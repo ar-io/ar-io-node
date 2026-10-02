@@ -14,7 +14,6 @@ import Sqlite from 'better-sqlite3';
 import { bandPublisherTag } from '../lib/index-band/build.js';
 import {
   BAND_FILE,
-  L1_FIRST_END,
   L1_SPAN,
   PARQUET_L1_TABLES,
 } from '../lib/parquet-l1/layout.js';
@@ -72,11 +71,11 @@ describe('ExportService parquet-l1', () => {
   const steps = (report: { l1Steps: any[] }) =>
     report.l1Steps.map((s) => [s.role, s.heightRange, s.result, s.reason]);
 
-  /** Band files for every whole range below FIRST, as if published before. */
+  /** Band files for every whole history range below FIRST, as if published before. */
   async function publishedBelow(skip: number[] = []) {
     const tag = bandPublisherTag(PUBLISHER);
-    const ranges: Array<[number, number]> = [[0, L1_FIRST_END]];
-    for (let from = L1_FIRST_END + 1; from < FIRST; from += L1_SPAN) {
+    const ranges: Array<[number, number]> = [];
+    for (let from = 0; from < FIRST; from += L1_SPAN) {
       ranges.push([from, from + L1_SPAN - 1]);
     }
     for (const [from, to] of ranges) {

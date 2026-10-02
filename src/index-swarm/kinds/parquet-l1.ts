@@ -26,7 +26,9 @@ import { checkParquetFile, openFooterReader } from '../../lib/parquet/check.js';
 import {
   BAND_FILE,
   BAND_FILES,
-  l1RangeOf,
+  isL1BandRange,
+  L1_SPAN,
+  L1_SUB_SPAN,
   MAX_BAND_FILE_BYTES,
   PARQUET_L1_TABLES,
   parseBandFile,
@@ -149,10 +151,9 @@ export class ParquetL1Kind implements ArtifactKind {
     }
     // Every publisher cuts the chain at the same heights, and a band's id
     // names its own: anything else is not a band of this layout.
-    const [rangeFrom, rangeTo] = l1RangeOf(from);
-    if (from !== rangeFrom || to > rangeTo) {
+    if (!isL1BandRange(from, to)) {
       throw new Error(
-        `Band ${band.id}: heights [${from}, ${to}] are not within one fixed range from its start ([${rangeFrom}, ${rangeTo}])`,
+        `Band ${band.id}: heights [${from}, ${to}] are not a whole ${L1_SPAN}-height range, a whole ${L1_SUB_SPAN}-height sub-range, or a sub-range cut short at the chain's top`,
       );
     }
     if (!band.id.startsWith(`l1-h${from}-${to}-`)) {

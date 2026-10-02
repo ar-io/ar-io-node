@@ -8,7 +8,11 @@ import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
 
 import {
+  isL1BandRange,
+  L1_SPAN,
+  L1_SUB_SPAN,
   l1RangeOf,
+  l1SubRangeOf,
   type ParquetL1Band,
 } from '../../../lib/parquet-l1/layout.js';
 import { L1PublishedBand, planL1 } from './kind.js';
@@ -21,92 +25,155 @@ const band = (id: string, from: number, to: number): L1PublishedBand => ({
   band: { heightRange: [from, to] } as ParquetL1Band,
 });
 
-describe('l1RangeOf', () => {
-  it('puts the sparse early chain in one range, then a range every 25,000', () => {
-    assert.deepEqual(l1RangeOf(0), [0, 499_999]);
-    assert.deepEqual(l1RangeOf(499_999), [0, 499_999]);
-    assert.deepEqual(l1RangeOf(500_000), [500_000, 524_999]);
-    assert.deepEqual(l1RangeOf(524_999), [500_000, 524_999]);
-    assert.deepEqual(l1RangeOf(525_000), [525_000, 549_999]);
-    assert.deepEqual(l1RangeOf(2_012_630), [2_000_000, 2_024_999]);
+describe('the fixed grids', () => {
+  it('puts a height in its history range and its sub-range', () => {
+    assert.deepEqual(l1RangeOf(0), [0, 99_999]);
+    assert.deepEqual(l1RangeOf(99_999), [0, 99_999]);
+    assert.deepEqual(l1RangeOf(100_000), [100_000, 199_999]);
+    assert.deepEqual(l1RangeOf(2_012_630), [2_000_000, 2_099_999]);
+    assert.deepEqual(l1SubRangeOf(0), [0, 4_999]);
+    assert.deepEqual(l1SubRangeOf(4_999), [0, 4_999]);
+    assert.deepEqual(l1SubRangeOf(2_012_630), [2_010_000, 2_014_999]);
+  });
+
+  it('nests the sub-range grid inside the history grid', () => {
+    assert.equal(L1_SPAN % L1_SUB_SPAN, 0);
+    for (const h of [0, 4_999, 99_999, 100_000, 1_234_567]) {
+      const [rf, rt] = l1RangeOf(h);
+      const [sf, st] = l1SubRangeOf(h);
+      assert.ok(sf >= rf && st <= rt, `sub-range of ${h} inside its range`);
+    }
+  });
+
+  it('accepts only a whole range, a whole sub-range, or a tip', () => {
+    assert.equal(isL1BandRange(0, 99_999), true, 'whole range');
+    assert.equal(isL1BandRange(100_000, 104_999), true, 'whole sub-range');
+    assert.equal(isL1BandRange(100_000, 100_003), true, 'tip');
+    assert.equal(isL1BandRange(100_000, 199_999), true);
+    assert.equal(isL1BandRange(1, 99_999), false, 'not on a boundary');
+    assert.equal(isL1BandRange(100_000, 105_000), false, 'past its sub-range');
+    assert.equal(isL1BandRange(100_000, 149_999), false, 'neither grid');
+    assert.equal(isL1BandRange(5, 10), false);
+    assert.equal(isL1BandRange(-1, 10), false);
+    assert.equal(isL1BandRange(10, 5), false);
   });
 });
 
 describe('planL1', () => {
-  it('bootstraps every whole range in order, then the tip band', () => {
-    const steps = planL1([], 590_000);
-    assert.deepEqual(
-      steps.map((s) => [s.role, s.heightRange]),
-      [
-        ['h', [0, 499_999]],
-        ['h', [500_000, 524_999]],
-        ['h', [525_000, 549_999]],
-        ['h', [550_000, 574_999]],
-        ['d', [575_000, 590_000]],
-      ],
-    );
-  });
+  const roles = (steps: ReturnType<typeof planL1>) =>
+    steps.map((s) => [s.role, s.heightRange] as const);
 
-  it('builds only what is missing, and nothing while the tip band is current', () => {
-    const bands = [
-      band('a', 0, 499_999),
-      band('b', 500_000, 524_999),
-      band('tip', 525_000, 530_000),
-    ];
-    assert.deepEqual(planL1(bands, 530_000), []);
-    assert.deepEqual(
-      planL1(
-        bands.filter((b) => b.id !== 'b'),
-        530_000,
-      ).map((s) => s.heightRange),
-      [[500_000, 524_999]],
-    );
-  });
-
-  it('rebuilds a moved tip band, superseding the old one, and closes a range at its edge', () => {
-    const bands = [
-      band('a', 0, 499_999),
-      band('b', 500_000, 524_999),
-      band('tip', 525_000, 530_000),
-    ];
-    assert.deepEqual(planL1(bands, 531_000), [
-      { role: 'd', heightRange: [525_000, 531_000], supersedes: ['tip'] },
+  it('bootstraps whole history ranges, then sub-ranges, then the tip', () => {
+    assert.deepEqual(roles(planL1([], 212_345)), [
+      ['h', [0, 99_999]],
+      ['h', [100_000, 199_999]],
+      ['d', [200_000, 204_999]],
+      ['d', [205_000, 209_999]],
+      ['d', [210_000, 212_345]],
     ]);
-    // The top reaches the range's end: a whole band, superseding the tip.
-    assert.deepEqual(planL1(bands, 549_999), [
-      { role: 'h', heightRange: [525_000, 549_999], supersedes: ['tip'] },
-    ]);
-    // Past it: the whole band, then a new tip band in the next range.
-    assert.deepEqual(
-      planL1(bands, 550_005).map((s) => [s.role, s.heightRange, s.supersedes]),
-      [
-        ['h', [525_000, 549_999], ['tip']],
-        ['d', [550_000, 550_005], []],
-      ],
-    );
   });
 
-  it('names the earlier tip bands it remembers, from the same start only', () => {
+  it('builds nothing while the tip is current', () => {
     const bands = [
-      band('a', 0, 499_999),
-      band('l1-h500000-510000-p-c', 500_000, 510_000),
+      band('l1-h0-99999-p-a', 0, 99_999),
+      band('l1-h100000-104999-p-b', 100_000, 104_999),
+      band('l1-h105000-106000-p-tip', 105_000, 106_000),
     ];
-    assert.deepEqual(
-      planL1(bands, 524_999, [
-        'l1-h500000-505000-p-a',
-        'l1-h500000-508000-p-b',
-        'l1-h475000-480000-p-x',
-        'l1-h5000000-5000001-p-y',
-      ])[0].supersedes,
-      [
-        'l1-h500000-505000-p-a',
-        'l1-h500000-508000-p-b',
-        'l1-h500000-510000-p-c',
-      ],
-    );
+    assert.deepEqual(planL1(bands, 106_000), []);
+  });
+
+  it('rebuilds only the tip as the top moves, superseding the tip before it', () => {
+    const bands = [
+      band('l1-h0-99999-p-a', 0, 99_999),
+      band('l1-h100000-104999-p-b', 100_000, 104_999),
+      band('l1-h105000-106000-p-tip', 105_000, 106_000),
+    ];
+    assert.deepEqual(planL1(bands, 106_500), [
+      {
+        role: 'd',
+        heightRange: [105_000, 106_500],
+        supersedes: ['l1-h105000-106000-p-tip'],
+      },
+    ]);
+  });
+
+  it('graduates the tip into a whole sub-range, then starts the next tip', () => {
+    const bands = [
+      band('l1-h0-99999-p-a', 0, 99_999),
+      band('l1-h100000-101000-p-tip', 100_000, 101_000),
+    ];
+    // The top reaches the sub-range's end: one whole sub-range, no tip.
+    assert.deepEqual(planL1(bands, 104_999), [
+      {
+        role: 'd',
+        heightRange: [100_000, 104_999],
+        supersedes: ['l1-h100000-101000-p-tip'],
+      },
+    ]);
+    // Past it: the whole sub-range, then a tip in the next one.
+    assert.deepEqual(roles(planL1(bands, 105_020)), [
+      ['d', [100_000, 104_999]],
+      ['d', [105_000, 105_020]],
+    ]);
+  });
+
+  it('folds a completed history range, superseding every band inside it', () => {
+    const bands = [
+      band('l1-h0-4999-p-a', 0, 4_999),
+      band('l1-h5000-9999-p-b', 5_000, 9_999),
+      band('l1-h95000-99999-p-c', 95_000, 99_999),
+      band('l1-h100000-100500-p-tip', 100_000, 100_500),
+    ];
+    const [fold] = planL1(bands, 100_500);
+    assert.equal(fold.role, 'h');
+    assert.deepEqual(fold.heightRange, [0, 99_999]);
+    assert.deepEqual(fold.supersedes, [
+      'l1-h0-4999-p-a',
+      'l1-h5000-9999-p-b',
+      'l1-h95000-99999-p-c',
+    ]);
+    // The tip of the next range is left alone.
+    assert.equal(fold.supersedes.includes('l1-h100000-100500-p-tip'), false);
+  });
+
+  it('names the superseded ids it remembers that its own range covers', () => {
+    const bands = [band('l1-h0-99999-p-a', 0, 99_999)];
+    const step = planL1(bands, 104_999, [
+      'l1-h100000-100200-p-t1',
+      'l1-h100000-100900-p-t2',
+      'l1-h200000-200100-p-elsewhere',
+    ])[0];
+    assert.deepEqual(step.heightRange, [100_000, 104_999]);
+    assert.deepEqual(step.supersedes, [
+      'l1-h100000-100200-p-t1',
+      'l1-h100000-100900-p-t2',
+    ]);
   });
 
   it('plans nothing with no stable top', () => {
     assert.deepEqual(planL1([], -1), []);
+  });
+
+  it('leaves no gap: every height up to the top is covered once it is built', () => {
+    let bands: L1PublishedBand[] = [];
+    let n = 0;
+    for (const top of [3_000, 4_999, 12_345, 99_999, 100_000, 234_567]) {
+      for (const step of planL1(bands, top)) {
+        n += 1;
+        const [from, to] = step.heightRange;
+        assert.ok(isL1BandRange(from, to), `step ${from}-${to} is on the grid`);
+        const supersedes = new Set(step.supersedes);
+        bands = bands
+          .filter((b) => !supersedes.has(b.id))
+          .concat(band(`l1-h${from}-${to}-p-${n}`, from, to));
+      }
+      const live = [...bands].sort((a, b) => a.from - b.from);
+      let next = 0;
+      for (const b of live) {
+        assert.equal(b.from, next, `no gap or overlap before ${b.from}`);
+        next = b.to + 1;
+      }
+      assert.equal(next - 1, top, `covered up to ${top}`);
+    }
   });
 });

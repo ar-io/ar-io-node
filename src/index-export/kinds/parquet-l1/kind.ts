@@ -24,7 +24,10 @@ import { bandPublisherTag } from '../../../lib/index-band/build.js';
 import { supersededBands } from '../../../lib/index-publication.js';
 import {
   BAND_FILE,
+  L1_SPAN,
+  L1_SUB_SPAN,
   l1RangeOf,
+  l1SubRangeOf,
   MAX_BAND_FILE_BYTES,
   parseBandFile,
   ParquetL1Band,
@@ -43,7 +46,7 @@ export interface L1PublishedBand {
 }
 
 export interface L1Step {
-  /** `h` for a whole range, `d` for the tip band. */
+  /** `h` for a whole history range, `d` for a sub-range or the tip. */
   role: 'h' | 'd';
   heightRange: [number, number];
   supersedes: string[];
@@ -110,15 +113,26 @@ export async function deriveL1Bands(
 }
 
 /**
- * The bands to build, in order: every whole range up to `top` that isn't
- * published, then the tip band if `top` has moved past the published one.
+ * The bands to build, in order, and never more than one per range.
+ *
  * `top` is the highest height a band may hold: one below the stable top, so
  * every band's last block is anchored by the block above it.
  *
- * Each supersedes this publisher's shorter bands from the same start
- * (earlier tip bands), and the ones before those it remembers (`superseded`),
- * so a subscriber that missed a tip band still keeps its old one until the
- * new one installs.
+ * Three levels, because L1 is append-only — a finalised height's rows never
+ * change, so only the tip is ever rebuilt:
+ *
+ * | Role | Covers | Built |
+ * | --- | --- | --- |
+ * | `h` | a whole {@link L1_SPAN} range | once the range is below `top`; supersedes its `d` bands |
+ * | `d` | a whole {@link L1_SUB_SPAN} sub-range | once the sub-range is below `top`; never rebuilt |
+ * | tip (`d`) | the one incomplete sub-range | each run `top` has moved; supersedes the tips before it |
+ *
+ * History is built before the sub-ranges beneath the tip, so an importer
+ * reading in height order sees the cheapest covering set first.
+ *
+ * Each step supersedes this publisher's bands that its own range covers, and
+ * the ids it remembers superseding (`superseded`), so a subscriber that
+ * missed one still keeps its old band until the new one installs.
  */
 export function planL1(
   bands: L1PublishedBand[],
@@ -127,30 +141,53 @@ export function planL1(
 ): L1Step[] {
   if (top < 0) return [];
   const steps: L1Step[] = [];
-  const [tipFrom, tipTo] = l1RangeOf(top);
-  const shorter = (from: number, to: number) => [
+  const covers = (from: number, to: number) => [
     ...new Set([
-      ...superseded.filter((id) => id.startsWith(`l1-h${from}-`)),
-      ...bands.filter((b) => b.from === from && b.to < to).map((b) => b.id),
+      ...superseded.filter((id) => {
+        const m = /^l1-h(\d+)-(\d+)-/.exec(id);
+        return m !== null && Number(m[1]) >= from && Number(m[2]) <= to;
+      }),
+      ...bands
+        .filter(
+          (b) =>
+            b.from >= from && b.to <= to && !(b.from === from && b.to === to),
+        )
+        .map((b) => b.id),
     ]),
   ];
-  for (let from = 0; from < tipFrom; ) {
-    const [, to] = l1RangeOf(from);
-    if (!bands.some((b) => b.from === from && b.to === to)) {
+  const have = (from: number, to: number) =>
+    bands.some((b) => b.from === from && b.to === to);
+
+  // Whole history ranges, oldest first.
+  const [activeFrom] = l1RangeOf(top);
+  for (let from = 0; from < activeFrom; from += L1_SPAN) {
+    const to = from + L1_SPAN - 1;
+    if (!have(from, to)) {
       steps.push({
         role: 'h',
         heightRange: [from, to],
-        supersedes: shorter(from, to),
+        supersedes: covers(from, to),
       });
     }
-    from = to + 1;
   }
-  const whole = top === tipTo;
+
+  // Inside the range the top falls in: whole sub-ranges, then the tip.
+  const [tipFrom] = l1SubRangeOf(top);
+  for (let from = activeFrom; from < tipFrom; from += L1_SUB_SPAN) {
+    const to = from + L1_SUB_SPAN - 1;
+    if (!have(from, to)) {
+      steps.push({
+        role: 'd',
+        heightRange: [from, to],
+        supersedes: covers(from, to),
+      });
+    }
+  }
   if (!bands.some((b) => b.from === tipFrom && b.to >= top)) {
     steps.push({
-      role: whole ? 'h' : 'd',
+      role: 'd',
       heightRange: [tipFrom, top],
-      supersedes: shorter(tipFrom, top),
+      supersedes: covers(tipFrom, top),
     });
   }
   return steps;

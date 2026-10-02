@@ -140,7 +140,7 @@ describe('ParquetL1Kind', () => {
     );
   });
 
-  it('refuses heights outside one fixed range, or an id that doesn’t name them', async () => {
+  it('refuses heights off the fixed grids, or an id that doesn’t name them', async () => {
     const descriptor = await kind.describe(band);
     await assert.rejects(
       kind.validate({ ...descriptor, id: 'l1-h0-5-abc' }, band),
@@ -149,14 +149,26 @@ describe('ParquetL1Kind', () => {
     const file = path.join(band, BAND_FILE);
     const json = JSON.parse(await fs.readFile(file, 'utf8'));
     for (const range of [
-      [5, 99_999],
-      [450_000, 520_000],
+      [5, 99_999], // not on a boundary
+      [100_000, 149_999], // neither a whole range nor a sub-range
+      [100_000, 105_000], // past the end of its sub-range
     ]) {
       await fs.writeFile(file, JSON.stringify({ ...json, heightRange: range }));
-      const moved = await kind.describe(band);
       await assert.rejects(
-        kind.validate(moved, band),
-        /not within one fixed range from its start/,
+        kind.validate(await kind.describe(band), band),
+        /are not a whole 100000-height range, a whole 5000-height sub-range, or a sub-range cut short/,
+      );
+    }
+    // A whole sub-range and a tip are both fine.
+    for (const range of [
+      [100_000, 104_999],
+      [100_000, 100_003],
+    ]) {
+      await fs.writeFile(file, JSON.stringify({ ...json, heightRange: range }));
+      const d = await kind.describe(band);
+      await kind.validate(
+        { ...d, id: `l1-h${range[0]}-${range[1]}-abc` },
+        band,
       );
     }
   });
