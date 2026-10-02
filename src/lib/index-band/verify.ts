@@ -4,20 +4,15 @@
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
-import * as fs from 'node:fs/promises';
-import * as path from 'node:path';
 import pLimit from 'p-limit';
 
 import { decodeDataItemHeader } from '../ans104-bundle-scan.js';
 import { ByteRangeSource } from '../byte-range-source.js';
-import { Cdb64Reader } from '../cdb64.js';
 import {
-  decodeCdb64Value,
   getRootTxId,
   isCompleteValue,
   isPathCompleteValue,
 } from '../cdb64-encoding.js';
-import { PARTITION_FILE_PATTERN, parseManifest } from '../cdb64-manifest.js';
 import { toB64Url } from '../encoding.js';
 import { createAgentPair } from '../http-agent.js';
 import {
@@ -27,6 +22,7 @@ import {
 } from '../http-byte-range-source.js';
 import { MAX_HEADER_BYTES, Reservoir } from './build.js';
 import type { BandSampleEntry } from './build.js';
+import { bandEntries, readBandManifest } from './read.js';
 
 /** Opens the data of a root transaction for range reads. */
 export type RootSourceFactory = (rootTxId: string) => ByteRangeSource;
@@ -53,9 +49,14 @@ export interface HeaderCheckResult {
   checked: number;
   ok: number;
   /** Entries whose header names another ID or ends somewhere else. */
-  wrong: Array<{ id: string; reason: string }>;
+  wrong: Array<{ id: string; reason: string; tag?: string }>;
   /** Entries that couldn't be checked (read failed, unknown signature type). */
-  errors: Array<{ id: string; error: string }>;
+  errors: Array<{ id: string; error: string; tag?: string }>;
+  /**
+   * The counts per sample tag (`''` for the general sample), so a check
+   * over stratified samples can say which stratum failed.
+   */
+  byTag: Record<string, { checked: number; ok: number; wrong: number }>;
 }
 
 /**
@@ -89,6 +90,12 @@ export async function checkBandHeaders({
   const wrong: HeaderCheckResult['wrong'] = [];
   const errors: HeaderCheckResult['errors'] = [];
   let ok = 0;
+  const byTag: HeaderCheckResult['byTag'] = {};
+  const stratum = (entry: BandSampleEntry) =>
+    (byTag[entry.tag ?? ''] ??= { checked: 0, ok: 0, wrong: 0 });
+  const tagOf = (entry: BandSampleEntry) =>
+    entry.tag !== undefined ? { tag: entry.tag } : {};
+  for (const entry of entries) stratum(entry).checked += 1;
 
   const limit = pLimit(concurrency);
   await Promise.all(
@@ -96,7 +103,9 @@ export async function checkBandHeaders({
       limit(async () => {
         const headerBytes = entry.rootDataOffset - entry.rootOffset;
         if (headerBytes <= 0 || headerBytes > MAX_HEADER_BYTES) {
+          stratum(entry).wrong += 1;
           wrong.push({
+            ...tagOf(entry),
             id: entry.id,
             reason: `offsets give a ${headerBytes}-byte header`,
           });
@@ -116,12 +125,15 @@ export async function checkBandHeaders({
             (error as { response?: { status?: number } }).response?.status ===
               416
           ) {
+            stratum(entry).wrong += 1;
             wrong.push({
+              ...tagOf(entry),
               id: entry.id,
               reason: 'offsets run past the end of the root transaction',
             });
           } else {
             errors.push({
+              ...tagOf(entry),
               id: entry.id,
               error: error instanceof Error ? error.message : String(error),
             });
@@ -138,7 +150,9 @@ export async function checkBandHeaders({
           // Bytes that don't decode as a header, an unknown signature type
           // included, are the commonest sign of a wrong offset: the first two
           // bytes of a payload are almost never a signature type.
+          stratum(entry).wrong += 1;
           wrong.push({
+            ...tagOf(entry),
             id: entry.id,
             reason: `no data item header at rootOffset: ${
               error instanceof Error ? error.message : String(error)
@@ -148,22 +162,29 @@ export async function checkBandHeaders({
         }
 
         if (!decoded.complete) {
+          stratum(entry).wrong += 1;
           wrong.push({
+            ...tagOf(entry),
             id: entry.id,
             reason: `header runs past rootDataOffset (needs ${decoded.needBytes} bytes, offsets give ${headerBytes})`,
           });
         } else if (decoded.header.headerSize !== headerBytes) {
+          stratum(entry).wrong += 1;
           wrong.push({
+            ...tagOf(entry),
             id: entry.id,
             reason: `header is ${decoded.header.headerSize} bytes, offsets give ${headerBytes}`,
           });
         } else if (decoded.header.id !== entry.id) {
+          stratum(entry).wrong += 1;
           wrong.push({
+            ...tagOf(entry),
             id: entry.id,
             reason: `header at rootOffset is item ${decoded.header.id}`,
           });
         } else {
           ok += 1;
+          stratum(entry).ok += 1;
         }
       }),
     ),
@@ -201,6 +222,7 @@ export async function checkBandHeaders({
     ok,
     wrong,
     errors,
+    byTag,
   };
 }
 
@@ -219,42 +241,16 @@ export async function sampleBandEntries(
   size: number,
   random: () => number = Math.random,
 ): Promise<{ entries: BandSampleEntry[]; totalRecords: number }> {
-  const manifest = parseManifest(
-    await fs.readFile(path.join(bandDir, 'manifest.json'), 'utf8'),
-  );
+  const manifest = await readBandManifest(bandDir);
   const sample = new Reservoir<BandSampleEntry>(size, random);
-  for (const partition of manifest.partitions) {
-    if (partition.location.type !== 'file') {
-      throw new Error(
-        `Partition ${partition.prefix} is not a local file; only local bands can be checked`,
-      );
-    }
-    // The manifest may come from anywhere; open only partition files.
-    if (!PARTITION_FILE_PATTERN.test(partition.location.filename)) {
-      throw new Error(
-        `Partition ${partition.prefix} names ${JSON.stringify(partition.location.filename)}, not a partition file`,
-      );
-    }
-    const reader = new Cdb64Reader(
-      path.join(bandDir, partition.location.filename),
-    );
-    await reader.open();
-    try {
-      for await (const { key, value } of reader.entries()) {
-        const decoded = decodeCdb64Value(value);
-        if (!isCompleteValue(decoded) && !isPathCompleteValue(decoded)) {
-          continue;
-        }
-        sample.offer({
-          id: toB64Url(key),
-          rootTxId: toB64Url(getRootTxId(decoded)),
-          rootOffset: decoded.rootDataItemOffset,
-          rootDataOffset: decoded.rootDataOffset,
-        });
-      }
-    } finally {
-      await reader.close();
-    }
+  for await (const { key, value } of bandEntries(bandDir, manifest)) {
+    if (!isCompleteValue(value) && !isPathCompleteValue(value)) continue;
+    sample.offer({
+      id: toB64Url(key),
+      rootTxId: toB64Url(getRootTxId(value)),
+      rootOffset: value.rootDataItemOffset,
+      rootDataOffset: value.rootDataOffset,
+    });
   }
   return { entries: sample.items, totalRecords: manifest.totalRecords };
 }
