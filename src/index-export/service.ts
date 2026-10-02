@@ -718,12 +718,12 @@ export class ExportService {
       const held = state.lastRejection;
       for (const [i, step] of steps.entries()) {
         // A rejected band waits for an operator's run, rather than being
-        // rebuilt and rejected every day.
+        // rebuilt and rejected every day. By its range's start: a tip band's
+        // end moves with the top, and the rows that failed are still there.
         if (
           options.force !== true &&
           held?.heightRange !== undefined &&
-          held.heightRange[0] === step.heightRange[0] &&
-          held.heightRange[1] === step.heightRange[1]
+          held.heightRange[0] === step.heightRange[0]
         ) {
           report.l1Steps.push({
             index: L1_INDEX,
@@ -832,10 +832,7 @@ export class ExportService {
           { index: L1_INDEX, kind: step.role },
           Date.parse(at) / 1000,
         );
-        if (
-          state.lastRejection?.heightRange?.[0] === step.heightRange[0] &&
-          state.lastRejection.heightRange[1] === step.heightRange[1]
-        ) {
+        if (state.lastRejection?.heightRange?.[0] === step.heightRange[0]) {
           delete state.lastRejection;
         }
       }

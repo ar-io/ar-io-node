@@ -106,6 +106,8 @@ describe('fileUrl', () => {
   });
 });
 
+const DAY_MS = 24 * 3600_000;
+
 describe('Subscriber', () => {
   let tempDir: string;
   let pubDir: string;
@@ -2420,6 +2422,39 @@ describe('Subscriber', () => {
     await makeSubscriber({ subscribe: [] }).pollOnce();
 
     assert.equal(existsSync(dir), false, 'retired and (grace 0) swept');
+  });
+
+  it('retires a band as the kind it was installed as', async () => {
+    const dir = path.join(
+      subInstalled,
+      'parquet-l1',
+      'l1-h0-9-p-0~000000000000',
+    );
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path.join(dir, 'band.json'), '{}');
+    await fs.writeFile(path.join(dir, 'manifest.json'), '{}');
+    await subState.update((draft) => {
+      draft.installed['parquet-l1'] = {
+        'l1-h0-9-p-0': {
+          dir,
+          files: [],
+          installedAt: clock.toISOString(),
+          publisher: 'GonePublisherWallet11111111111111111111111111',
+          kind: 'parquet-l1',
+        },
+      };
+    });
+
+    await makeSubscriber({
+      subscribe: [],
+      supersedeGraceMs: DAY_MS,
+    }).pollOnce();
+
+    // Kept through the grace, but no longer live as a Parquet L1 band.
+    assert.equal(existsSync(path.join(dir, 'band.json')), false);
+    assert.equal(existsSync(path.join(dir, 'manifest.json')), true);
+    const band = (await subState.load()).installed['parquet-l1']['l1-h0-9-p-0'];
+    assert.notEqual(band.retiredAt, undefined);
   });
 
   it('counts downloads waiting in incoming/ against the disk budget', async () => {

@@ -183,21 +183,21 @@ describe('ExportService parquet-l1', () => {
     assert.equal(state.retry, undefined);
   });
 
-  it('holds a rejected band for an operator, then rebuilds it on a forced run', async () => {
+  it('holds a rejected band for an operator as the top moves, then rebuilds it on a forced run', async () => {
     await publishedBelow();
     const db = new Sqlite(path.join(dir, 'core.db'));
     db.prepare(
       'UPDATE stable_blocks SET hash_list_merkle = ? WHERE height = ?',
     ).run(Buffer.alloc(48, 1), FIRST + 3);
     db.close();
-    let report = await service().runOnce();
-    assert.deepEqual(steps(report), [['d', [FIRST, TOP], 'rejected', 'chain']]);
-    const rejectedAt = (await stateOf('parquet-l1')).lastRejection?.at;
-    assert.deepEqual((await stateOf('parquet-l1')).lastRejection?.heightRange, [
-      FIRST,
-      TOP,
+    let report = await service().runOnce({ toHeight: FIRST + 20 });
+    assert.deepEqual(steps(report), [
+      ['d', [FIRST, FIRST + 20], 'rejected', 'chain'],
     ]);
+    const rejectedAt = (await stateOf('parquet-l1')).lastRejection?.at;
 
+    // A day later the top has moved: the tip band's range is new, its rows
+    // aren't.
     now += 24 * 3600_000;
     report = await service().runOnce();
     assert.deepEqual(steps(report), [['d', [FIRST, TOP], 'rejected', 'held']]);

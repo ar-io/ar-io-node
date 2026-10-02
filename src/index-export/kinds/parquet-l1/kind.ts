@@ -8,11 +8,12 @@
 /**
  * What to build for the `parquet-l1` index, and building it.
  *
- * Bands cover fixed height ranges: 0 to 499,999 (the sparse early chain),
- * then every 100,000. A range below the stable top is built once and never
- * changes; the range the stable top falls in is a tip band, rebuilt as the
- * top moves and superseding the tip band before it. Ranges are built in
- * order, from height 0, because an importer imports a contiguous run.
+ * Bands cover the fixed height ranges of {@link l1RangeOf}: 0 to 499,999
+ * (the sparse early chain), then every 25,000 (`L1_SPAN`). A range below the
+ * top is built once and never changes; the range the top falls in is a tip
+ * band, rebuilt as the top moves and superseding the tip bands before it.
+ * Ranges are built in order, from height 0, because an importer imports a
+ * contiguous run.
  */
 import crypto from 'node:crypto';
 import * as fs from 'node:fs/promises';
