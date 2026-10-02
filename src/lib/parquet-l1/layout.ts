@@ -30,18 +30,40 @@
 /** The layout version, in each band's `band.json`. */
 export const PARQUET_L1_SCHEMA = 'l1-1';
 
-/** The first range's end (the sparse early chain), then a range every span. */
-export const L1_FIRST_END = 499_999;
-export const L1_SPAN = 25_000;
+/**
+ * Bands cover two nested fixed grids, so every publisher cuts the chain at
+ * the same heights. L1 is append-only: a finalised height's rows never
+ * change, so a band that covers a completed range is written once and never
+ * rebuilt. Only the tip — the one incomplete sub-range — is rebuilt as the
+ * chain grows, and it is bounded by {@link L1_SUB_SPAN}.
+ */
+export const L1_SPAN = 100_000;
+export const L1_SUB_SPAN = 5_000;
 
-/** The fixed range a height falls in. */
+/** The history range a height falls in: `[n * L1_SPAN, …]`. */
 export function l1RangeOf(height: number): [number, number] {
-  if (height <= L1_FIRST_END) return [0, L1_FIRST_END];
-  const from =
-    L1_FIRST_END +
-    1 +
-    Math.floor((height - L1_FIRST_END - 1) / L1_SPAN) * L1_SPAN;
+  const from = Math.floor(height / L1_SPAN) * L1_SPAN;
   return [from, from + L1_SPAN - 1];
+}
+
+/** The sub-range a height falls in, always inside one {@link l1RangeOf}. */
+export function l1SubRangeOf(height: number): [number, number] {
+  const from = Math.floor(height / L1_SUB_SPAN) * L1_SUB_SPAN;
+  return [from, from + L1_SUB_SPAN - 1];
+}
+
+/**
+ * Whether `[from, to]` is a range a band may cover: a whole history range, a
+ * whole sub-range, or a tip (a sub-range cut short at the chain's top). A
+ * publisher offering anything else isn't following this layout.
+ */
+export function isL1BandRange(from: number, to: number): boolean {
+  if (!Number.isSafeInteger(from) || !Number.isSafeInteger(to)) return false;
+  if (from < 0 || to < from) return false;
+  const [rf, rt] = l1RangeOf(from);
+  if (from === rf && to === rt) return true;
+  const [sf, st] = l1SubRangeOf(from);
+  return from === sf && to <= st;
 }
 
 /** The band description file, beside the Parquet files. */

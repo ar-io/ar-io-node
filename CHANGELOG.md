@@ -10,7 +10,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - L1 index bands (`parquet-l1`): the Arweave base layer (blocks,
   transactions, tags in plaintext, owners) as Parquet, one fixed height
-  range per band (0 to 499,999, then every 25,000), so a new gateway can
+  range per band (whole 100,000-height history bands over 5,000-height
+  delta bands, so only the tip is ever rebuilt), so a new gateway can
   import its L1 index rather than index the chain block by block, and apps
   can query it with DuckDB. `index-export` builds them from `core.db` with
   `INDEX_EXPORT_KINDS` including `parquet-l1`, checking every block's

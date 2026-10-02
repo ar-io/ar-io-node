@@ -512,14 +512,20 @@ the sidecar is what retires a superseded tip band, so without it
 every block from height 0; a gateway that started above it (`START_HEIGHT`)
 can't build them, and its runs say so (`incomplete`, not retried).
 
-- **Ranges.** Bands cover fixed height ranges, the same for every
-  publisher: 0 to 499,999 (the sparse early chain), then every 25,000
-  (`l1-h<from>-<to>-<publisher>-<digest>`). A range below the top is built
-  once. The range the top is in is a tip band, rebuilt each run the top has
-  moved (at most 25,000 blocks, a few minutes and a few hundred MB) and
-  superseding the ones before; at the range's end it becomes a whole band.
-  The top is one below the stable top, so the block above every band's
-  last is there to anchor it.
+- **Ranges.** Bands cover two nested fixed grids, the same for every
+  publisher, so two publishers of the same chain cut it at the same heights.
+  L1 is append-only — a finalised height's rows never change — so a band
+  over a completed range is written once and never rebuilt:
+
+  | Role | Covers | Built | Size |
+  |---|---|---|---|
+  | `h` | a whole 100,000-height range | once the range is below the top; supersedes the `d` bands inside it | ~700 MB |
+  | `d` | a whole 5,000-height sub-range | once the sub-range is below the top; never rebuilt | ~35 MB |
+  | tip | the one incomplete sub-range | each run the top has moved; supersedes the tips before it | ≤35 MB |
+
+  Only the tip is ever rebuilt, so a subscriber re-downloads at most ~35 MB
+  a day rather than a whole range. The top is one below the stable top, so
+  the block above every band's last is there to anchor it.
 - **Checks before publishing.** Every block links to the one before it and
   is linked to by the one above, each `hash_list_merkle` follows from the
   previous block, each block's `tx_root` is recomputed from its transactions
