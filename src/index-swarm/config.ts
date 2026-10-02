@@ -35,8 +35,12 @@ export interface PublishConfig {
 export interface SubscribeConfig {
   /** The publishing gateway's wallet address, as registered. */
   publisher: string;
-  /** Restrict to one index name; all of the publisher's indexes when unset. */
-  name?: string;
+  /**
+   * The index names to take. Unset: every index the publisher offers whose
+   * kind isn't opt-in (`parquet-l1` is), so a large dataset is never taken
+   * unasked.
+   */
+  name?: string | string[];
   /** Override the URL derived from the publisher's gateway record. */
   url?: string;
 }
@@ -105,9 +109,17 @@ export function parseSubscribe(raw: string | undefined): SubscribeConfig[] {
     }
     // A malformed name could never match a published index, so the
     // subscription would silently do nothing.
-    if (name !== undefined && !isValidIndexName(name)) {
+    if (
+      name !== undefined &&
+      !isValidIndexName(name) &&
+      !(
+        Array.isArray(name) &&
+        name.length > 0 &&
+        name.every((n) => isValidIndexName(n))
+      )
+    ) {
       throw new Error(
-        `INDEX_SWARM_SUBSCRIBE[${i}].name must match ^[a-z0-9-]{1,64}$`,
+        `INDEX_SWARM_SUBSCRIBE[${i}].name must be a name matching ^[a-z0-9-]{1,64}$, or a list of them`,
       );
     }
     if (url !== undefined && typeof url !== 'string') {
@@ -117,13 +129,13 @@ export function parseSubscribe(raw: string | undefined): SubscribeConfig[] {
     // would be silently ignored.
     if (seen.has(publisher)) {
       throw new Error(
-        `INDEX_SWARM_SUBSCRIBE[${i}] repeats publisher ${publisher}; list it once, and omit name to take all of its indexes`,
+        `INDEX_SWARM_SUBSCRIBE[${i}] repeats publisher ${publisher}; list it once, with name a list of the indexes to take`,
       );
     }
     seen.add(publisher);
     return {
       publisher,
-      ...(name !== undefined ? { name } : {}),
+      ...(name !== undefined ? { name: name as string | string[] } : {}),
       ...(url !== undefined ? { url } : {}),
     };
   });

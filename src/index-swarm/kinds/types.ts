@@ -57,6 +57,12 @@ export interface SweepRequest {
 export interface ArtifactKind {
   /** Value of the manifest's `kind` field this implementation handles. */
   readonly kind: string;
+  /**
+   * Taken only from a subscription that names the index: one that names
+   * none takes what the gateway serves from, not every large dataset a
+   * publisher offers (and that shares the disk budget).
+   */
+  readonly optIn?: boolean;
 
   /**
    * Read a band directory and describe it for publication: its files, their

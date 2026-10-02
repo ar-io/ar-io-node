@@ -355,6 +355,22 @@ type TorrentOutcome =
   | { kind: 'fallback' }
   | { kind: 'done'; dir: string };
 
+/**
+ * Whether a subscription takes an index: the indexes it names, or, naming
+ * none, every one whose kind isn't opt-in (large datasets the gateway
+ * doesn't serve from are taken only when asked for).
+ */
+export function takesIndex(
+  subscription: Pick<SubscribeConfig, 'name'>,
+  indexName: string,
+  kind: Pick<ArtifactKind, 'optIn'> | undefined,
+): boolean {
+  if (subscription.name !== undefined) {
+    return [subscription.name].flat().includes(indexName);
+  }
+  return kind?.optIn !== true;
+}
+
 export class Subscriber {
   private readonly log: Logger;
   private readonly state: StateStore;
@@ -735,10 +751,8 @@ export class Subscriber {
     // band of any of its indexes starts another until the next poll.
     const meter: PollMeter = { refused: false };
     for (const index of document.indexes) {
-      if (subscription.name !== undefined && subscription.name !== index.name) {
-        continue;
-      }
       const kind = this.kinds.get(index.kind);
+      if (!takesIndex(subscription, index.name, kind)) continue;
       if (kind === undefined) {
         // A publisher offering a kind this node does not understand is
         // normal; take the kinds that are usable and move on.
@@ -761,18 +775,19 @@ export class Subscriber {
     // reconcileIndex, so its bands are retired here.
     const published = new Set(document.indexes.map((index) => index.name));
     const fallbackKind = this.kinds.values().next().value;
-    if (fallbackKind !== undefined) {
-      for (const indexName of Object.keys(
-        (await this.state.load()).installed,
-      )) {
-        if (published.has(indexName)) continue;
-        await this.retireUnoffered(
-          publisher,
-          indexName,
-          new Set(),
-          fallbackKind,
-        );
-      }
+    const installed = (await this.state.load()).installed;
+    for (const indexName of Object.keys(installed)) {
+      if (published.has(indexName)) continue;
+      // Retired as the kind it was installed as; bands installed before
+      // kinds were recorded are root-TX's, the first kind.
+      const recorded = Object.values(installed[indexName] ?? {}).find(
+        (band) => band.kind !== undefined,
+      )?.kind;
+      const kind =
+        (recorded !== undefined ? this.kinds.get(recorded) : undefined) ??
+        fallbackKind;
+      if (kind === undefined) continue;
+      await this.retireUnoffered(publisher, indexName, new Set(), kind);
     }
 
     await this.state.update((draft) => {
@@ -1215,7 +1230,14 @@ export class Subscriber {
       kind,
     );
     if (adopted !== undefined) {
-      await this.recordInstall(publisher, index.name, band, adopted, live);
+      await this.recordInstall(
+        publisher,
+        index.name,
+        kind.kind,
+        band,
+        adopted,
+        live,
+      );
       this.log.info('Adopted a band already on disk', {
         publisher,
         index: index.name,
@@ -1460,6 +1482,7 @@ export class Subscriber {
     next[band.id] = {
       ...next[band.id],
       publisher,
+      kind: kind.kind,
       ...(keptInfohash !== undefined ? { infohashV1: keptInfohash } : {}),
     };
     this.addPendingRetire(next, band.id, live, targetDir);
@@ -2495,6 +2518,7 @@ export class Subscriber {
   private async recordInstall(
     publisher: string,
     indexName: string,
+    kind: string,
     band: BandDescriptor,
     dir: string,
     replaced: InstalledBand | undefined,
@@ -2506,6 +2530,7 @@ export class Subscriber {
         files: band.files,
         installedAt: this.now().toISOString(),
         publisher,
+        kind,
       };
       this.addPendingRetire(map, band.id, replaced, dir);
     });
