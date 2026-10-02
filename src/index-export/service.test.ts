@@ -4,196 +4,29 @@
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
-import {
-  bundleAndSignData,
-  createData,
-  EthereumSigner,
-} from '@dha-team/arbundles';
+
 import { strict as assert } from 'node:assert';
 import * as fs from 'node:fs/promises';
-import * as os from 'node:os';
 import * as path from 'node:path';
-import { afterEach, before, beforeEach, describe, it } from 'node:test';
+import { describe, it } from 'node:test';
 
-import { scanBundle, ScannedDataItem } from '../lib/ans104-bundle-scan.js';
-import { ByteRangeSource } from '../lib/byte-range-source.js';
-import { fromB64Url, toB64Url } from '../lib/encoding.js';
-import type { BandRecord } from '../lib/index-band/build.js';
-import { BufferByteRangeSource } from '../../test/buffer-byte-range-source.js';
-import { createTestLogger } from '../../test/test-logger.js';
-import type { ExportConfig } from './config.js';
+import { toB64Url } from '../lib/encoding.js';
+import {
+  assertCovered,
+  DAY,
+  MemorySource,
+  useExportService,
+} from '../../test/index-export-service-fixture.js';
 import { CsvOverlaySource } from './kinds/root-tx/sources/csv.js';
-import { newSourceStats, RecordSource } from './kinds/root-tx/sources/rows.js';
 import { ExportLock } from './lock.js';
-import {
-  ExportService,
-  reportForOutput,
-  RETRY_FIRST_MS,
-  runResult,
-} from './service.js';
-import {
-  deriveOwnBands,
-  indexState,
-  loadState,
-  OwnBand,
-  updateIndexState,
-} from './state.js';
-
-const log = createTestLogger({ suite: 'index-export service' });
-const PUBLISHER = 'ErEgD7dq1yR9W1CnVG3pEywi3qST7jqWA9nfWtxSGeBc';
-const ROOT = Buffer.alloc(32, 9);
-const DAY = 24 * 3600_000;
-
-/** A source over records in memory, reaching up to `top`. */
-class MemorySource implements RecordSource {
-  readonly rank = 0;
-  readonly stats = newSourceStats();
-  top = 0;
-  fail?: string;
-
-  constructor(
-    readonly name: string,
-    private readonly all: () => BandRecord[],
-  ) {}
-
-  async stableHeight() {
-    if (this.fail !== undefined) throw new Error(this.fail);
-    return this.top;
-  }
-
-  async *records(from: number, to: number) {
-    for (const record of this.all()) {
-      const height = record.height ?? 0;
-      if (height < from || height > to || height > this.top) continue;
-      this.stats.records += 1;
-      yield { ...record, source: this.name };
-    }
-  }
-
-  async close() {}
-}
-
-/**
- * Every height from the bottom of the lowest band to `top` is in some live
- * band: what a subscriber relies on.
- */
-function assertCovered(bands: OwnBand[], from: number, top: number) {
-  const ranges = bands.map((b) => [b.from, b.to ?? Infinity] as const);
-  for (let height = from; height <= top; height++) {
-    assert.ok(
-      ranges.some(([lo, hi]) => lo <= height && height <= hi),
-      `height ${height} is covered`,
-    );
-  }
-}
+import { reportForOutput, RETRY_FIRST_MS, runResult } from './service.js';
+import { updateIndexState } from './state.js';
 
 describe('ExportService', () => {
-  let items: ScannedDataItem[];
-  let bundle: Buffer;
-  let records: BandRecord[];
-  let dir: string;
-  let now: number;
-  let gw1: MemorySource;
-  let rootsFail: boolean;
-
-  before(async () => {
-    const signer = new EthereumSigner(`0x${'11'.repeat(32)}`);
-    const signed = await bundleAndSignData(
-      Array.from({ length: 3300 }, (_, i) => createData(`item ${i}`, signer)),
-      signer,
-    );
-    bundle = signed.getRaw();
-    items = [];
-    for await (const item of scanBundle({
-      source: new BufferByteRangeSource(bundle),
-      rootTxId: toB64Url(ROOT),
-      bundleSize: bundle.length,
-    })) {
-      items.push(item);
-    }
-  });
-
-  beforeEach(async () => {
-    dir = await fs.mkdtemp(path.join(os.tmpdir(), 'index-export-service-'));
-    now = Date.parse('2026-10-02T04:00:00Z');
-    rootsFail = false;
-    freeBytes = 1e13;
-    // 1,100 items in each of h [1000, 1999], r [2000, 2087] and the
-    // overlap [2089, 2600] a delta reads.
-    records = items.map((item, i) => ({
-      id: fromB64Url(item.id),
-      rootTxId: ROOT,
-      height:
-        i < 1100
-          ? 1000 + (i % 1000)
-          : i < 2200
-            ? 2000 + (i % 88)
-            : 2089 + (i % 512),
-      rootOffset: item.rootDataItemOffset,
-      rootDataOffset: item.rootDataOffset,
-      size: item.dataItemSize,
-    }));
-    gw1 = new MemorySource('gw1', () => records);
-    gw1.top = 2600;
-  });
-
-  afterEach(async () => {
-    await fs.rm(dir, { recursive: true, force: true });
-  });
-
-  const config = (more: Partial<ExportConfig> = {}): ExportConfig => ({
-    publisher: PUBLISHER,
-    sources: [],
-    sourceEnv: {},
-    runAtMinute: 240,
-    recentMaxBlocks: 1000,
-    startHeight: 1000,
-    headerCheckUrl: 'http://gateway.test',
-    headerCheckTimeoutMs: 1000,
-    metricsPort: 0,
-    publishDir: path.join(dir, 'published', 'root-tx-index'),
-    workDir: path.join(dir, 'export'),
-    ...more,
-  });
-
-  let freeBytes: number;
-  const roots = () => ({
-    openRoot: (): ByteRangeSource =>
-      rootsFail
-        ? ({
-            read: async () => {
-              throw new Error('Request failed with status code 503');
-            },
-            close: async () => undefined,
-          } as unknown as ByteRangeSource)
-        : new BufferByteRangeSource(bundle),
-    close: () => undefined,
-  });
-  const service = (
-    more: Partial<ExportConfig> = {},
-    sources: () => Array<{ source: RecordSource; optional: boolean }> = () => [
-      { source: gw1, optional: false },
-    ],
-  ) =>
-    new ExportService({
-      config: config(more),
-      log,
-      now: () => now,
-      openSources: async () => sources(),
-      openRoots: roots,
-      diskSpace: async () => ({ free: freeBytes, total: 1e13 }),
-      headerCheck: { retryDelayMs: 1 },
-    });
-
-  const live = () => deriveOwnBands(config().publishDir, PUBLISHER, {});
-  const exportState = async () =>
-    indexState(
-      await loadState(path.join(dir, 'export', 'state.json')),
-      'root-tx-index',
-    );
+  const ctx = useExportService();
 
   it('bootstraps h and r at fixed edges up to the stable top, and records success', async () => {
-    const report = await service().runOnce();
+    const report = await ctx.service().runOnce();
     assert.deepEqual(
       report.steps.map((s) => [s.role, s.heightRange, s.result]),
       [
@@ -202,161 +35,62 @@ describe('ExportService', () => {
       ],
     );
     assert.equal(runResult(report), 'published');
-    const bands = await live();
+    const bands = await ctx.live();
     assert.deepEqual(
       bands.map((b) => b.role),
       ['h', 'r'],
     );
     assertCovered(bands, 1000, 2600);
-    const state = await exportState();
+    const state = await ctx.exportState();
     assert.deepEqual(Object.keys(state.lastSuccess).sort(), ['h', 'r']);
     assert.equal(state.lastFoldAt, report.at, 'the new r counts as a fold');
     assert.equal(state.lastRun?.outcome, 'published');
     assert.equal(state.retry, undefined);
-    assert.deepEqual(await fs.readdir(path.join(dir, 'export')), [
+    assert.deepEqual(await fs.readdir(path.join(ctx.dir, 'export')), [
       'state.json',
     ]);
   });
 
-  it('builds a daily delta above the r, then skips it while unchanged, despite a new id', async () => {
-    await service().runOnce();
-    now += DAY;
-    gw1.top = 2650;
-    const second = await service().runOnce();
-    assert.deepEqual(
-      second.steps.map((s) => [s.role, s.heightRange, s.result]),
-      [['d', [2089, null], 'published']],
-    );
-    const delta = (await live()).find((b) => b.role === 'd');
-    assertCovered(await live(), 1000, 2650);
-    now += DAY;
-    const third = await service().runOnce();
-    assert.deepEqual(
-      third.steps.map((s) => [s.role, s.result, s.reason]),
-      [['d', 'unchanged', 'same_content']],
-    );
-    assert.equal((await live()).find((b) => b.role === 'd')?.id, delta?.id);
-  });
-
-  it('folds weekly with the delta held at its start, so no installation order leaves a gap', async () => {
-    await service().runOnce();
-    now += DAY;
-    gw1.top = 2650;
-    await service().runOnce();
-    const first = await live();
-    const oldR = first.find((b) => b.role === 'r');
-    const oldD = first.find((b) => b.role === 'd');
-    // A week on, the sources reach higher: the last 1,100 items move up.
-    now += 7 * DAY;
-    for (const record of records.slice(2200)) {
-      record.height = (record.height ?? 0) + 500;
-    }
-    gw1.top = 3200;
-    const report = await service().runOnce();
-    const [fold, delta] = report.steps;
-    assert.equal(fold.role, 'r');
-    assert.deepEqual(fold.heightRange, [2000, 2999]);
-    assert.equal(fold.result, 'published');
-    assert.deepEqual(fold.band?.supersedes, [oldR?.id]);
-    assert.ok((fold.inputs.folded ?? 0) >= 2200, 'the old r was folded in');
-    // On a fold day the delta keeps its start, so it covers what the old r
-    // did while a subscriber still downloads the new one. (Its items only
-    // moved height, which bands don't store: its content is the same.)
-    assert.equal(delta.role, 'd');
-    assert.deepEqual(delta.heightRange, [2089, null]);
-    assert.equal(delta.result, 'unchanged');
-    // Every installation order: new d alone (old r kept), new r alone (old d
-    // kept), both.
-    const newR = (await live()).find((b) => b.role === 'r') as OwnBand;
-    const newD = (await live()).find((b) => b.role === 'd') as OwnBand;
-    assert.equal(newD.id, oldD?.id);
-    const h = first.find((b) => b.role === 'h') as OwnBand;
-    for (const installed of [
-      [h, oldR as OwnBand, newD],
-      [h, newR, oldD as OwnBand],
-      [h, newR, newD],
-    ]) {
-      assertCovered(installed, 1000, 3200);
-    }
-
-    // The next day the delta moves up over the new r, and names every delta
-    // it replaces, the first one included.
-    now += DAY;
-    const next = await service().runOnce();
-    assert.deepEqual(
-      next.steps.map((s) => [s.role, s.heightRange]),
-      [['d', [2488, null]]],
-    );
-    assert.equal(next.steps[0].result, 'published');
-    assert.ok(next.steps[0].band?.supersedes.includes(oldD?.id as string));
-    assertCovered(await live(), 1000, 3200);
-  });
-
-  it('names earlier superseded deltas too, for a subscriber that missed one', async () => {
-    const all = records;
-    const without = (from: number, to: number) =>
-      all.filter((_, i) => i < from || i >= to);
-    await service().runOnce();
-    gw1.top = 2650;
-    // Three days, three different deltas.
-    records = without(3200, 3300);
-    now += DAY;
-    const first = (await service().runOnce()).steps[0];
-    records = all;
-    now += DAY;
-    const second = (await service().runOnce()).steps[0];
-    records = without(3100, 3200);
-    now += DAY;
-    const third = (await service().runOnce()).steps[0];
-    for (const step of [first, second, third]) {
-      assert.equal(step.result, 'published');
-    }
-    assert.deepEqual(second.band?.supersedes, [first.band?.id]);
-    assert.deepEqual(
-      [...(third.band?.supersedes ?? [])].sort(),
-      [first.band?.id, second.band?.id].sort(),
-      'the first delta too, though no longer offered',
-    );
-  });
-
   it('rejects a band whose sources conflict on more than 1% of it', async () => {
-    await service().runOnce();
-    now += DAY;
-    gw1.top = 2650;
+    await ctx.service().runOnce();
+    ctx.now += DAY;
+    ctx.gw1.top = 2650;
     // A second indexer giving 100 of the delta's items other offsets.
     const gw2 = new MemorySource('gw2', () =>
-      records.slice(2200, 2300).map((r, i) => ({
+      ctx.records.slice(2200, 2300).map((r, i) => ({
         ...r,
-        rootOffset: records[2300 + i].rootOffset,
-        rootDataOffset: records[2300 + i].rootDataOffset,
+        rootOffset: ctx.records[2300 + i].rootOffset,
+        rootDataOffset: ctx.records[2300 + i].rootDataOffset,
       })),
     );
     gw2.top = 2650;
-    const report = await service({}, () => [
-      { source: gw1, optional: false },
-      { source: gw2, optional: false },
-    ]).runOnce();
+    const report = await ctx
+      .service({}, () => [
+        { source: ctx.gw1, optional: false },
+        { source: gw2, optional: false },
+      ])
+      .runOnce();
     assert.equal(report.steps[0].result, 'rejected');
     assert.equal(report.steps[0].reason, 'conflicts');
     assert.match(report.steps[0].details?.[0] ?? '', /100 conflicting IDs/);
   });
 
   it('rejects a band with no offsets to check, rather than retry it forever', async () => {
-    records = records.map(
+    ctx.records = ctx.records.map(
       ({ rootOffset, rootDataOffset, size, ...rest }) => rest,
     );
-    const report = await service().runOnce();
+    const report = await ctx.service().runOnce();
     assert.equal(report.steps[0].result, 'rejected');
     assert.equal(report.steps[0].reason, 'no_offsets');
-    assert.equal((await exportState()).retry, undefined);
+    assert.equal((await ctx.exportState()).retry, undefined);
   });
 
   it('runs a dry run beside a run that holds the lock', async () => {
-    await fs.mkdir(path.join(dir, 'export'), { recursive: true });
-    const held = await ExportLock.acquire(path.join(dir, 'export', 'lock'));
+    await fs.mkdir(path.join(ctx.dir, 'export'), { recursive: true });
+    const held = await ExportLock.acquire(path.join(ctx.dir, 'export', 'lock'));
     assert.ok(held.acquired);
     try {
-      const report = await service().runOnce({ dryRun: true });
+      const report = await ctx.service().runOnce({ dryRun: true });
       assert.equal(report.locked, undefined);
       assert.ok(report.steps.length > 0);
     } finally {
@@ -365,7 +99,7 @@ describe('ExportService', () => {
   });
 
   it('builds and checks on a dry run, but publishes, locks and saves nothing', async () => {
-    const report = await service().runOnce({ dryRun: true });
+    const report = await ctx.service().runOnce({ dryRun: true });
     assert.deepEqual(
       report.steps.map((s) => [s.role, s.result]),
       [
@@ -383,18 +117,22 @@ describe('ExportService', () => {
     assert.equal(printed.steps[0].band.records, report.steps[0].band?.records);
     assert.ok(report.peakBytes >= (report.steps[0].peakBytes ?? 0));
     assert.ok((report.steps[0].peakBytes ?? 0) > 0);
-    assert.deepEqual(await live(), []);
-    assert.deepEqual(await fs.readdir(path.join(dir, 'export')), ['dry-run']);
+    assert.deepEqual(await ctx.live(), []);
+    assert.deepEqual(await fs.readdir(path.join(ctx.dir, 'export')), [
+      'dry-run',
+    ]);
     assert.deepEqual(
-      await fs.readdir(path.join(dir, 'export', 'dry-run')),
+      await fs.readdir(path.join(ctx.dir, 'export', 'dry-run')),
       [],
       'no staging left',
     );
   });
 
   it('keeps a dry run’s bands at a fixed height for comparing', async () => {
-    const keep = path.join(dir, 'export', 'compare');
-    const report = await service().runOnce({ keepDir: keep, toHeight: 2300 });
+    const keep = path.join(ctx.dir, 'export', 'compare');
+    const report = await ctx
+      .service()
+      .runOnce({ keepDir: keep, toHeight: 2300 });
     assert.equal(report.stableTop, 2300);
     assert.equal(report.keptIn, keep);
     assert.deepEqual(
@@ -405,122 +143,87 @@ describe('ExportService', () => {
       ],
     );
     assert.equal((await fs.readdir(keep)).length, 2);
-    assert.deepEqual(await live(), [], 'nothing in the real publish directory');
-    await assert.rejects(fs.stat(path.join(dir, 'export', 'state.json')));
+    assert.deepEqual(
+      await ctx.live(),
+      [],
+      'nothing in the real publish directory',
+    );
+    await assert.rejects(fs.stat(path.join(ctx.dir, 'export', 'state.json')));
   });
 
   it('rejects a band with a wrong header, keeps what is published, and does not retry', async () => {
-    await service().runOnce();
-    const before = await live();
-    now += DAY;
-    gw1.top = 2650;
+    await ctx.service().runOnce();
+    const before = await ctx.live();
+    ctx.now += DAY;
+    ctx.gw1.top = 2650;
     // A source now gives a third of the delta's items another item's
     // offsets, so any sample holds some.
     for (let i = 2200; i < 2600; i++) {
-      records[i] = {
-        ...records[i],
-        rootOffset: records[i + 1].rootOffset,
-        rootDataOffset: records[i + 1].rootDataOffset,
+      ctx.records[i] = {
+        ...ctx.records[i],
+        rootOffset: ctx.records[i + 1].rootOffset,
+        rootDataOffset: ctx.records[i + 1].rootDataOffset,
       };
     }
-    const report = await service().runOnce();
+    const report = await ctx.service().runOnce();
     assert.equal(runResult(report), 'rejected');
     assert.equal(report.steps[0].reason, 'wrong_header');
-    const state = await exportState();
+    const state = await ctx.exportState();
     assert.equal(state.retry, undefined);
     assert.match(state.lastRejection?.reasons.join(' ') ?? '', /wrong_header/);
     assert.deepEqual(
-      (await live()).map((b) => b.id),
+      (await ctx.live()).map((b) => b.id),
       before.map((b) => b.id),
     );
   });
 
-  it('waits for an operator after a rejected fold, then folds on a forced run', async () => {
-    await service().runOnce();
-    now += 8 * DAY;
-    gw1.top = 3200;
-    for (const record of records.slice(2200)) {
-      record.height = (record.height ?? 0) + 500;
-    }
-    // The fold reads 2089 and up: corrupt a third of those rows.
-    const good = records.map((r) => ({ ...r }));
-    for (let i = 2200; i < 2600; i++) {
-      records[i] = {
-        ...records[i],
-        rootOffset: records[i + 1].rootOffset,
-        rootDataOffset: records[i + 1].rootDataOffset,
-      };
-    }
-    const rejected = await service().runOnce();
-    assert.equal(rejected.steps[0].role, 'r');
-    assert.equal(rejected.steps[0].result, 'rejected');
-    records = good;
-    now += DAY;
-    const daily = await service().runOnce();
-    assert.ok(
-      daily.steps.every((s) => s.role !== 'r'),
-      'no fold until an operator runs one',
-    );
-    const forced = await service().runOnce({ force: true });
-    assert.equal(forced.steps[0].role, 'r');
-    assert.equal(forced.steps[0].result, 'published');
-    assert.equal((await exportState()).foldRejectedAt, undefined);
-  });
-
-  it('does not fold twice in a week when a crash lost the state after a fold', async () => {
-    await service().runOnce();
-    await fs.rm(path.join(dir, 'export', 'state.json'));
-    now += DAY;
-    gw1.top = 2700;
-    const report = await service().runOnce();
-    assert.ok(
-      report.steps.every((s) => s.role === 'd'),
-      'the r manifest dates the last fold',
-    );
-  });
-
   it('retries a run that could not check, backing off, and clears on success', async () => {
-    rootsFail = true;
-    const first = await service().runOnce();
+    ctx.rootsFail = true;
+    const first = await ctx.service().runOnce();
     assert.equal(runResult(first), 'couldnt_check');
     assert.equal(first.steps[0].reason, 'gate');
-    let state = await exportState();
+    let state = await ctx.exportState();
     assert.equal(state.retry?.attempts, 1);
-    assert.equal(Date.parse(state.retry?.at ?? ''), now + RETRY_FIRST_MS);
-    assert.equal(await service().nextRunAt(), now + RETRY_FIRST_MS);
-    assert.deepEqual(await live(), [], 'nothing published or withdrawn');
+    assert.equal(Date.parse(state.retry?.at ?? ''), ctx.now + RETRY_FIRST_MS);
+    assert.equal(await ctx.service().nextRunAt(), ctx.now + RETRY_FIRST_MS);
+    assert.deepEqual(await ctx.live(), [], 'nothing published or withdrawn');
 
-    now += RETRY_FIRST_MS;
-    await service().runOnce();
-    state = await exportState();
+    ctx.now += RETRY_FIRST_MS;
+    await ctx.service().runOnce();
+    state = await ctx.exportState();
     assert.equal(state.retry?.attempts, 2);
-    assert.equal(Date.parse(state.retry?.at ?? ''), now + 2 * RETRY_FIRST_MS);
+    assert.equal(
+      Date.parse(state.retry?.at ?? ''),
+      ctx.now + 2 * RETRY_FIRST_MS,
+    );
 
-    rootsFail = false;
-    now += 2 * RETRY_FIRST_MS;
-    await service().runOnce();
-    state = await exportState();
+    ctx.rootsFail = false;
+    ctx.now += 2 * RETRY_FIRST_MS;
+    await ctx.service().runOnce();
+    state = await ctx.exportState();
     assert.equal(state.retry, undefined);
   });
 
   it('fails a run whose required source is down, and leaves an optional one out', async () => {
-    gw1.fail = 'connection refused';
-    const down = await service().runOnce();
+    ctx.gw1.fail = 'connection refused';
+    const down = await ctx.service().runOnce();
     assert.equal(down.failed?.reason, 'source');
     assert.match(down.failed?.message ?? '', /connection refused/);
 
     const gw2 = new MemorySource('gw2', () => []);
     gw2.fail = 'peer down';
-    gw1.fail = undefined;
-    const report = await service({}, () => [
-      { source: gw1, optional: false },
-      { source: gw2, optional: true },
-    ]).runOnce();
+    ctx.gw1.fail = undefined;
+    const report = await ctx
+      .service({}, () => [
+        { source: ctx.gw1, optional: false },
+        { source: gw2, optional: true },
+      ])
+      .runOnce();
     assert.equal(runResult(report), 'published');
   });
 
   it('refuses to bootstrap over bands it did not build', async () => {
-    const foreign = path.join(config().publishDir, 'b1-h1950000-tip-turbo');
+    const foreign = path.join(ctx.config().publishDir, 'b1-h1950000-tip-turbo');
     await fs.mkdir(foreign, { recursive: true });
     await fs.writeFile(
       path.join(foreign, 'manifest.json'),
@@ -539,101 +242,42 @@ describe('ExportService', () => {
         metadata: { heightRange: [1950000, null] },
       }),
     );
-    const report = await service().runOnce();
+    const report = await ctx.service().runOnce();
     assert.equal(report.failed?.reason, 'foreign_bands');
     assert.match(report.failed?.message ?? '', /adopt them first/);
     assert.equal(runResult(report), 'rejected');
     assert.deepEqual(report.steps, []);
-    const state = await exportState();
+    const state = await ctx.exportState();
     assert.equal(state.retry, undefined);
     assert.deepEqual(state.lastRejection?.reasons[0], 'foreign_bands');
   });
 
-  it('resumes an interrupted bootstrap above the history it published', async () => {
-    rootsFail = true;
-    const svc = service({ startHeight: 0 });
-    // h [0, 999] has no rows: skipped, empty. Then h [1000, 1999] can't be
-    // checked: the bootstrap stops there.
-    const first = await svc.runOnce();
-    assert.deepEqual(
-      first.steps.map((s) => [s.role, s.heightRange, s.result]),
-      [
-        ['h', [0, 999], 'skipped'],
-        ['h', [1000, 1999], 'couldnt_check'],
-      ],
-    );
-    rootsFail = false;
-    now += RETRY_FIRST_MS;
-    const second = await svc.runOnce();
-    assert.deepEqual(
-      second.steps.map((s) => [s.role, s.heightRange, s.result]),
-      [
-        ['h', [0, 999], 'skipped'],
-        ['h', [1000, 1999], 'published'],
-        ['r', [2000, 2600], 'published'],
-      ],
-    );
-  });
-
   it('rejects a band whose every record was invalid, but skips a range with no data', async () => {
     // Offsets that frame no header: the band library drops them all.
-    records = records.map((r) => ({
+    ctx.records = ctx.records.map((r) => ({
       ...r,
       rootDataOffset: r.rootOffset,
     }));
-    const report = await service().runOnce();
+    const report = await ctx.service().runOnce();
     assert.equal(report.steps[0].role, 'h');
     assert.equal(report.steps[0].result, 'rejected');
     assert.equal(report.steps[0].reason, 'build');
     // A range nobody indexed is nothing to cover.
-    records = [];
-    const empty = await service({ startHeight: 0 }).runOnce({ dryRun: true });
+    ctx.records = [];
+    const empty = await ctx
+      .service({ startHeight: 0 })
+      .runOnce({ dryRun: true });
     assert.equal(empty.steps[0].result, 'skipped');
     assert.equal(empty.steps[0].reason, 'empty');
   });
 
-  it('starts a new recent chain after a freeze, naming none of the old one', async () => {
-    // r [2000, 2600], folded to [2000, 2999], which freezes it.
-    await service().runOnce();
-    now += 8 * DAY;
-    for (const record of records.slice(2200)) {
-      record.height = (record.height ?? 0) + 500;
-    }
-    gw1.top = 3200;
-    const freeze = await service().runOnce();
-    assert.equal(freeze.steps[0].role, 'r');
-    assert.deepEqual(freeze.steps[0].heightRange, [2000, 2999]);
-    const frozenId = freeze.steps[0].band?.id;
-    assert.deepEqual(
-      (await exportState()).supersededHistory?.r,
-      [],
-      'a freeze ends the r chain',
-    );
-    // Even with history present, a new r above a frozen one names none of it.
-    await updateIndexState(
-      path.join(dir, 'export', 'state.json'),
-      'root-tx-index',
-      (state) => {
-        state.supersededHistory = { ...state.supersededHistory, r: ['r-old'] };
-      },
-    );
-    // A week on, a new r starts above the frozen one: it supersedes
-    // nothing, not the chain the frozen band ended.
-    now += 8 * DAY;
-    const next = await service().runOnce();
-    const fresh = next.steps.find((s) => s.role === 'r');
-    assert.deepEqual(fresh?.heightRange, [3000, 3200]);
-    assert.deepEqual(fresh?.band?.supersedes, []);
-    assert.ok((await live()).some((b) => b.id === frozenId));
-  });
-
   it('takes a peer’s exported files as a peer: capping the stable top and merging', async () => {
-    const files = path.join(dir, 'gw2-files');
+    const files = path.join(ctx.dir, 'gw2-files');
     await fs.mkdir(files);
     // gw2 exported up to 2500 only, and agrees with gw1 on what it has.
     await fs.writeFile(
       path.join(files, '1000-2500.csv'),
-      records
+      ctx.records
         .filter((r) => (r.height ?? 0) <= 2500)
         .map(
           (r) =>
@@ -641,10 +285,15 @@ describe('ExportService', () => {
         )
         .join('\n') + '\n',
     );
-    const report = await service({}, () => [
-      { source: gw1, optional: false },
-      { source: new CsvOverlaySource('gw2-files', files, 0), optional: false },
-    ]).runOnce();
+    const report = await ctx
+      .service({}, () => [
+        { source: ctx.gw1, optional: false },
+        {
+          source: new CsvOverlaySource('gw2-files', files, 0),
+          optional: false,
+        },
+      ])
+      .runOnce();
     assert.equal(report.stableTop, 2500, 'the lower peer caps the run');
     assert.deepEqual(
       report.steps.map((s) => [s.role, s.heightRange, s.result]),
@@ -657,88 +306,37 @@ describe('ExportService', () => {
     assert.ok((report.steps[0].inputs['gw2-files'] ?? 0) > 0);
   });
 
-  it('prunes overlay files a frozen band holds, a fold after it froze', async () => {
-    const overlay = path.join(dir, 'overlay');
-    await fs.mkdir(overlay);
-    // A peer's exported files: never pruned by this service.
-    const peerFiles = path.join(dir, 'gw2-files');
-    await fs.mkdir(peerFiles);
-    await fs.writeFile(path.join(peerFiles, '2000-2400.csv'), '');
-    await fs.writeFile(path.join(peerFiles, '2401-3300.csv'), '');
-    const sources = () => [
-      { source: gw1, optional: false },
-      { source: new CsvOverlaySource('bundler', overlay), optional: false },
-      { source: new CsvOverlaySource('gw2', peerFiles, 0), optional: false },
-    ];
-    await service({}, sources).runOnce();
-    // Files written before the freeze: one wholly below the frozen top less
-    // the overlap, one reaching into it.
-    await fs.writeFile(path.join(overlay, '2000-2400.csv'), '');
-    await fs.writeFile(path.join(overlay, '2600-2700.csv'), '');
-    const old = new Date(Date.now() - 3600_000);
-    for (const name of ['2000-2400.csv', '2600-2700.csv']) {
-      await fs.utimes(path.join(overlay, name), old, old);
-    }
-    await fs.utimes(path.join(peerFiles, '2000-2400.csv'), old, old);
-    now += 8 * DAY;
-    for (const record of records.slice(2200)) {
-      record.height = (record.height ?? 0) + 500;
-    }
-    gw1.top = 3200;
-    const freeze = await service({}, sources).runOnce();
-    assert.deepEqual(freeze.steps[0].heightRange, [2000, 2999]);
-    // Date the frozen band by the service's clock.
-    const frozen = (await live()).find((b) => b.role === 'r') as OwnBand;
-    const manifestPath = path.join(frozen.dir, 'manifest.json');
-    const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8'));
-    manifest.createdAt = new Date(now).toISOString();
-    await fs.writeFile(manifestPath, JSON.stringify(manifest));
-
-    now += DAY;
-    await service({}, sources).runOnce();
-    assert.equal(
-      (await fs.readdir(overlay)).length,
-      2,
-      'too soon after the freeze',
-    );
-
-    now += 7 * DAY;
-    await service({}, sources).runOnce();
-    assert.deepEqual(await fs.readdir(overlay), ['2600-2700.csv']);
-    assert.equal((await fs.readdir(peerFiles)).length, 2, 'peer files kept');
-  });
-
   it('publishes a small history band rather than leave its heights uncovered', async () => {
-    records = records.filter((_, i) => i >= 1100 || i % 10 === 0);
-    const report = await service().runOnce();
+    ctx.records = ctx.records.filter((_, i) => i >= 1100 || i % 10 === 0);
+    const report = await ctx.service().runOnce();
     assert.equal(report.steps[0].role, 'h');
     assert.equal(report.steps[0].result, 'published');
     assert.ok((report.steps[0].band?.records ?? 0) < 1000);
   });
 
   it('refuses a step without room on the disk', async () => {
-    freeBytes = 5 * 1024 ** 3;
-    const report = await service().runOnce();
+    ctx.freeBytes = 5 * 1024 ** 3;
+    const report = await ctx.service().runOnce();
     assert.equal(report.failed?.reason, 'disk');
     assert.match(report.failed?.message ?? '', /margin/);
     assert.equal(runResult(report), 'couldnt_check');
   });
 
   it('does not run while another holds a fresh lock', async () => {
-    await fs.mkdir(path.join(dir, 'export'), { recursive: true });
-    const held = await ExportLock.acquire(path.join(dir, 'export', 'lock'));
+    await fs.mkdir(path.join(ctx.dir, 'export'), { recursive: true });
+    const held = await ExportLock.acquire(path.join(ctx.dir, 'export', 'lock'));
     assert.ok(held.acquired);
-    const report = await service().runOnce();
+    const report = await ctx.service().runOnce();
     assert.equal(runResult(report), 'locked');
     assert.deepEqual(report.steps, []);
     await held.lock.release();
   });
 
   it('recovers its bands from disk when state.json is lost', async () => {
-    await service().runOnce();
-    await fs.rm(path.join(dir, 'export', 'state.json'));
-    now += DAY;
-    const report = await service().runOnce();
+    await ctx.service().runOnce();
+    await fs.rm(path.join(ctx.dir, 'export', 'state.json'));
+    ctx.now += DAY;
+    const report = await ctx.service().runOnce();
     assert.ok(
       report.steps.every((s) => s.role !== 'h'),
       'no second bootstrap',
@@ -746,12 +344,12 @@ describe('ExportService', () => {
   });
 
   it('reports alive from its heartbeat, whatever its runs do', async () => {
-    rootsFail = true;
-    const svc = service();
+    ctx.rootsFail = true;
+    const svc = ctx.service();
     svc.start();
     try {
       assert.equal(svc.alive(), true);
-      now += 6 * 60_000;
+      ctx.now += 6 * 60_000;
       assert.equal(svc.alive(), false, 'no tick for six minutes');
     } finally {
       await svc.stop(0);
@@ -759,20 +357,23 @@ describe('ExportService', () => {
   });
 
   it('schedules the daily run, a missed day soon, and a run that died soon', async () => {
-    const svc = service();
+    const svc = ctx.service();
     // Never run: soon.
-    assert.equal(await svc.nextRunAt(), now + 5 * 60_000);
+    assert.equal(await svc.nextRunAt(), ctx.now + 5 * 60_000);
     await svc.runOnce();
     // Ran today at 04:00: tomorrow at 04:00.
     assert.equal(await svc.nextRunAt(), Date.parse('2026-10-03T04:00:00Z'));
     // A run that died part way (its outcome still "running"): soon.
     await updateIndexState(
-      path.join(dir, 'export', 'state.json'),
+      path.join(ctx.dir, 'export', 'state.json'),
       'root-tx-index',
       (state) => {
-        state.lastRun = { at: new Date(now).toISOString(), outcome: 'running' };
+        state.lastRun = {
+          at: new Date(ctx.now).toISOString(),
+          outcome: 'running',
+        };
       },
     );
-    assert.equal(await svc.nextRunAt(), now + 5 * 60_000);
+    assert.equal(await svc.nextRunAt(), ctx.now + 5 * 60_000);
   });
 });
