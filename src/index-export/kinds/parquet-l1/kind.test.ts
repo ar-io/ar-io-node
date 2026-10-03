@@ -7,6 +7,8 @@
 import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
 
+import { createTestLogger } from '../../../../test/test-logger.js';
+
 import {
   isL1BandRange,
   L1_SPAN,
@@ -15,7 +17,8 @@ import {
   l1SubRangeOf,
   type ParquetL1Band,
 } from '../../../lib/parquet-l1/layout.js';
-import { L1PublishedBand, planL1 } from './kind.js';
+import { isTransientSqliteError, L1CheckError } from './export.js';
+import { L1PublishedBand, planL1, withReadRetry } from './kind.js';
 
 const band = (id: string, from: number, to: number): L1PublishedBand => ({
   id,
@@ -175,5 +178,82 @@ describe('planL1', () => {
       }
       assert.equal(next - 1, top, `covered up to ${top}`);
     }
+  });
+});
+
+describe('withReadRetry', () => {
+  const log = createTestLogger({ suite: 'parquet-l1 read retry' });
+  const opts = (slept: number[]) => ({
+    log,
+    heightRange: [0, 99] as [number, number],
+    delayMs: 10,
+    sleep: async (ms: number) => {
+      slept.push(ms);
+    },
+  });
+  const readonly = () =>
+    Object.assign(new Error('attempt to write a readonly database'), {
+      code: 'SQLITE_READONLY',
+    });
+
+  it('classifies only the errors that pass as transient', () => {
+    for (const e of [
+      readonly(),
+      Object.assign(new Error('x'), { code: 'SQLITE_BUSY' }),
+      Object.assign(new Error('x'), { code: 'SQLITE_IOERR_SHORT_READ' }),
+      new Error('database is locked'),
+    ]) {
+      assert.equal(isTransientSqliteError(e), true, String(e));
+    }
+    for (const e of [
+      new L1CheckError('Heights 0-9 fail the chain checks at 3 (tx_root)'),
+      new Error('no such table: stable_blocks'),
+      Object.assign(new Error('x'), { code: 'SQLITE_CORRUPT' }),
+      undefined,
+    ]) {
+      assert.equal(isTransientSqliteError(e), false, String(e));
+    }
+  });
+
+  it('builds the band again after a refused read, backing off', async () => {
+    const slept: number[] = [];
+    let calls = 0;
+    const got = await withReadRetry(async () => {
+      calls += 1;
+      if (calls < 3) throw readonly();
+      return 'band';
+    }, opts(slept));
+    assert.equal(got, 'band');
+    assert.equal(calls, 3);
+    assert.deepEqual(slept, [10, 20], 'backs off further each time');
+  });
+
+  it('gives up after its retries, throwing the last refusal', async () => {
+    const slept: number[] = [];
+    let calls = 0;
+    await assert.rejects(
+      withReadRetry(async () => {
+        calls += 1;
+        throw readonly();
+      }, opts(slept)),
+      /attempt to write a readonly database/,
+    );
+    assert.equal(calls, 3, 'the first try and two retries');
+  });
+
+  it('never rebuilds for a chain check: it would fail the same way', async () => {
+    const slept: number[] = [];
+    let calls = 0;
+    await assert.rejects(
+      withReadRetry(async () => {
+        calls += 1;
+        throw new L1CheckError(
+          'Heights 0-99 fail the chain checks at 7 (anchor)',
+        );
+      }, opts(slept)),
+      /fail the chain checks/,
+    );
+    assert.equal(calls, 1);
+    assert.deepEqual(slept, []);
   });
 });

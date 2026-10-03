@@ -18,6 +18,7 @@
 import crypto from 'node:crypto';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
+import { setTimeout } from 'node:timers/promises';
 import { Logger } from 'winston';
 
 import { bandPublisherTag } from '../../../lib/index-band/build.js';
@@ -33,9 +34,18 @@ import {
   ParquetL1Band,
 } from '../../../lib/parquet-l1/layout.js';
 import * as metrics from '../../metrics.js';
-import { exportL1Band, L1CheckError, L1IncompleteError } from './export.js';
+import {
+  exportL1Band,
+  isTransientSqliteError,
+  L1CheckError,
+  L1IncompleteError,
+} from './export.js';
 
 export const L1_INDEX = 'parquet-l1';
+
+/** Times a band is rebuilt after a read of `core.db` was refused, and the delay before each. */
+export const READ_RETRIES = 2;
+export const READ_RETRY_DELAY_MS = 15_000;
 
 export interface L1PublishedBand {
   id: string;
@@ -216,6 +226,45 @@ export function l1BandId(band: ParquetL1Band, publisher: string): string {
   ].join('-');
 }
 
+/**
+ * Runs an export, building the band again when a read of `core.db` was
+ * refused for a reason that passes (see {@link isTransientSqliteError}).
+ * Anything else, including a chain check, is thrown at once: rebuilding
+ * would only fail the same way.
+ */
+export async function withReadRetry<T>(
+  run: () => Promise<T>,
+  {
+    log,
+    heightRange,
+    retries = READ_RETRIES,
+    delayMs = READ_RETRY_DELAY_MS,
+    sleep = (ms: number) => setTimeout(ms),
+  }: {
+    log: Logger;
+    heightRange: [number, number];
+    retries?: number;
+    delayMs?: number;
+    sleep?: (ms: number) => Promise<unknown>;
+  },
+): Promise<T> {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await run();
+    } catch (error) {
+      if (attempt > retries || !isTransientSqliteError(error)) throw error;
+      const delay = delayMs * attempt;
+      log.warn('A read of core.db was refused; building this band again', {
+        heightRange,
+        attempt,
+        delayMs: delay,
+        error: (error as Error).message,
+      });
+      await sleep(delay);
+    }
+  }
+}
+
 /** Exports, checks and (unless a dry run) publishes one band. */
 export async function runL1Step(
   step: L1Step,
@@ -251,14 +300,21 @@ export async function runL1Step(
   } as const;
   let outcome: L1Outcome;
   try {
-    const result = await exportL1Band({
-      coreDbPath,
-      workDir,
-      from,
-      to,
-      supersedes: step.supersedes,
-      requireComplete: step.role === 'h',
-    });
+    // The gateway writes to core.db while this reads it, so a read can be
+    // refused mid-band during a WAL checkpoint. That costs the whole band,
+    // so it is retried here rather than left for the next run.
+    const result = await withReadRetry(
+      () =>
+        exportL1Band({
+          coreDbPath,
+          workDir,
+          from,
+          to,
+          supersedes: step.supersedes,
+          requireComplete: step.role === 'h',
+        }),
+      { log, heightRange: step.heightRange },
+    );
     const id = l1BandId(result.band, publisher);
     const staging = path.dirname(result.dir);
     const facts = {
