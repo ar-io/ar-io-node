@@ -24,7 +24,17 @@ import {
 /** Where the service works: the shared index volume, fixed in compose. */
 export const DATA_DIR = 'data/indexes';
 
+/** The indexes this service can build. */
+export const EXPORT_KINDS = ['root-tx-index', 'parquet-l1'] as const;
+export type ExportKind = (typeof EXPORT_KINDS)[number];
+
 export interface ExportConfig {
+  /** The indexes to build. */
+  kinds: ExportKind[];
+  /** `core.db`, opened read-only, for `parquet-l1`. */
+  coreDbPath: string;
+  /** `data/indexes/published/parquet-l1`. */
+  l1PublishDir: string;
   /** The publishing gateway's wallet; makes band ids this publisher's own. */
   publisher: string;
   sources: ResolvedSource[];
@@ -77,9 +87,10 @@ export function parseRunAt(raw: string): number {
 }
 
 /**
- * Reads the service's settings. Refuses: no `AR_IO_WALLET`; no
+ * Reads the service's settings. Refuses: no `AR_IO_WALLET`; an unknown
+ * index in `INDEX_EXPORT_KINDS`; and, when building root-TX bands, no
  * `INDEX_EXPORT_HEADER_CHECK_URL` (there is no safe default: a gateway that
- * has to fetch the roots itself times out and takes load for it); and
+ * has to fetch the roots itself times out and takes load for it), or
  * anything {@link resolveSourceConfigs} refuses.
  */
 export function parseExportConfig(env: Env, dataDir = DATA_DIR): ExportConfig {
@@ -89,7 +100,25 @@ export function parseExportConfig(env: Env, dataDir = DATA_DIR): ExportConfig {
       'AR_IO_WALLET is required: band ids are made unique to the publishing gateway',
     );
   }
-  const headerCheckUrl = value(env, 'INDEX_EXPORT_HEADER_CHECK_URL');
+  const kinds = (value(env, 'INDEX_EXPORT_KINDS') ?? 'root-tx-index')
+    .split(',')
+    .map((kind) => kind.trim())
+    .filter((kind) => kind.length > 0);
+  for (const kind of kinds) {
+    if (!(EXPORT_KINDS as readonly string[]).includes(kind)) {
+      throw new Error(
+        `INDEX_EXPORT_KINDS: ${JSON.stringify(kind)} is not one of ${EXPORT_KINDS.join(', ')}`,
+      );
+    }
+  }
+  if (kinds.length === 0) {
+    throw new Error('INDEX_EXPORT_KINDS names no index to build');
+  }
+  const rootTx = kinds.includes('root-tx-index');
+  // Only root-TX bands are header-checked against a gateway.
+  const headerCheckUrl =
+    value(env, 'INDEX_EXPORT_HEADER_CHECK_URL') ??
+    (rootTx ? undefined : 'http://unused.invalid');
   if (headerCheckUrl === undefined) {
     throw new Error(
       'INDEX_EXPORT_HEADER_CHECK_URL is required: a gateway that holds these root transactions (http://core:4000 if this gateway does, otherwise e.g. https://turbo-gateway.com); index-swarm-setup --publish sets it',
@@ -116,11 +145,13 @@ export function parseExportConfig(env: Env, dataDir = DATA_DIR): ExportConfig {
   };
   const startHeight = integer(env, 'INDEX_EXPORT_START_HEIGHT', { min: 0 });
   return {
+    kinds: [...new Set(kinds)] as ExportKind[],
+    coreDbPath: value(env, 'INDEX_EXPORT_CORE_DB') ?? 'data/sqlite/core.db',
+    l1PublishDir: path.join(dataDir, 'published', 'parquet-l1'),
     publisher,
-    sources: resolveSourceConfigs(
-      value(env, 'INDEX_EXPORT_SOURCES'),
-      sourceEnv,
-    ),
+    sources: rootTx
+      ? resolveSourceConfigs(value(env, 'INDEX_EXPORT_SOURCES'), sourceEnv)
+      : [],
     sourceEnv,
     runAtMinute: parseRunAt(value(env, 'INDEX_EXPORT_RUN_AT_UTC') ?? '04:00'),
     recentMaxBlocks: integer(env, 'INDEX_EXPORT_RECENT_MAX_BLOCKS', {

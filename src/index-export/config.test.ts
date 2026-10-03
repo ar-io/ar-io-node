@@ -24,6 +24,9 @@ describe('parseExportConfig', () => {
     assert.equal(config.metricsPort, 9102);
     assert.equal(config.publishDir, 'data/indexes/published/root-tx-index');
     assert.equal(config.workDir, 'data/indexes/export');
+    assert.deepEqual(config.kinds, ['root-tx-index']);
+    assert.equal(config.coreDbPath, 'data/sqlite/core.db');
+    assert.equal(config.l1PublishDir, 'data/indexes/published/parquet-l1');
     assert.deepEqual(
       config.sources.map((s) => s.config.type),
       ['sqlite'],
@@ -91,6 +94,41 @@ describe('parseExportConfig', () => {
         pattern,
       );
     }
+  });
+
+  it('builds L1 bands alone without a header-check gateway or sources, and refuses an unknown index', () => {
+    const config = parseExportConfig({
+      AR_IO_WALLET: BASE.AR_IO_WALLET,
+      INDEX_EXPORT_KINDS: ' parquet-l1 ',
+      INDEX_EXPORT_SOURCES: 'not even JSON',
+      INDEX_EXPORT_CORE_DB: '/data/core.db',
+    });
+    assert.deepEqual(config.kinds, ['parquet-l1']);
+    assert.deepEqual(config.sources, []);
+    assert.equal(config.coreDbPath, '/data/core.db');
+    assert.deepEqual(
+      parseExportConfig({
+        ...BASE,
+        INDEX_EXPORT_KINDS: 'root-tx-index,parquet-l1',
+      }).kinds,
+      ['root-tx-index', 'parquet-l1'],
+    );
+    assert.throws(
+      () =>
+        parseExportConfig({
+          AR_IO_WALLET: BASE.AR_IO_WALLET,
+          INDEX_EXPORT_KINDS: 'root-tx-index,parquet-l1',
+        }),
+      /INDEX_EXPORT_HEADER_CHECK_URL is required/,
+    );
+    assert.throws(
+      () => parseExportConfig({ ...BASE, INDEX_EXPORT_KINDS: 'parquet-l2' }),
+      /"parquet-l2" is not one of root-tx-index, parquet-l1/,
+    );
+    assert.throws(
+      () => parseExportConfig({ ...BASE, INDEX_EXPORT_KINDS: ' , ' }),
+      /names no index/,
+    );
   });
 
   it('passes source errors through', () => {

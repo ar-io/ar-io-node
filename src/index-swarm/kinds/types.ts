@@ -57,6 +57,18 @@ export interface SweepRequest {
 export interface ArtifactKind {
   /** Value of the manifest's `kind` field this implementation handles. */
   readonly kind: string;
+  /**
+   * Taken only from a subscription that names the index: one that names
+   * none takes what the gateway serves from, not every large dataset a
+   * publisher offers (and that shares the disk budget).
+   */
+  readonly optIn?: boolean;
+  /**
+   * The file whose presence makes an installed band live (`manifest.json`,
+   * `band.json`): retiring a band removes it first, and a record whose band
+   * lacks it is reinstalled rather than trusted.
+   */
+  readonly liveFile: string;
 
   /**
    * Read a band directory and describe it for publication: its files, their

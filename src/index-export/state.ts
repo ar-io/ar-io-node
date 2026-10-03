@@ -54,9 +54,18 @@ export interface IndexState {
   /** A pending retry after a run that couldn't check. */
   retry?: { at: string; attempts: number; reason: string };
   /** The latest rejection, for an operator. */
-  lastRejection?: { at: string; role: BandRole; reasons: string[] };
-  /** The last run; `running` while one is (or died) in progress. */
-  lastRun?: { at: string; outcome: string };
+  lastRejection?: {
+    at: string;
+    role: BandRole;
+    reasons: string[];
+    /** The rejected band's heights, where only that band waits for an operator. */
+    heightRange?: [number, number];
+  };
+  /**
+   * The last run; `running` while one is (or died) in progress. `detail`
+   * says why, when it didn't succeed.
+   */
+  lastRun?: { at: string; outcome: string; detail?: string };
   /** When each overlay's newest file was written, as of the last run. */
   overlayNewest?: Record<string, string>;
   /**

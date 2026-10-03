@@ -928,7 +928,8 @@ services:
     labels:
       autoheal: ${RUN_AUTOHEAL:-false}
 
-  # Builds this gateway's root-TX index bands from its own index once a day and
+  # Builds this gateway's root-TX (and, with INDEX_EXPORT_KINDS, L1) index
+  # bands from its own index once a day and
   # puts them where the index-swarm sidecar signs and offers them. See
   # "Producing bands" in docs/index-swarm.md.
   index-export:
@@ -951,7 +952,8 @@ services:
     # run "couldn't check", retried later.
     volumes:
       - ${INDEX_SWARM_DATA_PATH:-./data/indexes}:/app/data/indexes
-      # Read-only, for the SQLite source (gateways without ClickHouse).
+      # Read-only, for the SQLite source (gateways without ClickHouse) and
+      # L1 bands (core.db).
       - ${SQLITE_DATA_PATH:-./data/sqlite}:/app/data/sqlite:ro
       # Peers' ClickHouse password files, only when INDEX_EXPORT_SOURCES names
       # a peer; otherwise nothing is mounted.
@@ -965,6 +967,8 @@ services:
       - CLICKHOUSE_URL=${CLICKHOUSE_URL:-}
       - CLICKHOUSE_USER=${CLICKHOUSE_USER:-}
       - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:-}
+      - INDEX_EXPORT_KINDS=${INDEX_EXPORT_KINDS:-root-tx-index}
+      - INDEX_EXPORT_CORE_DB=${INDEX_EXPORT_CORE_DB:-}
       - INDEX_EXPORT_SOURCES=${INDEX_EXPORT_SOURCES:-}
       - INDEX_EXPORT_RUN_AT_UTC=${INDEX_EXPORT_RUN_AT_UTC:-04:00}
       - INDEX_EXPORT_RECENT_MAX_BLOCKS=${INDEX_EXPORT_RECENT_MAX_BLOCKS:-100000}

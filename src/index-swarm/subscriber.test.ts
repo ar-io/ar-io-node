@@ -19,6 +19,7 @@ import {
   MAX_ACTIVE_TORRENT_DOWNLOADS,
   MAX_SEQUENCE_JUMP,
   Subscriber,
+  takesIndex,
 } from './subscriber.js';
 import {
   manifestAgeClock,
@@ -104,6 +105,8 @@ describe('fileUrl', () => {
     );
   });
 });
+
+const DAY_MS = 24 * 3600_000;
 
 describe('Subscriber', () => {
   let tempDir: string;
@@ -2421,6 +2424,39 @@ describe('Subscriber', () => {
     assert.equal(existsSync(dir), false, 'retired and (grace 0) swept');
   });
 
+  it('retires a band as the kind it was installed as', async () => {
+    const dir = path.join(
+      subInstalled,
+      'parquet-l1',
+      'l1-h0-9-p-0~000000000000',
+    );
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path.join(dir, 'band.json'), '{}');
+    await fs.writeFile(path.join(dir, 'manifest.json'), '{}');
+    await subState.update((draft) => {
+      draft.installed['parquet-l1'] = {
+        'l1-h0-9-p-0': {
+          dir,
+          files: [],
+          installedAt: clock.toISOString(),
+          publisher: 'GonePublisherWallet11111111111111111111111111',
+          kind: 'parquet-l1',
+        },
+      };
+    });
+
+    await makeSubscriber({
+      subscribe: [],
+      supersedeGraceMs: DAY_MS,
+    }).pollOnce();
+
+    // Kept through the grace, but no longer live as a Parquet L1 band.
+    assert.equal(existsSync(path.join(dir, 'band.json')), false);
+    assert.equal(existsSync(path.join(dir, 'manifest.json')), true);
+    const band = (await subState.load()).installed['parquet-l1']['l1-h0-9-p-0'];
+    assert.notEqual(band.retiredAt, undefined);
+  });
+
   it('counts downloads waiting in incoming/ against the disk budget', async () => {
     await makeBand('band-a');
     await publish();
@@ -3027,6 +3063,56 @@ describe('Subscriber', () => {
 
     await makeSubscriber({ name: 'root-tx-index' }).pollOnce();
     assert.deepEqual(await installedIds(), ['band-a']);
+
+    // The publisher still offers it, but the subscription no longer takes
+    // it: retired, as though the publisher had dropped it.
+    await makeSubscriber({ name: 'some-other-index' }).pollOnce();
+    assert.deepEqual(await installedIds(), []);
+  });
+
+  it('keeps an installed band only while its kind’s live file is there', async () => {
+    await makeBand('band-a');
+    await publish();
+    await makeSubscriber().pollOnce();
+    const installedAt = async () =>
+      Object.values(
+        (await subState.load()).installed['root-tx-index'] ?? {},
+      ).map((band) => band.installedAt);
+    const first = await installedAt();
+
+    // Unchanged: the record and the live file stand, so it is left alone.
+    clock = new Date(clock.getTime() + 60_000);
+    await makeSubscriber().pollOnce();
+    assert.deepEqual(await installedAt(), first);
+
+    // A kind whose live file isn't there can't trust the record: the band
+    // is taken again (adopted from disk here).
+    const base = createKindRegistry({ log }).get('cdb64-root-tx')!;
+    const other: ArtifactKind = Object.assign(Object.create(base), {
+      liveFile: 'not-there.json',
+    });
+    clock = new Date(clock.getTime() + 60_000);
+    await makeSubscriber({
+      kinds: new Map([['cdb64-root-tx', other]]),
+    }).pollOnce();
+    assert.notDeepEqual(await installedAt(), first);
+  });
+
+  it('takes an opt-in kind only when the subscription names it', () => {
+    const l1 = { optIn: true };
+    const cdb = {};
+    assert.equal(takesIndex({}, 'root-tx-index', cdb), true);
+    assert.equal(takesIndex({}, 'parquet-l1', l1), false);
+    assert.equal(takesIndex({}, 'unknown', undefined), true);
+    assert.equal(takesIndex({ name: 'parquet-l1' }, 'parquet-l1', l1), true);
+    assert.equal(
+      takesIndex({ name: 'parquet-l1' }, 'root-tx-index', cdb),
+      false,
+    );
+    const both = { name: ['root-tx-index', 'parquet-l1'] };
+    assert.equal(takesIndex(both, 'root-tx-index', cdb), true);
+    assert.equal(takesIndex(both, 'parquet-l1', l1), true);
+    assert.equal(takesIndex(both, 'other', cdb), false);
   });
 
   it('keeps what is installed when the publisher is unreachable', async () => {
