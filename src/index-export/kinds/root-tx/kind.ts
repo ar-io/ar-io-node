@@ -78,6 +78,8 @@ export interface StepContext {
   dryRun: boolean;
   /** Whether this run still holds its lock; nothing publishes once it doesn't. */
   stillHeld?: () => Promise<boolean>;
+  /** The run's clock, stamped into the band manifest. */
+  now?: () => number;
   /** Overrides for the header check's read retries (tests). */
   headerCheck?: { retries?: number; retryDelayMs?: number };
 }
@@ -279,6 +281,7 @@ export async function buildStepBand(
   let band: BuiltBand;
   try {
     band = await buildBand({
+      ...(ctx.now !== undefined ? { now: ctx.now } : {}),
       log,
       records: records(),
       publishDir: ctx.publishDir,

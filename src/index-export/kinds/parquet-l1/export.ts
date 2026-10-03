@@ -557,6 +557,26 @@ export async function exportL1Band({
 export class L1CheckError extends Error {}
 
 /**
+ * A read of `core.db` that failed for a reason that passes: the gateway
+ * writes to it while this reads, and a reader riding along on another
+ * process's WAL index can be refused during a checkpoint or a WAL restart.
+ * SQLite reports that as a write to a read-only database, which it isn't.
+ */
+export function isTransientSqliteError(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null)?.code;
+  if (
+    typeof code === 'string' &&
+    /^SQLITE_(READONLY|BUSY|PROTOCOL|IOERR)/.test(code)
+  ) {
+    return true;
+  }
+  const message = error instanceof Error ? error.message : '';
+  return /attempt to write a readonly database|database is locked|database table is locked|locking protocol/i.test(
+    message,
+  );
+}
+
+/**
  * `core.db` doesn't hold every block of the range, as when the gateway
  * started above it (`START_HEIGHT`). Nothing is wrong with what it holds,
  * but no band can be built from it.

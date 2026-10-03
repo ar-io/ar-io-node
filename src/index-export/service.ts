@@ -467,6 +467,9 @@ export class ExportService {
         ...(this.lock !== undefined
           ? { stillHeld: async () => this.lock?.held() ?? false }
           : {}),
+        // The same clock the fold decision reads, so a band's createdAt and
+        // `foldDue` can never drift apart.
+        now: () => this.now(),
       };
       const plan = async (): Promise<PlanInput> => ({
         bands: await deriveOwnBands(

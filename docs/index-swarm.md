@@ -537,6 +537,11 @@ can't build them, and its runs say so (`incomplete`, not retried).
   tags: a row a fork left in `core.db` is counted (`strayTransactions`),
   never published. A range that fails is rejected, naming the heights, and
   nothing is written.
+- **Refused reads.** The gateway writes to `core.db` while the export reads
+  it, so during a WAL checkpoint SQLite can refuse a read, reporting it as a
+  write to a read-only database. That costs the whole band, so it is built
+  again (twice, 15 s then 30 s later) before the run gives up on it. A chain
+  check is never retried: it would fail the same way.
 - **Gaps.** A whole band is never rebuilt, so it waits (`incomplete`) while
   the index lacks a transaction a block lists, or an owner's key. A tip band
   publishes and counts them (`missingTransactions`, `missingWallets`); it is
