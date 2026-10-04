@@ -350,7 +350,7 @@ export interface ExportStatus {
     lastSuccess?: Partial<Record<'h' | 'r' | 'd', string>>;
     lastRejection?: { at: string; role: string; reasons: string[] };
     retry?: { at: string; attempts: number; reason: string };
-    lastRun?: { at: string; outcome: string };
+    lastRun?: { at: string; outcome: string; detail?: string };
     overlayNewest?: Record<string, string>;
   };
   /** Seconds since the lock was last touched, when one is there. */
@@ -475,6 +475,71 @@ export function exportChecks(status: ExportStatus, now: number): Check[] {
   return checks;
 }
 
+/** What the index-export service's state says of the L1 bands it builds. */
+export function l1ExportChecks(
+  state: NonNullable<ExportStatus['state']>,
+  now: number,
+): Check[] {
+  const age = (at: string | undefined) =>
+    at === undefined ? undefined : (now - Date.parse(at)) / 1000;
+  const checks: Check[] = [];
+  const tip = age(state.lastSuccess?.d);
+  const whole = age(state.lastSuccess?.h);
+  if (tip === undefined || tip > EXPORT_DELTA_FAIL_SECONDS) {
+    checks.push({
+      level: 'fail',
+      text:
+        tip === undefined
+          ? 'No L1 tip band has been built yet'
+          : `The L1 tip band last succeeded ${formatAge(tip)} ago`,
+      fix: `A bootstrap builds the whole bands below it first, over several runs. Check docker compose logs index-export and its last run below; to run now: ${RUN_ONCE}`,
+    });
+  } else {
+    checks.push({
+      level: 'ok',
+      text: `L1 tip band last succeeded ${formatAge(tip)} ago`,
+    });
+  }
+  if (whole !== undefined) {
+    checks.push({
+      level: 'info',
+      text: `A whole L1 band last built ${formatAge(whole)} ago`,
+    });
+  }
+  if (state.retry !== undefined) {
+    checks.push({
+      level: 'warn',
+      text: `Couldn't check (attempt ${state.retry.attempts}), retrying at ${state.retry.at}: ${state.retry.reason}`,
+    });
+  }
+  if (state.lastRun !== undefined) {
+    const { outcome, detail } = state.lastRun;
+    checks.push({
+      level: outcome === 'couldnt_check' ? 'warn' : 'info',
+      text: `Last L1 run ${formatAge(age(state.lastRun.at) ?? 0)} ago: ${outcome}${detail !== undefined ? ` (${detail})` : ''}`,
+    });
+  }
+  const rejection = state.lastRejection;
+  const rejected = age(rejection?.at);
+  const since =
+    rejection === undefined
+      ? undefined
+      : state.lastSuccess?.[rejection.role as 'h' | 'd'];
+  if (
+    rejection !== undefined &&
+    rejected !== undefined &&
+    rejected < 7 * 86400 &&
+    (since === undefined || Date.parse(since) < Date.parse(rejection.at))
+  ) {
+    checks.push({
+      level: 'fail',
+      text: `An L1 band failed its chain checks ${formatAge(rejected)} ago: ${rejection.reasons.slice(0, 3).join('; ')}`,
+      fix: 'The named heights in core.db disagree with the chain; later bands wait for it. Repair those blocks, then the next run builds it.',
+    });
+  }
+  return checks;
+}
+
 function print(title: string, checks: Check[]): void {
   process.stdout.write(`\n${title}\n`);
   for (const check of checks) {
@@ -551,7 +616,7 @@ async function main(): Promise<void> {
   }
 
   const exportDir = path.join(config.DATA_DIR, 'export');
-  const exportState = await fs
+  const exportStates = await fs
     .readFile(path.join(exportDir, 'state.json'), 'utf8')
     .then(
       (text) =>
@@ -559,10 +624,38 @@ async function main(): Promise<void> {
           JSON.parse(text) as {
             indexes?: Record<string, ExportStatus['state']>;
           }
-        ).indexes?.['root-tx-index'],
+        ).indexes,
     )
     .catch(() => undefined);
-  if (config.PUBLISH.length > 0 || exportState !== undefined) {
+  const l1State = exportStates?.['parquet-l1'];
+  let exportState = exportStates?.['root-tx-index'];
+  // A run's own record is kept with root-TX's, so a node building only L1
+  // bands has a root-TX state that holds nothing else.
+  if (
+    l1State !== undefined &&
+    Object.keys(exportState?.lastSuccess ?? {}).length === 0 &&
+    exportState?.lastRejection === undefined
+  ) {
+    exportState = undefined;
+  }
+  if (l1State !== undefined) {
+    // The run's pending retry, shown here when there's no root-TX section.
+    const retry =
+      exportState === undefined
+        ? exportStates?.['root-tx-index']?.retry
+        : undefined;
+    section(
+      'Building L1 bands (index-export)',
+      l1ExportChecks(
+        { ...l1State, ...(retry !== undefined ? { retry } : {}) },
+        Date.now(),
+      ),
+    );
+  }
+  if (
+    (config.PUBLISH.length > 0 && l1State === undefined) ||
+    exportState !== undefined
+  ) {
     const lock = await fs
       .stat(path.join(exportDir, 'lock'))
       .catch(() => undefined);

@@ -109,7 +109,19 @@ describe('index-swarm config', () => {
     it('rejects a malformed index name', () => {
       assert.throws(
         () => parseSubscribe('[{"publisher":"w","name":"Root_Tx"}]'),
-        /\[0\]\.name must match/,
+        /\[0\]\.name must be a name matching/,
+      );
+      for (const name of ['[]', '["root-tx-index","Bad"]', '42']) {
+        assert.throws(
+          () => parseSubscribe(`[{"publisher":"w","name":${name}}]`),
+          /\[0\]\.name must be a name matching/,
+        );
+      }
+      assert.deepEqual(
+        parseSubscribe(
+          '[{"publisher":"w","name":["root-tx-index","parquet-l1"]}]',
+        )[0].name,
+        ['root-tx-index', 'parquet-l1'],
       );
     });
 

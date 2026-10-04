@@ -29,7 +29,12 @@ import {
   PARTITION_FILE_PATTERN,
   parseManifest,
 } from '../../lib/cdb64-manifest.js';
-import { InstalledBand } from '../state.js';
+import {
+  BandLifecycle,
+  installBand,
+  retireBand,
+  sweepRetiredBands,
+} from './lifecycle.js';
 import {
   ArtifactKind,
   InstallRequest,
@@ -88,8 +93,10 @@ function rejectRemotePartitions(
 
 export class Cdb64RootTxKind implements ArtifactKind {
   readonly kind = CDB64_ROOT_TX_KIND;
+  readonly liveFile = MANIFEST_FILE;
   private readonly log: Logger;
   private readonly fileConcurrency: number;
+  private readonly lifecycle: BandLifecycle;
 
   constructor({
     log,
@@ -100,6 +107,11 @@ export class Cdb64RootTxKind implements ArtifactKind {
   }) {
     this.log = log.child({ class: 'Cdb64RootTxKind' });
     this.fileConcurrency = fileConcurrency;
+    this.lifecycle = {
+      log: this.log,
+      label: 'CDB64',
+      liveFile: this.liveFile,
+    };
   }
 
   async describe(dir: string): Promise<BandDescriptor> {
@@ -349,113 +361,18 @@ export class Cdb64RootTxKind implements ArtifactKind {
     });
   }
 
-  async install({
-    band,
-    sourceDir,
-    targetDir,
-    current,
-  }: InstallRequest): Promise<InstalledSet> {
-    await fs.mkdir(path.dirname(targetDir), { recursive: true });
-
-    // A directory left from an interrupted attempt would make the rename
-    // fail, or worse, nest inside it.
-    await fs.rm(targetDir, { recursive: true, force: true });
-
-    // One rename, so the gateway's watcher never sees a partially populated
-    // band. Both paths are on the shared volume, which is what makes this
-    // atomic rather than a copy.
-    try {
-      await fs.rename(sourceDir, targetDir);
-    } catch (error: any) {
-      if (error?.code === 'EXDEV') {
-        throw new Error(
-          `Cannot install band ${band.id}: ${sourceDir} and ${targetDir} are on different filesystems, so the move would not be atomic`,
-        );
-      }
-      throw error;
-    }
-
-    const installed: InstalledBand = {
-      dir: targetDir,
-      files: band.files,
-      installedAt: new Date().toISOString(),
-    };
-
-    this.log.info('Installed CDB64 band', {
-      id: band.id,
-      dir: targetDir,
-      fileCount: band.files.length,
-    });
-
-    return { ...current, [band.id]: installed };
+  async install(request: InstallRequest): Promise<InstalledSet> {
+    return installBand(request, this.lifecycle);
   }
 
-  async retire({ bandId, dir, current }: RetireRequest): Promise<InstalledSet> {
-    const existing = current[bandId];
-
+  async retire(request: RetireRequest): Promise<InstalledSet> {
     // Removing the manifest is what takes the band out of service: the
-    // gateway's collection watcher drops the reader on that event. The
-    // partition files stay until the sweep, so a reader mid-lookup keeps the
-    // bytes it already has open.
-    try {
-      await fs.unlink(path.join(dir, MANIFEST_FILE));
-    } catch (error: any) {
-      if (error?.code !== 'ENOENT') {
-        throw error;
-      }
-    }
-
-    this.log.info('Retired CDB64 band', { id: bandId, dir });
-
-    return {
-      ...current,
-      [bandId]: {
-        ...(existing ?? { dir, files: [], installedAt: '' }),
-        dir,
-        retiredAt: new Date().toISOString(),
-      },
-    };
+    // gateway's collection watcher drops the reader on that event.
+    return retireBand(request, this.lifecycle);
   }
 
-  async sweepRetired({
-    current,
-    dirFor,
-    graceMs,
-  }: SweepRequest): Promise<InstalledSet> {
-    const now = Date.now();
-    const next: InstalledSet = {};
-
-    for (const [bandId, band] of Object.entries(current)) {
-      if (band.retiredAt === undefined) {
-        next[bandId] = band;
-        continue;
-      }
-
-      const retiredAt = Date.parse(band.retiredAt);
-      // An unparseable timestamp would otherwise keep the band forever.
-      const elapsed = Number.isNaN(retiredAt) ? graceMs : now - retiredAt;
-      if (elapsed < graceMs) {
-        next[bandId] = band;
-        continue;
-      }
-
-      const dir = band.dir.length > 0 ? band.dir : dirFor(bandId);
-      try {
-        await fs.rm(dir, { recursive: true, force: true });
-        this.log.info('Removed retired CDB64 band', { id: bandId, dir });
-      } catch (error: any) {
-        // Keep the entry so the next sweep tries again, rather than losing
-        // track of a directory still on disk.
-        this.log.warn('Could not remove retired CDB64 band; will retry', {
-          id: bandId,
-          dir,
-          error: error?.message,
-        });
-        next[bandId] = band;
-      }
-    }
-
-    return next;
+  async sweepRetired(request: SweepRequest): Promise<InstalledSet> {
+    return sweepRetiredBands(request, this.lifecycle);
   }
 }
 

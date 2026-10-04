@@ -8,6 +8,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- L1 index bands (`parquet-l1`): the Arweave base layer (blocks,
+  transactions, tags in plaintext, owners) as Parquet, one fixed height
+  range per band (whole 100,000-height history bands over 5,000-height
+  delta bands, so only the tip is ever rebuilt), so a new gateway can
+  import its L1 index rather than index the chain block by block, and apps
+  can query it with DuckDB. `index-export` builds them from `core.db` with
+  `INDEX_EXPORT_KINDS` including `parquet-l1`, checking every block's
+  links, `hash_list_merkle`, `tx_root`, transaction positions and owners'
+  addresses before publishing; the index-swarm sidecar publishes them as
+  `{"name":"parquet-l1","kind":"parquet-l1"}`, and a subscriber that names
+  `parquet-l1` (`INDEX_SWARM_SUBSCRIBE` `name` may now be a list) checks
+  each band's files, footers, schema and row counts before installing it.
+  A subscription without `name` doesn't take them. See "L1 bands" in
+  [docs/index-swarm.md](docs/index-swarm.md).
+
 - The `index-export` service (compose profile `index-export`) builds this
   gateway's root-TX index bands from its own index once a day and puts them
   where the index-swarm sidecar signs and offers them: history bands cut at
