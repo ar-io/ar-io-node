@@ -46,15 +46,6 @@ export async function listOverlayFiles(dir: string): Promise<OverlayFile[]> {
   return files.sort((a, b) => a.from - b.from || a.to - b.to);
 }
 
-/** A file as it was when a build read it, so pruning can tell it hasn't changed. */
-interface ReadFile {
-  from: number;
-  to: number;
-  ino: number;
-  size: number;
-  mtimeMs: number;
-}
-
 /**
  * An authoritative overlay, such as a bundler's own offsets: a directory of
  * CSV files in the format `index-band-build` reads (`height` required), each
@@ -69,13 +60,18 @@ interface ReadFile {
  * it into place, and replace a file the same way.
  */
 export class CsvOverlaySource implements RecordSource {
-  readonly rank = 1;
   readonly stats: SourceStats = newSourceStats();
-  private readonly read = new Map<string, ReadFile>();
 
+  /**
+   * @param rank 1 (the default) for an overlay; 0 for a peer's records
+   *   exported to files (another indexer's `index-band-export`, where its
+   *   database isn't reachable), which compete like any peer's and, like
+   *   one, cap the run's stable height at their coverage.
+   */
   constructor(
     readonly name: string,
     readonly dir: string,
+    readonly rank: 0 | 1 = 1,
   ) {}
 
   /** The top of the highest file's coverage, or -1 with no files. */
@@ -99,14 +95,6 @@ export class CsvOverlaySource implements RecordSource {
       const filePath = path.join(this.dir, file.name);
       const handle = await fs.open(filePath, 'r');
       try {
-        const stat = await handle.stat();
-        this.read.set(file.name, {
-          from: file.from,
-          to: file.to,
-          ino: stat.ino,
-          size: stat.size,
-          mtimeMs: stat.mtimeMs,
-        });
         // Read through the handle opened above, so a file renamed over
         // this one meanwhile isn't mixed in.
         const rows = readBandRecordsCsv(
@@ -128,7 +116,9 @@ export class CsvOverlaySource implements RecordSource {
             if (height < from || height > to) continue;
             if (row.rootOffset === undefined) this.stats.rootOnly += 1;
             this.stats.records += 1;
-            yield { ...row, rank: 1, coverageTo: file.to, source: this.name };
+            yield this.rank === 1
+              ? { ...row, rank: 1, coverageTo: file.to, source: this.name }
+              : { ...row, source: this.name };
           }
         } catch (error) {
           throw new Error(
@@ -142,30 +132,27 @@ export class CsvOverlaySource implements RecordSource {
   }
 
   /**
-   * Deletes the files a frozen band was built from: those this source read
-   * whose whole coverage lies within `[from, to]`, the band's range, and
-   * that haven't changed since (a replacement dropped in meanwhile was never
-   * read, so it stays). Returns their names.
+   * Deletes the files whose whole coverage lies within `[from, to]` and that
+   * were last written before `writtenBefore` (ms): heights a frozen band
+   * holds, from files the band was built from. A file written or replaced
+   * after the band was built was never read into it, so it stays. Returns
+   * their names.
    */
-  async prune(from: number, to: number): Promise<string[]> {
+  async prune(
+    from: number,
+    to: number,
+    writtenBefore: number,
+  ): Promise<string[]> {
     const pruned: string[] = [];
-    for (const [name, seen] of this.read) {
-      if (seen.from < from || seen.to > to) continue;
-      const filePath = path.join(this.dir, name);
-      const now = await fs.stat(filePath).catch(() => undefined);
-      if (
-        now === undefined ||
-        now.ino !== seen.ino ||
-        now.size !== seen.size ||
-        now.mtimeMs !== seen.mtimeMs
-      ) {
-        continue;
-      }
+    for (const file of await this.files()) {
+      if (file.from < from || file.to > to) continue;
+      const filePath = path.join(this.dir, file.name);
+      const stat = await fs.stat(filePath).catch(() => undefined);
+      if (stat === undefined || stat.mtimeMs >= writtenBefore) continue;
       await fs.rm(filePath, { force: true });
-      this.read.delete(name);
-      pruned.push(name);
+      pruned.push(file.name);
     }
-    return pruned.sort();
+    return pruned;
   }
 
   /** Seconds since the newest overlay file was written, or undefined with none. */

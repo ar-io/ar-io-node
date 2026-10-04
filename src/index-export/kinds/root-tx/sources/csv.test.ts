@@ -86,6 +86,18 @@ describe('CsvOverlaySource', () => {
     assert.equal(source.stats.records, 2);
   });
 
+  it('gives plain peer records at rank 0, still only inside each file coverage', async () => {
+    await write('100-199.csv', [line(1, 150), line(2, 250)]);
+    const source = new CsvOverlaySource('gw2-files', dir, 0);
+    assert.equal(source.rank, 0);
+    const records = await collect(source.records(100, 300));
+    assert.equal(records.length, 1);
+    assert.equal(records[0].rank, undefined);
+    assert.equal(records[0].coverageTo, undefined);
+    assert.equal(records[0].source, 'gw2-files');
+    assert.deepEqual(source.stats.dropped, { outside_coverage: 1 });
+  });
+
   it('skips files whose coverage misses the range without reading them', async () => {
     await write('100-199.csv', [line(1, 150)]);
     await write('300-399.csv', ['not,a,valid,file']);
@@ -163,25 +175,25 @@ describe('CsvOverlaySource', () => {
     assert.equal(await source.stableHeight(), 250);
   });
 
-  it('prunes only files it read, unchanged, wholly within the frozen band', async () => {
+  it('prunes files wholly within the range written before the band, and no others', async () => {
     await write('50-99.csv', [line(1, 60)]);
     await write('100-199.csv', [line(2, 150)]);
     await write('200-299.csv', [line(3, 250)]);
     await write('300-399.csv', [line(4, 350)]);
     await write('scratch.csv.tmp', []);
+    const builtAt = Date.now();
+    const before = new Date(builtAt - 3600_000);
+    for (const name of ['50-99.csv', '100-199.csv', '300-399.csv']) {
+      await fs.utimes(path.join(dir, name), before, before);
+    }
+    // 200-299.csv was replaced after the band was built: never read into it.
+    const after = new Date(builtAt + 60_000);
+    await fs.utimes(path.join(dir, '200-299.csv'), after, after);
     const source = new CsvOverlaySource('bundler', dir);
-    await collect(source.records(100, 399));
-    // Unread: a file never built is never pruned.
-    await write('400-499.csv', [line(5, 450)]);
-    // Replaced after it was read: the correction stays.
-    await fs.rm(path.join(dir, '200-299.csv'));
-    await write('200-299.csv', [line(3, 251), line(6, 252)]);
-    // The frozen band covers 100-350: 300-399 runs past it.
-    assert.deepEqual(await source.prune(100, 350), ['100-199.csv']);
+    assert.deepEqual(await source.prune(100, 350, builtAt), ['100-199.csv']);
     assert.deepEqual((await fs.readdir(dir)).sort(), [
       '200-299.csv',
       '300-399.csv',
-      '400-499.csv',
       '50-99.csv',
       'scratch.csv.tmp',
     ]);

@@ -77,12 +77,20 @@ restart.
    but a wallet asked to sign an arbitrary message starting with that prefix
    would produce one, so don't use the observer key in a wallet that signs
    messages for dApps.
-3. Put finished bands under `data/indexes/published/root-tx-index/<band>/`,
-   with a `heightRange` in each manifest (see [producing bands](#producing-bands)).
-4. Set it up and start it:
+3. Bands are built by the `index-export` service from this gateway's own
+   index, once a day (see [producing bands](#producing-bands)). Publishing is
+   for gateways that unbundle: one that indexes no data items has nothing to
+   offer.
+4. Set it up, dry-run the first build, and start it:
    ```bash
-   ./tools/index-swarm-setup --publish --torrent --public-host <this node's public IP> --restart
+   ./tools/index-swarm-setup --publish --start-height 1950000 --torrent --public-host <this node's public IP>
+   docker compose --profile index-export run --rm -T index-export --once --dry-run > plan.json
+   ./tools/index-swarm-setup --publish --restart
    ```
+   `--restart` recreates the gateway when its index settings in `.env`
+   differ from what it runs, which applies every pending change to its
+   settings; on a live gateway, start the services by name instead, with
+   the gateway's compose `-f` files and `up -d --no-deps index-swarm index-export`.
    `--public-host` is where peers reach this node's engine and its tracker.
    The first scan hashes every file once (minutes for tens of GB; disk-bound).
 5. With `--torrent`, open 6881 (TCP and UDP) and 6969 (TCP) to the internet.
@@ -286,8 +294,129 @@ fallback key has nothing anyone can verify against and will refuse to publish.
 ### Producing bands
 
 The publisher offers whatever band directories are under
-`data/indexes/published/<index>/`; it does not build indexes itself. A band is
-a [partitioned CDB64 index](cdb64-format.md#partitioned-cdb64-index-format),
+`data/indexes/published/<index>/`; it does not build them. The `index-export`
+service (compose profile `index-export`, the core image) does, from this
+gateway's own index, so every publisher builds bands the same way.
+
+**What it builds.** For the root-TX index, three kinds of band, named
+`<kind>-h<from>-<to|tip>-<publisher>-<digest>`:
+
+| Kind | Range | When |
+|---|---|---|
+| `h` (history) | Fixed and closed | Cut at the first run, at multiples of `INDEX_EXPORT_RECENT_MAX_BLOCKS` from `INDEX_EXPORT_START_HEIGHT`; never rebuilt |
+| `r` (recent) | `[R_lo, R_hi]` | Folded weekly: its own entries plus the sources' rows above it, so rows the index has since expired (ClickHouse TTL) are kept. At `INDEX_EXPORT_RECENT_MAX_BLOCKS` it is frozen and a new `r` starts above it |
+| `d` (delta) | From 512 blocks below the top of the highest `h` or `r` to the tip | Rebuilt daily at `INDEX_EXPORT_RUN_AT_UTC`; published only when its content changed |
+
+A fold publishes the new `r` (superseding only `r`s) before the new `d`
+(superseding only `d`s), and on a fold day the `d` keeps its old start, moving
+up over the new `r` the next day. A subscriber keeps a superseded band until
+its own successor installs, so whichever of the two installs first, every
+height stays covered. Each new band also names the ids its predecessors
+replaced, so a subscriber that missed one still keeps its old band.
+
+**Where records come from.** `INDEX_EXPORT_SOURCES` (see
+[envs](envs.md)): by default this gateway's ClickHouse, or its SQLite
+without one. Several sources merge under one rule: the later root wins, an
+overlay (a bundler's own offsets, as coverage-named CSV files) wins within
+its coverage, and two sources disagreeing on an item's offsets are left out
+(or fall back to the earlier entry) rather than signed. Where a peer
+indexer's database isn't reachable, it can run `index-band-export` into
+coverage-named files that this service reads as a peer (`"rank": 0`). Offsets are placed
+only where proven; an item whose `root_parent_offset` is ambiguous keeps its
+root without them. `ar-io-node index-band-export` shows what one source gives
+(see [the CLI](cli.md#index-band-export)).
+
+**Before publishing**, each band is read back and a sample of its entries is
+header-checked against `INDEX_EXPORT_HEADER_CHECK_URL`: 150 entries, plus up
+to 50 whose offsets were repaired and 200 the overlay changed. That reads
+root transactions over the network, so point it at a gateway that holds
+them, not at a gateway that would have to fetch them. Then:
+
+| Outcome | What happens |
+|---|---|
+| Published | Renamed into place; the sidecar offers it at its next scan |
+| Unchanged | Nothing written |
+| Skipped | A `d` under 1,000 entries (normal for a small publisher just after a fold), or nothing new. Not an error. An `h` or `r` publishes whatever its size, or its heights would stay uncovered |
+| Couldn't check | A source down, the check gateway unable to serve (under 80% read, none wrong, after retrying each read twice), too little disk, or an optional source down during a fold that freezes its band. Retried after 15 minutes, doubling to 2 hours, until the next daily run |
+| Rejected | A wrong header, conflicts over 1% of the band, a band with no offsets to check, a failed read-back, or bands in `published/` it didn't build (bootstrap). Not retried: `index-swarm-status` shows it as a FAIL for an operator |
+
+Nothing already published is withdrawn because a run failed. A rejected
+fold isn't rebuilt every day either: folds wait until an operator runs one
+with `--once`.
+
+**Running it.** It needs a core image that includes it (Release 85 or
+later); set `INDEX_EXPORT_IMAGE_TAG` if core runs an older one. Use your
+compose `-f` files throughout, as for core.
+
+```bash
+# Once, without publishing: the plan, rows, time and peak disk per band
+# (and in total), and the header check's result. -T keeps the logs on
+# stderr, out of the JSON report.
+docker compose --profile index-export run --rm -T index-export --once --dry-run > plan.json
+# The same at a fixed height, keeping the bands to compare (under
+# data/indexes, so on the bands' filesystem).
+docker compose --profile index-export run --rm -T index-export \
+  --once --to 2010000 --keep data/indexes/export/compare > compare.json
+# The service. Its first run is about 5 minutes after it starts, then daily.
+docker compose --profile index-export up -d --no-deps index-export
+```
+
+A long `--once` (a bootstrap of several bands can take hours) is best run
+in `tmux` or `screen`. A `--once` run counts as an operator's: it retries a
+fold that was rejected.
+
+- One run at a time: a run holds `data/indexes/export/lock`, touched every
+  30 s and broken when 5 minutes stale (a killed run). A `--once` beside the
+  running service exits with `locked`.
+- It works under `data/indexes/export/` (scratch, `state.json`, the lock;
+  dry runs under `export/dry-run/`), on the same filesystem as `published/`.
+  Before each band it checks for room: three times the band it folds (the
+  old band stays through the grace beside the scratch and the new one),
+  plus a margin of 5% of the filesystem, at least 10 GiB, that it never
+  eats into, since the gateway's own data may share that disk.
+- `state.json` holds adoptions, the last fold, a pending retry and the
+  last run; the bands themselves are read from `published/` (and the last
+  fold from the recent band's own manifest), so losing it costs the
+  adoptions and the status history.
+- `/healthz` (port `INDEX_EXPORT_METRICS_PORT`, 9102, in `--once` runs too)
+  reports that the loop is alive, never whether runs succeed, so autoheal
+  can't restart-loop a failing export. Run outcomes are in its metrics and
+  in `./tools/index-swarm-status`. For alerting:
+  `time() - index_export_last_success_timestamp_seconds{kind="d"} > 2 * 86400 or absent(index_export_last_success_timestamp_seconds{kind="d"})`
+  (the gauge is set again from `state.json` after a restart);
+  `index_export_run_in_progress` with `index_export_run_started_timestamp_seconds`
+  shows a run that is taking long.
+- Bounds: 6 GB of memory, a 4 GB heap, read-only, low-priority ClickHouse
+  queries of 2 threads, and an I/O weight where the kernel's I/O scheduler
+  honours one (check `BlkioWeight` in `docker inspect`).
+- The container runs as root, so the band directories it writes under
+  `published/` are root's: removing one by hand takes `sudo`.
+
+**Taking over existing bands.** The service refuses to bootstrap while
+`published/` holds bands it didn't build and hasn't adopted: new bands
+would overlap them. A publisher with bands built another way hands them over
+first, with the service stopped (adopting takes the lock):
+
+```bash
+docker compose --profile index-export run --rm -T index-export \
+  --adopt <band-id> --as h|r|d [--top <highest height it covers>]
+```
+
+Adopt every band: the recent one as `r` (folded like the service's own;
+under `INDEX_EXPORT_RECENT_MAX_BLOCKS` in span), older ones as `h`, and a
+daily delta as `d`, so the service's first `d` supersedes it. `--top` is
+required for a band open at the tip, since bands store no heights; err low,
+since the fold reads the sources from just below it. Stop whatever else
+built the bands before adopting, or it will replace them under new ids.
+
+**Known limits.** Rows indexed late at heights already frozen into a band
+(backfills) are not exported. An item under two roots at one height keeps
+whichever sorts first.
+
+#### By hand
+
+A band is a
+[partitioned CDB64 index](cdb64-format.md#partitioned-cdb64-index-format),
 for example from the local database:
 
 ```bash
@@ -985,6 +1114,7 @@ data/indexes/
   swarm/<infohash>/   # with an engine: torrent downloads; the engine's only writable directory
   torrents/<infohash>.torrent    # with an engine: checked torrents kept for seeding
   state.json          # hashes, sequences seen and bands installed
+  export/             # index-export: scratch (.band-build-*), state.json and lock
 ```
 
 Each copy of a band installs into its own directory, named by the band id
@@ -1014,7 +1144,7 @@ container. Nothing reaches the host unless the operator maps the port.
 | Path | Meaning |
 |---|---|
 | `/healthz` | 200 while running, 503 during shutdown. The container healthcheck acts on this, and so does autoheal when `RUN_AUTOHEAL=true`. It deliberately does not track poll progress: a legitimate multi-gigabyte first pull keeps one publisher's poll running longer than any threshold would allow, and autoheal restarting it would lose nothing but waste the transfer. Alarm on `index_subscription_manifest_age_seconds` instead. |
-| `/metrics` | Prometheus exposition. Sidecar and process series only. The shipped `prometheus.yml` has no job for it; add one for `index-swarm:9101` to scrape it. |
+| `/metrics` | Prometheus exposition. Sidecar and process series only. The shipped `prometheus.yml` scrapes it as the `index-swarm` job (and index-export's, on 9102, as `index-export`). |
 
 Metrics worth a dashboard:
 

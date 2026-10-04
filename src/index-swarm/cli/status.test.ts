@@ -12,6 +12,7 @@ import {
   parseMetrics,
   publisherChecks,
   subscriberChecks,
+  exportChecks,
 } from './status.js';
 
 const TURBO = '34LYvMptiDvBP5sqfh1oAd6Q4qFsy4PWaZ1HTFmML7h5';
@@ -209,5 +210,106 @@ describe('engineChecks', () => {
     const [check] = engineChecks(sidecar, { available: false }, 6881, 1e11);
     assert.equal(check.level, 'fail');
     assert.match(check.fix ?? '', /index-swarm-engine-init index-swarm-engine/);
+  });
+});
+
+describe('exportChecks', () => {
+  const now = Date.parse('2026-10-05T12:00:00Z');
+  const hoursAgo = (hours: number) =>
+    new Date(now - hours * 3600_000).toISOString();
+  const levels = (checks: Array<{ level: string; text: string }>) =>
+    checks.map((c) => `${c.level}: ${c.text}`);
+
+  it('says when index-export has not run here, and warns a publisher', () => {
+    const checks = exportChecks({}, now);
+    assert.equal(checks.length, 1);
+    assert.equal(checks[0].level, 'info');
+    const publisher = exportChecks({ publishing: true }, now);
+    assert.equal(publisher[0].level, 'warn');
+    assert.match(publisher[0].fix ?? '', /docker compose logs index-export/);
+  });
+
+  it('warns when the service does not answer', () => {
+    const checks = exportChecks(
+      { state: { lastSuccess: { d: hoursAgo(2) } }, serviceUp: false },
+      now,
+    );
+    assert.equal(checks[0].level, 'warn');
+    assert.match(checks[0].text, /not answering/);
+  });
+
+  it('clears a rejection once that band has since succeeded', () => {
+    const checks = exportChecks(
+      {
+        state: {
+          lastSuccess: { d: hoursAgo(1) },
+          lastRejection: { at: hoursAgo(5), role: 'd', reasons: ['x'] },
+        },
+      },
+      now,
+    );
+    assert.ok(checks.every((c) => c.level !== 'fail'));
+  });
+
+  it('is fine with a fresh daily band and recent fold', () => {
+    const checks = exportChecks(
+      {
+        state: {
+          lastSuccess: { d: hoursAgo(8), r: hoursAgo(80) },
+          lastRun: { at: hoursAgo(8), outcome: 'unchanged' },
+        },
+      },
+      now,
+    );
+    assert.deepEqual(
+      checks.map((c) => c.level),
+      ['ok', 'ok', 'info'],
+    );
+  });
+
+  it('fails a daily band over two days old, or never built', () => {
+    for (const lastSuccess of [{ d: hoursAgo(49) }, {}]) {
+      const [first] = exportChecks({ state: { lastSuccess } }, now);
+      assert.equal(first.level, 'fail');
+      assert.match(first.fix ?? '', /docker compose logs index-export/);
+    }
+  });
+
+  it('fails a recent rejection, warns of a retry, a stale lock and a stale overlay', () => {
+    const checks = exportChecks(
+      {
+        state: {
+          lastSuccess: { d: hoursAgo(20) },
+          lastRejection: {
+            at: hoursAgo(5),
+            role: 'd',
+            reasons: ['wrong_header', '1 of 150 checked entries are wrong'],
+          },
+          retry: { at: hoursAgo(-1), attempts: 2, reason: 'gate' },
+          overlayNewest: { bundler: hoursAgo(24 * 9), fresh: hoursAgo(10) },
+        },
+        lockAgeSeconds: 900,
+      },
+      now,
+    );
+    const text = levels(checks).join('\n');
+    assert.match(text, /fail: A d band was rejected 5\.0 h ago: wrong_header/);
+    assert.match(text, /warn: Couldn't check \(attempt 2\)/);
+    assert.match(text, /warn: A stale lock/);
+    assert.match(text, /warn: Overlay bundler: newest file 9\.0 days old/);
+    assert.match(text, /ok: Overlay fresh/);
+  });
+
+  it('forgets a rejection a week old', () => {
+    const checks = exportChecks(
+      {
+        state: {
+          lastSuccess: { d: hoursAgo(2) },
+          lastRejection: { at: hoursAgo(24 * 8), role: 'd', reasons: ['x'] },
+        },
+      },
+      now,
+    );
+    assert.ok(checks.every((c) => c.level !== 'fail'));
   });
 });

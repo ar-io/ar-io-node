@@ -62,6 +62,28 @@ describe('resolveSourceConfigs', () => {
     );
   });
 
+  it('takes a csv source as an overlay by default, or as a peer at rank 0', () => {
+    const [overlay, peer] = resolveSourceConfigs(
+      JSON.stringify([
+        { type: 'csv', path: 'data/indexes/overlay/bundler' },
+        { type: 'csv', path: 'data/indexes/peer/gw2', rank: 0 },
+      ]),
+      {},
+    );
+    assert.deepEqual(overlay.config, {
+      type: 'csv',
+      name: 'overlay',
+      path: 'data/indexes/overlay/bundler',
+      rank: 1,
+    });
+    assert.deepEqual(peer.config, {
+      type: 'csv',
+      name: 'peer-files',
+      path: 'data/indexes/peer/gw2',
+      rank: 0,
+    });
+  });
+
   it('refuses what would export wrongly', () => {
     const refuse = (json: unknown, pattern: RegExp, env = CH_ENV) =>
       assert.throws(
@@ -99,6 +121,7 @@ describe('resolveSourceConfigs', () => {
     );
     refuse([{ type: 'sqlite', optional: 'yes' }], /optional must be/);
     refuse([{ type: 'clickhouse', pasword: 'x' }], /unknown key "pasword"/);
+    refuse([{ type: 'csv', path: 'a', rank: 2 }], /rank must be 0/);
     refuse([{ type: 'csv', path: 'a', url: 'x' }], /unknown key "url"/);
     refuse(
       [
@@ -153,11 +176,17 @@ describe('openSource', () => {
         },
         { url: 'http://peer:8123', username: 'reader', password: 'peer-pass' },
       ]);
-      const [overlay] = resolveSourceConfigs(
-        JSON.stringify([{ type: 'csv', path: dir }]),
+      const [overlay, peerFiles] = resolveSourceConfigs(
+        JSON.stringify([
+          { type: 'csv', path: dir },
+          { type: 'csv', path: dir, rank: 0 },
+        ]),
         {},
       );
-      assert.ok((await openSource(overlay, {})) instanceof CsvOverlaySource);
+      const overlaySource = await openSource(overlay, {});
+      assert.ok(overlaySource instanceof CsvOverlaySource);
+      assert.equal(overlaySource.rank, 1);
+      assert.equal((await openSource(peerFiles, {})).rank, 0);
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
     }

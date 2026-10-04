@@ -213,6 +213,71 @@ describe('planSetup', () => {
     assert.match(p.notes.join('\n'), /tracker port 6969/);
   });
 
+  it('sets up index-export when publishing, with the header check off this gateway by default', () => {
+    const base =
+      'INDEX_SWARM_OBSERVER_KEYPAIR_FILE=/k.json\nAR_IO_WALLET=W\nANS104_UNBUNDLE_FILTER={"always":true}';
+    const p = plan(base, { publish: true, startHeight: 1950000 });
+    assert.deepEqual(p.errors, []);
+    assert.ok(p.profiles.includes('index-export'));
+    assert.ok(p.services.includes('index-export'));
+    assert.equal(
+      valueOf(p, 'INDEX_EXPORT_HEADER_CHECK_URL'),
+      'https://turbo-gateway.com',
+    );
+    assert.equal(valueOf(p, 'INDEX_EXPORT_START_HEIGHT'), '1950000');
+    assert.deepEqual(p.warnings, []);
+    assert.match(p.notes.join('\n'), /--once --dry-run/);
+    assert.equal(p.restartCore, false, 'index-export needs nothing of core');
+  });
+
+  it('starts index-export with the torrent engine too', () => {
+    const p = plan(
+      'INDEX_SWARM_OBSERVER_KEYPAIR_FILE=/k.json\nAR_IO_WALLET=W\nANS104_UNBUNDLE_FILTER={"always":true}',
+      {
+        publish: true,
+        torrent: true,
+        publicHost: '203.0.113.5',
+        startHeight: 1,
+      },
+    );
+    assert.deepEqual(p.errors, []);
+    assert.deepEqual(p.services, [
+      'index-swarm-engine-init',
+      'index-swarm-engine',
+      'index-swarm',
+      'index-export',
+    ]);
+    assert.ok(p.profiles.includes('index-export'));
+    assert.ok(p.profiles.includes('index-swarm-torrent'));
+  });
+
+  it('warns when publishing would read headers from core, start nowhere, or build nothing', () => {
+    const p = plan(
+      'INDEX_SWARM_OBSERVER_KEYPAIR_FILE=/k.json\nAR_IO_WALLET=W',
+      {
+        publish: true,
+        headerCheckUrl: 'http://core:4000',
+      },
+    );
+    const warnings = p.warnings.join('\n');
+    assert.equal(
+      valueOf(p, 'INDEX_EXPORT_HEADER_CHECK_URL'),
+      'http://core:4000',
+    );
+    assert.match(warnings, /reads from this gateway/);
+    assert.match(warnings, /INDEX_EXPORT_START_HEIGHT/);
+    assert.match(warnings, /unbundles nothing/);
+  });
+
+  it('keeps a header-check gateway already set', () => {
+    const p = plan(
+      'INDEX_SWARM_OBSERVER_KEYPAIR_FILE=/k.json\nAR_IO_WALLET=W\nINDEX_EXPORT_HEADER_CHECK_URL=https://gw.example\nINDEX_EXPORT_START_HEIGHT=5',
+      { publish: true },
+    );
+    assert.equal(valueOf(p, 'INDEX_EXPORT_HEADER_CHECK_URL'), undefined);
+    assert.doesNotMatch(p.warnings.join('\n'), /START_HEIGHT/);
+  });
+
   it('will not publish without a registered key and wallet', () => {
     const none = plan('', { publish: true });
     assert.match(none.errors.join('\n'), /observer key/);
