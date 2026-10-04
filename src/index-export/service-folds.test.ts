@@ -246,7 +246,9 @@ describe('ExportService folds and the recent band', () => {
     // the overlap, one reaching into it.
     await fs.writeFile(path.join(overlay, '2000-2400.csv'), '');
     await fs.writeFile(path.join(overlay, '2600-2700.csv'), '');
-    const old = new Date(Date.now() - 3600_000);
+    // The service's clock, not the real one: the prune compares these file
+    // times against the frozen band's createdAt, which the service dates.
+    const old = new Date(ctx.now - 3600_000);
     for (const name of ['2000-2400.csv', '2600-2700.csv']) {
       await fs.utimes(path.join(overlay, name), old, old);
     }

@@ -176,6 +176,12 @@ export interface BuildBandOptions {
   sampleSizes?: Record<string, number>;
   /** Random source for sampling, in [0, 1). */
   random?: () => number;
+  /**
+   * The clock stamped into the manifest's `createdAt`. The service decides
+   * when a band is due to fold from that stamp, so both must read the same
+   * clock or a test's clock drifts against the band's.
+   */
+  now?: () => number;
 }
 
 export interface BuiltBand {
@@ -482,6 +488,7 @@ export async function buildBand({
   sampleSize = 150,
   sampleSizes = {},
   random = Math.random,
+  now = Date.now,
 }: BuildBandOptions): Promise<BuiltBand> {
   const log = parentLog.child({ function: 'buildBand' });
   if (!KIND_PATTERN.test(kind)) {
@@ -771,7 +778,7 @@ export async function buildBand({
     };
     const manifest: Cdb64Manifest = {
       version: 1,
-      createdAt: new Date().toISOString(),
+      createdAt: new Date(now()).toISOString(),
       totalRecords: written,
       partitions,
       metadata: bandMetadata,
