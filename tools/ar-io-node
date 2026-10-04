@@ -15,12 +15,15 @@
 #     --height-range 2010500,tip --gateway-url http://core:4000 --input - < records.csv
 #   ./tools/ar-io-node index-band-verify --band-dir data/indexes/published/root-tx-index/<band> \
 #     --gateway-url http://core:4000
+#   ./tools/ar-io-node index-band-export --from 2010000 --to 2011000 \
+#     --output data/indexes/export/records.csv
 #   ./tools/ar-io-node get-gateway --address <wallet>
 #
 # Mounts only what a command needs: data/indexes for index-band-* commands
 # (built under data/indexes/export, beside the publish directory, so the final
-# rename stays on one filesystem), and for any other command only the file a
-# --wallet-file names, read-only. Band commands never take a key. It runs as
+# rename stays on one filesystem), plus for index-band-export the SQLite
+# directory read-only and the ClickHouse settings; for any other command only
+# the file a --wallet-file names, read-only. Band commands never take a key. It runs as
 # your user, so data/indexes/published/<index> must be writable by you.
 # Prefer --wallet-file to --private-key: an inline key shows in `ps` and
 # `docker inspect`.
@@ -108,17 +111,40 @@ case "${COMMAND}" in
     }
     for i in "${!ARGS[@]}"; do
       case "${ARGS[$i]}" in
-        --input|--band-dir|--publish-dir|--work-dir)
+        --input|--band-dir|--publish-dir|--work-dir|--output)
           next=$((i + 1))
           if [[ -n "${ARGS[$next]:-}" ]]; then
             ARGS[$next]="$(to_container "${ARGS[$next]}")"
           fi
           ;;
-        --input=*|--band-dir=*|--publish-dir=*|--work-dir=*)
+        --input=*|--band-dir=*|--publish-dir=*|--work-dir=*|--output=*)
           ARGS[$i]="${ARGS[$i]%%=*}=$(to_container "${ARGS[$i]#*=}")"
           ;;
       esac
     done
+    if [[ "${COMMAND}" == "index-band-export" ]]; then
+      # The gateway's own index: its ClickHouse settings, passed by name so
+      # the password stays off the command line (out of `ps`; `docker
+      # inspect` on the running container still shows it), and its SQLite,
+      # read-only. A peer's password file comes from INDEX_EXPORT_SECRETS_DIR,
+      # at /run/secrets/index-export/<file>.
+      for name in CLICKHOUSE_URL CLICKHOUSE_USER CLICKHOUSE_PASSWORD; do
+        value="$(setting "${name}")"
+        if [[ -n "${value}" ]]; then
+          export "${name}=${value}"
+          DOCKER_ARGS+=(-e "${name}")
+        fi
+      done
+      SQLITE_PATH="$(setting SQLITE_DATA_PATH)"
+      SQLITE_PATH="$(realpath -m "${SQLITE_PATH:-./data/sqlite}")"
+      if [[ -d "${SQLITE_PATH}" ]]; then
+        DOCKER_ARGS+=(-v "${SQLITE_PATH}:/app/data/sqlite:ro")
+      fi
+      SECRETS_DIR="$(setting INDEX_EXPORT_SECRETS_DIR)"
+      if [[ -n "${SECRETS_DIR}" ]]; then
+        DOCKER_ARGS+=(-v "$(realpath -e "${SECRETS_DIR}"):/run/secrets/index-export:ro")
+      fi
+    fi
     # Join the gateway's network, so --gateway-url http://core:4000 works.
     NETWORK="$(setting DOCKER_NETWORK_NAME)"
     NETWORK="${NETWORK:-ar-io-network}"

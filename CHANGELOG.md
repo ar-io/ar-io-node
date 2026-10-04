@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- `ar-io-node index-band-export` writes one record source's root-TX index
+  records for a height range as the CSV `index-band-build` reads: this
+  gateway's ClickHouse or SQLite, a peer's ClickHouse, or an overlay
+  directory of coverage-named CSV files. Offsets are placed in the root only
+  where proven: nested items whose `root_parent_offset` was zeroed (#907) are
+  repaired when their parent proves the offsets relative, and otherwise keep
+  their root without offsets. ClickHouse queries are read-only and bounded.
+  The record sources are the first part of the `index-export` service; see
+  [docs/cli.md](docs/cli.md).
+
 - The `ar-io-node` CLI (`tools/ar-io-node`, [docs/cli.md](docs/cli.md)),
   in the style of the `ar.io` CLI from `@ar.io/sdk`: JSON on stdout, errors
   on stderr, exit 1 on failure. `index-band-build` builds an index band from

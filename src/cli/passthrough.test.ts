@@ -14,6 +14,7 @@ import { passthroughArgs, runSdkCli, sdkCli } from './passthrough.js';
 describe('passthrough to the ar.io CLI', () => {
   const own = new Set([
     'index-band-build',
+    'index-band-export',
     'index-band-verify',
     'network-help',
   ]);

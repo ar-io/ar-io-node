@@ -17,11 +17,13 @@ import { createCliLogger } from './log.js';
 import {
   globalOptions,
   indexBandBuildOptions,
+  indexBandExportOptions,
   indexBandVerifyOptions,
 } from './options.js';
 import { passthroughArgs, runSdkCli, sdkCli } from './passthrough.js';
 import type {
   IndexBandBuildCLIOptions,
+  IndexBandExportCLIOptions,
   IndexBandVerifyCLIOptions,
 } from './types.js';
 import { applyOptions, makeCommand } from './utils.js';
@@ -31,6 +33,8 @@ import { applyOptions, makeCommand } from './utils.js';
  * `ar.io` command start without the band library.
  */
 const indexBandCommands = async () => import('./commands/indexBandCommands.js');
+const indexExportCommands = async () =>
+  import('./commands/indexExportCommands.js');
 
 const sdk = sdkCli();
 
@@ -98,6 +102,26 @@ makeCommand<IndexBandVerifyCLIOptions>({
     '  ar-io-node index-band-verify \\',
     '    --band-dir data/indexes/published/root-tx-index/<band> \\',
     '    --gateway-url https://turbo-gateway.com',
+    CONTRACT,
+  ].join('\n'),
+);
+
+makeCommand<IndexBandExportCLIOptions>({
+  name: 'index-band-export',
+  description:
+    "Export one record source's records for a height range, as CSV for index-band-build",
+  options: indexBandExportOptions,
+  action: async (options) =>
+    (await indexExportCommands()).indexBandExportCLICommand(options, {
+      log: createCliLogger({ debug: options.debug === true }),
+    }),
+}).addHelpText(
+  'after',
+  [
+    '',
+    'Example:',
+    '  ar-io-node index-band-export --source \'{"type":"clickhouse"}\' \\',
+    '    --from 2010000 --to 2011000 --output data/indexes/export/records.csv',
     CONTRACT,
   ].join('\n'),
 );
