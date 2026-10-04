@@ -55,6 +55,12 @@ export class ImportRefused extends Error {}
 const spec = (name: string) =>
   PARQUET_L1_TABLES.find((t) => t.name === name) as TableSpec;
 
+/**
+ * Rows written before a commit. Bounds the WAL and the memory a write
+ * transaction holds; the cost of a crash is re-importing one band.
+ */
+export const COMMIT_EVERY_ROWS = 2_000_000;
+
 /** A band's identity for the ledger: its heights and every table's digest. */
 export function bandDigest(band: ParquetL1Band): Buffer {
   const hash = crypto.createHash('sha256');
@@ -92,9 +98,12 @@ export async function readBands(dir: string): Promise<ImportableBand[]> {
 /**
  * The bands to import, in height order: those the ledger doesn't hold that
  * carry heights above what `core.db` already has. Overlapping bands are
- * dropped in favour of the one that reaches furthest, and a gap between
- * what the database holds and the first band, or between two bands, is
- * refused rather than imported around.
+ * dropped in favour of the one that reaches furthest.
+ *
+ * A gap is refused rather than imported around, because the block importer
+ * rewinds across one and gives up after `MAX_FORK_DEPTH`. An empty database
+ * is the exception: it has no history to be continuous with, so it adopts
+ * the lowest band's start.
  */
 export function planImport(
   bands: ImportableBand[],
@@ -102,7 +111,15 @@ export function planImport(
 ): { steps: ImportableBand[]; skipped: ImportableBand[] } {
   const steps: ImportableBand[] = [];
   const skipped: ImportableBand[] = [];
-  let next = haveTo + 1;
+  // An empty database takes the lowest band's start as its own: the result
+  // is a gateway whose history begins there, as one started with
+  // START_HEIGHT does. A database that already holds blocks must be
+  // continued from, not left with a hole.
+  const lowest = bands.reduce(
+    (low, b) => Math.min(low, b.band.heightRange[0]),
+    Number.MAX_SAFE_INTEGER,
+  );
+  let next = haveTo < 0 ? lowest : haveTo + 1;
   for (const candidate of bands) {
     const [from, to] = candidate.band.heightRange;
     if (to < next || held.has(candidate.id)) {
@@ -115,9 +132,11 @@ export function planImport(
       );
     }
     if (from < next) {
-      // Overlaps what is held: a tip band that a whole one has since
-      // covered, or two bands of different grids.
-      skipped.push(candidate);
+      // Starts below what is held but reaches past it: a band an earlier
+      // run left part way through. Importing it again is safe — every
+      // write is idempotent — and is the only way to finish it.
+      steps.push(candidate);
+      next = to + 1;
       continue;
     }
     steps.push(candidate);
@@ -217,7 +236,11 @@ export async function importBand(
   db: Sqlite.Database,
   duck: import('duckdb-async').Database,
   entry: ImportableBand,
-  { log, batchRows }: { log: Logger; batchRows?: number },
+  {
+    log,
+    batchRows,
+    commitEvery = COMMIT_EVERY_ROWS,
+  }: { log: Logger; batchRows?: number; commitEvery?: number },
 ): Promise<{ rows: number; missingTransactions: number }> {
   const { band, dir } = entry;
   const [from, to] = band.heightRange;
@@ -385,12 +408,23 @@ export async function importBand(
   };
 
   const txFile = path.join(dir, spec('transactions').file).replace(/'/g, "''");
-  // One transaction for the whole band, ledger row included: a crash leaves
-  // core.db exactly as it was and the band is imported again from the
-  // start. Held open across the reads, which better-sqlite3 allows because
-  // it is synchronous on a single connection. `missing_tx_count` is raised
-  // with an UPDATE, which only a whole-band rollback makes safe to repeat.
+  // Committed in chunks rather than as one transaction for the band.
+  // Measured on a real 1.3 GB band (10.4M transactions, 25.7M tags), one
+  // transaction grew the WAL past 7.8 GB and the process past 4.6 GB of
+  // memory before committing anything — too much to ask of a machine
+  // bootstrapping a gateway. Chunks bound both.
+  //
+  // A crash now leaves part of a band behind without its ledger row, which
+  // is safe because every write is idempotent and `missing_tx_count` is
+  // derived: the planner sees the band still covers the next height it
+  // needs and imports it again, over the top of what is there.
+  let sinceCommit = 0;
   db.exec('BEGIN IMMEDIATE');
+  const commitChunk = () => {
+    db.exec('COMMIT');
+    sinceCommit = 0;
+    db.exec('BEGIN IMMEDIATE');
+  };
   try {
     for (const table of IMPORT_ORDER) {
       const extra =
@@ -407,6 +441,11 @@ export async function importBand(
         band,
         async (batch) => {
           writers[table.name](batch);
+          sinceCommit += batch.length;
+          // Never between a block and the links that need its hash, nor
+          // between a transaction and its tags: each table is finished
+          // before the next begins, so a chunk boundary inside one is safe.
+          if (sinceCommit >= commitEvery) commitChunk();
         },
         batchRows,
         extra,
@@ -433,4 +472,95 @@ export async function importBand(
     missingTransactions,
   });
   return { rows, missingTransactions };
+}
+
+export interface ImportRunResult {
+  haveTo: number;
+  outcomes: ImportOutcome[];
+  /** Bands on disk the run had no use for, with why. */
+  skipped: Array<{ id: string; heightRange: [number, number] }>;
+}
+
+/**
+ * Imports every band of `bandsDir` that `core.db` is missing, lowest first,
+ * stopping at the first that fails.
+ *
+ * Stopping matters: bands must be imported as a contiguous run, so carrying
+ * on past a failure would leave a hole the block importer cannot cross.
+ * What was imported before the failure is committed and the ledger records
+ * it, so the next run picks up from there.
+ */
+export async function runImport({
+  db,
+  duck,
+  bandsDir,
+  log,
+  limit,
+  batchRows,
+  onBand,
+}: {
+  db: Sqlite.Database;
+  duck: import('duckdb-async').Database;
+  bandsDir: string;
+  log: Logger;
+  /** Import at most this many bands, for a first run an operator watches. */
+  limit?: number;
+  batchRows?: number;
+  onBand?: (outcome: ImportOutcome) => void;
+}): Promise<ImportRunResult> {
+  assertImportable(db);
+  const bands = await readBands(bandsDir);
+  if (bands.length === 0) {
+    throw new ImportRefused(`${bandsDir} holds no bands with a ${BAND_FILE}`);
+  }
+  const progress = readProgress(db);
+  const { steps, skipped } = planImport(bands, progress);
+  log.info('Planned an import', {
+    bandsOnDisk: bands.length,
+    toImport: steps.length,
+    skipped: skipped.length,
+    fromHeight: progress.haveTo + 1,
+  });
+
+  const outcomes: ImportOutcome[] = [];
+  let haveTo = progress.haveTo;
+  for (const entry of steps.slice(0, limit ?? steps.length)) {
+    const started = Date.now();
+    const base = { id: entry.id, heightRange: entry.band.heightRange };
+    try {
+      const { rows, missingTransactions } = await importBand(db, duck, entry, {
+        log,
+        ...(batchRows !== undefined ? { batchRows } : {}),
+      });
+      haveTo = entry.band.heightRange[1];
+      const outcome: ImportOutcome = {
+        ...base,
+        result: 'imported',
+        rows,
+        missingTransactions,
+        seconds: (Date.now() - started) / 1000,
+      };
+      outcomes.push(outcome);
+      onBand?.(outcome);
+    } catch (error) {
+      const outcome: ImportOutcome = {
+        ...base,
+        result: 'refused',
+        reason: error instanceof Error ? error.message : String(error),
+        seconds: (Date.now() - started) / 1000,
+      };
+      outcomes.push(outcome);
+      onBand?.(outcome);
+      log.error('Import stopped', { id: entry.id, error: outcome.reason });
+      break;
+    }
+  }
+  return {
+    haveTo,
+    outcomes,
+    skipped: skipped.map((b) => ({
+      id: b.id,
+      heightRange: b.band.heightRange,
+    })),
+  };
 }

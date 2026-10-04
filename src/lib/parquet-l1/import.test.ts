@@ -25,6 +25,7 @@ import {
   LEDGER_MIGRATION,
   planImport,
   readBands,
+  runImport,
   readProgress,
 } from './import.js';
 
@@ -90,6 +91,26 @@ describe('planImport', () => {
         }),
       (e: Error) =>
         e instanceof ImportRefused && /No band covers height 0/.test(e.message),
+    );
+  });
+
+  it('finishes a band an earlier run left part way, rather than skipping it', () => {
+    // core.db stops inside the band: a crash between chunks. The band is
+    // not in the ledger, so it is imported again over what is there.
+    const { steps, skipped } = planImport(
+      [band('a', 0, 99), band('b', 100, 199)],
+      {
+        haveTo: 149,
+        held: new Set(['a']),
+      },
+    );
+    assert.deepEqual(
+      steps.map((s) => s.id),
+      ['b'],
+    );
+    assert.deepEqual(
+      skipped.map((s) => s.id),
+      ['a'],
     );
   });
 
@@ -340,23 +361,61 @@ describe('importBand', () => {
     assert.equal(count(), 2, 'still 2 after a re-import');
   });
 
-  it('leaves core.db untouched when a band fails part way', async () => {
-    const before = counts(target);
-    // A band whose tags claim a row count their rows do not reach.
+  it('leaves no ledger row when a band fails part way, and finishes on a re-run', async () => {
+    // Commit often enough that the failure lands after some rows are
+    // committed: the band is partly in, which is what makes the planner's
+    // re-import and the idempotent writes load-bearing.
     const lying = {
       ...entry,
       band: { ...entry.band, tables: { ...entry.band.tables } },
     };
-    lying.band.tables.tags = { ...lying.band.tables.tags, rows: 99_999 };
+    lying.band.tables.tags = {
+      ...lying.band.tables.tags,
+      rowDigest: 'f'.repeat(64),
+    };
     await assert.rejects(
-      importBand(target, duck, lying, { log, batchRows: 7 }),
+      importBand(target, duck, lying, { log, batchRows: 5, commitEvery: 10 }),
+      /do not reproduce the digest/,
     );
-    assert.deepEqual(counts(target), before, 'nothing was left behind');
+    const partial = target
+      .prepare('SELECT COUNT(*) FROM stable_blocks')
+      .pluck()
+      .get() as number;
+    assert.ok(partial > 0, 'the chunks that committed are still there');
     assert.equal(
       target.prepare('SELECT COUNT(*) FROM parquet_l1_imports').pluck().get(),
       0,
-      'and no ledger row',
+      'but the band is not recorded, so a re-run redoes it',
     );
+
+    // The same band, intact: the re-run writes over what is there.
+    const out = await importBand(target, duck, entry, {
+      log,
+      batchRows: 5,
+      commitEvery: 10,
+    });
+    assert.equal(out.missingTransactions, 0);
+    assert.equal(
+      target.prepare('SELECT COUNT(*) FROM stable_blocks').pluck().get(),
+      30,
+    );
+    assert.equal(
+      target.prepare('SELECT COUNT(*) FROM parquet_l1_imports').pluck().get(),
+      1,
+    );
+    // And the rows match the chain it came from, as an uninterrupted run.
+    const source = new Sqlite(sourceDb, { readonly: true });
+    try {
+      const tx = (db: Sqlite.Database) =>
+        db
+          .prepare(
+            'SELECT id, height, block_transaction_index FROM stable_transactions ORDER BY height, block_transaction_index',
+          )
+          .all();
+      assert.deepEqual(tx(target), tx(source));
+    } finally {
+      source.close();
+    }
   });
 
   it('records a link whose transaction the band lacks as missing, and counts it on the block', async () => {
@@ -521,5 +580,129 @@ describe('assertImportable', () => {
       other.close();
       db.close();
     }
+  });
+});
+
+describe('runImport', () => {
+  let dir: string;
+  let bandsDir: string;
+  let duck: Database;
+  let db: Sqlite.Database;
+  let sourceDb: string;
+
+  /** Two adjacent bands of 15 heights each, exported from one chain. */
+  beforeEach(async () => {
+    dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'parquet-l1-run-'));
+    sourceDb = path.join(dir, 'source.db');
+    bandsDir = path.join(dir, 'bands');
+    const workDir = path.join(dir, 'work');
+    await fsp.mkdir(bandsDir);
+    await fsp.mkdir(workDir);
+    await buildCoreDb(sourceDb, FIRST, 31);
+    for (const [from, to] of [
+      [FIRST, FIRST + 14],
+      [FIRST + 15, FIRST + 29],
+    ]) {
+      const out = await exportL1Band({
+        coreDbPath: sourceDb,
+        workDir,
+        from,
+        to,
+      });
+      await fsp.rename(out.dir, path.join(bandsDir, `l1-h${from}-${to}-t-0`));
+      await fsp.rm(path.dirname(out.dir), { recursive: true, force: true });
+    }
+    const { Database } = await import('duckdb-async');
+    duck = await Database.create(':memory:');
+    db = emptyCore(path.join(dir, 'core.db'));
+    db.prepare('INSERT INTO migrations (name) VALUES (?)').run(
+      LEDGER_MIGRATION,
+    );
+  });
+
+  afterEach(async () => {
+    db?.close();
+    await duck?.close();
+    await fsp.rm(dir, { recursive: true, force: true });
+  });
+
+  const heights = () =>
+    db
+      .prepare('SELECT MIN(height), MAX(height) FROM stable_blocks')
+      .raw()
+      .get();
+
+  it('imports a directory of bands in height order and records where it got to', async () => {
+    const run = await runImport({ db, duck, bandsDir, log, batchRows: 9 });
+    assert.deepEqual(
+      run.outcomes.map((o) => [o.heightRange, o.result]),
+      [
+        [[FIRST, FIRST + 14], 'imported'],
+        [[FIRST + 15, FIRST + 29], 'imported'],
+      ],
+    );
+    assert.equal(run.haveTo, FIRST + 29);
+    assert.deepEqual(heights(), [FIRST, FIRST + 29]);
+    assert.equal(
+      db.prepare('SELECT COUNT(*) FROM parquet_l1_imports').pluck().get(),
+      2,
+    );
+  });
+
+  it('does nothing on a second run, and resumes after a partial one', async () => {
+    const first = await runImport({
+      db,
+      duck,
+      bandsDir,
+      log,
+      batchRows: 9,
+      limit: 1,
+    });
+    assert.equal(first.outcomes.length, 1);
+    assert.deepEqual(heights(), [FIRST, FIRST + 14]);
+
+    const second = await runImport({ db, duck, bandsDir, log, batchRows: 9 });
+    assert.deepEqual(
+      second.outcomes.map((o) => o.heightRange),
+      [[FIRST + 15, FIRST + 29]],
+      'only the band that was left',
+    );
+    assert.deepEqual(heights(), [FIRST, FIRST + 29]);
+
+    const third = await runImport({ db, duck, bandsDir, log, batchRows: 9 });
+    assert.deepEqual(third.outcomes, [], 'nothing left to do');
+  });
+
+  it('stops at a bad band, keeping what came before it', async () => {
+    // Corrupt the second band's claim so it is refused on read.
+    const second = path.join(bandsDir, `l1-h${FIRST + 15}-${FIRST + 29}-t-0`);
+    const file = path.join(second, 'band.json');
+    const json = JSON.parse(await fsp.readFile(file, 'utf8'));
+    json.tables.blocks.rowDigest = 'f'.repeat(64);
+    await fsp.writeFile(file, JSON.stringify(json));
+
+    const run = await runImport({ db, duck, bandsDir, log, batchRows: 9 });
+    assert.deepEqual(
+      run.outcomes.map((o) => o.result),
+      ['imported', 'refused'],
+    );
+    assert.match(run.outcomes[1].reason ?? '', /do not reproduce the digest/);
+    // The good band is committed; the bad one left nothing.
+    assert.deepEqual(heights(), [FIRST, FIRST + 14]);
+    assert.equal(run.haveTo, FIRST + 14);
+    assert.equal(
+      db.prepare('SELECT COUNT(*) FROM parquet_l1_imports').pluck().get(),
+      1,
+    );
+  });
+
+  it('refuses a directory with no bands', async () => {
+    const empty = path.join(dir, 'empty');
+    await fsp.mkdir(empty);
+    await assert.rejects(
+      runImport({ db, duck, bandsDir: empty, log }),
+      (e: Error) =>
+        e instanceof ImportRefused && /holds no bands/.test(e.message),
+    );
   });
 });

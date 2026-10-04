@@ -121,7 +121,7 @@ describe('readTable', () => {
     await assert.rejects(
       readAll(spec('blocks'), narrowed),
       (e: Error) =>
-        e instanceof BandRowsError && /outside the band's/.test(e.message),
+        e instanceof BandRowsError && /rows outside the band's/.test(e.message),
     );
   });
 });
