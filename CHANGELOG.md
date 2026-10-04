@@ -8,6 +8,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- `ar-io-node index-l1-import` fills a gateway's `core.db` from installed
+  `parquet-l1` bands, so a new gateway starts from a published index rather
+  than walking the chain block by block. It runs with the gateway stopped
+  and refuses a database another writer holds, one still holding unstable
+  blocks, or one that has not run the import migration. Bands land in
+  height order, each recorded in `parquet_l1_imports` as it commits, so a
+  run that stops can be run again and carries on; every write is idempotent
+  and a band interrupted part way is simply imported again. A transaction a
+  block lists that its band lacks becomes a `missing_transactions` row for
+  the usual backfill. Measured on vilenarios.com: the busiest 100,000
+  heights (46.6M rows) import in about 22 minutes. See
+  [docs/cli.md](docs/cli.md).
+
 - L1 index bands (`parquet-l1`): the Arweave base layer (blocks,
   transactions, tags in plaintext, owners) as Parquet, one fixed height
   range per band (whole 100,000-height history bands over 5,000-height

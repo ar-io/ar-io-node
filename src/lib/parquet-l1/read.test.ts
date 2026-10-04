@@ -113,6 +113,50 @@ describe('readTable', () => {
     await assert.rejects(readAll(spec('tags'), lying), /is not described/);
   });
 
+  /** Rewrites one band file with a value changed, for the checks below. */
+  const rewrite = async (table: string, expr: string) => {
+    const file = path.join(bandDir, `${table}.parquet`);
+    const copy = path.join(bandDir, `${table}.bad.parquet`);
+    await duck.exec(
+      `COPY (SELECT ${expr} FROM read_parquet('${file}')) TO '${copy}' (FORMAT PARQUET)`,
+    );
+    await fs.rename(copy, file);
+  };
+
+  it('refuses a hash the chain fixes the width of', async () => {
+    // Every column as it was, but one block's indep_hash cut short.
+    const cols = spec('blocks')
+      .columns.map((c) =>
+        c.name === 'indep_hash'
+          ? `CASE WHEN height = ${FIRST + 4} THEN '\\x0102'::BLOB ELSE indep_hash END AS indep_hash`
+          : `"${c.name}"`,
+      )
+      .join(', ');
+    await rewrite('blocks', cols);
+    await assert.rejects(
+      readAll(spec('blocks')),
+      (e: Error) =>
+        e instanceof BandRowsError &&
+        /blocks\.indep_hash is \d+ bytes, not 48/.test(e.message),
+    );
+  });
+
+  it('refuses a blob far larger than a band should carry', async () => {
+    const big = "repeat('x', 20000)::BLOB";
+    const cols = spec('tags')
+      .columns.map((c) =>
+        c.name === 'tag_value' ? `${big} AS tag_value` : `"${c.name}"`,
+      )
+      .join(', ');
+    await rewrite('tags', cols);
+    await assert.rejects(
+      readAll(spec('tags')),
+      (e: Error) =>
+        e instanceof BandRowsError &&
+        /tags.tag_value is 20000 bytes, over the/.test(e.message),
+    );
+  });
+
   it('refuses a height outside the band', async () => {
     const narrowed = {
       ...band,
