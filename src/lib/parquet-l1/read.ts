@@ -1,0 +1,141 @@
+/**
+ * AR.IO Gateway
+ * Copyright (C) 2022-2025 Permanent Data Solutions, Inc. All Rights Reserved.
+ *
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+
+/**
+ * Reading a `parquet-l1` band back, for an importer.
+ *
+ * A band's files arrive from a publisher, so nothing in them is trusted. The
+ * sidecar has already checked them against the signed digests and the
+ * layout; this reads the rows and checks them against what the band's own
+ * `band.json` claims: the row count and the row digest of each table, in the
+ * table's order. A band whose rows don't reproduce its digests is refused
+ * before a single row reaches SQLite.
+ *
+ * Rows come back in batches so a 1.4 GB band never has to fit in memory.
+ */
+import type { Database } from 'duckdb-async';
+import * as path from 'node:path';
+
+import { RowDigest } from './digest.js';
+import { ParquetL1Band, PARQUET_L1_TABLES, TableSpec } from './layout.js';
+
+/** Rows read per batch: enough to amortise the query, small enough to hold. */
+export const READ_BATCH_ROWS = 50_000;
+
+export class BandRowsError extends Error {}
+
+/** The byte lengths a column must have, where the chain fixes them. */
+const FIXED_BYTES: Record<string, number> = {
+  indep_hash: 48,
+  previous_block: 48,
+  hash_list_merkle: 48,
+  id: 32,
+  transaction_id: 32,
+  data_root: 32,
+  owner_address: 32,
+  target: 32,
+  address: 32,
+};
+
+/**
+ * Checks one row's values against the layout: a blob column the chain fixes
+ * the width of must have that width, and a height must be in the band.
+ * Everything else the row digest covers.
+ */
+function checkRow(
+  spec: TableSpec,
+  values: unknown[],
+  heightRange: [number, number],
+): void {
+  for (const [i, column] of spec.columns.entries()) {
+    const value = values[i];
+    if (value === null || value === undefined) continue;
+    const fixed = FIXED_BYTES[column.name];
+    if (fixed !== undefined && column.type === 'BLOB') {
+      const length = (value as Uint8Array).length;
+      // tx_root and an empty value are zero bytes; a wrong non-zero width is
+      // not something the chain produces.
+      if (length !== fixed && length !== 0) {
+        throw new BandRowsError(
+          `${spec.name}.${column.name} is ${length} bytes, not ${fixed}`,
+        );
+      }
+    }
+    if (column.name === 'height') {
+      const height = Number(value);
+      if (height < heightRange[0] || height > heightRange[1]) {
+        throw new BandRowsError(
+          `${spec.name} holds height ${height}, outside the band's ${JSON.stringify(heightRange)}`,
+        );
+      }
+    }
+  }
+}
+
+/**
+ * Reads one table of a band in batches, in the order its digest was taken,
+ * checking each row and the digest of the whole. `onBatch` sees rows as
+ * arrays in the layout's column order.
+ */
+export async function readTable(
+  duck: Database,
+  dir: string,
+  spec: TableSpec,
+  band: ParquetL1Band,
+  onBatch: (rows: unknown[][]) => Promise<void>,
+  batchRows = READ_BATCH_ROWS,
+): Promise<number> {
+  const described = band.tables[spec.name];
+  if (described === undefined) {
+    throw new BandRowsError(`${BAND_LABEL}: ${spec.name} is not described`);
+  }
+  const file = path.join(dir, spec.file).replace(/'/g, "''");
+  const columns = spec.columns.map((c) => `"${c.name}"`).join(', ');
+  const order = spec.orderBy.map((c) => `"${c}"`).join(', ');
+  const digest = new RowDigest(spec.columns);
+  let read = 0;
+  for (;;) {
+    const batch = (await duck.all(
+      `SELECT ${columns} FROM read_parquet('${file}') ORDER BY ${order} LIMIT ${batchRows} OFFSET ${read}`,
+    )) as Array<Record<string, unknown>>;
+    if (batch.length === 0) break;
+    const rows = batch.map((row) => spec.columns.map((c) => row[c.name]));
+    for (const values of rows) {
+      checkRow(spec, values, band.heightRange);
+      digest.add(values);
+    }
+    read += rows.length;
+    if (read > described.rows) {
+      throw new BandRowsError(
+        `${spec.name} holds more than the ${described.rows} rows its band.json claims`,
+      );
+    }
+    await onBatch(rows);
+  }
+  if (read !== described.rows) {
+    throw new BandRowsError(
+      `${spec.name} holds ${read} rows, its band.json claims ${described.rows}`,
+    );
+  }
+  if (digest.hex() !== described.rowDigest) {
+    throw new BandRowsError(
+      `${spec.name} rows do not reproduce the digest its band.json claims`,
+    );
+  }
+  return read;
+}
+
+const BAND_LABEL = 'band.json';
+
+/** The tables of a band, in the order an importer must write them. */
+export const IMPORT_ORDER: TableSpec[] = [
+  'wallets',
+  'blocks',
+  'transactions',
+  'block_transactions',
+  'tags',
+].map((name) => PARQUET_L1_TABLES.find((t) => t.name === name) as TableSpec);
