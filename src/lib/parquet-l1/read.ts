@@ -110,30 +110,39 @@ export async function readTable(
   const order = spec.orderBy.map((c) => `t."${c}"`).join(', ');
   const from = extra.from === '' ? `${self} t` : `${self} t ${extra.from}`;
   const digest = new RowDigest(spec.columns);
+  const names = [
+    ...spec.columns.map((c) => c.name),
+    ...extra.select.map((e) => e.slice(e.lastIndexOf(' ') + 1)),
+  ];
+  // One streaming pass. Paging with LIMIT/OFFSET would re-scan and re-sort
+  // the file for every page, which on a 14M-row table (and, for tags, a
+  // join) is quadratic.
+  const stream = await duck.stream(
+    `SELECT ${columns} FROM ${from} ORDER BY ${order}`,
+  );
   let read = 0;
-  for (;;) {
-    const batch = (await duck.all(
-      `SELECT ${columns} FROM ${from} ORDER BY ${order} LIMIT ${batchRows} OFFSET ${read}`,
-    )) as Array<Record<string, unknown>>;
-    if (batch.length === 0) break;
-    const names = [
-      ...spec.columns.map((c) => c.name),
-      ...extra.select.map((e) => e.slice(e.lastIndexOf(' ') + 1)),
-    ];
-    const rows = batch.map((row) => names.map((n) => row[n]));
-    for (const values of rows) {
-      const own = values.slice(0, spec.columns.length);
-      checkRow(spec, own, band.heightRange);
-      digest.add(own);
-    }
-    read += rows.length;
+  let batch: unknown[][] = [];
+  const flush = async () => {
+    if (batch.length === 0) return;
+    const sending = batch;
+    batch = [];
+    await onBatch(sending);
+  };
+  for await (const row of stream) {
+    const values = names.map((n) => (row as Record<string, unknown>)[n]);
+    const own = values.slice(0, spec.columns.length);
+    checkRow(spec, own, band.heightRange);
+    digest.add(own);
+    read += 1;
     if (read > described.rows) {
       throw new BandRowsError(
         `${spec.name} holds more than the ${described.rows} rows its band.json claims`,
       );
     }
-    await onBatch(rows);
+    batch.push(values);
+    if (batch.length >= batchRows) await flush();
   }
+  await flush();
   if (read !== described.rows) {
     throw new BandRowsError(
       `${spec.name} holds ${read} rows, its band.json claims ${described.rows}`,

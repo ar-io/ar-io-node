@@ -17,10 +17,12 @@ import { exportL1Band } from '../../index-export/kinds/parquet-l1/export.js';
 import { buildCoreDb } from '../../../test/parquet-l1-core-db.js';
 import { createTestLogger } from '../../../test/test-logger.js';
 import {
+  assertImportable,
   bandDigest,
   ImportableBand,
   importBand,
   ImportRefused,
+  LEDGER_MIGRATION,
   planImport,
   readBands,
   readProgress,
@@ -274,6 +276,70 @@ describe('importBand', () => {
     target = new Sqlite(file);
   });
 
+  it('is idempotent: importing the same band twice changes nothing', async () => {
+    await importBand(target, duck, entry, { log, batchRows: 7 });
+    const snapshot = () =>
+      Object.fromEntries(
+        [
+          'stable_blocks',
+          'stable_transactions',
+          'stable_block_transactions',
+          'stable_transaction_tags',
+          'wallets',
+          'tag_names',
+          'tag_values',
+          'missing_transactions',
+        ].map((t) => [
+          t,
+          JSON.stringify(target.prepare(`SELECT * FROM ${t}`).all(), (_k, v) =>
+            v?.type === 'Buffer' ? v.data.join(',') : v,
+          ),
+        ]),
+      );
+    const first = snapshot();
+
+    const out = await importBand(target, duck, entry, { log, batchRows: 7 });
+
+    assert.deepEqual(snapshot(), first, 'every table is unchanged');
+    assert.equal(out.missingTransactions, 0);
+    assert.equal(
+      target.prepare('SELECT COUNT(*) FROM parquet_l1_imports').pluck().get(),
+      1,
+      'one ledger row, not two',
+    );
+  });
+
+  it('derives missing_tx_count rather than adding to it, so a re-import holds', async () => {
+    const db = new Sqlite(sourceDb);
+    // Two gone from one block: an incrementing count would say 1, because
+    // re-inserting the block resets it to 0 first. Only a derived count
+    // says 2.
+    db.prepare(
+      'DELETE FROM stable_transactions WHERE height = ? AND block_transaction_index IN (0, 1)',
+    ).run(FIRST + 3);
+    db.close();
+    const work2 = path.join(dir, 'work-missing');
+    await fsp.mkdir(work2);
+    const gapped = await exportL1Band({
+      coreDbPath: sourceDb,
+      workDir: work2,
+      from: FIRST,
+      to: FIRST + 29,
+    });
+    const band2 = { id: 'l1-gapped', dir: gapped.dir, band: gapped.band };
+    const count = () =>
+      target
+        .prepare('SELECT missing_tx_count FROM stable_blocks WHERE height = ?')
+        .pluck()
+        .get(FIRST + 3);
+
+    const first = await importBand(target, duck, band2, { log, batchRows: 7 });
+    assert.equal(first.missingTransactions, 2);
+    assert.equal(count(), 2, 'both gaps counted on the block');
+    await importBand(target, duck, band2, { log, batchRows: 7 });
+    assert.equal(count(), 2, 'still 2 after a re-import');
+  });
+
   it('leaves core.db untouched when a band fails part way', async () => {
     const before = counts(target);
     // A band whose tags claim a row count their rows do not reach.
@@ -360,6 +426,100 @@ describe('readBands', () => {
       );
     } finally {
       await fsp.rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('assertImportable', () => {
+  let dir: string;
+  let file: string;
+
+  beforeEach(async () => {
+    dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'parquet-l1-guard-'));
+    file = path.join(dir, 'core.db');
+  });
+  afterEach(async () => {
+    await fsp.rm(dir, { recursive: true, force: true });
+  });
+
+  /** A core.db as the gateway leaves it, optionally already migrated. */
+  const core = (migrated: boolean) => {
+    const db = new Sqlite(file);
+    db.exec(fs.readFileSync('test/core-schema.sql', 'utf8'));
+    if (migrated) {
+      db.exec(fs.readFileSync(MIGRATION, 'utf8'));
+      db.prepare('INSERT INTO migrations (name) VALUES (?)').run(
+        LEDGER_MIGRATION,
+      );
+    }
+    return db;
+  };
+
+  it('accepts a migrated, quiet database', () => {
+    const db = core(true);
+    try {
+      assertImportable(db);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('refuses one that has not run the ledger migration', () => {
+    const db = core(false);
+    try {
+      assert.throws(
+        () => assertImportable(db),
+        (e: Error) =>
+          e instanceof ImportRefused && /yarn db:migrate up/.test(e.message),
+      );
+    } finally {
+      db.close();
+    }
+  });
+
+  it('refuses one holding unstable blocks, which the importer writes beneath', () => {
+    const db = core(true);
+    try {
+      db.prepare(
+        `INSERT INTO new_blocks (indep_hash, height, previous_block, nonce, hash,
+         block_timestamp, diff, cumulative_diff, last_retarget, reward_addr,
+         reward_pool, block_size, weave_size, hash_list_merkle, tx_root,
+         tx_count, missing_tx_count)
+         VALUES (?, 5, ?, ?, ?, 1, '1', '2', 3, ?, '4', 0, 0, ?, ?, 0, 0)`,
+      ).run(
+        Buffer.alloc(48, 1),
+        Buffer.alloc(48, 2),
+        Buffer.alloc(48, 3),
+        Buffer.alloc(32, 4),
+        Buffer.alloc(32, 5),
+        Buffer.alloc(48, 6),
+        Buffer.alloc(32, 7),
+      );
+      assert.throws(
+        () => assertImportable(db),
+        (e: Error) =>
+          e instanceof ImportRefused && /1 unstable blocks/.test(e.message),
+      );
+    } finally {
+      db.close();
+    }
+  });
+
+  it('refuses one another writer is holding', () => {
+    const db = core(true);
+    const other = new Sqlite(file);
+    try {
+      other.exec('BEGIN IMMEDIATE');
+      assert.throws(
+        () => assertImportable(db),
+        (e: Error) =>
+          e instanceof ImportRefused &&
+          /open for writing elsewhere/.test(e.message),
+      );
+    } finally {
+      other.exec('ROLLBACK');
+      other.close();
+      db.close();
     }
   });
 });

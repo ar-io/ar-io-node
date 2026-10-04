@@ -126,6 +126,52 @@ export function planImport(
   return { steps, skipped };
 }
 
+/** The migration this importer was written against; its table must exist. */
+export const LEDGER_MIGRATION =
+  '2026.10.04T12.00.00.core.add-parquet-l1-imports';
+
+/**
+ * Refuses a `core.db` an import would damage or silently half-fill.
+ *
+ * - The ledger migration must have run, so the gateway and the importer
+ *   agree on the schema. An older `core.db` is missing columns this writes.
+ * - `new_*` must be empty. Those are the unstable rows near the tip; an
+ *   import writes `stable_*` beneath them, and the block importer would
+ *   then flush them over heights it never fetched.
+ * - The gateway must be stopped. A second writer is the one thing a long
+ *   transaction cannot survive, and SQLite will not tell us politely.
+ */
+export function assertImportable(db: Sqlite.Database): void {
+  const migrated = db
+    .prepare('SELECT 1 FROM migrations WHERE name = ?')
+    .pluck()
+    .get(LEDGER_MIGRATION);
+  if (migrated === undefined) {
+    throw new ImportRefused(
+      `core.db has not run ${LEDGER_MIGRATION}: run \`yarn db:migrate up\` first, so the importer and the gateway agree on the schema`,
+    );
+  }
+  const unstable = db
+    .prepare('SELECT COUNT(*) FROM new_blocks')
+    .pluck()
+    .get() as number;
+  if (unstable > 0) {
+    throw new ImportRefused(
+      `core.db holds ${unstable} unstable blocks: stop the gateway and let them flush, or reset them, before importing beneath them`,
+    );
+  }
+  // Another writer holding the database: better found now than half way
+  // through a band.
+  try {
+    db.exec('BEGIN IMMEDIATE');
+    db.exec('ROLLBACK');
+  } catch (error) {
+    throw new ImportRefused(
+      `core.db is open for writing elsewhere (${(error as Error).message}); stop the gateway before importing`,
+    );
+  }
+}
+
 /** What `core.db` already holds, and the bands it was built from. */
 export function readProgress(db: Sqlite.Database): {
   haveTo: number;
@@ -155,6 +201,12 @@ const asBuffer = (value: unknown): Buffer =>
 
 /**
  * Imports one band in a single transaction, ending with its ledger row.
+ *
+ * Idempotent: every write is `INSERT OR REPLACE`/`OR IGNORE` keyed the way
+ * the table is, and `missing_tx_count` is derived from the rows rather than
+ * incremented, so importing the same band twice leaves `core.db` exactly as
+ * importing it once does. The planner skips a band the ledger holds; this
+ * is what makes that an optimisation rather than a correctness rule.
  *
  * Order matters: owners and blocks before the rows that point at them,
  * transactions before the links and tags that name them. A link whose
@@ -199,17 +251,23 @@ export async function importBand(
     tag: db.prepare(`INSERT OR IGNORE INTO stable_transaction_tags (tag_name_hash,
       tag_value_hash, height, block_transaction_index, transaction_tag_index,
       transaction_id) VALUES (?, ?, ?, ?, ?, ?)`),
-    bumpMissing: db.prepare(
-      'UPDATE stable_blocks SET missing_tx_count = missing_tx_count + 1 WHERE height = ?',
-    ),
-    ledger: db.prepare(`INSERT INTO parquet_l1_imports (band_id, height_from,
+    // Derived from the rows, not incremented: an import that runs twice
+    // must land on the same number.
+    countMissing: db.prepare(`UPDATE stable_blocks SET missing_tx_count =
+      (SELECT COUNT(*) FROM missing_transactions m WHERE m.height = stable_blocks.height)
+      WHERE height BETWEEN ? AND ?`),
+    hashAt: db
+      .prepare('SELECT indep_hash FROM stable_blocks WHERE height = ?')
+      .pluck(),
+    haveTx: db
+      .prepare('SELECT 1 FROM stable_transactions WHERE id = ?')
+      .pluck(),
+    ledger:
+      db.prepare(`INSERT OR REPLACE INTO parquet_l1_imports (band_id, height_from,
       height_to, band_digest, rows_imported, imported_at)
       VALUES (?, ?, ?, ?, ?, ?)`),
   };
 
-  // Heights to block hashes, for the links; the band's own blocks only.
-  const hashAt = new Map<number, Buffer>();
-  const haveTx = new Set<string>();
   let rows = 0;
   let missingTransactions = 0;
 
@@ -235,7 +293,6 @@ export async function importBand(
                   : v,
           ),
         );
-        hashAt.set(Number(r[1]), asBuffer(r[0]));
       }
     },
     transactions: (batch) => {
@@ -277,13 +334,16 @@ export async function importBand(
           tagCount === null ? null : Number(tagCount),
           signature === null ? null : asBuffer(signature),
         );
-        haveTx.add(asBuffer(id).toString('hex'));
       }
     },
     block_transactions: (batch) => {
+      // Looked up rather than held in memory: a 100,000-height band has
+      // about a million transactions, and a map of their ids would be
+      // hundreds of megabytes. These are primary-key reads inside the
+      // transaction, so they see the rows written moments ago.
       for (const [height, bti, txId] of batch) {
         const h = Number(height);
-        const indepHash = hashAt.get(h);
+        const indepHash = insert.hashAt.get(h) as Buffer | undefined;
         if (indepHash === undefined) {
           throw new ImportRefused(
             `A link at height ${h} has no block in the band`,
@@ -291,9 +351,8 @@ export async function importBand(
         }
         const id = asBuffer(txId);
         insert.link.run(indepHash, id, Number(bti));
-        if (!haveTx.has(id.toString('hex'))) {
+        if (insert.haveTx.get(id) === undefined) {
           insert.missing.run(indepHash, id, h);
-          insert.bumpMissing.run(h);
           missingTransactions += 1;
         }
       }
@@ -353,6 +412,7 @@ export async function importBand(
         extra,
       );
     }
+    insert.countMissing.run(from, to);
     insert.ledger.run(
       entry.id,
       from,
