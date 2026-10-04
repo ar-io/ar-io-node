@@ -383,9 +383,14 @@ describe('importBand', () => {
       .get() as number;
     assert.ok(partial > 0, 'the chunks that committed are still there');
     assert.equal(
-      target.prepare('SELECT COUNT(*) FROM parquet_l1_imports').pluck().get(),
-      0,
-      'but the band is not recorded, so a re-run redoes it',
+      target
+        .prepare(
+          'SELECT COUNT(*) FROM parquet_l1_imports WHERE completed_at IS NULL',
+        )
+        .pluck()
+        .get(),
+      1,
+      'the band is recorded as unfinished, so a re-run redoes it',
     );
 
     // The same band, intact: the re-run writes over what is there.
@@ -400,8 +405,14 @@ describe('importBand', () => {
       30,
     );
     assert.equal(
-      target.prepare('SELECT COUNT(*) FROM parquet_l1_imports').pluck().get(),
+      target
+        .prepare(
+          'SELECT COUNT(*) FROM parquet_l1_imports WHERE completed_at IS NOT NULL',
+        )
+        .pluck()
+        .get(),
       1,
+      'and is finished now',
     );
     // And the rows match the chain it came from, as an uninterrupted run.
     const source = new Sqlite(sourceDb, { readonly: true });
@@ -703,6 +714,118 @@ describe('runImport', () => {
       db.prepare('SELECT COUNT(*) FROM parquet_l1_imports').pluck().get(),
       1,
     );
+  });
+
+  it('re-imports a band a crash left part way, rather than skipping it', async () => {
+    // Blocks are written before transactions and tags, so the first chunk
+    // to commit carries every block of the band. The database's highest
+    // height is then the band's top while most of its rows are missing.
+    // Nothing may read that as "this band is done".
+    const second = path.join(bandsDir, `l1-h${FIRST + 10}-${FIRST + 19}-t-0`);
+    const file = path.join(second, 'band.json');
+    const good = await fsp.readFile(file, 'utf8');
+    const json = JSON.parse(good);
+    // Fail on `transactions`. Blocks are written first and commit before
+    // it, so the database's highest height becomes the band's top while
+    // the band holds almost nothing — the state that must not be read as
+    // "this band is done".
+    json.tables.transactions.rowDigest = 'f'.repeat(64);
+    await fsp.writeFile(file, JSON.stringify(json));
+
+    // Commit often, so the failure lands after blocks are durable.
+    const crashed = await runImport({
+      db,
+      duck,
+      bandsDir,
+      log,
+      batchRows: 3,
+      commitEvery: 5,
+    });
+    assert.equal(crashed.outcomes[1].result, 'refused');
+    assert.equal(
+      db.prepare('SELECT MAX(height) FROM stable_blocks').pluck().get(),
+      FIRST + 19,
+      "every block of the failed band is durable, so the database's top is the band's top",
+    );
+    const txs = db
+      .prepare(
+        'SELECT COUNT(*) FROM stable_transactions WHERE height BETWEEN ? AND ?',
+      )
+      .pluck()
+      .get(FIRST + 10, FIRST + 19) as number;
+    // Some of its transactions reached disk before it failed, but not all.
+
+    // Put the band back as published and run again.
+    await fsp.writeFile(file, good);
+    const again = await runImport({ db, duck, bandsDir, log, batchRows: 9 });
+    assert.ok(
+      again.outcomes.some(
+        (o) => o.heightRange[0] === FIRST + 10 && o.result === 'imported',
+      ),
+      'the half-imported band was imported again, not skipped',
+    );
+    const after = db
+      .prepare(
+        'SELECT COUNT(*) FROM stable_transactions WHERE height BETWEEN ? AND ?',
+      )
+      .pluck()
+      .get(FIRST + 10, FIRST + 19) as number;
+    assert.ok(
+      after > txs,
+      `the rest of its transactions are there now (${txs} -> ${after})`,
+    );
+    assert.deepEqual(heights(), [FIRST, FIRST + 29]);
+  });
+
+  it("replaces its height range, so a fork's leftovers do not survive", async () => {
+    await runImport({ db, duck, bandsDir, log, batchRows: 9 });
+    // A transaction at a height the band covers that the band never had:
+    // what an orphaned fork, or an earlier band of another grid, leaves.
+    const ghost = Buffer.alloc(32, 0xee);
+    db.prepare(
+      `INSERT INTO stable_transactions (id, height, block_transaction_index,
+       format, last_tx, owner_address, quantity, reward, data_size, tag_count,
+       indexed_at) VALUES (?, ?, 0, 2, ?, ?, '0', '0', 0, 0, 5)`,
+    ).run(ghost, FIRST + 12, Buffer.alloc(32, 1), Buffer.alloc(32, 2));
+    // As a crash would leave it: recorded, but not finished.
+    db.prepare(
+      'UPDATE parquet_l1_imports SET completed_at = NULL WHERE height_from = ?',
+    ).run(FIRST + 10);
+
+    await runImport({ db, duck, bandsDir, log, batchRows: 9 });
+
+    assert.equal(
+      db
+        .prepare('SELECT COUNT(*) FROM stable_transactions WHERE id = ?')
+        .pluck()
+        .get(ghost),
+      0,
+      'the row the band does not contain is gone',
+    );
+  });
+
+  it('imports the band that reaches furthest where two overlap', async () => {
+    // A tip band inside a whole one, as a publisher offers while a range
+    // fills. readBands sorts the shorter first, so the planner must drop
+    // it rather than import both.
+    const whole = path.join(bandsDir, `l1-h${FIRST}-${FIRST + 9}-t-0`);
+    const tip = path.join(bandsDir, `l1-h${FIRST}-${FIRST + 4}-tip-0`);
+    await fsp.cp(whole, tip, { recursive: true });
+    const file = path.join(tip, 'band.json');
+    const json = JSON.parse(await fsp.readFile(file, 'utf8'));
+    json.heightRange = [FIRST, FIRST + 4];
+    await fsp.writeFile(file, JSON.stringify(json));
+
+    const { steps, skipped } = planImport(await readBands(bandsDir), {
+      haveTo: -1,
+      held: new Set(),
+    });
+    assert.deepEqual(
+      steps.map((s) => s.band.heightRange[1]),
+      [FIRST + 9, FIRST + 19, FIRST + 29],
+      'the tip band was dropped in favour of the whole one',
+    );
+    assert.ok(skipped.some((b) => b.id.includes('tip')));
   });
 
   it('refuses a directory with no bands', async () => {

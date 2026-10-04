@@ -11,11 +11,18 @@
  * block.
  *
  * Runs with the gateway stopped: it writes `stable_*` directly and makes no
- * network calls. Each band is one SQLite transaction that ends by recording
- * the band in `parquet_l1_imports`, so an interrupted import resumes and a
- * band is never applied twice. Bands are imported in height order and a gap
- * is refused: the block importer rewinds across one and gives up after
- * `MAX_FORK_DEPTH`.
+ * network calls.
+ *
+ * A band replaces its own height range, and is recorded in
+ * `parquet_l1_imports` before its rows are written and completed after
+ * them. That is what makes an interrupted import safe: a band writes all
+ * of its blocks long before its transactions, so how far `stable_blocks`
+ * reaches says nothing about how much of a band landed. Progress is read
+ * from the ledger, and a band left unfinished is imported again over
+ * whatever it managed to write.
+ *
+ * Bands are imported in height order and a gap is refused: the block
+ * importer rewinds across one and gives up after `MAX_FORK_DEPTH`.
  */
 import crypto from 'node:crypto';
 import * as fs from 'node:fs/promises';
@@ -104,6 +111,9 @@ export async function readBands(dir: string): Promise<ImportableBand[]> {
  * rewinds across one and gives up after `MAX_FORK_DEPTH`. An empty database
  * is the exception: it has no history to be continuous with, so it adopts
  * the lowest band's start.
+ *
+ * Only a band the ledger records as finished counts as held. One left
+ * unfinished is imported again, over whatever it managed to write.
  */
 export function planImport(
   bands: ImportableBand[],
@@ -120,9 +130,21 @@ export function planImport(
     Number.MAX_SAFE_INTEGER,
   );
   let next = haveTo < 0 ? lowest : haveTo + 1;
+  // Sorted by start then end, so a tip band comes before the whole band
+  // that covers it. Drop any band another wholly contains, or the shorter
+  // would be imported and the longer then import over it.
+  const covered = (b: ImportableBand) =>
+    bands.some(
+      (other) =>
+        other !== b &&
+        other.band.heightRange[0] <= b.band.heightRange[0] &&
+        other.band.heightRange[1] >= b.band.heightRange[1] &&
+        other.band.heightRange[1] - other.band.heightRange[0] >
+          b.band.heightRange[1] - b.band.heightRange[0],
+    );
   for (const candidate of bands) {
     const [from, to] = candidate.band.heightRange;
-    if (to < next || held.has(candidate.id)) {
+    if (to < next || held.has(candidate.id) || covered(candidate)) {
       skipped.push(candidate);
       continue;
     }
@@ -195,21 +217,37 @@ export function assertImportable(db: Sqlite.Database): void {
 export function readProgress(db: Sqlite.Database): {
   haveTo: number;
   held: Set<string>;
-  newRows: number;
+  unfinished: Array<{ id: string; from: number }>;
 } {
-  const at = (sql: string) =>
-    (db.prepare(sql).pluck().get() as number | null) ?? -1;
+  const blocksTo =
+    (db.prepare('SELECT MAX(height) FROM stable_blocks').pluck().get() as
+      | number
+      | null) ?? -1;
   const held = new Set(
     db
-      .prepare('SELECT band_id FROM parquet_l1_imports')
+      .prepare(
+        'SELECT band_id FROM parquet_l1_imports WHERE completed_at IS NOT NULL',
+      )
       .pluck()
       .all() as string[],
   );
-  return {
-    haveTo: Math.max(at('SELECT MAX(height) FROM stable_blocks'), -1),
-    held,
-    newRows: Math.max(at('SELECT COUNT(*) FROM new_blocks'), 0),
-  };
+  const unfinished = (
+    db
+      .prepare(
+        'SELECT band_id, height_from FROM parquet_l1_imports WHERE completed_at IS NULL ORDER BY height_from',
+      )
+      .all() as Array<{ band_id: string; height_from: number }>
+  ).map((row) => ({ id: row.band_id, from: row.height_from }));
+
+  // A band writes all of its blocks long before its transactions, so how
+  // far `stable_blocks` reaches is not how far the database can be
+  // trusted. Where a band was left unfinished, the trustworthy top is the
+  // height below where it began.
+  const haveTo = unfinished.reduce(
+    (top, band) => Math.min(top, band.from - 1),
+    blocksTo,
+  );
+  return { haveTo, held, unfinished };
 }
 
 const sha1 = (bytes: Buffer) =>
@@ -285,10 +323,29 @@ export async function importBand(
     haveTx: db
       .prepare('SELECT 1 FROM stable_transactions WHERE id = ?')
       .pluck(),
-    ledger:
-      db.prepare(`INSERT OR REPLACE INTO parquet_l1_imports (band_id, height_from,
-      height_to, band_digest, rows_imported, imported_at)
-      VALUES (?, ?, ?, ?, ?, ?)`),
+    pending: db.prepare(`INSERT OR REPLACE INTO parquet_l1_imports (band_id,
+      height_from, height_to, band_digest, rows_imported, started_at,
+      completed_at) VALUES (?, ?, ?, ?, NULL, ?, NULL)`),
+    completed: db.prepare(`UPDATE parquet_l1_imports
+      SET rows_imported = ?, completed_at = ? WHERE band_id = ?`),
+    // A band replaces its own height range. Whatever is already there came
+    // from an earlier attempt at this band, a band of another grid, or a
+    // fork the chain has since dropped; none of it should outlive this.
+    clearTags: db.prepare(
+      'DELETE FROM stable_transaction_tags WHERE height BETWEEN ? AND ?',
+    ),
+    clearTxs: db.prepare(
+      'DELETE FROM stable_transactions WHERE height BETWEEN ? AND ?',
+    ),
+    clearLinks: db.prepare(`DELETE FROM stable_block_transactions
+      WHERE block_indep_hash IN
+        (SELECT indep_hash FROM stable_blocks WHERE height BETWEEN ? AND ?)`),
+    clearMissing: db.prepare(
+      'DELETE FROM missing_transactions WHERE height BETWEEN ? AND ?',
+    ),
+    clearBlocks: db.prepare(
+      'DELETE FROM stable_blocks WHERE height BETWEEN ? AND ?',
+    ),
   };
 
   let rows = 0;
@@ -420,6 +477,21 @@ export async function importBand(
   // needs and imports it again, over the top of what is there.
   let sinceCommit = 0;
   db.exec('BEGIN IMMEDIATE');
+  // Recorded before a single row is written, so a crash leaves the band
+  // marked unfinished rather than looking done, and the range is cleared
+  // so what lands is the band's own content and nothing else.
+  insert.pending.run(
+    entry.id,
+    from,
+    to,
+    bandDigest(band),
+    Math.floor(Date.now() / 1000),
+  );
+  insert.clearLinks.run(from, to);
+  insert.clearTags.run(from, to);
+  insert.clearTxs.run(from, to);
+  insert.clearMissing.run(from, to);
+  insert.clearBlocks.run(from, to);
   const commitChunk = () => {
     db.exec('COMMIT');
     sinceCommit = 0;
@@ -452,14 +524,7 @@ export async function importBand(
       );
     }
     insert.countMissing.run(from, to);
-    insert.ledger.run(
-      entry.id,
-      from,
-      to,
-      bandDigest(band),
-      rows,
-      Math.floor(Date.now() / 1000),
-    );
+    insert.completed.run(rows, Math.floor(Date.now() / 1000), entry.id);
     db.exec('COMMIT');
   } catch (error) {
     db.exec('ROLLBACK');
@@ -497,6 +562,7 @@ export async function runImport({
   log,
   limit,
   batchRows,
+  commitEvery,
   onBand,
 }: {
   db: Sqlite.Database;
@@ -506,6 +572,7 @@ export async function runImport({
   /** Import at most this many bands, for a first run an operator watches. */
   limit?: number;
   batchRows?: number;
+  commitEvery?: number;
   onBand?: (outcome: ImportOutcome) => void;
 }): Promise<ImportRunResult> {
   assertImportable(db);
@@ -531,6 +598,7 @@ export async function runImport({
       const { rows, missingTransactions } = await importBand(db, duck, entry, {
         log,
         ...(batchRows !== undefined ? { batchRows } : {}),
+        ...(commitEvery !== undefined ? { commitEvery } : {}),
       });
       haveTo = entry.band.heightRange[1];
       const outcome: ImportOutcome = {
