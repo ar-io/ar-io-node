@@ -600,8 +600,9 @@ describe('runImport', () => {
     await fsp.mkdir(workDir);
     await buildCoreDb(sourceDb, FIRST, 31);
     for (const [from, to] of [
-      [FIRST, FIRST + 14],
-      [FIRST + 15, FIRST + 29],
+      [FIRST, FIRST + 9],
+      [FIRST + 10, FIRST + 19],
+      [FIRST + 20, FIRST + 29],
     ]) {
       const out = await exportL1Band({
         coreDbPath: sourceDb,
@@ -637,15 +638,16 @@ describe('runImport', () => {
     assert.deepEqual(
       run.outcomes.map((o) => [o.heightRange, o.result]),
       [
-        [[FIRST, FIRST + 14], 'imported'],
-        [[FIRST + 15, FIRST + 29], 'imported'],
+        [[FIRST, FIRST + 9], 'imported'],
+        [[FIRST + 10, FIRST + 19], 'imported'],
+        [[FIRST + 20, FIRST + 29], 'imported'],
       ],
     );
     assert.equal(run.haveTo, FIRST + 29);
     assert.deepEqual(heights(), [FIRST, FIRST + 29]);
     assert.equal(
       db.prepare('SELECT COUNT(*) FROM parquet_l1_imports').pluck().get(),
-      2,
+      3,
     );
   });
 
@@ -659,13 +661,16 @@ describe('runImport', () => {
       limit: 1,
     });
     assert.equal(first.outcomes.length, 1);
-    assert.deepEqual(heights(), [FIRST, FIRST + 14]);
+    assert.deepEqual(heights(), [FIRST, FIRST + 9]);
 
     const second = await runImport({ db, duck, bandsDir, log, batchRows: 9 });
     assert.deepEqual(
       second.outcomes.map((o) => o.heightRange),
-      [[FIRST + 15, FIRST + 29]],
-      'only the band that was left',
+      [
+        [FIRST + 10, FIRST + 19],
+        [FIRST + 20, FIRST + 29],
+      ],
+      'only the bands that were left',
     );
     assert.deepEqual(heights(), [FIRST, FIRST + 29]);
 
@@ -673,23 +678,27 @@ describe('runImport', () => {
     assert.deepEqual(third.outcomes, [], 'nothing left to do');
   });
 
-  it('stops at a bad band, keeping what came before it', async () => {
-    // Corrupt the second band's claim so it is refused on read.
-    const second = path.join(bandsDir, `l1-h${FIRST + 15}-${FIRST + 29}-t-0`);
-    const file = path.join(second, 'band.json');
+  it('stops at a bad band, keeping what came before and leaving what comes after', async () => {
+    // The middle band is refused, so the third must not be imported over
+    // the hole it leaves: the block importer cannot cross a gap.
+    const middle = path.join(bandsDir, `l1-h${FIRST + 10}-${FIRST + 19}-t-0`);
+    const file = path.join(middle, 'band.json');
     const json = JSON.parse(await fsp.readFile(file, 'utf8'));
     json.tables.blocks.rowDigest = 'f'.repeat(64);
     await fsp.writeFile(file, JSON.stringify(json));
 
     const run = await runImport({ db, duck, bandsDir, log, batchRows: 9 });
     assert.deepEqual(
-      run.outcomes.map((o) => o.result),
-      ['imported', 'refused'],
+      run.outcomes.map((o) => [o.heightRange[0], o.result]),
+      [
+        [FIRST, 'imported'],
+        [FIRST + 10, 'refused'],
+      ],
+      'the third band was never attempted',
     );
     assert.match(run.outcomes[1].reason ?? '', /do not reproduce the digest/);
-    // The good band is committed; the bad one left nothing.
-    assert.deepEqual(heights(), [FIRST, FIRST + 14]);
-    assert.equal(run.haveTo, FIRST + 14);
+    assert.deepEqual(heights(), [FIRST, FIRST + 9]);
+    assert.equal(run.haveTo, FIRST + 9);
     assert.equal(
       db.prepare('SELECT COUNT(*) FROM parquet_l1_imports').pluck().get(),
       1,
