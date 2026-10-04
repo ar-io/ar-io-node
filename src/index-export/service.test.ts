@@ -222,6 +222,65 @@ describe('ExportService', () => {
     assert.equal(runResult(report), 'published');
   });
 
+  /** A stranger's band in the publish directory. */
+  async function foreignBand(name: string, from: number) {
+    const dir = path.join(ctx.config().publishDir, name);
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(
+      path.join(dir, 'manifest.json'),
+      JSON.stringify({
+        version: 1,
+        createdAt: '2026-09-29T00:00:00Z',
+        totalRecords: 1,
+        partitions: [
+          {
+            prefix: '00',
+            location: { type: 'file', filename: '00.cdb' },
+            recordCount: 1,
+            size: 1,
+          },
+        ],
+        metadata: { heightRange: [from, null] },
+      }),
+    );
+  }
+
+  it("refuses a resumed bootstrap over a stranger's band, keeping its own", async () => {
+    // A bootstrap that got as far as history, with no recent band yet.
+    ctx.gw1.top = 1999;
+    await ctx.service().runOnce();
+    const mine = await ctx.live();
+    assert.deepEqual(
+      mine.map((b) => [b.role, b.from, b.to]),
+      [['h', 1000, 1999]],
+      'history published, no recent band: a bootstrap is still due',
+    );
+
+    // A stranger's band appears before the bootstrap resumes.
+    await foreignBand('b1-h1950000-tip-turbo', 1_950_000);
+    // Far enough for another whole recent span: a bootstrap is planned again.
+    ctx.gw1.top = 3200;
+    const report = await ctx.service().runOnce();
+
+    assert.equal(report.failed?.reason, 'foreign_bands');
+    assert.match(report.failed?.message ?? '', /b1-h1950000-tip-turbo/);
+    // Its own band is not mistaken for the stranger's.
+    assert.doesNotMatch(report.failed?.message ?? '', /f5b1208c/);
+  });
+
+  it('scans for strangers only when a bootstrap is planned', async () => {
+    // Steady state: bands of its own, nothing to bootstrap.
+    await ctx.service().runOnce();
+    assert.ok((await ctx.live()).length > 0);
+    // A band superseded moments ago is still on disk and is not "own"; a
+    // steady-state run must not read it as a stranger's.
+    await foreignBand('d-h2089-tip-f5b1208c-superseded', 2089);
+    ctx.now += DAY;
+    ctx.gw1.top = 2650;
+    const report = await ctx.service().runOnce();
+    assert.equal(report.failed, undefined, 'the run was not refused');
+  });
+
   it('refuses to bootstrap over bands it did not build', async () => {
     const foreign = path.join(ctx.config().publishDir, 'b1-h1950000-tip-turbo');
     await fs.mkdir(foreign, { recursive: true });

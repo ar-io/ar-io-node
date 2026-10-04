@@ -398,10 +398,13 @@ export class ExportService {
       };
 
       const before = await plan();
-      await this.refuseForeignBands(before.bands);
       const from = bootstrapFrom(before);
       let deltaInput = before;
       if (from !== undefined) {
+        // Only a bootstrap cuts bands that could overlap a stranger's. A
+        // steady-state run must not scan: a band superseded moments ago is
+        // still on disk until the sidecar sweeps it, and is not its own.
+        await this.refuseForeignBands(before.bands);
         // Bootstrap, in order: each band published before the next is cut.
         let input = before;
         for (const step of planBootstrap(before, from)) {
@@ -503,9 +506,12 @@ export class ExportService {
    * Refuses to bootstrap over bands in the publish directory that are
    * neither this service's nor adopted (a publisher's bands built another
    * way): new bands would overlap them. Adopt them first.
+   *
+   * Called only when a bootstrap is planned, including one resumed over the
+   * history it already published, which is why own bands are excluded
+   * rather than the scan skipped.
    */
   private async refuseForeignBands(own: OwnBand[]): Promise<void> {
-    if (own.length > 0) return;
     const ownIds = new Set(own.map((band) => band.id));
     const names = await fs
       .readdir(this.deps.config.publishDir)
