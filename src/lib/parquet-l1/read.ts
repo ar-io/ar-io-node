@@ -27,9 +27,8 @@ import { ParquetL1Band, PARQUET_L1_TABLES, TableSpec } from './layout.js';
 /** Rows read per batch: enough to amortise the query, small enough to hold. */
 export const READ_BATCH_ROWS = 50_000;
 /**
- * Heights per query for a table ordered by height. Bounds how far DuckDB
- * reads ahead of the writer: the densest 1,000 heights of the chain hold
- * roughly a quarter of a million tag rows.
+ * Heights per query for a table ordered by height. The densest 1,000
+ * heights of the chain hold roughly a quarter of a million tag rows.
  */
 export const READ_HEIGHT_WINDOW = 1_000;
 
@@ -191,8 +190,11 @@ export async function readTable(
 
   // A table ordered by height is read a window of heights at a time, in
   // ascending order, so the rows still reach the digest in the table's
-  // order. Reading a 25M-row table in one query let DuckDB run far ahead
-  // of the SQLite writes and hold gigabytes of rows while it waited.
+  // order. This bounds the work in any one query — the largest band's tag
+  // table is 25M rows read through a join — and makes progress visible.
+  // It is not what keeps memory down: the importer holds about 450 MB
+  // whichever way the rows are read, and what looks like gigabytes in
+  // `docker stats` is the page cache of the database being written.
   if (spec.orderBy[0] === 'height' && heightWindow > 0) {
     const [low, high] = band.heightRange;
     // Reading by window would quietly leave a row outside the band

@@ -245,6 +245,78 @@ records then passed the header check against turbo-gateway.com, 150 of 150):
 `root_is_item`, `zero_size`, and for an overlay `no_height` and
 `outside_coverage`.
 
+## `index-l1-import`
+
+Fills this gateway's `core.db` from installed `parquet-l1` bands, so it
+starts from a published index instead of walking the chain block by block.
+See "L1 bands" in [index-swarm.md](index-swarm.md) for what a band is and
+how one arrives.
+
+**The gateway must be stopped.** The command refuses a `core.db` another
+writer holds rather than racing it, and refuses one that still holds
+unstable (`new_*`) blocks, which an import would be written beneath. Run
+`yarn db:migrate up` first: a `core.db` that has not got the import ledger
+is refused too.
+
+```bash
+docker compose run --rm -T core ar-io-node index-l1-import \
+  --bands-dir data/indexes/installed/parquet-l1 \
+  --core-db data/sqlite/core.db
+```
+
+Bands are imported in height order, lowest first. The run stops at the
+first band that fails, because bands must land as a contiguous run — the
+block importer rewinds across a gap and gives up after 18 blocks. What was
+imported before the failure is kept and recorded, so running the command
+again carries on from there.
+
+| Option | |
+|---|---|
+| `--bands-dir` | A directory of bands, as the sidecar installs them. Required |
+| `--core-db` | The gateway's `core.db`. Required |
+| `--max-bands` | Import at most this many bands, then stop |
+
+Running it again when there is nothing to do is a no-op: each band is
+recorded in `parquet_l1_imports` as it lands, and a band already held is
+skipped. Every write is idempotent, so a band interrupted part way is
+simply imported again over what is there.
+
+**What to expect.** Measured on vilenarios.com against real bands: the
+sparse first 100,000 heights take about 10 seconds, and the busiest
+100,000 (10.4M transactions, 25.7M tags, 46.6M rows) take about 22
+minutes and leave a 12 GB `core.db`. Allow roughly 2 GB of WAL beside the
+database while a band is landing, and the band's own size on disk.
+
+**Afterwards.** The block importer continues from the highest height
+imported. Transactions that arrive this way never emit `TX_INDEXED`, so
+historical bundles are not unbundled unless you also run with
+`BACKFILL_BUNDLE_RECORDS`. A transaction a block lists that its band did
+not carry is written to `missing_transactions`, and the gateway backfills
+it the usual way.
+
+### `index-l1-import` result
+
+```json
+{
+  "coreDb": "data/sqlite/core.db",
+  "bandsDir": "data/indexes/installed/parquet-l1",
+  "haveTo": 99999,
+  "imported": 1,
+  "rows": 125179,
+  "missingTransactions": 0,
+  "skipped": 0,
+  "bands": [
+    { "heightRange": [0, 99999], "result": "imported", "rows": 125179, "seconds": 10 }
+  ],
+  "seconds": 10.4
+}
+```
+
+`haveTo` is the highest height `core.db` holds when the run ends. A band's
+`result` is `imported` or `refused`; a refused one also carries `reason`,
+and `refused` appears at the top level. `skipped` counts bands the run had
+no use for: already held, or wholly below what the database has.
+
 ## For scripts and agents
 
 Every `ar-io-node` command is non-interactive and answers in one shape, so a

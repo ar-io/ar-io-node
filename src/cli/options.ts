@@ -99,6 +99,19 @@ export const optionMap = {
     alias: '--to <height>',
     description: 'Highest block height to export. Required',
   },
+  bandsDir: {
+    alias: '--bands-dir <path>',
+    description:
+      'A directory of parquet-l1 bands, as the index-swarm sidecar installs them (data/indexes/installed/parquet-l1). Required',
+  },
+  coreDb: {
+    alias: '--core-db <path>',
+    description: "The gateway's core.db. It must be stopped. Required",
+  },
+  maxBands: {
+    alias: '--max-bands <n>',
+    description: 'Import at most this many bands, then stop',
+  },
   force: {
     alias: '--force',
     description: 'Replace --output if it exists',
@@ -134,6 +147,12 @@ export const indexBandVerifyOptions: CommanderOption[] = [
   optionMap.gatewayUrl,
   optionMap.readTimeout,
   optionMap.sampleSize,
+];
+
+export const indexL1ImportOptions: CommanderOption[] = [
+  optionMap.bandsDir,
+  optionMap.coreDb,
+  optionMap.maxBands,
 ];
 
 export const indexBandExportOptions: CommanderOption[] = [

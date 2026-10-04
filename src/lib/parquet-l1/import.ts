@@ -410,9 +410,9 @@ export async function importBand(
   const txFile = path.join(dir, spec('transactions').file).replace(/'/g, "''");
   // Committed in chunks rather than as one transaction for the band.
   // Measured on a real 1.3 GB band (10.4M transactions, 25.7M tags), one
-  // transaction grew the WAL past 7.8 GB and the process past 4.6 GB of
-  // memory before committing anything — too much to ask of a machine
-  // bootstrapping a gateway. Chunks bound both.
+  // transaction grew the WAL past 7.8 GB before committing anything, and
+  // nothing was durable until the end. Chunked, the same band imports in
+  // 22 minutes with the WAL peaking at 1.85 GB.
   //
   // A crash now leaves part of a band behind without its ledger row, which
   // is safe because every write is idempotent and `missing_tx_count` is

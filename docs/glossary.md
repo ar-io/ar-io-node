@@ -324,6 +324,11 @@ range, in Parquet, with a `band.json` of per-table row counts and row
 digests. Lets a new gateway import its L1 index instead of indexing the
 chain, and apps query it in place.
 
+<a id="l1-import"></a> **L1 import** — Filling a gateway's `core.db` from
+published [Parquet L1 bands](#parquet-l1) with `ar-io-node index-l1-import`,
+instead of indexing the chain block by block. Offline, idempotent, and
+recorded band by band in `parquet_l1_imports` so it resumes.
+
 <a id="fold"></a> **Fold** — Building a band from an earlier band's entries
 plus newer rows from the index, so entries the index has since dropped (such
 as ClickHouse rows past their TTL) are kept. A folded entry counts as being at
