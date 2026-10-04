@@ -8,11 +8,18 @@
 /**
  * What to build for the `parquet-l1` index, and building it.
  *
- * Bands cover the fixed height ranges of {@link l1RangeOf}: 0 to 499,999
- * (the sparse early chain), then every 25,000 (`L1_SPAN`). A range below the
- * top is built once and never changes; the range the top falls in is a tip
- * band, rebuilt as the top moves and superseding the tip bands before it.
- * Ranges are built in order, from height 0, because an importer imports a
+ * Bands cover two nested uniform grids, the same for every publisher:
+ * whole {@link L1_SPAN} ranges ({@link l1RangeOf}), and whole
+ * {@link L1_SUB_SPAN} sub-ranges ({@link l1SubRangeOf}) inside the range the
+ * chain's top falls in.
+ *
+ * L1 is append-only, so a completed range or sub-range is built once and
+ * never changes. Only the sub-range holding the top — the tip — is rebuilt
+ * as the top moves, superseding the tips before it, until it completes and
+ * becomes a sub-range band of its own. A whole range supersedes the
+ * sub-ranges beneath it. See {@link planL1}.
+ *
+ * Bands are built in order, from height 0, because an importer imports a
  * contiguous run.
  */
 import crypto from 'node:crypto';

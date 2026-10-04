@@ -552,10 +552,12 @@ can't build them, and its runs say so (`incomplete`, not retried).
   `core.db`, then run `--once`. A band published wrongly can't be replaced
   under its range by the service; remove it from `published/parquet-l1/`
   (`sudo`) and run `--once`.
-- **Time.** A bootstrap of the whole chain takes hours (on vilenarios.com:
-  19 minutes for 0 to 499,999, about 13 for each 100,000 heights after). A
-  run starts no new whole band after 4 hours; the rest are listed as
-  `l1Deferred`, and the next run starts 15 minutes later.
+- **Time.** A bootstrap of the whole chain takes hours. Measured on
+  vilenarios.com (2026-10-03, 2.01M heights): 23 bands and 12.8 GB in about
+  9 hours. A band costs from 40 seconds in the sparse early chain to about
+  45 minutes and 1.35 GB through the busiest stretch, settling lower again
+  nearer the tip. A run starts no new whole band after 4 hours; the rest
+  are listed as `l1Deferred`, and the next run starts 15 minutes later.
 - **Disk.** Before each band, room for the band and its scratch: eight
   times the largest band published, at least 10 GiB, beyond the same
   margin as root-TX bands. Scratch is about six times the band; DuckDB's
