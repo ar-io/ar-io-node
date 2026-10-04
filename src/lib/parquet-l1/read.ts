@@ -88,25 +88,43 @@ export async function readTable(
   band: ParquetL1Band,
   onBatch: (rows: unknown[][]) => Promise<void>,
   batchRows = READ_BATCH_ROWS,
+  /**
+   * Columns to read beyond the layout's, as `<expression> AS <name>`. They
+   * come after the layout's in each row and are left out of the digest: the
+   * digest covers what the band says it holds, not what a reader joined to
+   * it. Used to carry a tag's `block_transaction_index`, which the layout
+   * keys by transaction id.
+   */
+  extra: { select: string[]; from: string } = { select: [], from: '' },
 ): Promise<number> {
   const described = band.tables[spec.name];
   if (described === undefined) {
     throw new BandRowsError(`${BAND_LABEL}: ${spec.name} is not described`);
   }
   const file = path.join(dir, spec.file).replace(/'/g, "''");
-  const columns = spec.columns.map((c) => `"${c.name}"`).join(', ');
-  const order = spec.orderBy.map((c) => `"${c}"`).join(', ');
+  const self = `read_parquet('${file}')`;
+  const columns = [
+    ...spec.columns.map((c) => `t."${c.name}"`),
+    ...extra.select,
+  ].join(', ');
+  const order = spec.orderBy.map((c) => `t."${c}"`).join(', ');
+  const from = extra.from === '' ? `${self} t` : `${self} t ${extra.from}`;
   const digest = new RowDigest(spec.columns);
   let read = 0;
   for (;;) {
     const batch = (await duck.all(
-      `SELECT ${columns} FROM read_parquet('${file}') ORDER BY ${order} LIMIT ${batchRows} OFFSET ${read}`,
+      `SELECT ${columns} FROM ${from} ORDER BY ${order} LIMIT ${batchRows} OFFSET ${read}`,
     )) as Array<Record<string, unknown>>;
     if (batch.length === 0) break;
-    const rows = batch.map((row) => spec.columns.map((c) => row[c.name]));
+    const names = [
+      ...spec.columns.map((c) => c.name),
+      ...extra.select.map((e) => e.slice(e.lastIndexOf(' ') + 1)),
+    ];
+    const rows = batch.map((row) => names.map((n) => row[n]));
     for (const values of rows) {
-      checkRow(spec, values, band.heightRange);
-      digest.add(values);
+      const own = values.slice(0, spec.columns.length);
+      checkRow(spec, own, band.heightRange);
+      digest.add(own);
     }
     read += rows.length;
     if (read > described.rows) {
