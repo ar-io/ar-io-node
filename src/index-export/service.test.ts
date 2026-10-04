@@ -11,10 +11,12 @@ import * as path from 'node:path';
 import { describe, it } from 'node:test';
 
 import { toB64Url } from '../lib/encoding.js';
+import { bandPublisherTag } from '../lib/index-band/build.js';
 import {
   assertCovered,
   DAY,
   MemorySource,
+  PUBLISHER,
   useExportService,
 } from '../../test/index-export-service-fixture.js';
 import { CsvOverlaySource } from './kinds/root-tx/sources/csv.js';
@@ -266,6 +268,41 @@ describe('ExportService', () => {
     assert.match(report.failed?.message ?? '', /b1-h1950000-tip-turbo/);
     // Its own band is not mistaken for the stranger's.
     assert.doesNotMatch(report.failed?.message ?? '', /f5b1208c/);
+  });
+
+  it("does not read its own superseded band as a stranger's", async () => {
+    // A bootstrap that got as far as history, with no recent band yet.
+    ctx.gw1.top = 1999;
+    await ctx.service().runOnce();
+
+    // A band of its own that is no longer live: superseded, or its manifest
+    // from an older format. Either way it is not in the live set, and it
+    // sits on disk until the sidecar sweeps it.
+    const tag = bandPublisherTag(PUBLISHER);
+    const mine = path.join(
+      ctx.config().publishDir,
+      `d-h2089-tip-${tag}-aaaaaaaaaaaa`,
+    );
+    await fs.mkdir(mine, { recursive: true });
+    await fs.writeFile(
+      path.join(mine, 'manifest.json'),
+      JSON.stringify({
+        version: 1,
+        createdAt: '2026-10-01T00:00:00Z',
+        totalRecords: 1,
+        partitions: [],
+        metadata: {},
+      }),
+    );
+    assert.equal(
+      (await ctx.live()).some((b) => b.id.endsWith('aaaaaaaaaaaa')),
+      false,
+      'not in the live set',
+    );
+
+    ctx.gw1.top = 3200;
+    const report = await ctx.service().runOnce();
+    assert.equal(report.failed, undefined, 'its own band did not refuse it');
   });
 
   it('scans for strangers only when a bootstrap is planned', async () => {

@@ -17,11 +17,56 @@ import {
   indexState,
   loadState,
   updateIndexState,
+  ownBandRole,
 } from './state.js';
 import { bandPublisherTag } from '../lib/index-band/build.js';
 
 const PUBLISHER = 'ErEgD7dq1yR9W1CnVG3pEywi3qST7jqWA9nfWtxSGeBc';
 const TAG = bandPublisherTag(PUBLISHER);
+
+describe('ownBandRole', () => {
+  const PUB = 'ErEgD7dq1yR9W1CnVG3pEywi3qST7jqWA9nfWtxSGeBc';
+  const tag = bandPublisherTag(PUB);
+
+  it('reads the role from a band of this publisher, whatever supersedes it', () => {
+    for (const role of ['h', 'r', 'd'] as const) {
+      assert.equal(
+        ownBandRole(`${role}-h1000-1999-${tag}-abcdef123456`, PUB, {}),
+        role,
+        `${role} band`,
+      );
+    }
+    assert.equal(
+      ownBandRole(`d-h1000-tip-${tag}-abcdef123456`, PUB, {}),
+      'd',
+      'open at the tip',
+    );
+  });
+
+  it("does not claim another publisher's band, or a malformed id", () => {
+    for (const id of [
+      'h-h1000-1999-deadbeef-abcdef123456', // another publisher's tag
+      `x-h1000-1999-${tag}-abcdef123456`, // not a role
+      `h-h1000-1999-${tag}-tooshort`,
+      'b1-h1950000-tip-turbo',
+      '',
+    ]) {
+      assert.equal(ownBandRole(id, PUB, {}), undefined, id);
+    }
+  });
+
+  it('claims an adopted band whatever its id, at the role it was adopted as', () => {
+    const adoptions = {
+      'b1-h1950000-tip-turbo': {
+        as: 'r' as const,
+        top: 1_999_999,
+        adoptedAt: '2026-10-01T00:00:00Z',
+      },
+    };
+    assert.equal(ownBandRole('b1-h1950000-tip-turbo', PUB, adoptions), 'r');
+    assert.equal(ownBandRole('b2-h1-2-turbo', PUB, adoptions), undefined);
+  });
+});
 
 describe('deriveOwnBands', () => {
   let dir: string;

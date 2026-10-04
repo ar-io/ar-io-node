@@ -133,6 +133,25 @@ const isRole = (value: string): value is BandRole =>
   value === 'h' || value === 'r' || value === 'd';
 
 /**
+ * The role a band id has for this publisher, or undefined when the band is
+ * someone else's: its id must carry the publisher's tag and a known role,
+ * unless it was adopted. Independent of supersession, so a band of this
+ * publisher's that another supersedes is still its own.
+ */
+export function ownBandRole(
+  id: string,
+  publisher: string,
+  adoptions: Record<string, Adoption>,
+): BandRole | undefined {
+  const adoption = adoptions[id];
+  if (adoption !== undefined) return adoption.as;
+  const match = BAND_ID.exec(id);
+  if (match === null || match[4] !== bandPublisherTag(publisher))
+    return undefined;
+  return isRole(match[1]) ? match[1] : undefined;
+}
+
+/**
  * This publisher's bands as published: every directory in `publishDir`
  * holding a manifest (one without is being retired), less the ones another
  * band supersedes. A band is this publisher's when its id carries the
@@ -144,7 +163,6 @@ export async function deriveOwnBands(
   adoptions: Record<string, Adoption>,
 ): Promise<OwnBand[]> {
   const names = await fs.readdir(publishDir).catch(() => [] as string[]);
-  const tag = bandPublisherTag(publisher);
   const all: Array<{ id: string; dir: string; manifest: Cdb64Manifest }> = [];
   for (const name of names) {
     if (name.startsWith('.')) continue;
@@ -181,23 +199,16 @@ export async function deriveOwnBands(
       continue;
     }
     const [from, to] = range as [number, number | null];
-    const adoption = adoptions[id];
-    let role: BandRole;
-    if (adoption !== undefined) {
-      role = adoption.as;
-    } else {
-      const match = BAND_ID.exec(id);
-      if (match === null || match[4] !== tag || !isRole(match[1])) continue;
-      role = match[1];
-    }
+    const role = ownBandRole(id, publisher, adoptions);
+    if (role === undefined) continue;
     own.push({
       id,
       dir,
       role,
       from,
       to,
-      top: to ?? adoption?.top ?? from,
-      adopted: adoption !== undefined,
+      top: to ?? adoptions[id]?.top ?? from,
+      adopted: adoptions[id] !== undefined,
       manifest,
     });
   }

@@ -43,12 +43,14 @@ import type { RecordSource } from './kinds/root-tx/sources/rows.js';
 import { ExportLock, LOCK_STALE_MS, LockHolder } from './lock.js';
 import * as metrics from './metrics.js';
 import {
+  Adoption,
   BandRole,
   deriveOwnBands,
   IndexState,
   indexState,
   loadState,
   OwnBand,
+  ownBandRole,
   updateIndexState,
 } from './state.js';
 
@@ -404,7 +406,7 @@ export class ExportService {
         // Only a bootstrap cuts bands that could overlap a stranger's. A
         // steady-state run must not scan: a band superseded moments ago is
         // still on disk until the sidecar sweeps it, and is not its own.
-        await this.refuseForeignBands(before.bands);
+        await this.refuseForeignBands(state.adoptions);
         // Bootstrap, in order: each band published before the next is cut.
         let input = before;
         for (const step of planBootstrap(before, from)) {
@@ -508,22 +510,25 @@ export class ExportService {
    * way): new bands would overlap them. Adopt them first.
    *
    * Called only when a bootstrap is planned, including one resumed over the
-   * history it already published, which is why own bands are excluded
-   * rather than the scan skipped.
+   * history it already published. Ownership is read from the band's own id
+   * (its publisher tag and role) or its adoption, not from the live set: a
+   * band of this publisher's that another supersedes is still its own, and
+   * sits on disk until the sidecar sweeps it.
    */
-  private async refuseForeignBands(own: OwnBand[]): Promise<void> {
-    const ownIds = new Set(own.map((band) => band.id));
-    const names = await fs
-      .readdir(this.deps.config.publishDir)
-      .catch(() => [] as string[]);
+  private async refuseForeignBands(
+    adoptions: Record<string, Adoption>,
+  ): Promise<void> {
+    const { publishDir, publisher } = this.deps.config;
+    const names = await fs.readdir(publishDir).catch(() => [] as string[]);
     const foreign: string[] = [];
     for (const name of names) {
-      if (name.startsWith('.') || ownIds.has(name)) continue;
-      const manifest = path.join(
-        this.deps.config.publishDir,
-        name,
-        'manifest.json',
-      );
+      if (
+        name.startsWith('.') ||
+        ownBandRole(name, publisher, adoptions) !== undefined
+      ) {
+        continue;
+      }
+      const manifest = path.join(publishDir, name, 'manifest.json');
       if (
         await fs.stat(manifest).then(
           () => true,
@@ -536,7 +541,7 @@ export class ExportService {
     if (foreign.length > 0) {
       throw new RunFailure(
         'foreign_bands',
-        `${this.deps.config.publishDir} holds bands this service didn't build (${foreign.slice(0, 5).join(', ')}${foreign.length > 5 ? ', …' : ''}); adopt them first (--adopt <id> --as h|r|d), or move them away, rather than bootstrap over them`,
+        `${publishDir} holds bands this service didn't build (${foreign.slice(0, 5).join(', ')}${foreign.length > 5 ? ', …' : ''}); adopt them first (--adopt <id> --as h|r|d), or move them away, rather than bootstrap over them`,
       );
     }
   }
