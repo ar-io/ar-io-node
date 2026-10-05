@@ -106,7 +106,7 @@ export const optionMap = {
   toHeight: {
     alias: '--to <height>',
     description:
-      'Highest block height to check. Defaults to the first post-2.0 block (422250), or the highest held if lower',
+      'Highest block height to check. For an index reaching below the 2.0 fork, defaults to the fork (422250) or the highest held if lower; for one starting at or above it, to the highest held',
   },
   bandsDir: {
     alias: '--bands-dir <path>',
@@ -116,6 +116,11 @@ export const optionMap = {
   coreDb: {
     alias: '--core-db <path>',
     description: "The gateway's core.db. It must be stopped. Required",
+  },
+  coreDbReadOnly: {
+    alias: '--core-db <path>',
+    description:
+      "The gateway's core.db. Opened read-only, so it can stay up. Required",
   },
   maxBands: {
     alias: '--max-bands <n>',
@@ -165,7 +170,7 @@ export const indexL1ImportOptions: CommanderOption[] = [
 ];
 
 export const indexL1VerifyOptions: CommanderOption[] = [
-  optionMap.coreDb,
+  optionMap.coreDbReadOnly,
   optionMap.fromHeight,
   optionMap.toHeight,
 ];

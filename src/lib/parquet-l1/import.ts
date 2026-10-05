@@ -161,7 +161,21 @@ export async function readBands(dir: string): Promise<ImportableBand[]> {
  */
 export function planImport(
   bands: ImportableBand[],
-  { haveTo, held }: { haveTo: number; held: ReadonlySet<string> },
+  {
+    haveTo,
+    held,
+    blocksTo = haveTo,
+  }: {
+    haveTo: number;
+    held: ReadonlySet<string>;
+    /**
+     * The highest height `stable_blocks` actually reaches, which can be
+     * above `haveTo` when an unfinished band pulled that down. Used to
+     * tell "these heights are there, the ledger just has a stale row"
+     * from "the ledger claims heights the database does not hold".
+     */
+    blocksTo?: number;
+  },
 ): { steps: ImportableBand[]; skipped: SkippedBand[] } {
   const steps: ImportableBand[] = [];
   const skipped: SkippedBand[] = [];
@@ -197,6 +211,14 @@ export function planImport(
           : undefined;
     if (reason !== undefined) {
       skipped.push({ band: candidate, reason });
+      // A band the ledger holds, whose heights the database really does
+      // hold, has landed: carry on above it. Without this, an unfinished
+      // row that pulled `haveTo` down makes the band above it look like
+      // a gap and refuses every run from then on. The `blocksTo` test is
+      // what stops this trusting a ledger that outlived its database.
+      if (reason === 'already_imported' && to <= blocksTo) {
+        next = Math.max(next, to + 1);
+      }
       continue;
     }
     if (from > next) {
@@ -355,6 +377,8 @@ export function assertImportable(db: Sqlite.Database): void {
 /** What `core.db` already holds, and the bands it was built from. */
 export function readProgress(db: Sqlite.Database): {
   haveTo: number;
+  /** The highest height `stable_blocks` holds, before any unfinished band pulls it down. */
+  blocksTo: number;
   held: Set<string>;
   unfinished: Array<{ id: string; from: number }>;
 } {
@@ -386,7 +410,7 @@ export function readProgress(db: Sqlite.Database): {
     (top, band) => Math.min(top, band.from - 1),
     blocksTo,
   );
-  return { haveTo, held, unfinished };
+  return { haveTo, blocksTo, held, unfinished };
 }
 
 const sha1 = (bytes: Buffer) =>
@@ -480,6 +504,13 @@ export async function importBand(
       completed_at) VALUES (?, ?, ?, ?, NULL, ?, NULL)`),
     completed: db.prepare(`UPDATE parquet_l1_imports
       SET rows_imported = ?, completed_at = ? WHERE band_id = ?`),
+    // An earlier attempt at these heights is finished with: this band
+    // cleared the range and rewrote it. Leaving the row would hold
+    // `haveTo` below a band nothing can ever finish — a tip superseded
+    // by a wider one is never imported again under its old id — and the
+    // planner would then read the band above it as a gap, for ever.
+    forgetSuperseded: db.prepare(`DELETE FROM parquet_l1_imports
+      WHERE completed_at IS NULL AND height_from >= ? AND height_to <= ?`),
     // A band replaces its own height range. Whatever is already there came
     // from an earlier attempt at this band, a band of another grid, or a
     // fork the chain has since dropped; none of it should outlive this.
@@ -696,6 +727,8 @@ export async function importBand(
     }
     insert.countMissing.run(from, to);
     insert.completed.run(rows, Math.floor(Date.now() / 1000), entry.id);
+    // After this band's own row is complete, so it is not caught by it.
+    insert.forgetSuperseded.run(from, to);
     db.exec('COMMIT');
   } catch (error) {
     db.exec('ROLLBACK');

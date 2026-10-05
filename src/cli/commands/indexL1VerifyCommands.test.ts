@@ -88,20 +88,35 @@ describe('indexL1VerifyCLICommand', () => {
     );
   });
 
-  it('reports a broken index rather than throwing', async () => {
+  it('fails the command on a broken index, with the result as the error', async () => {
+    // Returning it would print the same JSON and exit 0, and a script
+    // would read a broken index as a good one. `runCommand` prints a
+    // thrown result on stderr and exits 1.
     const db = new Sqlite(coreDb);
     db.prepare(
       'UPDATE stable_transactions SET data_size = data_size + 1 WHERE height = ?',
     ).run(FIRST + 3);
     db.close();
-    const result = await run();
-    assert.equal(result.ok, false);
-    const checks = result.checks as Array<Record<string, unknown>>;
+    let thrown: Record<string, unknown> | undefined;
+    try {
+      await run();
+    } catch (error) {
+      thrown = error as Record<string, unknown>;
+    }
+    assert.ok(thrown !== undefined, 'the command failed');
+    assert.ok(!(thrown instanceof Error), 'and threw the result, not an Error');
+    assert.equal(thrown.ok, false);
+    const checks = thrown.checks as Array<Record<string, unknown>>;
     const bad = checks.find((c) => c.name === 'weave_accounting');
     assert.equal(bad?.ok, false);
     assert.equal(
       (bad?.failures as Array<Record<string, unknown>>)[0].height,
       FIRST + 3,
+    );
+    assert.deepEqual(
+      JSON.parse(JSON.stringify(thrown)),
+      thrown,
+      'and it survives JSON, because the CLI prints it',
     );
   });
 

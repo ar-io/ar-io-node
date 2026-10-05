@@ -71,7 +71,7 @@ export async function indexL1VerifyCLICommand(
       blocks: result.blocks,
       seconds: Math.round(result.seconds),
     });
-    return {
+    const answer = {
       coreDb,
       heightRange: result.heightRange,
       blocks: result.blocks,
@@ -100,6 +100,12 @@ export async function indexL1VerifyCLICommand(
       })),
       seconds: Math.round(result.seconds * 10) / 10,
     };
+    // A failed check has to fail the command. `runCommand` prints a
+    // thrown result on stderr and exits 1; returning it would print the
+    // same JSON and exit 0, and a script would read a broken index as a
+    // good one.
+    if (!result.ok) throw answer;
+    return answer;
   } finally {
     db.close();
   }

@@ -112,6 +112,37 @@ describe('planImport', () => {
     );
   });
 
+  it('carries on above a held band when a stale ledger row pulled haveTo down', () => {
+    // A tip band was interrupted, then superseded by a wider one that
+    // imported cleanly. The old row can never complete — nothing will
+    // import that id again — so without this the planner reads the band
+    // above as a gap and refuses every run from then on.
+    const { steps } = planImport(
+      [band('tip', 100, 149), band('wider', 100, 199), band('next', 200, 299)],
+      { haveTo: 99, blocksTo: 199, held: new Set(['wider']) },
+    );
+    assert.deepEqual(
+      steps.map((s) => s.id),
+      ['next'],
+    );
+  });
+
+  it('still refuses a ledger that outlived the database it describes', () => {
+    // The same shape, but the blocks really are absent: an empty core.db
+    // with a ledger left over. Trusting the ledger here would leave a
+    // hole, so the gap must still be refused.
+    assert.throws(
+      () =>
+        planImport([band('a', 0, 99), band('b', 100, 199)], {
+          haveTo: -1,
+          blocksTo: -1,
+          held: new Set(['a']),
+        }),
+      (e: Error) =>
+        e instanceof ImportRefused && /No band covers height 0/.test(e.message),
+    );
+  });
+
   it('finishes a band an earlier run left part way, rather than skipping it', () => {
     // core.db stops inside the band: a crash between chunks. The band is
     // not in the ledger, so it is imported again over what is there.
@@ -466,6 +497,48 @@ describe('importBand', () => {
     } finally {
       source.close();
     }
+  });
+
+  it('forgets an unfinished row its own range has rewritten', async () => {
+    // A tip band interrupted, then superseded by a wider one. Nothing
+    // will ever import the old id again, so its row has to go with the
+    // rewrite — otherwise it pulls `haveTo` below a band that has
+    // landed, and every later run reads the band above as a gap.
+    const [from, to] = entry.band.heightRange;
+    target
+      .prepare(
+        `INSERT INTO parquet_l1_imports (band_id, height_from, height_to,
+         band_digest, rows_imported, started_at, completed_at)
+         VALUES ('an-older-tip', ?, ?, ?, NULL, 1, NULL)`,
+      )
+      .run(from, to - 5, Buffer.alloc(32));
+    // One outside the range must survive: it describes heights this
+    // band did not touch.
+    target
+      .prepare(
+        `INSERT INTO parquet_l1_imports (band_id, height_from, height_to,
+         band_digest, rows_imported, started_at, completed_at)
+         VALUES ('elsewhere', ?, ?, ?, NULL, 1, NULL)`,
+      )
+      .run(to + 1, to + 10, Buffer.alloc(32));
+
+    await importBand(target, duck, entry, { log, batchRows: 7 });
+
+    assert.deepEqual(
+      target
+        .prepare(
+          'SELECT band_id FROM parquet_l1_imports WHERE completed_at IS NULL ORDER BY band_id',
+        )
+        .pluck()
+        .all(),
+      ['elsewhere'],
+      'the superseded row is gone; the one outside the range is not',
+    );
+    assert.equal(
+      readProgress(target).haveTo,
+      to,
+      'so progress is no longer held below the band that landed',
+    );
   });
 
   it('says where it is while a band is in flight', async () => {

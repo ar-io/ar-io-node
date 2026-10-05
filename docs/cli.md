@@ -355,7 +355,10 @@ it the usual way.
 
 `haveTo` is the highest height `core.db` holds when the run ends. A band's
 `result` is `imported` or `refused`; a refused one also carries `reason`,
-and `refused` appears at the top level. `skipped` lists the bands the run had
+and `refused` appears at the top level. **A refused band fails the
+command**: the bands below it are imported and kept, but the result goes
+to stderr and the exit code is 1, so a script notices. Run it again to
+carry on from what landed. `skipped` lists the bands the run had
 no use for, each with a `reason`: `already_imported`,
 `covered_by_a_wider_band` (a tip band inside a whole one), or
 `below_what_core_db_holds`.
@@ -449,7 +452,9 @@ accounted for — without that, the checks only show the range is
 self-consistent. `weaveSize` and `accountedFor` are strings, because the
 weave is larger than a JSON number holds exactly. A failing check carries
 `failures` (at most 20, each naming a height, what was found and what was
-expected) and `more` for the rest. The command exits 1 when `ok` is false.
+expected) and `more` for the rest. **When `ok` is false the command fails**:
+the same JSON goes to stderr and the exit code is 1, so a script cannot
+read a broken index as a good one.
 
 ## For scripts and agents
 

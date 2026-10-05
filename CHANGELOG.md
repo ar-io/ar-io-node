@@ -23,7 +23,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   twice leaves `core.db` exactly as importing it once does. A transaction a
   block lists that its band lacks becomes a `missing_transactions` row for
   the usual backfill. The run is refused up front if the filesystem has no
-  room for it, and says where it is once a minute while a band lands.
+  room for it, says where it is once a minute while a band lands, and
+  exits 1 with the result on stderr if a band is refused.
   Measured on vilenarios.com: the busiest 100,000 heights (46,606,658 rows)
   import in about half an hour and leave a 12.1 GB `core.db`; the whole
   chain is 468,501,488 rows and about 120 GB. See

@@ -77,7 +77,7 @@ export async function indexL1ImportCLICommand(
     });
     const imported = run.outcomes.filter((o) => o.result === 'imported');
     const refused = run.outcomes.find((o) => o.result === 'refused');
-    return {
+    const answer = {
       coreDb,
       bandsDir,
       haveTo: run.haveTo,
@@ -95,11 +95,19 @@ export async function indexL1ImportCLICommand(
       bands: run.outcomes.map((o) => ({
         heightRange: o.heightRange,
         result: o.result,
-        rows: o.rows,
+        // A refused band imported nothing, and `undefined` would not
+        // survive the JSON the CLI contract promises.
+        ...(o.rows !== undefined ? { rows: o.rows } : {}),
+        ...(o.reason !== undefined ? { reason: o.reason } : {}),
         seconds: Math.round(o.seconds),
       })),
       seconds: Math.round((Date.now() - started) / 100) / 10,
     };
+    // A refused band stops the run, so the command failed, even though
+    // the bands below it were imported and kept. Thrown rather than
+    // returned so the CLI exits 1 and a script notices.
+    if (refused !== undefined) throw answer;
+    return answer;
   } finally {
     await duck.close();
     await fsp.rm(path.join(path.dirname(coreDb), '.duckdb-import-tmp'), {

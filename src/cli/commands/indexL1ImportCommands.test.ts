@@ -134,6 +134,32 @@ describe('indexL1ImportCLICommand', () => {
     );
   });
 
+  it('fails the command when a band is refused, keeping what landed', async () => {
+    // The bands below the failure are imported and kept, but the run did
+    // not do what was asked, so it must exit 1 rather than print a
+    // success a script would believe.
+    const file = path.join(
+      bandsDir,
+      `l1-h${FIRST}-${FIRST + 19}-f5b1208c-${'0'.repeat(12)}`,
+      'band.json',
+    );
+    const band = JSON.parse(await fsp.readFile(file, 'utf8'));
+    band.tables.transactions.rowDigest = 'f'.repeat(64);
+    await fsp.writeFile(file, JSON.stringify(band));
+
+    let thrown: Record<string, unknown> | undefined;
+    try {
+      await indexL1ImportCLICommand({ bandsDir, coreDb }, { log });
+    } catch (error) {
+      thrown = error as Record<string, unknown>;
+    }
+    assert.ok(thrown !== undefined, 'the command failed');
+    assert.ok(!(thrown instanceof Error), 'and threw the result, not an Error');
+    assert.equal(thrown.imported, 0);
+    assert.match(String(thrown.refused), /digest/);
+    assert.deepEqual(JSON.parse(JSON.stringify(thrown)), thrown);
+  });
+
   it('refuses the options it cannot act on', async () => {
     await assert.rejects(
       indexL1ImportCLICommand({ coreDb }, { log }),
