@@ -259,10 +259,17 @@ unstable (`new_*`) blocks, which an import would be written beneath. Run
 is refused too.
 
 ```bash
-docker compose run --rm -T core ar-io-node index-l1-import \
+docker compose -f docker-compose.yaml -f docker-compose.override.yaml stop core
+docker compose -f docker-compose.yaml -f docker-compose.override.yaml \
+  run --rm --no-deps -T core ar-io-node index-l1-import \
   --bands-dir data/indexes/installed/parquet-l1 \
   --core-db data/sqlite/core.db
 ```
+
+`--no-deps` matters: without it `run` starts the services `core` depends on,
+and `stop core` alone does not keep them from bringing it back. Name every
+compose file you normally use — passing `-f` at all turns off loading
+`docker-compose.override.yaml` automatically.
 
 Bands are imported in height order, lowest first. The run stops at the
 first band that fails, because bands must land as a contiguous run — the
@@ -278,14 +285,46 @@ again carries on from there.
 
 Running it again when there is nothing to do is a no-op: each band is
 recorded in `parquet_l1_imports` as it lands, and a band already held is
-skipped. Every write is idempotent, so a band interrupted part way is
-simply imported again over what is there.
+skipped.
+
+**Interruption is safe.** A band is written to the ledger before its first
+row and completed after its last, and importing it clears its height range
+first, so a band a crash left part way is imported again over whatever it
+managed to write. Progress is read from that ledger, not from
+`stable_blocks`: a band writes all of its blocks long before its
+transactions, so how far `stable_blocks` reaches says nothing about how
+much of a band landed. Every write is idempotent, so a band imported twice
+leaves `core.db` exactly as importing it once does.
+
+**Before it starts** the command estimates the space the run needs — about
+300 bytes per row, plus 4 GiB held back for the write-ahead log and for the
+gateway afterwards — and refuses rather than running out of disk inside a
+write transaction. If it refuses, free space or import in stages with
+`--max-bands`.
+
+**While a band lands** it logs `Importing a band` to stderr once a minute,
+naming the table it is on and the rows it has written of the rows the band
+holds. The largest bands take over half an hour, so this is how you tell a
+slow import from a stuck one.
 
 **What to expect.** Measured on vilenarios.com against real bands: the
 sparse first 100,000 heights take about 10 seconds, and the busiest
-100,000 (10.4M transactions, 25.7M tags, 46.6M rows) take about 22
-minutes and leave a 12 GB `core.db`. Allow roughly 2 GB of WAL beside the
-database while a band is landing, and the band's own size on disk.
+100,000 (10.4M transactions, 25.7M tags, 46,606,658 rows) take about half
+an hour and leave a 12.1 GB `core.db` — roughly 260 bytes a row. Allow
+about 2 GB of WAL beside the database while a band is landing, and the
+band's own size on disk.
+
+The whole chain to height 2,014,135 is 23 bands, 12.8 GB on disk, holding
+468,501,488 rows. Expect **about 120 GB of `core.db`** and the best part of
+a day. `--max-bands` splits that across several runs; the ledger makes each
+one pick up where the last stopped.
+
+No `ANALYZE` or `VACUUM` is wanted afterwards. The rows are written in
+primary-key order into tables the migrations already analysed, and a
+`VACUUM` of a 120 GB database would rewrite the lot for nothing. If the
+process is killed outright, the `-wal` file beside `core.db` is not a
+problem to clear by hand — the next process to open the database replays
+it.
 
 **Afterwards.** The block importer continues from the highest height
 imported. Transactions that arrive this way never emit `TX_INDEXED`, so
@@ -304,7 +343,9 @@ it the usual way.
   "imported": 1,
   "rows": 125179,
   "missingTransactions": 0,
-  "skipped": 0,
+  "skipped": [
+    { "heightRange": [0, 4999], "reason": "covered_by_a_wider_band" }
+  ],
   "bands": [
     { "heightRange": [0, 99999], "result": "imported", "rows": 125179, "seconds": 10 }
   ],
@@ -314,8 +355,10 @@ it the usual way.
 
 `haveTo` is the highest height `core.db` holds when the run ends. A band's
 `result` is `imported` or `refused`; a refused one also carries `reason`,
-and `refused` appears at the top level. `skipped` counts bands the run had
-no use for: already held, or wholly below what the database has.
+and `refused` appears at the top level. `skipped` lists the bands the run had
+no use for, each with a `reason`: `already_imported`,
+`covered_by_a_wider_band` (a tip band inside a whole one), or
+`below_what_core_db_holds`.
 
 ## For scripts and agents
 

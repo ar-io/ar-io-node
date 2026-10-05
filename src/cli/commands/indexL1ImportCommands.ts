@@ -13,6 +13,8 @@
  * Offline: the gateway must be stopped. The command refuses a database
  * another writer holds rather than racing it.
  */
+import * as fsp from 'node:fs/promises';
+import * as path from 'node:path';
 import Sqlite from 'better-sqlite3';
 import { Logger } from 'winston';
 
@@ -51,8 +53,13 @@ export async function indexL1ImportCLICommand(
   const { Database } = await import('duckdb-async');
   const duck = await Database.create(':memory:');
   try {
+    // Without a temp directory DuckDB sorts entirely in memory whatever
+    // `memory_limit` says, as the Parquet exporter's own comment records.
+    // Spill beside the database, not into the container's layer.
+    const spill = path.join(path.dirname(coreDb), '.duckdb-import-tmp');
+    await fsp.mkdir(spill, { recursive: true });
     await duck.exec(
-      "SET memory_limit = '1GB'; SET threads = 2; SET autoinstall_known_extensions = false; SET autoload_known_extensions = false;",
+      `SET memory_limit = '1GB'; SET threads = 2; SET temp_directory = '${spill.replace(/'/g, "''")}'; SET max_temp_directory_size = '16GB'; SET autoinstall_known_extensions = false; SET autoload_known_extensions = false;`,
     );
     const run = await runImport({
       db,
@@ -80,7 +87,10 @@ export async function indexL1ImportCLICommand(
         (sum, o) => sum + (o.missingTransactions ?? 0),
         0,
       ),
-      skipped: run.skipped.length,
+      skipped: run.skipped.map((b) => ({
+        heightRange: b.heightRange,
+        reason: b.reason,
+      })),
       ...(refused !== undefined ? { refused: refused.reason } : {}),
       bands: run.outcomes.map((o) => ({
         heightRange: o.heightRange,
@@ -92,6 +102,11 @@ export async function indexL1ImportCLICommand(
     };
   } finally {
     await duck.close();
+    await fsp.rm(path.join(path.dirname(coreDb), '.duckdb-import-tmp'), {
+      recursive: true,
+      force: true,
+    });
+    db.pragma('locking_mode = NORMAL');
     db.close();
   }
 }

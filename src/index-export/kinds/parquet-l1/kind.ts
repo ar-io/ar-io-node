@@ -22,7 +22,6 @@
  * Bands are built in order, from height 0, because an importer imports a
  * contiguous run.
  */
-import crypto from 'node:crypto';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { setTimeout } from 'node:timers/promises';
@@ -32,6 +31,7 @@ import { bandPublisherTag } from '../../../lib/index-band/build.js';
 import { supersededBands } from '../../../lib/index-publication.js';
 import {
   BAND_FILE,
+  bandTablesDigest,
   L1_SPAN,
   L1_SUB_SPAN,
   l1RangeOf,
@@ -212,17 +212,7 @@ export function planL1(
 
 /** A band's id: its heights, its publisher, and a digest of its rows and heights. */
 export function l1BandId(band: ParquetL1Band, publisher: string): string {
-  const digest = crypto
-    .createHash('sha256')
-    .update(JSON.stringify(band.heightRange))
-    .update(
-      Object.keys(band.tables)
-        .sort()
-        .map((t) => `${t}:${band.tables[t].rows}:${band.tables[t].rowDigest}`)
-        .join('\n'),
-    )
-    .digest('hex')
-    .slice(0, 12);
+  const digest = bandTablesDigest(band).toString('hex').slice(0, 12);
   const [from, to] = band.heightRange;
   return [
     'l1',

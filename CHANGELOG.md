@@ -14,11 +14,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   and refuses a database another writer holds, one still holding unstable
   blocks, or one that has not run the import migration. Bands land in
   height order, each recorded in `parquet_l1_imports` as it commits, so a
-  run that stops can be run again and carries on; every write is idempotent
-  and a band interrupted part way is simply imported again. A transaction a
+  run that stops can be run again and carries on. A band is written to the
+  ledger before its first row and completed after its last, and importing
+  it clears its height range first, so a band a crash left part way is
+  imported again over whatever it managed to write — progress is read from
+  the ledger rather than from `stable_blocks`, which a band fills long
+  before its transactions. Every write is idempotent, so a band imported
+  twice leaves `core.db` exactly as importing it once does. A transaction a
   block lists that its band lacks becomes a `missing_transactions` row for
-  the usual backfill. Measured on vilenarios.com: the busiest 100,000
-  heights (46.6M rows) import in about 22 minutes. See
+  the usual backfill. The run is refused up front if the filesystem has no
+  room for it, and says where it is once a minute while a band lands.
+  Measured on vilenarios.com: the busiest 100,000 heights (46,606,658 rows)
+  import in about half an hour and leave a 12.1 GB `core.db`; the whole
+  chain is 468,501,488 rows and about 120 GB. See
   [docs/cli.md](docs/cli.md).
 
 - L1 index bands (`parquet-l1`): the Arweave base layer (blocks,

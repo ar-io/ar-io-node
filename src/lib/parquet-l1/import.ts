@@ -32,6 +32,7 @@ import { Logger } from 'winston';
 
 import {
   BAND_FILE,
+  bandTablesDigest,
   MAX_BAND_FILE_BYTES,
   PARQUET_L1_TABLES,
   ParquetL1Band,
@@ -57,6 +58,15 @@ export interface ImportOutcome {
   seconds: number;
 }
 
+/** A band on disk the run had no use for, and why. */
+export interface SkippedBand {
+  band: ImportableBand;
+  reason:
+    | 'already_imported'
+    | 'covered_by_a_wider_band'
+    | 'below_what_core_db_holds';
+}
+
 export class ImportRefused extends Error {}
 
 const spec = (name: string) =>
@@ -68,32 +78,66 @@ const spec = (name: string) =>
  */
 export const COMMIT_EVERY_ROWS = 2_000_000;
 
-/** A band's identity for the ledger: its heights and every table's digest. */
-export function bandDigest(band: ParquetL1Band): Buffer {
-  const hash = crypto.createHash('sha256');
-  hash.update(JSON.stringify(band.heightRange));
-  for (const name of Object.keys(band.tables).sort()) {
-    hash.update(
-      `${name}:${band.tables[name].rows}:${band.tables[name].rowDigest}\n`,
-    );
-  }
-  return hash.digest();
+/**
+ * How often a band in flight says where it is. The largest band takes
+ * around twenty minutes, so an operator watching a first import needs to
+ * see something between the plan and the result.
+ */
+export const PROGRESS_EVERY_MS = 60_000;
+
+/**
+ * A band's identity for the ledger. The same digest the band's id carries,
+ * so a band recorded as imported cannot be a different band under the same
+ * name.
+ */
+export const bandDigest = bandTablesDigest;
+
+/**
+ * The heights a band's directory name claims, or `undefined` if it is not a
+ * band id. The name is whoever-published-it's, and it is the ledger's key,
+ * so it has to agree with the band it names.
+ */
+export function idHeightRange(id: string): [number, number] | undefined {
+  const m = /^l1-h(\d{1,15})-(\d{1,15})-[0-9a-f]{8}-[0-9a-f]{12}$/.exec(id);
+  if (m === null) return undefined;
+  return [Number(m[1]), Number(m[2])];
 }
 
-/** Every band of a `parquet-l1` directory, lowest first, with its band file read. */
+/**
+ * Every band of a `parquet-l1` directory, lowest first, with its band file
+ * read.
+ *
+ * A directory whose name is not a band id, or whose name disagrees with the
+ * band inside it, is passed over rather than refused: the directory holds
+ * whatever a publisher and a subscriber left there, and one band nobody can
+ * read must not stop the rest importing.
+ *
+ * The name has to agree with the band because the name is the ledger's key.
+ * A band recorded under heights it does not hold would leave the planner
+ * certain of a range nothing filled. The grid itself is not checked here —
+ * {@link planImport} refuses a gap or an overlap whatever grid a band came
+ * from, and a publisher that changes the grid should not strand the bands
+ * already published.
+ */
 export async function readBands(dir: string): Promise<ImportableBand[]> {
   const bands: ImportableBand[] = [];
   for (const name of await fs.readdir(dir).catch(() => [] as string[])) {
     if (name.startsWith('.')) continue;
+    const named = idHeightRange(name);
+    if (named === undefined) continue;
     const bandDir = path.join(dir, name);
     const file = path.join(bandDir, BAND_FILE);
     const stat = await fs.stat(file).catch(() => undefined);
     if (stat === undefined || stat.size > MAX_BAND_FILE_BYTES) continue;
-    bands.push({
-      id: name,
-      dir: bandDir,
-      band: parseBandFile(await fs.readFile(file, 'utf8')),
-    });
+    let band: ParquetL1Band;
+    try {
+      band = parseBandFile(await fs.readFile(file, 'utf8'));
+    } catch {
+      continue;
+    }
+    const [from, to] = band.heightRange;
+    if (from !== named[0] || to !== named[1]) continue;
+    bands.push({ id: name, dir: bandDir, band });
   }
   return bands.sort(
     (a, b) =>
@@ -118,9 +162,9 @@ export async function readBands(dir: string): Promise<ImportableBand[]> {
 export function planImport(
   bands: ImportableBand[],
   { haveTo, held }: { haveTo: number; held: ReadonlySet<string> },
-): { steps: ImportableBand[]; skipped: ImportableBand[] } {
+): { steps: ImportableBand[]; skipped: SkippedBand[] } {
   const steps: ImportableBand[] = [];
-  const skipped: ImportableBand[] = [];
+  const skipped: SkippedBand[] = [];
   // An empty database takes the lowest band's start as its own: the result
   // is a gateway whose history begins there, as one started with
   // START_HEIGHT does. A database that already holds blocks must be
@@ -144,8 +188,15 @@ export function planImport(
     );
   for (const candidate of bands) {
     const [from, to] = candidate.band.heightRange;
-    if (to < next || held.has(candidate.id) || covered(candidate)) {
-      skipped.push(candidate);
+    const reason = held.has(candidate.id)
+      ? 'already_imported'
+      : covered(candidate)
+        ? 'covered_by_a_wider_band'
+        : to < next
+          ? 'below_what_core_db_holds'
+          : undefined;
+    if (reason !== undefined) {
+      skipped.push({ band: candidate, reason });
       continue;
     }
     if (from > next) {
@@ -167,6 +218,79 @@ export function planImport(
   return { steps, skipped };
 }
 
+/**
+ * Bytes of `core.db` a band row costs, measured: the 100,000-height band
+ * at the chain's busiest heights holds 46.6M rows and leaves a 12 GB
+ * database, indexes included. Rounded up, because a run that stops for
+ * want of disk part way through costs far more than one that waits.
+ */
+export const BYTES_PER_ROW = 300;
+
+/**
+ * Free bytes an import keeps back beyond its estimate: the write-ahead log
+ * a band in flight builds (1.9 GB at the largest band's chunk size), and
+ * room for the gateway to start afterwards.
+ */
+export const DISK_HEADROOM_BYTES = 4 * 1024 ** 3;
+
+/**
+ * Refuses a run the filesystem holding `core.db` has no room for, before a
+ * band is read rather than part way through the largest one.
+ *
+ * The estimate is deliberately rough and deliberately high. A full chain is
+ * hundreds of gigabytes, and `ENOSPC` inside a write transaction is the one
+ * failure that leaves an operator with a database to repair instead of a
+ * run to restart.
+ */
+export async function assertDiskSpace(
+  coreDbPath: string,
+  steps: ImportableBand[],
+  {
+    log,
+    statfs = fs.statfs,
+    bytesPerRow = BYTES_PER_ROW,
+    headroom = DISK_HEADROOM_BYTES,
+  }: {
+    log: Logger;
+    statfs?: (path: string) => Promise<{ bsize: number; bavail: number }>;
+    bytesPerRow?: number;
+    headroom?: number;
+  },
+): Promise<void> {
+  const rows = steps.reduce(
+    (sum, step) =>
+      sum +
+      Object.values(step.band.tables).reduce((n, table) => n + table.rows, 0),
+    0,
+  );
+  const needed = rows * bytesPerRow + headroom;
+  let free: number;
+  try {
+    const stat = await statfs(path.dirname(path.resolve(coreDbPath)));
+    free = stat.bsize * stat.bavail;
+  } catch (error) {
+    // Not every filesystem answers. Better to import than to refuse over
+    // a check that could not be made.
+    log.warn('Could not read free space; importing without the check', {
+      coreDbPath,
+      error: (error as Error).message,
+    });
+    return;
+  }
+  const gib = (bytes: number) => `${(bytes / 1024 ** 3).toFixed(1)} GiB`;
+  if (free < needed) {
+    throw new ImportRefused(
+      `${gib(free)} free where core.db lives, and ${steps.length} bands of ${rows.toLocaleString()} rows need about ${gib(needed)} (${gib(headroom)} of it kept back for the write-ahead log and the gateway). Free space, or import fewer bands with --max-bands`,
+    );
+  }
+  log.info('Disk checked', {
+    freeBytes: free,
+    estimatedBytes: needed,
+    bands: steps.length,
+    rows,
+  });
+}
+
 /** The migration this importer was written against; its table must exist. */
 export const LEDGER_MIGRATION =
   '2026.10.04T12.00.00.core.add-parquet-l1-imports';
@@ -179,8 +303,11 @@ export const LEDGER_MIGRATION =
  * - `new_*` must be empty. Those are the unstable rows near the tip; an
  *   import writes `stable_*` beneath them, and the block importer would
  *   then flush them over heights it never fetched.
- * - The gateway must be stopped. A second writer is the one thing a long
- *   transaction cannot survive, and SQLite will not tell us politely.
+ * - The gateway must be stopped. `locking_mode = EXCLUSIVE` takes the
+ *   database for the whole run and fails if anything else is attached,
+ *   which `BEGIN IMMEDIATE` alone does not: a gateway that happens to be
+ *   idle between flushes holds no write lock to collide with, and an
+ *   import releases its own lock at every chunk.
  */
 export function assertImportable(db: Sqlite.Database): void {
   const migrated = db
@@ -192,23 +319,35 @@ export function assertImportable(db: Sqlite.Database): void {
       `core.db has not run ${LEDGER_MIGRATION}: run \`yarn db:migrate up\` first, so the importer and the gateway agree on the schema`,
     );
   }
-  const unstable = db
-    .prepare('SELECT COUNT(*) FROM new_blocks')
-    .pluck()
-    .get() as number;
+  // Any of the three: a transaction can arrive before its block, so
+  // `new_blocks` alone can be empty while the others are not.
+  const unstable = (
+    ['new_blocks', 'new_transactions', 'new_block_transactions'] as const
+  ).reduce(
+    (total, table) =>
+      total +
+      (db.prepare(`SELECT COUNT(*) FROM ${table}`).pluck().get() as number),
+    0,
+  );
   if (unstable > 0) {
     throw new ImportRefused(
-      `core.db holds ${unstable} unstable blocks: stop the gateway and let them flush, or reset them, before importing beneath them`,
+      `core.db holds ${unstable} unstable rows: stop the gateway and let them flush, or reset them, before importing beneath them`,
     );
   }
-  // Another writer holding the database: better found now than half way
-  // through a band.
+  // Takes the database for the run, and keeps it: a gateway started half
+  // way through would otherwise write `new_*` over heights being rewritten
+  // beneath it.
   try {
+    db.pragma('locking_mode = EXCLUSIVE');
     db.exec('BEGIN IMMEDIATE');
-    db.exec('ROLLBACK');
+    db.exec('COMMIT');
   } catch (error) {
+    db.pragma('locking_mode = NORMAL');
+    const message = (error as Error).message;
     throw new ImportRefused(
-      `core.db is open for writing elsewhere (${(error as Error).message}); stop the gateway before importing`,
+      /busy|locked/i.test(message)
+        ? `core.db is open elsewhere (${message}); stop the gateway before importing`
+        : `core.db would not take an exclusive lock: ${message}`,
     );
   }
 }
@@ -278,7 +417,15 @@ export async function importBand(
     log,
     batchRows,
     commitEvery = COMMIT_EVERY_ROWS,
-  }: { log: Logger; batchRows?: number; commitEvery?: number },
+    progressEveryMs = PROGRESS_EVERY_MS,
+    now = Date.now,
+  }: {
+    log: Logger;
+    batchRows?: number;
+    commitEvery?: number;
+    progressEveryMs?: number;
+    now?: () => number;
+  },
 ): Promise<{ rows: number; missingTransactions: number }> {
   const { band, dir } = entry;
   const [from, to] = band.heightRange;
@@ -297,8 +444,8 @@ export async function importBand(
     transactions: db.prepare(`INSERT OR REPLACE INTO stable_transactions (id,
       block_transaction_index, target, quantity, reward, last_tx, data_size,
       content_type, format, height, owner_address, data_root, offset,
-      content_encoding, tag_count, signature)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+      content_encoding, tag_count, signature, indexed_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
     link: db.prepare(`INSERT OR IGNORE INTO stable_block_transactions
       (block_indep_hash, transaction_id, block_transaction_index) VALUES (?, ?, ?)`),
     missing: db.prepare(`INSERT OR IGNORE INTO missing_transactions
@@ -322,6 +469,11 @@ export async function importBand(
       .pluck(),
     haveTx: db
       .prepare('SELECT 1 FROM stable_transactions WHERE id = ?')
+      .pluck(),
+    btiOf: db
+      .prepare(
+        'SELECT block_transaction_index FROM stable_transactions WHERE id = ?',
+      )
       .pluck(),
     pending: db.prepare(`INSERT OR REPLACE INTO parquet_l1_imports (band_id,
       height_from, height_to, band_digest, rows_imported, started_at,
@@ -348,6 +500,10 @@ export async function importBand(
     ),
   };
 
+  // When the band was built, not when it is being imported: importing the
+  // same band twice must leave the same rows, and the band's own time is
+  // the closest stable stand-in for when this gateway learned of them.
+  const indexedAt = Math.floor(Date.parse(band.createdAt) / 1000);
   let rows = 0;
   let missingTransactions = 0;
 
@@ -403,7 +559,9 @@ export async function importBand(
           String(quantity),
           String(reward),
           asBuffer(anchor),
-          Number(dataSize),
+          // Nullable, and a partial index keys on `data_size > 0`, so a
+          // missing size must stay missing rather than become a zero.
+          dataSize === null ? null : Number(dataSize),
           contentType ?? null,
           Number(format),
           Number(height),
@@ -411,8 +569,13 @@ export async function importBand(
           dataRoot === null ? null : asBuffer(dataRoot),
           offset === null ? null : Number(offset),
           contentEncoding ?? null,
-          tagCount === null ? null : Number(tagCount),
+          // NOT NULL in the schema: a band that carries no count would
+          // otherwise abort the import part way through.
+          tagCount === null ? 0 : Number(tagCount),
           signature === null ? null : asBuffer(signature),
+          // A band carries no `indexed_at`, so that two publishers of the
+          // same chain write the same rows; the importer supplies one.
+          indexedAt,
         );
       }
     },
@@ -438,9 +601,12 @@ export async function importBand(
       }
     },
     tags: (batch) => {
+      // The transaction's position comes from SQLite, where the band's
+      // transactions already are. Joining the Parquet file for it would
+      // re-scan every transaction of the band once per height window.
       for (const r of batch) {
         const [height, id, tagIndex, name, value] = r;
-        const bti = r[r.length - 1];
+        const bti = insert.btiOf.get(asBuffer(id));
         if (bti === null || bti === undefined) {
           throw new ImportRefused(
             `A tag at height ${Number(height)} names a transaction the band lacks`,
@@ -464,17 +630,13 @@ export async function importBand(
     },
   };
 
-  const txFile = path.join(dir, spec('transactions').file).replace(/'/g, "''");
-  // Committed in chunks rather than as one transaction for the band.
-  // Measured on a real 1.3 GB band (10.4M transactions, 25.7M tags), one
-  // transaction grew the WAL past 7.8 GB before committing anything, and
-  // nothing was durable until the end. Chunked, the same band imports in
-  // 22 minutes with the WAL peaking at 1.85 GB.
-  //
-  // A crash now leaves part of a band behind without its ledger row, which
-  // is safe because every write is idempotent and `missing_tx_count` is
-  // derived: the planner sees the band still covers the next height it
-  // needs and imports it again, over the top of what is there.
+  const expected: Record<string, number> = Object.fromEntries(
+    IMPORT_ORDER.map((t) => [t.name, band.tables[t.name]?.rows ?? 0]),
+  );
+  const total = Object.values(expected).reduce((sum, n) => sum + n, 0);
+  const startedAt = now();
+  let lastProgress = startedAt;
+  let rowsBefore = 0;
   let sinceCommit = 0;
   db.exec('BEGIN IMMEDIATE');
   // Recorded before a single row is written, so a crash leaves the band
@@ -499,28 +661,37 @@ export async function importBand(
   };
   try {
     for (const table of IMPORT_ORDER) {
-      const extra =
-        table.name === 'tags'
-          ? {
-              select: ['x."block_transaction_index" AS bti'],
-              from: `LEFT JOIN read_parquet('${txFile}') x ON x."id" = t."id"`,
-            }
-          : { select: [], from: '' };
-      rows += await readTable(
+      rowsBefore = rows;
+      // The row count comes from the batches as they are written, not
+      // from `readTable`'s return: the progress line needs a running
+      // total part way through a table.
+      await readTable(
         duck,
         dir,
         table,
         band,
         async (batch) => {
           writers[table.name](batch);
+          rows += batch.length;
           sinceCommit += batch.length;
           // Never between a block and the links that need its hash, nor
           // between a transaction and its tags: each table is finished
           // before the next begins, so a chunk boundary inside one is safe.
           if (sinceCommit >= commitEvery) commitChunk();
+          if (progressEveryMs > 0 && now() - lastProgress >= progressEveryMs) {
+            lastProgress = now();
+            log.info('Importing a band', {
+              id: entry.id,
+              heightRange: band.heightRange,
+              table: table.name,
+              tableRows: `${rows - rowsBefore}/${expected[table.name]}`,
+              rows,
+              ofRows: total,
+              elapsedSeconds: Math.round((now() - startedAt) / 1000),
+            });
+          }
         },
         batchRows,
-        extra,
       );
     }
     insert.countMissing.run(from, to);
@@ -543,7 +714,11 @@ export interface ImportRunResult {
   haveTo: number;
   outcomes: ImportOutcome[];
   /** Bands on disk the run had no use for, with why. */
-  skipped: Array<{ id: string; heightRange: [number, number] }>;
+  skipped: Array<{
+    id: string;
+    heightRange: [number, number];
+    reason: SkippedBand['reason'];
+  }>;
 }
 
 /**
@@ -564,6 +739,7 @@ export async function runImport({
   batchRows,
   commitEvery,
   onBand,
+  disk,
 }: {
   db: Sqlite.Database;
   duck: import('duckdb-async').Database;
@@ -574,6 +750,8 @@ export async function runImport({
   batchRows?: number;
   commitEvery?: number;
   onBand?: (outcome: ImportOutcome) => void;
+  /** Overrides for {@link assertDiskSpace}, for tests. */
+  disk?: Partial<Parameters<typeof assertDiskSpace>[2]>;
 }): Promise<ImportRunResult> {
   assertImportable(db);
   const bands = await readBands(bandsDir);
@@ -588,10 +766,12 @@ export async function runImport({
     skipped: skipped.length,
     fromHeight: progress.haveTo + 1,
   });
+  const planned = steps.slice(0, limit ?? steps.length);
+  await assertDiskSpace(db.name, planned, { log, ...disk });
 
   const outcomes: ImportOutcome[] = [];
   let haveTo = progress.haveTo;
-  for (const entry of steps.slice(0, limit ?? steps.length)) {
+  for (const entry of planned) {
     const started = Date.now();
     const base = { id: entry.id, heightRange: entry.band.heightRange };
     try {
@@ -626,9 +806,10 @@ export async function runImport({
   return {
     haveTo,
     outcomes,
-    skipped: skipped.map((b) => ({
-      id: b.id,
-      heightRange: b.band.heightRange,
+    skipped: skipped.map((s) => ({
+      id: s.band.id,
+      heightRange: s.band.band.heightRange,
+      reason: s.reason,
     })),
   };
 }

@@ -45,7 +45,10 @@ describe('indexL1ImportCLICommand', () => {
     });
     await fsp.rename(
       out.dir,
-      path.join(bandsDir, `l1-h${FIRST}-${FIRST + 19}-t-0`),
+      path.join(
+        bandsDir,
+        `l1-h${FIRST}-${FIRST + 19}-f5b1208c-${'0'.repeat(12)}`,
+      ),
     );
 
     const db = new Sqlite(coreDb);
@@ -69,7 +72,7 @@ describe('indexL1ImportCLICommand', () => {
 
     assert.equal(result.imported, 1);
     assert.equal(result.haveTo, FIRST + 19);
-    assert.equal(result.skipped, 0);
+    assert.deepEqual(result.skipped, []);
     assert.equal(result.missingTransactions, 0);
     assert.ok((result.rows as number) > 0);
     assert.equal(result.coreDb, coreDb);
@@ -88,7 +91,9 @@ describe('indexL1ImportCLICommand', () => {
       { log },
     )) as Record<string, unknown>;
     assert.equal(again.imported, 0);
-    assert.equal(again.skipped, 1);
+    assert.deepEqual(again.skipped, [
+      { heightRange: [FIRST, FIRST + 19], reason: 'already_imported' },
+    ]);
     assert.equal(again.haveTo, FIRST + 19);
   });
 
@@ -103,7 +108,10 @@ describe('indexL1ImportCLICommand', () => {
     });
     await fsp.rename(
       out.dir,
-      path.join(bandsDir, `l1-h${FIRST + 20}-${FIRST + 29}-t-0`),
+      path.join(
+        bandsDir,
+        `l1-h${FIRST + 20}-${FIRST + 29}-f5b1208c-${'1'.repeat(12)}`,
+      ),
     );
 
     const result = (await indexL1ImportCLICommand(
@@ -112,6 +120,18 @@ describe('indexL1ImportCLICommand', () => {
     )) as Record<string, unknown>;
     assert.equal(result.imported, 1);
     assert.equal(result.haveTo, FIRST + 19, 'stopped after the first band');
+    // Without this the test passes whether or not the second band was
+    // ever seen: --max-bands has to be what left it, not a name the
+    // reader passed over.
+    const next = (await indexL1ImportCLICommand(
+      { bandsDir, coreDb },
+      { log },
+    )) as Record<string, unknown>;
+    assert.equal(
+      next.haveTo,
+      FIRST + 29,
+      'the second band was there all along, and the next run took it',
+    );
   });
 
   it('refuses the options it cannot act on', async () => {

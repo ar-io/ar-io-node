@@ -35,18 +35,25 @@ export const READ_HEIGHT_WINDOW = 1_000;
 export class BandRowsError extends Error {}
 
 /**
- * Columns the chain fixes the width of: a hash is a hash. Zero is allowed
- * too, because the chain leaves some of them empty (every `tx_root` before
- * 2.0, `previous_block` at genesis).
+ * Columns the chain fixes the width of: a hash is a hash. An identifier is
+ * never empty, so a zero-length one is refused — a band whose transaction
+ * ids are blank would otherwise collapse into a single row.
  */
 const EXACT_BYTES: Record<string, number> = {
   indep_hash: 48,
-  previous_block: 48,
-  hash_list_merkle: 48,
   id: 32,
   transaction_id: 32,
   owner_address: 32,
   address: 32,
+};
+
+/**
+ * The same, but the chain really does leave these empty: `previous_block`
+ * at genesis, and `hash_list_merkle` before fork 2.0.
+ */
+const EXACT_OR_EMPTY_BYTES: Record<string, number> = {
+  previous_block: 48,
+  hash_list_merkle: 48,
 };
 
 /**
@@ -92,9 +99,15 @@ function checkRow(
     if (column.type === 'BLOB') {
       const length = (value as Uint8Array).length;
       const exact = EXACT_BYTES[column.name];
-      if (exact !== undefined && length !== exact && length !== 0) {
+      if (exact !== undefined && length !== exact) {
         throw new BandRowsError(
           `${spec.name}.${column.name} is ${length} bytes, not ${exact}`,
+        );
+      }
+      const orEmpty = EXACT_OR_EMPTY_BYTES[column.name];
+      if (orEmpty !== undefined && length !== orEmpty && length !== 0) {
+        throw new BandRowsError(
+          `${spec.name}.${column.name} is ${length} bytes, not ${orEmpty} or empty`,
         );
       }
       if (length > MAX_BYTES) {
@@ -126,14 +139,6 @@ export async function readTable(
   band: ParquetL1Band,
   onBatch: (rows: unknown[][]) => Promise<void>,
   batchRows = READ_BATCH_ROWS,
-  /**
-   * Columns to read beyond the layout's, as `<expression> AS <name>`. They
-   * come after the layout's in each row and are left out of the digest: the
-   * digest covers what the band says it holds, not what a reader joined to
-   * it. Used to carry a tag's `block_transaction_index`, which the layout
-   * keys by transaction id.
-   */
-  extra: { select: string[]; from: string } = { select: [], from: '' },
   /** Heights read per query, for a table ordered by height. */
   heightWindow = READ_HEIGHT_WINDOW,
 ): Promise<number> {
@@ -143,17 +148,11 @@ export async function readTable(
   }
   const file = path.join(dir, spec.file).replace(/'/g, "''");
   const self = `read_parquet('${file}')`;
-  const columns = [
-    ...spec.columns.map((c) => selectColumn(c)),
-    ...extra.select,
-  ].join(', ');
+  const columns = spec.columns.map((c) => selectColumn(c)).join(', ');
   const order = spec.orderBy.map((c) => `t."${c}"`).join(', ');
-  const from = extra.from === '' ? `${self} t` : `${self} t ${extra.from}`;
+  const from = `${self} t`;
   const digest = new RowDigest(spec.columns);
-  const names = [
-    ...spec.columns.map((c) => c.name),
-    ...extra.select.map((e) => e.slice(e.lastIndexOf(' ') + 1)),
-  ];
+  const names = spec.columns.map((c) => c.name);
   let read = 0;
   let batch: unknown[][] = [];
   const flush = async () => {
@@ -173,9 +172,8 @@ export async function readTable(
     );
     for await (const row of stream) {
       const values = names.map((n) => (row as Record<string, unknown>)[n]);
-      const own = values.slice(0, spec.columns.length);
-      checkRow(spec, own, band.heightRange);
-      digest.add(own);
+      checkRow(spec, values, band.heightRange);
+      digest.add(values);
       read += 1;
       if (read > described.rows) {
         throw new BandRowsError(

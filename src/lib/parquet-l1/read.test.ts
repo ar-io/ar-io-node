@@ -8,7 +8,7 @@ import { strict as assert } from 'node:assert';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { after, before, describe, it } from 'node:test';
+import { after, afterEach, before, describe, it } from 'node:test';
 import type { Database } from 'duckdb-async';
 
 import { exportL1Band } from '../../index-export/kinds/parquet-l1/export.js';
@@ -113,15 +113,31 @@ describe('readTable', () => {
     await assert.rejects(readAll(spec('tags'), lying), /is not described/);
   });
 
-  /** Rewrites one band file with a value changed, for the checks below. */
+  /**
+   * Rewrites one band file with a value changed, for the checks below. The
+   * band is built once for the whole suite, so the original is kept and put
+   * back afterwards: otherwise one test's damaged column is what the next
+   * test reads, and a check fails for a reason that is not its own.
+   */
+  const rewritten = new Map<string, string>();
   const rewrite = async (table: string, expr: string) => {
     const file = path.join(bandDir, `${table}.parquet`);
+    if (!rewritten.has(file)) {
+      const keep = path.join(dir, `${table}.original.parquet`);
+      await fs.copyFile(file, keep);
+      rewritten.set(file, keep);
+    }
     const copy = path.join(bandDir, `${table}.bad.parquet`);
     await duck.exec(
       `COPY (SELECT ${expr} FROM read_parquet('${file}')) TO '${copy}' (FORMAT PARQUET)`,
     );
     await fs.rename(copy, file);
   };
+
+  afterEach(async () => {
+    for (const [file, keep] of rewritten) await fs.copyFile(keep, file);
+    rewritten.clear();
+  });
 
   it('refuses a hash the chain fixes the width of', async () => {
     // Every column as it was, but one block's indep_hash cut short.
@@ -138,6 +154,58 @@ describe('readTable', () => {
       (e: Error) =>
         e instanceof BandRowsError &&
         /blocks\.indep_hash is \d+ bytes, not 48/.test(e.message),
+    );
+  });
+
+  it('refuses an empty identifier, which would collapse a band into one row', async () => {
+    // A blank id is not a short hash the old check let through by
+    // accident: every one of the chain's 80M transaction ids is 32 bytes,
+    // and a band of blank ones writes a single row over and over.
+    const cols = spec('transactions')
+      .columns.map((c) => (c.name === 'id' ? `''::BLOB AS id` : `"${c.name}"`))
+      .join(', ');
+    await rewrite('transactions', cols);
+    await assert.rejects(
+      readAll(spec('transactions')),
+      (e: Error) =>
+        e instanceof BandRowsError &&
+        /transactions\.id is 0 bytes, not 32/.test(e.message),
+    );
+  });
+
+  it('allows the empty previous_block the chain really does carry at genesis', async () => {
+    const cols = spec('blocks')
+      .columns.map((c) =>
+        c.name === 'previous_block'
+          ? `''::BLOB AS previous_block`
+          : `"${c.name}"`,
+      )
+      .join(', ');
+    await rewrite('blocks', cols);
+    // The digest changes with the bytes, so the width check is what this
+    // must get past; a digest complaint means the row was accepted.
+    await assert.rejects(
+      readAll(spec('blocks')),
+      (e: Error) =>
+        e instanceof BandRowsError &&
+        /do not reproduce the digest/.test(e.message),
+    );
+  });
+
+  it('refuses a previous_block that is neither 48 bytes nor empty', async () => {
+    const cols = spec('blocks')
+      .columns.map((c) =>
+        c.name === 'previous_block'
+          ? `'ab'::BLOB AS previous_block`
+          : `"${c.name}"`,
+      )
+      .join(', ');
+    await rewrite('blocks', cols);
+    await assert.rejects(
+      readAll(spec('blocks')),
+      (e: Error) =>
+        e instanceof BandRowsError &&
+        /blocks\.previous_block is 2 bytes, not 48 or empty/.test(e.message),
     );
   });
 

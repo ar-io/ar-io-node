@@ -73,6 +73,8 @@ export const BAND_FILE = 'band.json';
 export const MAX_BAND_FILE_BYTES = 64 * 1024;
 
 export type { ColumnSpec } from '../parquet/check.js';
+import crypto from 'node:crypto';
+
 import type { ColumnSpec } from '../parquet/check.js';
 
 export interface TableSpec {
@@ -286,3 +288,25 @@ export const BAND_FILES = [
   BAND_FILE,
   ...PARQUET_L1_TABLES.map((table) => table.file),
 ].sort();
+
+/**
+ * A digest of what a band holds: its heights, and every table's row count
+ * and row digest. Independent of the Parquet bytes, so two publishers that
+ * wrote the same rows agree on it.
+ *
+ * Both the band's id ({@link l1BandId}) and the importer's ledger key are
+ * taken from this, so a band cannot be recorded as imported under one
+ * identity and served under another.
+ */
+export function bandTablesDigest(band: ParquetL1Band): Buffer {
+  return crypto
+    .createHash('sha256')
+    .update(JSON.stringify(band.heightRange))
+    .update(
+      Object.keys(band.tables)
+        .sort()
+        .map((t) => `${t}:${band.tables[t].rows}:${band.tables[t].rowDigest}`)
+        .join('\n'),
+    )
+    .digest();
+}

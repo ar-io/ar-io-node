@@ -16,7 +16,9 @@ import type { Database } from 'duckdb-async';
 import { exportL1Band } from '../../index-export/kinds/parquet-l1/export.js';
 import { buildCoreDb } from '../../../test/parquet-l1-core-db.js';
 import { createTestLogger } from '../../../test/test-logger.js';
+import type { Logger } from 'winston';
 import {
+  assertDiskSpace,
   assertImportable,
   bandDigest,
   ImportableBand,
@@ -40,6 +42,20 @@ function emptyCore(file: string): Sqlite.Database {
   db.exec(fs.readFileSync('test/core-schema.sql', 'utf8'));
   db.exec(fs.readFileSync(MIGRATION, 'utf8'));
   return db;
+}
+
+/** The test logger, with every `info` it is given kept for assertions. */
+function spyLog(): {
+  log: Logger;
+  lines: Array<[string, Record<string, unknown>]>;
+} {
+  const lines: Array<[string, Record<string, unknown>]> = [];
+  const spy = Object.create(log) as Logger;
+  spy.info = ((message: string, meta: Record<string, unknown>) => {
+    lines.push([message, meta ?? {}]);
+    return log.info(message, meta);
+  }) as Logger['info'];
+  return { log: spy, lines };
 }
 
 const band = (id: string, from: number, to: number): ImportableBand => ({
@@ -75,8 +91,8 @@ describe('planImport', () => {
       ['b'],
     );
     assert.deepEqual(
-      skipped.map((s) => s.id),
-      ['a'],
+      skipped.map((s) => [s.band.id, s.reason]),
+      [['a', 'already_imported']],
     );
   });
 
@@ -109,8 +125,8 @@ describe('planImport', () => {
       ['b'],
     );
     assert.deepEqual(
-      skipped.map((s) => s.id),
-      ['a'],
+      skipped.map((s) => [s.band.id, s.reason]),
+      [['a', 'already_imported']],
     );
   });
 
@@ -137,8 +153,8 @@ describe('planImport', () => {
       ['whole'],
     );
     assert.deepEqual(
-      skipped.map((s) => s.id),
-      ['tip'],
+      skipped.map((s) => [s.band.id, s.reason]),
+      [['tip', 'covered_by_a_wider_band']],
     );
   });
 });
@@ -330,6 +346,27 @@ describe('importBand', () => {
     );
   });
 
+  it("takes indexed_at from the band's clock, not the importer's", async () => {
+    // Two imports a second apart must leave the same rows, and a snapshot
+    // comparison taken inside one second would not notice if they did
+    // not. Assert the value against a band built long enough ago that the
+    // wall clock could not produce it by chance.
+    const built = '2026-01-02T03:04:05.000Z';
+    await importBand(
+      target,
+      duck,
+      { ...entry, band: { ...entry.band, createdAt: built } },
+      { log, batchRows: 7 },
+    );
+    assert.deepEqual(
+      target
+        .prepare('SELECT DISTINCT indexed_at FROM stable_transactions')
+        .pluck()
+        .all(),
+      [Date.parse(built) / 1000],
+    );
+  });
+
   it('derives missing_tx_count rather than adding to it, so a re-import holds', async () => {
     const db = new Sqlite(sourceDb);
     // Two gone from one block: an incrementing count would say 1, because
@@ -429,6 +466,42 @@ describe('importBand', () => {
     }
   });
 
+  it('says where it is while a band is in flight', async () => {
+    // A 100,000-height band takes twenty minutes. Without this an operator
+    // watching a first import sees the plan, then nothing, then the result.
+    const { log: spy, lines } = spyLog();
+    let clock = 0;
+    await importBand(target, duck, entry, {
+      log: spy,
+      batchRows: 7,
+      progressEveryMs: 1,
+      now: () => (clock += 1000),
+    });
+    const progress = lines.filter(([m]) => m === 'Importing a band');
+    assert.ok(progress.length > 1, 'reported more than once');
+    assert.deepEqual(
+      [...new Set(progress.map(([, meta]) => meta.table))],
+      ['wallets', 'blocks', 'transactions', 'block_transactions', 'tags'],
+      'named each table as it reached it, in import order',
+    );
+    const last = progress.at(-1)?.[1] as { rows: number; ofRows: number };
+    assert.ok(last.rows > 0 && last.rows <= last.ofRows);
+    assert.equal(
+      last.ofRows,
+      Object.values(entry.band.tables).reduce((n, t) => n + t.rows, 0),
+    );
+  });
+
+  it('stays quiet when progress is turned off', async () => {
+    const { log: spy, lines } = spyLog();
+    await importBand(target, duck, entry, {
+      log: spy,
+      batchRows: 7,
+      progressEveryMs: 0,
+    });
+    assert.equal(lines.filter(([m]) => m === 'Importing a band').length, 0);
+  });
+
   it('records a link whose transaction the band lacks as missing, and counts it on the block', async () => {
     const db = new Sqlite(sourceDb);
     db.prepare(
@@ -465,38 +538,92 @@ describe('importBand', () => {
 });
 
 describe('readBands', () => {
+  let dir: string;
+
+  const TABLES = Object.fromEntries(
+    ['blocks', 'block_transactions', 'transactions', 'tags', 'wallets'].map(
+      (t) => [t, { rows: 0, rowDigest: '0'.repeat(64) }],
+    ),
+  );
+
+  /** Writes a band directory, whose name need not match what is inside it. */
+  const write = async (
+    id: string,
+    heightRange: [number, number],
+  ): Promise<void> => {
+    await fsp.mkdir(path.join(dir, id), { recursive: true });
+    await fsp.writeFile(
+      path.join(dir, id, 'band.json'),
+      JSON.stringify({
+        version: 1,
+        schema: 'l1-1',
+        heightRange,
+        tables: TABLES,
+        createdAt: '2026-10-04T00:00:00Z',
+      }),
+    );
+  };
+
+  const id = (from: number, to: number) =>
+    `l1-h${from}-${to}-f5b1208c-${'a'.repeat(12)}`;
+
+  beforeEach(async () => {
+    dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'parquet-l1-bands-'));
+  });
+  afterEach(async () => {
+    await fsp.rm(dir, { recursive: true, force: true });
+  });
+
   it('reads a directory of bands lowest first, ignoring what has no band file', async () => {
-    const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'parquet-l1-bands-'));
-    try {
-      const tables = Object.fromEntries(
-        ['blocks', 'block_transactions', 'transactions', 'tags', 'wallets'].map(
-          (t) => [t, { rows: 0, rowDigest: '0'.repeat(64) }],
-        ),
-      );
-      for (const [id, from, to] of [
-        ['b', 100, 199],
-        ['a', 0, 99],
-      ] as const) {
-        await fsp.mkdir(path.join(dir, id));
-        await fsp.writeFile(
-          path.join(dir, id, 'band.json'),
-          JSON.stringify({
-            version: 1,
-            schema: 'l1-1',
-            heightRange: [from, to],
-            tables,
-            createdAt: '2026-10-04T00:00:00Z',
-          }),
-        );
-      }
-      await fsp.mkdir(path.join(dir, 'not-a-band'));
-      assert.deepEqual(
-        (await readBands(dir)).map((b) => b.id),
-        ['a', 'b'],
-      );
-    } finally {
-      await fsp.rm(dir, { recursive: true, force: true });
-    }
+    await write(id(100_000, 199_999), [100_000, 199_999]);
+    await write(id(0, 99_999), [0, 99_999]);
+    await fsp.mkdir(path.join(dir, id(200_000, 299_999)));
+    assert.deepEqual(
+      (await readBands(dir)).map((b) => b.band.heightRange),
+      [
+        [0, 99_999],
+        [100_000, 199_999],
+      ],
+    );
+  });
+
+  it('passes over a directory whose name is not a band id', async () => {
+    await write(id(0, 99_999), [0, 99_999]);
+    await write('not-a-band', [100_000, 199_999]);
+    await write('l1-h100000-199999-nothex!!-aaaaaaaaaaaa', [100_000, 199_999]);
+    assert.deepEqual(
+      (await readBands(dir)).map((b) => b.id),
+      [id(0, 99_999)],
+    );
+  });
+
+  it('passes over a band whose name disagrees with the heights inside it', async () => {
+    // The name is the ledger's key. A band recorded under heights it does
+    // not hold would leave the planner certain of a range nothing filled.
+    await write(id(0, 99_999), [0, 99_999]);
+    await write(id(100_000, 199_999), [100_000, 149_999]);
+    assert.deepEqual(
+      (await readBands(dir)).map((b) => b.id),
+      [id(0, 99_999)],
+    );
+  });
+
+  it('passes over an unreadable band file rather than failing the run', async () => {
+    await write(id(0, 99_999), [0, 99_999]);
+    await fsp.mkdir(path.join(dir, id(100_000, 199_999)));
+    await fsp.writeFile(
+      path.join(dir, id(100_000, 199_999), 'band.json'),
+      '{ not json',
+    );
+    assert.deepEqual(
+      (await readBands(dir)).map((b) => b.id),
+      [id(0, 99_999)],
+    );
+  });
+
+  it('accepts a tip band, which ends short of a whole range', async () => {
+    await write(id(2_010_000, 2_014_135), [2_010_000, 2_014_135]);
+    assert.equal((await readBands(dir)).length, 1);
   });
 });
 
@@ -568,7 +695,7 @@ describe('assertImportable', () => {
       assert.throws(
         () => assertImportable(db),
         (e: Error) =>
-          e instanceof ImportRefused && /1 unstable blocks/.test(e.message),
+          e instanceof ImportRefused && /1 unstable rows/.test(e.message),
       );
     } finally {
       db.close();
@@ -583,14 +710,67 @@ describe('assertImportable', () => {
       assert.throws(
         () => assertImportable(db),
         (e: Error) =>
-          e instanceof ImportRefused &&
-          /open for writing elsewhere/.test(e.message),
+          e instanceof ImportRefused && /open elsewhere/.test(e.message),
       );
     } finally {
       other.exec('ROLLBACK');
       other.close();
       db.close();
     }
+  });
+});
+
+describe('assertDiskSpace', () => {
+  const rows = (n: number) =>
+    ({
+      id: 'x',
+      dir: '/x',
+      band: {
+        heightRange: [0, 99],
+        tables: { blocks: { rows: n, rowDigest: '' } },
+      },
+    }) as unknown as ImportableBand;
+
+  const free = (bytes: number) => async () => ({ bsize: 1, bavail: bytes });
+
+  it('lets a run through when the filesystem has room for it', async () => {
+    await assertDiskSpace('/x/core.db', [rows(1_000_000)], {
+      log,
+      statfs: free(1_000_000 * 300 + 4 * 1024 ** 3),
+      headroom: 4 * 1024 ** 3,
+    });
+  });
+
+  it('refuses before the first band rather than part way through the largest', async () => {
+    // ENOSPC inside a write transaction is the one failure that leaves an
+    // operator with a database to repair instead of a run to restart.
+    await assert.rejects(
+      assertDiskSpace('/x/core.db', [rows(46_600_000)], {
+        log,
+        statfs: free(10 * 1024 ** 3),
+      }),
+      (e: Error) =>
+        e instanceof ImportRefused &&
+        /10\.0 GiB free/.test(e.message) &&
+        /46,600,000 rows/.test(e.message) &&
+        /--max-bands/.test(e.message),
+    );
+  });
+
+  it('imports rather than refusing when free space cannot be read', async () => {
+    const { log: spy, lines } = spyLog();
+    await assertDiskSpace('/x/core.db', [rows(46_600_000)], {
+      log: Object.assign(spy, {
+        warn: ((m: string, meta: Record<string, unknown>) => {
+          lines.push([m, meta]);
+          return log.warn(m, meta);
+        }) as Logger['warn'],
+      }),
+      statfs: async () => {
+        throw new Error('ENOSYS');
+      },
+    });
+    assert.ok(lines.some(([m]) => /Could not read free space/.test(m)));
   });
 });
 
@@ -621,7 +801,10 @@ describe('runImport', () => {
         from,
         to,
       });
-      await fsp.rename(out.dir, path.join(bandsDir, `l1-h${from}-${to}-t-0`));
+      await fsp.rename(
+        out.dir,
+        path.join(bandsDir, `l1-h${from}-${to}-f5b1208c-${'0'.repeat(12)}`),
+      );
       await fsp.rm(path.dirname(out.dir), { recursive: true, force: true });
     }
     const { Database } = await import('duckdb-async');
@@ -692,7 +875,10 @@ describe('runImport', () => {
   it('stops at a bad band, keeping what came before and leaving what comes after', async () => {
     // The middle band is refused, so the third must not be imported over
     // the hole it leaves: the block importer cannot cross a gap.
-    const middle = path.join(bandsDir, `l1-h${FIRST + 10}-${FIRST + 19}-t-0`);
+    const middle = path.join(
+      bandsDir,
+      `l1-h${FIRST + 10}-${FIRST + 19}-f5b1208c-${'0'.repeat(12)}`,
+    );
     const file = path.join(middle, 'band.json');
     const json = JSON.parse(await fsp.readFile(file, 'utf8'));
     json.tables.blocks.rowDigest = 'f'.repeat(64);
@@ -721,7 +907,10 @@ describe('runImport', () => {
     // to commit carries every block of the band. The database's highest
     // height is then the band's top while most of its rows are missing.
     // Nothing may read that as "this band is done".
-    const second = path.join(bandsDir, `l1-h${FIRST + 10}-${FIRST + 19}-t-0`);
+    const second = path.join(
+      bandsDir,
+      `l1-h${FIRST + 10}-${FIRST + 19}-f5b1208c-${'0'.repeat(12)}`,
+    );
     const file = path.join(second, 'band.json');
     const good = await fsp.readFile(file, 'utf8');
     const json = JSON.parse(good);
@@ -808,8 +997,14 @@ describe('runImport', () => {
     // A tip band inside a whole one, as a publisher offers while a range
     // fills. readBands sorts the shorter first, so the planner must drop
     // it rather than import both.
-    const whole = path.join(bandsDir, `l1-h${FIRST}-${FIRST + 9}-t-0`);
-    const tip = path.join(bandsDir, `l1-h${FIRST}-${FIRST + 4}-tip-0`);
+    const whole = path.join(
+      bandsDir,
+      `l1-h${FIRST}-${FIRST + 9}-f5b1208c-${'0'.repeat(12)}`,
+    );
+    const tip = path.join(
+      bandsDir,
+      `l1-h${FIRST}-${FIRST + 4}-f5b1208c-${'1'.repeat(12)}`,
+    );
     await fsp.cp(whole, tip, { recursive: true });
     const file = path.join(tip, 'band.json');
     const json = JSON.parse(await fsp.readFile(file, 'utf8'));
@@ -825,7 +1020,54 @@ describe('runImport', () => {
       [FIRST + 9, FIRST + 19, FIRST + 29],
       'the tip band was dropped in favour of the whole one',
     );
-    assert.ok(skipped.some((b) => b.id.includes('tip')));
+    assert.deepEqual(
+      skipped.map((s) => [s.band.band.heightRange, s.reason]),
+      [[[FIRST, FIRST + 4], 'covered_by_a_wider_band']],
+    );
+  });
+
+  it('refuses a run the filesystem has no room for, before reading a band', async () => {
+    await assert.rejects(
+      runImport({
+        db,
+        duck,
+        bandsDir,
+        log,
+        disk: {
+          statfs: async () => ({ bsize: 1, bavail: 0 }),
+          headroom: 1,
+          bytesPerRow: 1,
+        },
+      }),
+      (e: Error) =>
+        e instanceof ImportRefused && /free where core.db/.test(e.message),
+    );
+    assert.deepEqual(
+      heights(),
+      [null, null],
+      'nothing was written before the refusal',
+    );
+  });
+
+  it('measures only the bands this run will import, so --max-bands is a way out', async () => {
+    // The same filesystem that cannot hold three bands can hold one.
+    const band1Rows = Object.values(
+      (await readBands(bandsDir))[0].band.tables,
+    ).reduce((n, t) => n + t.rows, 0);
+    const run = await runImport({
+      db,
+      duck,
+      bandsDir,
+      log,
+      limit: 1,
+      disk: {
+        statfs: async () => ({ bsize: 1, bavail: band1Rows + 1 }),
+        headroom: 1,
+        bytesPerRow: 1,
+      },
+    });
+    assert.equal(run.outcomes.length, 1);
+    assert.equal(run.haveTo, FIRST + 9);
   });
 
   it('refuses a directory with no bands', async () => {
