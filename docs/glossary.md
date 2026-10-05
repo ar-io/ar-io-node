@@ -329,6 +329,14 @@ published [Parquet L1 bands](#parquet-l1) with `ar-io-node index-l1-import`,
 instead of indexing the chain block by block. Offline, idempotent, and
 recorded band by band in `parquet_l1_imports` so it resumes.
 
+<a id="l1-verify"></a> **L1 verify** — Checking an L1 index against the
+weave size the chain commits to, with `ar-io-node index-l1-verify`. Below
+the 2.0 fork a block grew the weave by exactly its transactions'
+`data_size`, and the first post-2.0 block commits the running total, so
+one trusted block hash pins the size of every transaction beneath it.
+Proves nothing was invented, dropped or resized; does not prove which
+pre-2.0 block a transaction belonged to.
+
 <a id="fold"></a> **Fold** — Building a band from an earlier band's entries
 plus newer rows from the index, so entries the index has since dropped (such
 as ClickHouse rows past their TTL) are kept. A folded entry counts as being at

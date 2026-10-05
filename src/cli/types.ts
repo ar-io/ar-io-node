@@ -57,6 +57,12 @@ export interface IndexL1ImportCLIOptions extends GlobalCLIOptions {
   maxBands?: string;
 }
 
+export interface IndexL1VerifyCLIOptions extends GlobalCLIOptions {
+  coreDb?: string;
+  from?: string;
+  to?: string;
+}
+
 export interface IndexBandExportCLIOptions extends GlobalCLIOptions {
   source?: string;
   from?: string;

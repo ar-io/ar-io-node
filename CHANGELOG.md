@@ -29,6 +29,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   chain is 468,501,488 rows and about 120 GB. See
   [docs/cli.md](docs/cli.md).
 
+- `ar-io-node index-l1-verify` checks a gateway's L1 index against the
+  weave size the chain commits to. Above the 2.0 fork a block's `tx_root`
+  proves its transactions; below it, a pre-2.0 identity hash cannot be
+  recomputed from an index at all (it commits to the full wallet list, the
+  recall block's whole binary, and every transaction's data and
+  signature). What is left is exact accounting: a pre-2.0 block grew the
+  weave by its transactions' `data_size`, those differences telescope, and
+  the first post-2.0 block commits the running total — so one trusted
+  block hash pins the size of every transaction beneath it. Read-only, so
+  the gateway can stay up; 422,251 blocks in 2.7 seconds. It also checks
+  contiguity, block linkage and `block_size`. It does not prove which
+  pre-2.0 block a transaction belonged to. See
+  [docs/cli.md](docs/cli.md).
+
 - L1 index bands (`parquet-l1`): the Arweave base layer (blocks,
   transactions, tags in plaintext, owners) as Parquet, one fixed height
   range per band (whole 100,000-height history bands over 5,000-height

@@ -360,6 +360,97 @@ no use for, each with a `reason`: `already_imported`,
 `covered_by_a_wider_band` (a tip band inside a whole one), or
 `below_what_core_db_holds`.
 
+## `index-l1-verify`
+
+Checks this gateway's L1 index against the weave size the chain itself
+commits to, and against its own internal arithmetic. Read-only, so the
+gateway can stay up.
+
+```bash
+docker compose -f docker-compose.yaml -f docker-compose.override.yaml \
+  run --rm --no-deps -T core ar-io-node index-l1-verify \
+  --core-db data/sqlite/core.db
+```
+
+**Why this is worth running.** Above the 2.0 fork (height 422,250) a
+block's `tx_root` recomputes from its transactions, so each block's
+transaction set proves itself. Below the fork `tx_root` is empty, and a
+pre-2.0 block's identity hash cannot be recomputed from an index at all:
+it commits to the full wallet list at that height, to the recall block's
+whole binary, and to every transaction's bytes including its data and
+signature. Modern Arweave nodes do not attempt it either — they take
+everything below the fork from a hardcoded block index.
+
+What is left is an accounting identity, and it is exact. A pre-2.0 block
+added its transactions' `data_size` to the weave, so for every height
+
+```
+weave_size(h) - weave_size(h-1) = block_size(h) = sum of data_size
+```
+
+Those differences telescope, and the first post-2.0 block commits its own
+`weave_size` in the segment its identity hash is taken over. So a single
+trusted block hash pins the total size of every transaction beneath it.
+
+| Option | |
+|---|---|
+| `--core-db` | The gateway's `core.db`. Required |
+| `--from` | Lowest height to check. Defaults to the lowest held |
+| `--to` | Highest height to check. Defaults to the fork, or the highest held if lower |
+
+An index reaching below the fork is checked up to the fork and no
+further: above it `tx_root` is the stronger proof, and reading on costs
+tens of millions of rows for nothing. An index starting above the fork is
+read whole. Measured: 422,251 blocks in **2.7 seconds**.
+
+**What it proves.** Given the identity hash of the anchor block, no
+transaction below the fork can have been invented, dropped, or had its
+size changed, and the index is contiguous and correctly linked.
+
+**What it does not prove.** Membership of a *particular* pre-2.0 block.
+The intermediate `weave_size` values are not committed individually, so
+transactions could in principle be moved between pre-2.0 blocks with
+those values adjusted to match. Closing that needs agreement between
+independent gateways, which is corroboration rather than proof. Do not
+describe pre-2.0 membership as cryptographically verified.
+
+Above the weave offset where Arweave began padding each transaction to a
+chunk boundary (`STRICT_DATA_SPLIT_THRESHOLD`, 30,607,159,107,830, which
+the weave passed around height 800,000) the identity stops holding. Those
+blocks are counted as skipped rather than reported as wrong, and a range
+with any skipped block is not reported as anchored.
+
+### `index-l1-verify` result
+
+```json
+{
+  "coreDb": "data/sqlite/core.db",
+  "heightRange": [0, 422250],
+  "blocks": 422251,
+  "anchored": true,
+  "anchorHeight": 422250,
+  "weaveSize": "407672420044",
+  "accountedFor": "407672420044",
+  "ok": true,
+  "checks": [
+    { "name": "contiguous", "ok": true, "detail": "..." },
+    { "name": "linked", "ok": true, "detail": "..." },
+    { "name": "block_size", "ok": true, "detail": "..." },
+    { "name": "weave_accounting", "ok": true, "detail": "..." },
+    { "name": "anchor", "ok": true, "detail": "..." }
+  ],
+  "seconds": 2.7
+}
+```
+
+`ok` is every check passing. `anchored` says whether the top of the range
+commits its own weave size, and whether every block in it could be
+accounted for — without that, the checks only show the range is
+self-consistent. `weaveSize` and `accountedFor` are strings, because the
+weave is larger than a JSON number holds exactly. A failing check carries
+`failures` (at most 20, each naming a height, what was found and what was
+expected) and `more` for the rest. The command exits 1 when `ok` is false.
+
 ## For scripts and agents
 
 Every `ar-io-node` command is non-interactive and answers in one shape, so a

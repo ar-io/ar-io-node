@@ -99,6 +99,15 @@ export const optionMap = {
     alias: '--to <height>',
     description: 'Highest block height to export. Required',
   },
+  fromHeight: {
+    alias: '--from <height>',
+    description: 'Lowest block height to check. Defaults to the lowest held',
+  },
+  toHeight: {
+    alias: '--to <height>',
+    description:
+      'Highest block height to check. Defaults to the first post-2.0 block (422250), or the highest held if lower',
+  },
   bandsDir: {
     alias: '--bands-dir <path>',
     description:
@@ -153,6 +162,12 @@ export const indexL1ImportOptions: CommanderOption[] = [
   optionMap.bandsDir,
   optionMap.coreDb,
   optionMap.maxBands,
+];
+
+export const indexL1VerifyOptions: CommanderOption[] = [
+  optionMap.coreDb,
+  optionMap.fromHeight,
+  optionMap.toHeight,
 ];
 
 export const indexBandExportOptions: CommanderOption[] = [

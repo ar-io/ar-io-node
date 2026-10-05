@@ -19,6 +19,7 @@ import {
   indexBandBuildOptions,
   indexBandExportOptions,
   indexL1ImportOptions,
+  indexL1VerifyOptions,
   indexBandVerifyOptions,
 } from './options.js';
 import { passthroughArgs, runSdkCli, sdkCli } from './passthrough.js';
@@ -26,6 +27,7 @@ import type {
   IndexBandBuildCLIOptions,
   IndexBandExportCLIOptions,
   IndexL1ImportCLIOptions,
+  IndexL1VerifyCLIOptions,
   IndexBandVerifyCLIOptions,
 } from './types.js';
 import { applyOptions, makeCommand } from './utils.js';
@@ -39,6 +41,8 @@ const indexExportCommands = async () =>
   import('./commands/indexExportCommands.js');
 const indexL1ImportCommands = async () =>
   import('./commands/indexL1ImportCommands.js');
+const indexL1VerifyCommands = async () =>
+  import('./commands/indexL1VerifyCommands.js');
 
 const sdk = sdkCli();
 
@@ -151,6 +155,30 @@ makeCommand<IndexL1ImportCLIOptions>({
     'Bands are imported in height order, lowest first, and the run stops at',
     'the first that fails. What it imported is kept, so running it again',
     'carries on from there.',
+    CONTRACT,
+  ].join('\n'),
+);
+
+makeCommand<IndexL1VerifyCLIOptions>({
+  name: 'index-l1-verify',
+  description:
+    "Check this gateway's L1 index against the weave size the chain commits to",
+  options: indexL1VerifyOptions,
+  action: async (options) =>
+    (await indexL1VerifyCommands()).indexL1VerifyCLICommand(options, {
+      log: createCliLogger({ debug: options.debug === true }),
+    }),
+}).addHelpText(
+  'after',
+  [
+    '',
+    'Example:',
+    '  ar-io-node index-l1-verify --core-db data/sqlite/core.db',
+    '',
+    'Read-only, so the gateway can stay up. Below the 2.0 fork a block',
+    'grew the weave by exactly its transactions, and the first post-2.0',
+    'block commits the running total, so one trusted block hash pins the',
+    'size of every transaction beneath it. Exits 1 if a check fails.',
     CONTRACT,
   ].join('\n'),
 );
