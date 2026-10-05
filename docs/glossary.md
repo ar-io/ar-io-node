@@ -329,6 +329,12 @@ published [Parquet L1 bands](#parquet-l1) with `ar-io-node index-l1-import`,
 instead of indexing the chain block by block. Offline, idempotent, and
 recorded band by band in `parquet_l1_imports` so it resumes.
 
+<a id="query-in-place"></a> **Query in place** — Reading
+[Parquet L1 bands](#parquet-l1) directly with DuckDB or Polars instead of
+importing them into a gateway's `core.db`. Possible because tags are
+plaintext in a band and Parquet is columnar. Good for scans and
+aggregates, no use for point lookups, and it serves no gateway route.
+
 <a id="l1-verify"></a> **L1 verify** — Checking an L1 index against the
 weave size the chain commits to, with `ar-io-node index-l1-verify`. Below
 the 2.0 fork a block grew the weave by exactly its transactions'
