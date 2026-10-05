@@ -277,10 +277,39 @@ block importer rewinds across a gap and gives up after 18 blocks. What was
 imported before the failure is kept and recorded, so running the command
 again carries on from there.
 
+**Filling in history beneath a gateway that began mid-chain.** By default
+the run continues upward from the highest height `core.db` holds, so a
+gateway started with `START_HEIGHT` would have its index completed above
+and keep the hole underneath for ever. `--from` and `--to` fill that in:
+
+```bash
+# core.db holds 1,000,000 upward; fill in everything below it
+ar-io-node index-l1-import --bands-dir ... --core-db ... --from 0 --to 999999
+```
+
+This is safe because a band clears and rewrites only its own height
+range, so importing below what is held cannot disturb it. `--to` means a
+backfill need not redo the part you already have. The run's own
+contiguity is still enforced: a gap *inside* it is refused.
+
+**Mind the hole.** A backfill done in stages leaves heights uncovered
+between runs, and the block importer rewinds across a gap. The command
+works out what will still be missing, warns, and carries it in the result
+as `holes`. It does not refuse — staged backfill would be impossible if
+it did — so **check `holes` is empty before starting the gateway**.
+
+Two things `--from` does not do. It will not redo a band the ledger
+already records as imported, which is skipped as `already_imported`. And
+it does not repair missing transactions *inside* heights you already
+hold: `core.db` reaching the tip means nothing plans, whatever is missing
+underneath.
+
 | Option | |
 |---|---|
 | `--bands-dir` | A directory of bands, as the sidecar installs them. Required |
 | `--core-db` | The gateway's `core.db`. Required |
+| `--from` | Start here instead of continuing above what `core.db` holds |
+| `--to` | Stop after the band covering this height |
 | `--max-bands` | Import at most this many bands, then stop |
 | `--cache-mib` | SQLite page cache for the import, in MiB (default 1024) |
 
@@ -379,8 +408,10 @@ command**: the bands below it are imported and kept, but the result goes
 to stderr and the exit code is 1, so a script notices. Run it again to
 carry on from what landed. `skipped` lists the bands the run had
 no use for, each with a `reason`: `already_imported`,
-`covered_by_a_wider_band` (a tip band inside a whole one), or
-`below_what_core_db_holds`.
+`covered_by_a_wider_band` (a tip band inside a whole one),
+`below_what_core_db_holds`, or `above_the_requested_range` (past `--to`).
+`holes` appears only when the run leaves heights uncovered, and is the
+one field to check before starting the gateway.
 
 ## `index-l1-verify`
 

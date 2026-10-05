@@ -56,6 +56,8 @@ export interface IndexL1ImportCLIOptions extends GlobalCLIOptions {
   coreDb?: string;
   maxBands?: string;
   cacheMib?: string;
+  from?: string;
+  to?: string;
 }
 
 export interface IndexL1VerifyCLIOptions extends GlobalCLIOptions {

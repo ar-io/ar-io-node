@@ -64,7 +64,8 @@ export interface SkippedBand {
   reason:
     | 'already_imported'
     | 'covered_by_a_wider_band'
-    | 'below_what_core_db_holds';
+    | 'below_what_core_db_holds'
+    | 'above_the_requested_range';
 }
 
 export class ImportRefused extends Error {}
@@ -165,6 +166,8 @@ export function planImport(
     haveTo,
     held,
     blocksTo = haveTo,
+    from: startAt,
+    to: stopAt,
   }: {
     haveTo: number;
     held: ReadonlySet<string>;
@@ -175,6 +178,15 @@ export function planImport(
      * from "the ledger claims heights the database does not hold".
      */
     blocksTo?: number;
+    /**
+     * Start here instead of continuing from the top of what `core.db`
+     * holds. This is how a gateway that began mid-chain fills in the
+     * history beneath it: a band rewrites only its own height range, so
+     * importing below what is held cannot disturb it.
+     */
+    from?: number;
+    /** Stop after the band covering this height, so a backfill need not redo what is already held. */
+    to?: number;
   },
 ): { steps: ImportableBand[]; skipped: SkippedBand[] } {
   const steps: ImportableBand[] = [];
@@ -187,7 +199,7 @@ export function planImport(
     (low, b) => Math.min(low, b.band.heightRange[0]),
     Number.MAX_SAFE_INTEGER,
   );
-  let next = haveTo < 0 ? lowest : haveTo + 1;
+  let next = startAt ?? (haveTo < 0 ? lowest : haveTo + 1);
   // Sorted by start then end, so a tip band comes before the whole band
   // that covers it. Drop any band another wholly contains, or the shorter
   // would be imported and the longer then import over it.
@@ -208,7 +220,9 @@ export function planImport(
         ? 'covered_by_a_wider_band'
         : to < next
           ? 'below_what_core_db_holds'
-          : undefined;
+          : stopAt !== undefined && candidate.band.heightRange[0] > stopAt
+            ? 'above_the_requested_range'
+            : undefined;
     if (reason !== undefined) {
       skipped.push({ band: candidate, reason });
       // A band the ledger holds, whose heights the database really does
@@ -340,6 +354,37 @@ export function applyImportPragmas(
   db.pragma('synchronous = NORMAL');
 }
 
+/**
+ * Heights that would still be missing after a run, given what `core.db`
+ * holds and what the run will import.
+ *
+ * The importer's promise is that it never leaves a hole in
+ * `stable_blocks`, because the block importer rewinds across one and
+ * gives up after `MAX_FORK_DEPTH`. Continuing upward from the top kept
+ * that promise for free. Filling in underneath cannot, so the hole is
+ * worked out directly and reported.
+ *
+ * `held` is the range `stable_blocks` covers, or `undefined` when it is
+ * empty. Ranges are inclusive. The result is the gaps between the
+ * union's pieces, lowest first.
+ */
+export function remainingHoles(
+  held: readonly [number, number] | undefined,
+  planned: ReadonlyArray<readonly [number, number]>,
+): Array<[number, number]> {
+  const pieces = [...planned, ...(held !== undefined ? [held] : [])]
+    .filter(([from, to]) => to >= from)
+    .sort((a, b) => a[0] - b[0]);
+  if (pieces.length === 0) return [];
+  const holes: Array<[number, number]> = [];
+  let reach = pieces[0][1];
+  for (const [from, to] of pieces.slice(1)) {
+    if (from > reach + 1) holes.push([reach + 1, from - 1]);
+    reach = Math.max(reach, to);
+  }
+  return holes;
+}
+
 /** The migration this importer was written against; its table must exist. */
 export const LEDGER_MIGRATION =
   '2026.10.04T12.00.00.core.add-parquet-l1-imports';
@@ -404,15 +449,18 @@ export function assertImportable(db: Sqlite.Database): void {
 /** What `core.db` already holds, and the bands it was built from. */
 export function readProgress(db: Sqlite.Database): {
   haveTo: number;
+  /** The lowest height `stable_blocks` holds, or -1 when it holds none. */
+  blocksFrom: number;
   /** The highest height `stable_blocks` holds, before any unfinished band pulls it down. */
   blocksTo: number;
   held: Set<string>;
   unfinished: Array<{ id: string; from: number }>;
 } {
-  const blocksTo =
-    (db.prepare('SELECT MAX(height) FROM stable_blocks').pluck().get() as
-      | number
-      | null) ?? -1;
+  const span = db
+    .prepare('SELECT MIN(height) AS lo, MAX(height) AS hi FROM stable_blocks')
+    .get() as { lo: number | null; hi: number | null };
+  const blocksFrom = span.lo ?? -1;
+  const blocksTo = span.hi ?? -1;
   const held = new Set(
     db
       .prepare(
@@ -437,7 +485,7 @@ export function readProgress(db: Sqlite.Database): {
     (top, band) => Math.min(top, band.from - 1),
     blocksTo,
   );
-  return { haveTo, blocksTo, held, unfinished };
+  return { haveTo, blocksFrom, blocksTo, held, unfinished };
 }
 
 const sha1 = (bytes: Buffer) =>
@@ -773,6 +821,8 @@ export async function importBand(
 export interface ImportRunResult {
   haveTo: number;
   outcomes: ImportOutcome[];
+  /** Heights still missing after the run; the gateway must not be started on one. */
+  holes: Array<[number, number]>;
   /** Bands on disk the run had no use for, with why. */
   skipped: Array<{
     id: string;
@@ -798,6 +848,8 @@ export async function runImport({
   limit,
   batchRows,
   commitEvery,
+  from,
+  to,
   onBand,
   disk,
 }: {
@@ -809,6 +861,10 @@ export async function runImport({
   limit?: number;
   batchRows?: number;
   commitEvery?: number;
+  /** Start here instead of continuing from the top of what `core.db` holds. */
+  from?: number;
+  /** Stop after the band covering this height. */
+  to?: number;
   onBand?: (outcome: ImportOutcome) => void;
   /** Overrides for {@link assertDiskSpace}, for tests. */
   disk?: Partial<Parameters<typeof assertDiskSpace>[2]>;
@@ -819,7 +875,11 @@ export async function runImport({
     throw new ImportRefused(`${bandsDir} holds no bands with a ${BAND_FILE}`);
   }
   const progress = readProgress(db);
-  const { steps, skipped } = planImport(bands, progress);
+  const { steps, skipped } = planImport(bands, {
+    ...progress,
+    ...(from !== undefined ? { from } : {}),
+    ...(to !== undefined ? { to } : {}),
+  });
   if (progress.unfinished.length > 0) {
     // An earlier run was interrupted. Its band is imported again over
     // what it wrote, and anything it had reached above that band is
@@ -837,6 +897,23 @@ export async function runImport({
     fromHeight: progress.haveTo + 1,
   });
   const planned = steps.slice(0, limit ?? steps.length);
+  const holes = remainingHoles(
+    progress.blocksFrom < 0
+      ? undefined
+      : [progress.blocksFrom, progress.blocksTo],
+    planned.map((b) => b.band.heightRange),
+  );
+  if (holes.length > 0) {
+    // Not refused: a backfill done in stages legitimately leaves a hole
+    // between runs, the same way `--max-bands` does going upward. But
+    // the gateway must not be started on one, so it is said loudly and
+    // carried in the result.
+    log.warn('This run will leave heights uncovered', {
+      holes,
+      detail:
+        'the block importer rewinds across a gap; close it before starting the gateway',
+    });
+  }
   await assertDiskSpace(db.name, planned, { log, ...disk });
 
   const outcomes: ImportOutcome[] = [];
@@ -875,6 +952,7 @@ export async function runImport({
   }
   return {
     haveTo,
+    holes,
     outcomes,
     skipped: skipped.map((s) => ({
       id: s.band.id,

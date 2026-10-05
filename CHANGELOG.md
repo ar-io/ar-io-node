@@ -27,7 +27,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   exits 1 with the result on stderr if a band is refused. `--cache-mib`
   sets the SQLite page cache (default 1024): a bootstrap spends its time
   maintaining indexes, and the 2 MB SQLite default makes the rate decay as
-  the database fills.
+  the database fills. `--from` and `--to` fill in history beneath a
+  gateway that began mid-chain, which the default upward-only run could
+  not do; a band rewrites only its own range, so importing below what is
+  held cannot disturb it. Because that can leave a hole between staged
+  runs, and the block importer rewinds across one, the result carries
+  `holes` and the run warns when any remain.
   Measured on vilenarios.com: the busiest 100,000 heights (46,606,658 rows)
   import in about half an hour and leave a 12.1 GB `core.db`; the whole
   chain is 468,501,488 rows and about 120 GB. See

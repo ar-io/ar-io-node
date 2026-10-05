@@ -48,6 +48,19 @@ export async function indexL1ImportCLICommand(
   if (maxBands !== undefined && (!Number.isInteger(maxBands) || maxBands < 1)) {
     throw new Error(`--max-bands must be a positive whole number`);
   }
+  const bound = (value: string | undefined, flag: string) => {
+    if (value === undefined) return undefined;
+    const n = Number(value);
+    if (!Number.isSafeInteger(n) || n < 0) {
+      throw new ImportRefused(`${flag} must be a whole height, 0 or above`);
+    }
+    return n;
+  };
+  const from = bound(options.from, '--from');
+  const to = bound(options.to, '--to');
+  if (from !== undefined && to !== undefined && to < from) {
+    throw new ImportRefused(`--to (${to}) is below --from (${from})`);
+  }
   const cacheMib =
     options.cacheMib === undefined
       ? DEFAULT_CACHE_MIB
@@ -85,6 +98,8 @@ export async function indexL1ImportCLICommand(
       bandsDir,
       log,
       ...(maxBands !== undefined ? { limit: maxBands } : {}),
+      ...(from !== undefined ? { from } : {}),
+      ...(to !== undefined ? { to } : {}),
       onBand: (outcome) =>
         log.info('Band finished', {
           heightRange: outcome.heightRange,
@@ -105,6 +120,7 @@ export async function indexL1ImportCLICommand(
         (sum, o) => sum + (o.missingTransactions ?? 0),
         0,
       ),
+      ...(run.holes.length > 0 ? { holes: run.holes } : {}),
       skipped: run.skipped.map((b) => ({
         heightRange: b.heightRange,
         reason: b.reason,

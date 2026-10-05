@@ -132,6 +132,16 @@ export const optionMap = {
     description:
       "The gateway's core.db. Opened read-only, so it can stay up. Required",
   },
+  importFrom: {
+    alias: '--from <height>',
+    description:
+      'Start here instead of continuing above what core.db holds. How a gateway that began mid-chain fills in the history beneath it',
+  },
+  importTo: {
+    alias: '--to <height>',
+    description:
+      'Stop after the band covering this height, so a backfill need not redo what is already held',
+  },
   cacheMib: {
     alias: '--cache-mib <n>',
     description:
@@ -181,6 +191,8 @@ export const indexBandVerifyOptions: CommanderOption[] = [
 export const indexL1ImportOptions: CommanderOption[] = [
   optionMap.bandsDir,
   optionMap.coreDb,
+  optionMap.importFrom,
+  optionMap.importTo,
   optionMap.maxBands,
   optionMap.cacheMib,
 ];

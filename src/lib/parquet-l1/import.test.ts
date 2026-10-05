@@ -20,6 +20,7 @@ import type { Logger } from 'winston';
 import {
   applyImportPragmas,
   assertDiskSpace,
+  remainingHoles,
   assertImportable,
   bandDigest,
   ImportableBand,
@@ -793,6 +794,122 @@ describe('assertImportable', () => {
       other.close();
       db.close();
     }
+  });
+});
+
+describe('planImport backfilling below what is held', () => {
+  const held = new Set<string>();
+
+  it('fills in the history beneath a gateway that began mid-chain', () => {
+    // The case this exists for: 20% of the chain near the tip and
+    // nothing underneath. Without --from every band below is skipped as
+    // `below_what_core_db_holds` and the hole is permanent.
+    const bands = [
+      band('a', 0, 99),
+      band('b', 100, 199),
+      band('c', 200, 299),
+      band('d', 300, 399),
+    ];
+    const atTop = planImport(bands, { haveTo: 299, blocksTo: 299, held });
+    assert.deepEqual(
+      atTop.steps.map((s) => s.id),
+      ['d'],
+      'by default it only ever continues upward',
+    );
+
+    const backfill = planImport(bands, {
+      haveTo: 299,
+      blocksTo: 299,
+      held,
+      from: 0,
+      to: 199,
+    });
+    assert.deepEqual(
+      backfill.steps.map((s) => s.id),
+      ['a', 'b'],
+      'and with --from/--to it fills exactly the gap beneath',
+    );
+    assert.deepEqual(
+      backfill.skipped
+        .filter((s) => s.reason === 'above_the_requested_range')
+        .map((s) => s.band.id),
+      ['c', 'd'],
+    );
+  });
+
+  it('still refuses a gap inside the run itself', () => {
+    assert.throws(
+      () =>
+        planImport([band('a', 0, 99), band('c', 200, 299)], {
+          haveTo: 299,
+          blocksTo: 299,
+          held,
+          from: 0,
+        }),
+      (e: Error) =>
+        e instanceof ImportRefused && /No band covers/.test(e.message),
+    );
+  });
+});
+
+describe('remainingHoles', () => {
+  it('finds nothing when the run meets what is held', () => {
+    assert.deepEqual(remainingHoles([200, 299], [[0, 199]]), []);
+  });
+
+  it('finds nothing for a fresh database filled from the bottom', () => {
+    assert.deepEqual(
+      remainingHoles(undefined, [
+        [0, 99],
+        [100, 199],
+      ]),
+      [],
+    );
+  });
+
+  it('finds the gap a staged backfill leaves behind', () => {
+    // Importing 0-99 under a gateway holding 200+ leaves 100-199
+    // missing, and the block importer rewinds across it.
+    assert.deepEqual(remainingHoles([200, 299], [[0, 99]]), [[100, 199]]);
+  });
+
+  it('finds a gap above what is held', () => {
+    assert.deepEqual(remainingHoles([0, 99], [[200, 299]]), [[100, 199]]);
+  });
+
+  it('is not confused by overlap, which a band rewriting its range causes', () => {
+    assert.deepEqual(remainingHoles([150, 299], [[0, 199]]), []);
+  });
+
+  it('is not confused by a range wholly inside another', () => {
+    // The reach has to be the furthest seen, not the last seen, or a
+    // contained range makes everything after it look like a gap.
+    assert.deepEqual(
+      remainingHoles(
+        [0, 500],
+        [
+          [100, 200],
+          [450, 600],
+        ],
+      ),
+      [],
+    );
+  });
+
+  it('reports several gaps, lowest first', () => {
+    assert.deepEqual(
+      remainingHoles(
+        [500, 599],
+        [
+          [0, 99],
+          [200, 299],
+        ],
+      ),
+      [
+        [100, 199],
+        [300, 499],
+      ],
+    );
   });
 });
 
