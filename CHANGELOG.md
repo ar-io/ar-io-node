@@ -43,7 +43,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   rebuilds the `hash_list_merkle` recurrence — a running commitment to
   every block hash below, folded from height 0 for the fork-1.6 seed — so
   one trusted block hash pins every `indep_hash` beneath it, and checks
-  contiguity, block linkage and `block_size`. It does not prove which
+  contiguity, block linkage and `block_size`. `--anchor-from` fetches that
+  trusted hash from independent Arweave nodes (both sides of the fork,
+  since its seed breaks the recurrence) and requires several to agree —
+  one source is a single point of trust, so one reachable source fails. It does not prove which
   pre-2.0 block a transaction belonged to. See
   [docs/cli.md](docs/cli.md).
 

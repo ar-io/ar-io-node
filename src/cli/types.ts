@@ -61,6 +61,8 @@ export interface IndexL1VerifyCLIOptions extends GlobalCLIOptions {
   coreDb?: string;
   from?: string;
   to?: string;
+  anchorFrom?: string;
+  anchorMin?: string;
 }
 
 export interface IndexBandExportCLIOptions extends GlobalCLIOptions {

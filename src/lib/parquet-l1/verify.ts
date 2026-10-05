@@ -107,7 +107,92 @@ export interface VerifyResult {
   seconds: number;
 }
 
+const add = (check: VerifyCheck, failure: VerifyFailure): void => {
+  check.ok = false;
+  check.failures ??= [];
+  if (check.failures.length < MAX_FAILURES_REPORTED) {
+    check.failures.push(failure);
+  } else {
+    check.more = (check.more ?? 0) + 1;
+  }
+};
+
 export class VerifyRefused extends Error {}
+
+/** One source's answer for a block's identity hash, base64url or a reason it is missing. */
+export interface AnchorAnswer {
+  url: string;
+  height: number;
+  indepHash?: string;
+  error?: string;
+}
+
+/**
+ * The heights worth anchoring for a range: the top of each segment of the
+ * `hash_list_merkle` recurrence it covers.
+ *
+ * The recurrence commits to every block hash below, so anchoring its top
+ * pins the whole segment. The fork-2.0 seed is not rebuildable from stored
+ * fields, so it breaks the chain in two and each side needs its own.
+ */
+export function anchorHeights(
+  from: number,
+  to: number,
+  forkHeight = FORK_2_0_HEIGHT,
+): number[] {
+  const heights: number[] = [];
+  if (from < forkHeight) heights.push(Math.min(to, forkHeight - 1));
+  if (to >= forkHeight) heights.push(to);
+  return heights;
+}
+
+/**
+ * Checks what independent sources say a block's identity hash is against
+ * what the index holds.
+ *
+ * Every source that answered must agree with the index and with the
+ * others, and at least `minSources` must have answered for a height —
+ * one source is a single point of trust, which is the thing this exists
+ * to remove. Sources that could not be reached are reported but do not
+ * fail the check; sources that answered differently do.
+ */
+export function checkAnchors(
+  ours: ReadonlyMap<number, string>,
+  answers: readonly AnchorAnswer[],
+  minSources = 2,
+): VerifyCheck {
+  const check: VerifyCheck = { name: 'anchor_hash', ok: true, detail: '' };
+  const parts: string[] = [];
+  for (const height of [...ours.keys()].sort((a, b) => a - b)) {
+    const mine = ours.get(height) as string;
+    const forHeight = answers.filter((a) => a.height === height);
+    const replied = forHeight.filter((a) => a.indepHash !== undefined);
+    for (const answer of replied) {
+      if (answer.indepHash !== mine) {
+        add(check, {
+          height,
+          found: `${answer.url} says ${answer.indepHash}`,
+          expected: mine,
+        });
+      }
+    }
+    if (replied.length < minSources) {
+      add(check, {
+        height,
+        found: `${replied.length} of ${forHeight.length} sources answered`,
+        expected: `at least ${minSources}`,
+      });
+      parts.push(`${height}: only ${replied.length} answered`);
+    } else {
+      parts.push(`${height}: ${replied.length} sources agree`);
+    }
+  }
+  check.detail =
+    ours.size === 0
+      ? 'no anchor was asked for, so nothing outside this index vouches for it'
+      : parts.join('; ');
+  return check;
+}
 
 interface BlockRow {
   height: number;
@@ -164,16 +249,6 @@ export function chooseRange(
   }
   return [low, high];
 }
-
-const add = (check: VerifyCheck, failure: VerifyFailure): void => {
-  check.ok = false;
-  check.failures ??= [];
-  if (check.failures.length < MAX_FAILURES_REPORTED) {
-    check.failures.push(failure);
-  } else {
-    check.more = (check.more ?? 0) + 1;
-  }
-};
 
 /**
  * Walks a height range once, checking every block against the one below

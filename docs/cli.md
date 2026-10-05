@@ -402,6 +402,8 @@ trusted block hash pins the total size of every transaction beneath it.
 | `--core-db` | The gateway's `core.db`. Required |
 | `--from` | Lowest height to check. Defaults to the lowest held |
 | `--to` | Highest height to check. Defaults to the fork, or the highest held if lower |
+| `--anchor-from` | Comma-separated nodes to ask for the anchor block hashes. Omitted, nothing outside the index vouches for it |
+| `--anchor-min` | How many sources must answer per anchor height (default 2) |
 
 An index reaching below the fork is checked up to the fork and no
 further: above it `tx_root` is the stronger proof, and reading on costs
@@ -416,12 +418,27 @@ the fork-2.0 seed is unrebuildable from stored fields. That is what makes
 the chain is only as strong as `previous_block`, which an index that
 fabricated the whole thing self-consistently would satisfy just as well.
 
-Get that one hash from somewhere independent — raw Arweave nodes
-(`/block/height/N` on port 1984, whose peer list any gateway's `/peers`
-will give you) are a different implementation from this one, so agreement
-across several of them is worth more than agreement with another gateway.
-Anchor each segment separately: the fork-2.0 seed breaks the recurrence,
-so heights below it need their own anchor at 422,249.
+`--anchor-from` gets that hash from somewhere independent and is the only
+part of this command that asks anyone else:
+
+```bash
+ar-io-node index-l1-verify --core-db data/sqlite/core.db \
+  --anchor-from http://15.235.234.171:1984,http://208.69.78.61:1984,http://148.113.226.53:1984
+```
+
+Prefer raw Arweave nodes (port 1984) over gateways: they are a different
+implementation from this one, so their agreement is worth more. Any
+gateway's `/peers` lists them. Each anchor height needs `--anchor-min`
+sources to answer (default 2) and every source that answers must agree —
+**one source is a single point of trust, which is what the anchor exists
+to remove**, so a single reachable source fails the check. Sources that
+cannot be reached are reported but do not count as disagreement. The
+command works offline without it, and says so rather than implying
+anything vouches for the index.
+
+Both sides of the fork are anchored automatically: the fork-2.0 seed
+breaks the recurrence, so heights below it are anchored at 422,249 and
+heights above at the top of the range.
 
 **What it proves.** Given the identity hash of the anchor block, no
 transaction below the fork can have been invented, dropped, or had its
@@ -461,6 +478,7 @@ with any skipped block is not reported as anchored.
     { "name": "contiguous", "ok": true, "detail": "..." },
     { "name": "linked", "ok": true, "detail": "..." },
     { "name": "hash_list_merkle", "ok": true, "detail": "..." },
+    { "name": "anchor_hash", "ok": true, "detail": "422249: 3 sources agree; ..." },
     { "name": "block_size", "ok": true, "detail": "..." },
     { "name": "weave_accounting", "ok": true, "detail": "..." },
     { "name": "anchor", "ok": true, "detail": "..." }

@@ -13,6 +13,8 @@ import Sqlite from 'better-sqlite3';
 
 import { buildCoreDb } from '../../../test/parquet-l1-core-db.js';
 import {
+  anchorHeights,
+  checkAnchors,
   chooseRange,
   FORK_2_0_HEIGHT,
   MAX_FAILURES_REPORTED,
@@ -407,6 +409,76 @@ describe('chooseRange', () => {
       (e: Error) =>
         e instanceof VerifyRefused && /at least two heights/.test(e.message),
     );
+  });
+});
+
+describe('anchorHeights', () => {
+  const F = FORK_2_0_HEIGHT;
+
+  it('anchors each side of the fork separately', () => {
+    // The fork-2.0 seed is not rebuildable, so the recurrence is two
+    // chains and one hash cannot pin both.
+    assert.deepEqual(anchorHeights(0, 2_014_815), [F - 1, 2_014_815]);
+  });
+
+  it('anchors the top of a range wholly below the fork', () => {
+    assert.deepEqual(anchorHeights(0, 300_000), [300_000]);
+  });
+
+  it('anchors only the top of a range wholly above the fork', () => {
+    assert.deepEqual(anchorHeights(F, 900_000), [900_000]);
+    assert.deepEqual(anchorHeights(F + 10, 900_000), [900_000]);
+  });
+});
+
+describe('checkAnchors', () => {
+  const ours = new Map([[100, 'AAA']]);
+
+  it('passes when enough independent sources agree with the index', () => {
+    const check = checkAnchors(ours, [
+      { url: 'a', height: 100, indepHash: 'AAA' },
+      { url: 'b', height: 100, indepHash: 'AAA' },
+    ]);
+    assert.equal(check.ok, true);
+    assert.match(check.detail, /2 sources agree/);
+  });
+
+  it('fails when a source says something else', () => {
+    const check = checkAnchors(ours, [
+      { url: 'a', height: 100, indepHash: 'AAA' },
+      { url: 'b', height: 100, indepHash: 'XXX' },
+      { url: 'c', height: 100, indepHash: 'AAA' },
+    ]);
+    assert.equal(check.ok, false);
+    assert.match(check.failures?.[0].found ?? '', /b says XXX/);
+  });
+
+  it('fails when too few sources answered, because one is a single point of trust', () => {
+    const check = checkAnchors(ours, [
+      { url: 'a', height: 100, indepHash: 'AAA' },
+      { url: 'b', height: 100, error: 'timed out' },
+    ]);
+    assert.equal(check.ok, false);
+    assert.match(check.failures?.[0].found ?? '', /1 of 2 sources answered/);
+  });
+
+  it('counts an unreachable source as absent, not as disagreement', () => {
+    const check = checkAnchors(
+      ours,
+      [
+        { url: 'a', height: 100, indepHash: 'AAA' },
+        { url: 'b', height: 100, indepHash: 'AAA' },
+        { url: 'c', height: 100, error: 'ECONNREFUSED' },
+      ],
+      2,
+    );
+    assert.equal(check.ok, true);
+  });
+
+  it('says plainly when nothing was asked', () => {
+    const check = checkAnchors(new Map(), []);
+    assert.equal(check.ok, true);
+    assert.match(check.detail, /nothing outside this index vouches/);
   });
 });
 

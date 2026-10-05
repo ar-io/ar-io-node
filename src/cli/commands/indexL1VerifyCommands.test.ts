@@ -120,6 +120,95 @@ describe('indexL1VerifyCLICommand', () => {
     );
   });
 
+  it('asks the named sources for the anchor hash and agrees with them', async () => {
+    const ours = (h: number) => {
+      const db = new Sqlite(coreDb);
+      try {
+        return (
+          db
+            .prepare('SELECT indep_hash FROM stable_blocks WHERE height = ?')
+            .pluck()
+            .get(h) as Buffer
+        ).toString('base64url');
+      } finally {
+        db.close();
+      }
+    };
+    const asked: Array<[string, number]> = [];
+    const result = (await indexL1VerifyCLICommand(
+      { coreDb, anchorFrom: 'http://one.example,http://two.example' },
+      {
+        log,
+        fetchIndepHash: async (url, h) => {
+          asked.push([url, h]);
+          return ours(h);
+        },
+      },
+    )) as Record<string, unknown>;
+    assert.equal(result.ok, true);
+    // Wholly below the fork, so one anchor at the top of the range.
+    assert.deepEqual(
+      asked.map(([, h]) => h),
+      [FIRST + COUNT - 1, FIRST + COUNT - 1],
+    );
+    const check = (result.checks as Array<Record<string, unknown>>).find(
+      (c) => c.name === 'anchor_hash',
+    );
+    assert.equal(check?.ok, true);
+    assert.equal((result.anchorSources as unknown[]).length, 2);
+    assert.deepEqual(JSON.parse(JSON.stringify(result)), result);
+  });
+
+  it('fails when a source disagrees about the anchor', async () => {
+    let thrown: Record<string, unknown> | undefined;
+    try {
+      await indexL1VerifyCLICommand(
+        { coreDb, anchorFrom: 'http://liar.example,http://other.example' },
+        { log, fetchIndepHash: async () => 'not-the-real-hash' },
+      );
+    } catch (error) {
+      thrown = error as Record<string, unknown>;
+    }
+    assert.ok(thrown !== undefined, 'the command failed');
+    const check = (thrown.checks as Array<Record<string, unknown>>).find(
+      (c) => c.name === 'anchor_hash',
+    );
+    assert.equal(check?.ok, false);
+  });
+
+  it('fails when too few sources could be reached', async () => {
+    // One source is a single point of trust, which is the thing the
+    // anchor exists to remove — so an unreachable second is a failure,
+    // not a pass with a shrug.
+    const ours = new Sqlite(coreDb);
+    const top = ours
+      .prepare('SELECT indep_hash FROM stable_blocks WHERE height = ?')
+      .pluck()
+      .get(FIRST + COUNT - 1) as Buffer;
+    ours.close();
+    await assert.rejects(
+      indexL1VerifyCLICommand(
+        { coreDb, anchorFrom: 'http://up.example,http://down.example' },
+        {
+          log,
+          fetchIndepHash: async (url) => {
+            if (url.includes('down')) throw new Error('ECONNREFUSED');
+            return top.toString('base64url');
+          },
+        },
+      ),
+    );
+  });
+
+  it('asks nobody when no source is named, and says so', async () => {
+    const result = await run();
+    assert.equal(result.anchorSources, undefined);
+    const names = (result.checks as Array<Record<string, unknown>>).map(
+      (c) => c.name,
+    );
+    assert.ok(!names.includes('anchor_hash'));
+  });
+
   it('leaves the database byte for byte as it found it', async () => {
     // What an operator needs is that running this against a live
     // gateway changes nothing. The handle is also opened read-only, so a

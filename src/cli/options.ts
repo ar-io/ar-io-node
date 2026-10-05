@@ -108,6 +108,16 @@ export const optionMap = {
     description:
       'Highest block height to check. For an index reaching below the 2.0 fork, defaults to the fork (422250) or the highest held if lower; for one starting at or above it, to the highest held',
   },
+  anchorFrom: {
+    alias: '--anchor-from <urls>',
+    description:
+      'Comma-separated Arweave nodes or gateways to ask for the anchor block hashes. Raw nodes (port 1984) are a different implementation, so their agreement is worth most',
+  },
+  anchorMin: {
+    alias: '--anchor-min <n>',
+    description:
+      'How many sources must answer for each anchor height (default 2)',
+  },
   bandsDir: {
     alias: '--bands-dir <path>',
     description:
@@ -173,6 +183,8 @@ export const indexL1VerifyOptions: CommanderOption[] = [
   optionMap.coreDbReadOnly,
   optionMap.fromHeight,
   optionMap.toHeight,
+  optionMap.anchorFrom,
+  optionMap.anchorMin,
 ];
 
 export const indexBandExportOptions: CommanderOption[] = [

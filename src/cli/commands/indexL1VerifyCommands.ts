@@ -15,6 +15,9 @@ import Sqlite from 'better-sqlite3';
 import { Logger } from 'winston';
 
 import {
+  AnchorAnswer,
+  anchorHeights,
+  checkAnchors,
   chooseRange,
   stableHeightRange,
   verifyRange,
@@ -25,6 +28,39 @@ import { requiredStringFromOptions } from '../utils.js';
 
 export interface IndexL1VerifyDeps {
   log: Logger;
+  /** Asks one source for a block's identity hash; injected in tests. */
+  fetchIndepHash?: (
+    url: string,
+    height: number,
+    timeoutMs: number,
+  ) => Promise<string>;
+}
+
+/** How long one source gets to answer before it counts as unreachable. */
+export const ANCHOR_TIMEOUT_MS = 10_000;
+
+/**
+ * Asks one source for a block's identity hash. Any Arweave node or
+ * gateway serves `/block/height/N`; raw nodes on port 1984 are a
+ * different implementation from this one, which is what makes their
+ * agreement worth having.
+ */
+async function httpIndepHash(
+  url: string,
+  height: number,
+  timeoutMs: number,
+): Promise<string> {
+  const stop = AbortSignal.timeout(timeoutMs);
+  const response = await fetch(
+    `${url.replace(/\/+$/, '')}/block/height/${height}`,
+    { signal: stop },
+  );
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  const body = (await response.json()) as { indep_hash?: unknown };
+  if (typeof body.indep_hash !== 'string' || body.indep_hash.length === 0) {
+    throw new Error('no indep_hash in the response');
+  }
+  return body.indep_hash;
 }
 
 const height = (
@@ -41,11 +77,20 @@ const height = (
 
 export async function indexL1VerifyCLICommand(
   options: IndexL1VerifyCLIOptions,
-  { log }: IndexL1VerifyDeps,
+  { log, fetchIndepHash = httpIndepHash }: IndexL1VerifyDeps,
 ): Promise<JsonSerializable> {
   const coreDb = requiredStringFromOptions(options, 'coreDb');
   const wantFrom = height(options.from, '--from');
   const wantTo = height(options.to, '--to');
+  const sources = (options.anchorFrom ?? '')
+    .split(',')
+    .map((url) => url.trim())
+    .filter((url) => url.length > 0);
+  const minSources =
+    options.anchorMin === undefined ? 2 : Number(options.anchorMin);
+  if (!Number.isInteger(minSources) || minSources < 1) {
+    throw new VerifyRefused('--anchor-min must be a positive whole number');
+  }
 
   let db: Sqlite.Database;
   try {
@@ -66,6 +111,49 @@ export async function indexL1VerifyCLICommand(
     });
     log.info('Checking the L1 index', { coreDb, from, to });
     const result = verifyRange(db, { from, to });
+
+    // Everything above is the index agreeing with itself. This is the
+    // only part that asks anyone else, and it is what turns the chain
+    // binding into a statement about the real Arweave chain.
+    let anchors: AnchorAnswer[] = [];
+    if (sources.length > 0) {
+      const wanted = anchorHeights(from, to);
+      const hashes = db.prepare(
+        'SELECT indep_hash FROM stable_blocks WHERE height = ?',
+      );
+      const ours = new Map<number, string>();
+      for (const h of wanted) {
+        const row = hashes.get(h) as { indep_hash: Buffer | null } | undefined;
+        if (row?.indep_hash != null) {
+          ours.set(h, row.indep_hash.toString('base64url'));
+        }
+      }
+      anchors = (
+        await Promise.all(
+          wanted.flatMap((h) =>
+            sources.map(async (url): Promise<AnchorAnswer> => {
+              try {
+                return {
+                  url,
+                  height: h,
+                  indepHash: await fetchIndepHash(url, h, ANCHOR_TIMEOUT_MS),
+                };
+              } catch (error) {
+                return { url, height: h, error: (error as Error).message };
+              }
+            }),
+          ),
+        )
+      ).flat();
+      const check = checkAnchors(ours, anchors, minSources);
+      result.checks.push(check);
+      result.ok = result.ok && check.ok;
+      log.info('Asked for anchors', {
+        heights: wanted,
+        sources: sources.length,
+        answered: anchors.filter((a) => a.indepHash !== undefined).length,
+      });
+    }
     log.info('Checked the L1 index', {
       ok: result.ok,
       blocks: result.blocks,
@@ -87,6 +175,16 @@ export async function indexL1VerifyCLICommand(
       accountingChecked: result.accountingChecked,
       accountingSkipped: result.accountingSkipped,
       ok: result.ok,
+      ...(anchors.length > 0
+        ? {
+            anchorSources: anchors.map((a) => ({
+              url: a.url,
+              height: a.height,
+              ...(a.indepHash !== undefined ? { indepHash: a.indepHash } : {}),
+              ...(a.error !== undefined ? { error: a.error } : {}),
+            })),
+          }
+        : {}),
       checks: result.checks.map((c) => ({
         name: c.name,
         ok: c.ok,
