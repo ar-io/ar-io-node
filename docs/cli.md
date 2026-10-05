@@ -314,9 +314,11 @@ an hour and leave a 12.1 GB `core.db` — roughly 260 bytes a row. Allow
 about 2 GB of WAL beside the database while a band is landing, and the
 band's own size on disk.
 
-The whole chain to height 2,014,135 is 23 bands, 12.8 GB on disk, holding
-468,501,488 rows. Expect **about 120 GB of `core.db`** and the best part of
-a day. `--max-bands` splits that across several runs; the ledger makes each
+The whole chain was, at the time of writing, 23 bands and 12.8 GB on disk
+holding 468,501,488 rows to height 2,014,135 — the tip band is rebuilt as
+the chain grows, so expect those numbers to have moved. Expect **about
+120 GB of `core.db`** (a gateway that indexed the same chain itself holds
+120.7 GB) and the best part of a day. `--max-bands` splits that across several runs; the ledger makes each
 one pick up where the last stopped.
 
 No `ANALYZE` or `VACUUM` is wanted afterwards. The rows are written in
@@ -406,9 +408,25 @@ further: above it `tx_root` is the stronger proof, and reading on costs
 tens of millions of rows for nothing. An index starting above the fork is
 read whole. Measured: 422,251 blocks in **2.7 seconds**.
 
+**The chain binding.** `hash_list_merkle` is a running commitment to every
+block hash below it, and the command rebuilds that recurrence the whole
+way — including folding heights 0 to 94,998 for the fork-1.6 seed. Only
+the fork-2.0 seed is unrebuildable from stored fields. That is what makes
+**one** trusted block hash pin every `indep_hash` beneath it. Without it
+the chain is only as strong as `previous_block`, which an index that
+fabricated the whole thing self-consistently would satisfy just as well.
+
+Get that one hash from somewhere independent — raw Arweave nodes
+(`/block/height/N` on port 1984, whose peer list any gateway's `/peers`
+will give you) are a different implementation from this one, so agreement
+across several of them is worth more than agreement with another gateway.
+Anchor each segment separately: the fork-2.0 seed breaks the recurrence,
+so heights below it need their own anchor at 422,249.
+
 **What it proves.** Given the identity hash of the anchor block, no
 transaction below the fork can have been invented, dropped, or had its
-size changed, and the index is contiguous and correctly linked.
+size changed, and the index is contiguous, correctly linked, and bound to
+that anchor block by block.
 
 **What it does not prove.** Membership of a *particular* pre-2.0 block.
 The intermediate `weave_size` values are not committed individually, so
@@ -434,10 +452,15 @@ with any skipped block is not reported as anchored.
   "anchorHeight": 422250,
   "weaveSize": "407672420044",
   "accountedFor": "407672420044",
+  "merkleChecked": 422249,
+  "merkleSkipped": 1,
+  "accountingChecked": 422250,
+  "accountingSkipped": 0,
   "ok": true,
   "checks": [
     { "name": "contiguous", "ok": true, "detail": "..." },
     { "name": "linked", "ok": true, "detail": "..." },
+    { "name": "hash_list_merkle", "ok": true, "detail": "..." },
     { "name": "block_size", "ok": true, "detail": "..." },
     { "name": "weave_accounting", "ok": true, "detail": "..." },
     { "name": "anchor", "ok": true, "detail": "..." }

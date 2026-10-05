@@ -128,6 +128,42 @@ export function nextHashListMerkle(previous: ChainBlock): Buffer {
 }
 
 /**
+ * What a block's `hash_list_merkle` must be, given the block below it and
+ * the running fold for the 1.6 seed.
+ *
+ * - `Buffer` — it must equal this.
+ * - `null` — it must be empty (every height below the 1.6 fork).
+ * - `undefined` — not checkable here: the 1.6 seed without a run that
+ *   starts at height 0 to fold, the 2.0 seed (not rebuildable from stored
+ *   fields), or no usable block below.
+ *
+ * Shared by {@link checkBlockChain} and the streaming verifier, so the two
+ * cannot drift on the era rules.
+ */
+export function expectedHashListMerkle(
+  height: number,
+  previous: ChainBlock | undefined,
+  seedFold: Buffer | undefined,
+): Buffer | null | undefined {
+  if (height < FORK_1_6) return null;
+  if (height === FORK_1_6) return seedFold;
+  if (height === FORK_2_0) return undefined;
+  if (previous === undefined || empty(previous.hash_list_merkle)) {
+    return undefined;
+  }
+  return nextHashListMerkle(previous);
+}
+
+/** The 1.6 seed folds heights 0 to 94,998; this accumulates one block. */
+export function foldSeed(
+  seedFold: Buffer | undefined,
+  block: Pick<ChainBlock, 'height' | 'indep_hash'>,
+): Buffer | undefined {
+  if (seedFold === undefined || block.height > FORK_1_6 - 2) return seedFold;
+  return sha384(seedFold, block.indep_hash);
+}
+
+/**
  * Checks block links and `hash_list_merkle` over consecutive blocks, sorted
  * by height. `prior` is the block just below the first, when there is one.
  */
@@ -173,18 +209,7 @@ export function checkBlockChain(
       }
     }
 
-    let expected: Buffer | null | undefined;
-    if (h < FORK_1_6) {
-      expected = null;
-    } else if (h === FORK_1_6) {
-      expected = seedFold;
-    } else if (h === FORK_2_0) {
-      expected = undefined;
-    } else if (previous === undefined || empty(previous.hash_list_merkle)) {
-      expected = undefined;
-    } else {
-      expected = nextHashListMerkle(previous);
-    }
+    const expected = expectedHashListMerkle(h, previous, seedFold);
     if (expected === undefined) {
       report.hashListSkipped += 1;
     } else {
@@ -197,10 +222,7 @@ export function checkBlockChain(
       if (!ok) fail(h, 'hash_list_merkle');
     }
 
-    // The fold for the 1.6 seed takes heights 0 to 94,998.
-    if (seedFold !== undefined && h <= FORK_1_6 - 2) {
-      seedFold = sha384(seedFold, block.indep_hash);
-    }
+    seedFold = foldSeed(seedFold, block);
     previous = block;
   }
   return report;

@@ -64,7 +64,14 @@ describe('verifyRange', () => {
     assert.equal(result.blocks, FORK - LOW + 1);
     assert.deepEqual(
       result.checks.map((c) => c.name),
-      ['contiguous', 'linked', 'block_size', 'weave_accounting', 'anchor'],
+      [
+        'contiguous',
+        'linked',
+        'hash_list_merkle',
+        'block_size',
+        'weave_accounting',
+        'anchor',
+      ],
     );
     assert.equal(result.weaveSize, result.accountedFor);
   });
@@ -109,6 +116,55 @@ describe('verifyRange', () => {
       .get(FIRST + 1, FORK) as number;
     assert.equal(result.accountedFor, String(above));
     assert.equal(result.ok, true, 'and the range still adds up');
+  });
+
+  it('rebuilds the hash_list_merkle recurrence over the whole range', () => {
+    // This is what makes a single trusted hash at the top pin every
+    // block hash below it. `previous_block` alone would be satisfied by
+    // an index that fabricated the entire chain self-consistently.
+    const result = run();
+    assert.equal(result.merkleChecked, FORK - LOW);
+    assert.equal(result.merkleSkipped, 0);
+    assert.equal(failed(result, 'hash_list_merkle')?.ok, true);
+  });
+
+  it('catches a tampered hash_list_merkle', () => {
+    db.prepare(
+      'UPDATE stable_blocks SET hash_list_merkle = ? WHERE height = ?',
+    ).run(Buffer.alloc(48, 3), FIRST + 2);
+    const result = run();
+    assert.equal(result.ok, false);
+    const check = failed(result, 'hash_list_merkle');
+    assert.equal(check?.failures?.[0].height, FIRST + 2);
+    // The recurrence feeds forward, so the block above fails too — that
+    // is the chain doing its job, not noise.
+    assert.equal(check?.failures?.[1].height, FIRST + 3);
+  });
+
+  it('catches a forged indep_hash even when the links are moved with it', () => {
+    // `previous_block` linkage alone cannot see this if both are moved
+    // together; the merkle recurrence can, because it commits to the
+    // hash of every block below.
+    const other = Buffer.alloc(48, 7);
+    db.prepare('UPDATE stable_blocks SET indep_hash = ? WHERE height = ?').run(
+      other,
+      FIRST + 4,
+    );
+    db.prepare(
+      'UPDATE stable_blocks SET previous_block = ? WHERE height = ?',
+    ).run(other, FIRST + 5);
+    const result = run();
+    assert.equal(result.ok, false);
+    assert.equal(
+      failed(result, 'linked')?.ok,
+      true,
+      'the links were moved together, so linkage alone is happy',
+    );
+    assert.equal(
+      failed(result, 'hash_list_merkle')?.failures?.[0].height,
+      FIRST + 5,
+      'but the recurrence notices',
+    );
   });
 
   it('catches a range whose first block is missing', () => {

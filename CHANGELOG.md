@@ -39,7 +39,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   weave by its transactions' `data_size`, those differences telescope, and
   the first post-2.0 block commits the running total — so one trusted
   block hash pins the size of every transaction beneath it. Read-only, so
-  the gateway can stay up; 422,251 blocks in 2.7 seconds. It also checks
+  the gateway can stay up; 422,251 blocks in about 4 seconds. It also
+  rebuilds the `hash_list_merkle` recurrence — a running commitment to
+  every block hash below, folded from height 0 for the fork-1.6 seed — so
+  one trusted block hash pins every `indep_hash` beneath it, and checks
   contiguity, block linkage and `block_size`. It does not prove which
   pre-2.0 block a transaction belonged to. See
   [docs/cli.md](docs/cli.md).

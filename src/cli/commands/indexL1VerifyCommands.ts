@@ -82,6 +82,10 @@ export async function indexL1VerifyCLICommand(
       ...(result.weaveSize !== undefined
         ? { weaveSize: result.weaveSize, accountedFor: result.accountedFor }
         : {}),
+      merkleChecked: result.merkleChecked,
+      merkleSkipped: result.merkleSkipped,
+      accountingChecked: result.accountingChecked,
+      accountingSkipped: result.accountingSkipped,
       ok: result.ok,
       checks: result.checks.map((c) => ({
         name: c.name,

@@ -49,6 +49,8 @@
  */
 import Sqlite from 'better-sqlite3';
 
+import { ChainBlock, expectedHashListMerkle, foldSeed } from './chain.js';
+
 /** The first post-2.0 block. Its segment commits its own `weave_size`. */
 export const FORK_2_0_HEIGHT = 422_250;
 
@@ -97,6 +99,9 @@ export interface VerifyResult {
   /** Blocks whose growth was checked against their transactions, and those past the padding threshold. */
   accountingChecked: number;
   accountingSkipped: number;
+  /** Blocks whose `hash_list_merkle` recurrence was rebuilt, and those that are seeds. */
+  merkleChecked: number;
+  merkleSkipped: number;
   checks: VerifyCheck[];
   ok: boolean;
   seconds: number;
@@ -110,6 +115,8 @@ interface BlockRow {
   previous_block: Buffer | null;
   block_size: number;
   weave_size: number;
+  tx_root: Buffer | null;
+  hash_list_merkle: Buffer | null;
 }
 
 /** The heights a `core.db` holds, or `undefined` when it holds none. */
@@ -227,6 +234,11 @@ export function verifyRange(
     ok: true,
     detail: '',
   };
+  const merkle: VerifyCheck = {
+    name: 'hash_list_merkle',
+    ok: true,
+    detail: '',
+  };
 
   // height is `INTEGER PRIMARY KEY`, so this is a rowid range scan, and
   // the transaction sums come off (height, block_transaction_index). Both
@@ -234,7 +246,8 @@ export function verifyRange(
   // than a row is held.
   const blocks = db
     .prepare(
-      `SELECT height, indep_hash, previous_block, block_size, weave_size
+      `SELECT height, indep_hash, previous_block, block_size, weave_size,
+              tx_root, hash_list_merkle
        FROM stable_blocks WHERE height BETWEEN ? AND ? ORDER BY height`,
     )
     .iterate(from, to) as IterableIterator<BlockRow>;
@@ -268,6 +281,11 @@ export function verifyRange(
   let accounted = 0;
   let checked = 0;
   let skipped = 0;
+  let merkleChecked = 0;
+  let merkleSkipped = 0;
+  // The 1.6 seed folds every hash from height 0, so only a run starting
+  // there can rebuild it.
+  let seedFold: Buffer | undefined = from === 0 ? Buffer.alloc(0) : undefined;
   let base: number | undefined;
   for (const block of blocks) {
     seen += 1;
@@ -280,6 +298,7 @@ export function verifyRange(
         });
       }
       base = block.weave_size;
+      seedFold = foldSeed(seedFold, block as unknown as ChainBlock);
       previous = block;
       continue;
     }
@@ -306,6 +325,34 @@ export function verifyRange(
         expected: previous.indep_hash?.toString('base64url') ?? 'null',
       });
     }
+    // `hash_list_merkle` is a running commitment to every block hash
+    // below, so checking the recurrence the whole way means one trusted
+    // hash at the top pins every `indep_hash` under it. Without it, the
+    // chain is only as good as `previous_block`, which an index that
+    // made the whole thing up would satisfy just as well.
+    const want = expectedHashListMerkle(
+      block.height,
+      previous as unknown as ChainBlock,
+      seedFold,
+    );
+    if (want === undefined) {
+      merkleSkipped += 1;
+    } else {
+      merkleChecked += 1;
+      const got = block.hash_list_merkle;
+      const ok =
+        want === null
+          ? got === null || got.length === 0
+          : got !== null && want.equals(got);
+      if (!ok) {
+        add(merkle, {
+          height: block.height,
+          found: got === null ? 'null' : got.toString('base64url'),
+          expected: want === null ? 'empty' : want.toString('base64url'),
+        });
+      }
+    }
+
     const grew = block.weave_size - previous.weave_size;
     if (grew !== block.block_size) {
       add(sizes, {
@@ -328,6 +375,7 @@ export function verifyRange(
     } else {
       skipped += 1;
     }
+    seedFold = foldSeed(seedFold, block as unknown as ChainBlock);
     previous = block;
   }
 
@@ -345,7 +393,12 @@ export function verifyRange(
       ? "each block grew the weave by exactly its transactions' data_size"
       : `${checked} blocks grew the weave by exactly their transactions' data_size; ${skipped} are past the padding threshold, where that no longer holds`;
 
-  const checks = [contiguous, linked, sizes, accounting];
+  merkle.detail =
+    merkleChecked === 0
+      ? 'no block in this range has a rebuildable hash_list_merkle'
+      : `${merkleChecked} blocks commit to every block hash below them; ${merkleSkipped} are seeds or below the 1.6 fork`;
+
+  const checks = [contiguous, linked, merkle, sizes, accounting];
   const result: VerifyResult = {
     heightRange: [from, to],
     blocks: seen,
@@ -355,6 +408,8 @@ export function verifyRange(
     anchored: to >= forkHeight && skipped === 0,
     accountingChecked: checked,
     accountingSkipped: skipped,
+    merkleChecked,
+    merkleSkipped,
     checks,
     ok: checks.every((c) => c.ok),
     seconds: 0,
