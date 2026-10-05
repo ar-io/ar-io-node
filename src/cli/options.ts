@@ -132,6 +132,11 @@ export const optionMap = {
     description:
       "The gateway's core.db. Opened read-only, so it can stay up. Required",
   },
+  cacheMib: {
+    alias: '--cache-mib <n>',
+    description:
+      'SQLite page cache for the import, in MiB (default 1024). The biggest lever on a long bootstrap: too small and every insert becomes random I/O as the indexes grow',
+  },
   maxBands: {
     alias: '--max-bands <n>',
     description: 'Import at most this many bands, then stop',
@@ -177,6 +182,7 @@ export const indexL1ImportOptions: CommanderOption[] = [
   optionMap.bandsDir,
   optionMap.coreDb,
   optionMap.maxBands,
+  optionMap.cacheMib,
 ];
 
 export const indexL1VerifyOptions: CommanderOption[] = [

@@ -160,6 +160,25 @@ describe('indexL1ImportCLICommand', () => {
     assert.deepEqual(JSON.parse(JSON.stringify(thrown)), thrown);
   });
 
+  it('refuses a cache size it cannot act on', async () => {
+    await assert.rejects(
+      indexL1ImportCLICommand({ bandsDir, coreDb, cacheMib: '0' }, { log }),
+      /--cache-mib/,
+    );
+    await assert.rejects(
+      indexL1ImportCLICommand({ bandsDir, coreDb, cacheMib: 'lots' }, { log }),
+      /--cache-mib/,
+    );
+  });
+
+  it('imports with an explicit cache size', async () => {
+    const result = (await indexL1ImportCLICommand(
+      { bandsDir, coreDb, cacheMib: '16' },
+      { log },
+    )) as Record<string, unknown>;
+    assert.equal(result.imported, 1);
+  });
+
   it('refuses the options it cannot act on', async () => {
     await assert.rejects(
       indexL1ImportCLICommand({ coreDb }, { log }),

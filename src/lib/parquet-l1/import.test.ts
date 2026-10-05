@@ -18,6 +18,7 @@ import { buildCoreDb } from '../../../test/parquet-l1-core-db.js';
 import { createTestLogger } from '../../../test/test-logger.js';
 import type { Logger } from 'winston';
 import {
+  applyImportPragmas,
   assertDiskSpace,
   assertImportable,
   bandDigest,
@@ -792,6 +793,45 @@ describe('assertImportable', () => {
       other.close();
       db.close();
     }
+  });
+});
+
+describe('applyImportPragmas', () => {
+  let dir: string;
+  let db: Sqlite.Database;
+
+  beforeEach(async () => {
+    dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'parquet-l1-pragma-'));
+    db = emptyCore(path.join(dir, 'core.db'));
+  });
+  afterEach(async () => {
+    db?.close();
+    await fsp.rm(dir, { recursive: true, force: true });
+  });
+
+  const read = (name: string) =>
+    db.pragma(name, { simple: true }) as number | string;
+
+  it("gives the load a page cache measured in MiB, not SQLite's 2 MB default", () => {
+    // The whole point: a negative cache_size is KiB, and the default is
+    // what makes a long import decay as the indexes stop fitting.
+    applyImportPragmas(db, 512);
+    assert.equal(read('cache_size'), -512 * 1024);
+  });
+
+  it('keeps WAL and relaxes synchronous to NORMAL', () => {
+    applyImportPragmas(db, 1);
+    assert.equal(String(read('journal_mode')).toLowerCase(), 'wal');
+    assert.equal(read('synchronous'), 1, 'NORMAL');
+  });
+
+  it('leaves temp_store alone, so a later sort is not forced into memory', () => {
+    // A CREATE INDEX over the 305M-row tag table would try to sort in
+    // RAM if this were set to MEMORY. An import does not sort, so there
+    // is nothing to gain and a trap to avoid.
+    const before = read('temp_store');
+    applyImportPragmas(db, 1);
+    assert.equal(read('temp_store'), before);
   });
 });
 

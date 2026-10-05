@@ -282,6 +282,7 @@ again carries on from there.
 | `--bands-dir` | A directory of bands, as the sidecar installs them. Required |
 | `--core-db` | The gateway's `core.db`. Required |
 | `--max-bands` | Import at most this many bands, then stop |
+| `--cache-mib` | SQLite page cache for the import, in MiB (default 1024) |
 
 Running it again when there is nothing to do is a no-op: each band is
 recorded in `parquet_l1_imports` as it lands, and a band already held is
@@ -307,12 +308,28 @@ naming the table it is on and the rows it has written of the rows the band
 holds. The largest bands take over half an hour, so this is how you tell a
 slow import from a stuck one.
 
-**What to expect.** Measured on vilenarios.com against real bands: the
-sparse first 100,000 heights take about 10 seconds, and the busiest
-100,000 (10.4M transactions, 25.7M tags, 46,606,658 rows) take about half
-an hour and leave a 12.1 GB `core.db` — roughly 260 bytes a row. Allow
-about 2 GB of WAL beside the database while a band is landing, and the
-band's own size on disk.
+**Give it a page cache.** `--cache-mib` is the single biggest lever on a
+long import. A bootstrap spends its time maintaining indexes, and SQLite's
+own default cache is 2 MB: once the indexes outgrow it every insert
+becomes random I/O and the rate falls as the database fills. Measured
+full-chain on vilenarios.com with the default, the rate decayed from
+31,730 rows/s at 8 GB to 7,758 at 27 GB; raising the cache to 8 GiB held
+10,739 rows/s at 69 GB, on a database two and a half times larger. Set it
+to whatever the box can spare.
+
+**What to expect.** Measured on vilenarios.com against real bands. A
+single band into an empty database is fast: the sparse first 100,000
+heights take about 10 seconds, and the busiest 100,000 (46,606,658 rows)
+about half an hour, leaving a 12.1 GB `core.db` — roughly 260 bytes a
+row.
+
+**A full bootstrap is much slower than those numbers suggest**, and the
+difference is not small. The same 42.9M-row band imports at 26,653 rows/s
+into an empty database and 11,238 rows/s when the database has already
+reached 50 GB: index maintenance, not CPU or the band. Budget for the
+whole chain accordingly rather than multiplying the single-band figure.
+Allow about 2 GB of WAL beside the database while a band is landing, and
+the band's own size on disk.
 
 The whole chain was, at the time of writing, 23 bands and 12.8 GB on disk
 holding 468,501,488 rows to height 2,014,135 — the tip band is rebuilt as

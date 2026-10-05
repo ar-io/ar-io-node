@@ -313,6 +313,33 @@ export async function assertDiskSpace(
   });
 }
 
+/**
+ * Sets the database up for a bulk load.
+ *
+ * `cache_size` is the one that matters. SQLite's default page cache is 2 MB,
+ * and a bootstrap spends its time maintaining indexes: once those outgrow
+ * the cache every insert becomes random I/O, and the rate falls as the
+ * database fills. Measured on a full-chain run with the default: 31,730
+ * rows/s at 8 GB, down to 7,758 at 27 GB.
+ *
+ * `synchronous = NORMAL` is durable against this process dying, which is
+ * the failure that happens. A band lost to a power cut is safe to redo:
+ * the ledger records it unfinished and the range is rewritten.
+ *
+ * Deliberately not set: `temp_store`. An import is inserts, not sorts, so
+ * it has nothing to gain, and forcing temp storage into memory would be
+ * actively wrong for anything that does sort — a `CREATE INDEX` over the
+ * 305M-row tag table would try to do it in RAM.
+ */
+export function applyImportPragmas(
+  db: Sqlite.Database,
+  cacheMib: number,
+): void {
+  db.pragma('journal_mode = WAL');
+  db.pragma(`cache_size = -${cacheMib * 1024}`);
+  db.pragma('synchronous = NORMAL');
+}
+
 /** The migration this importer was written against; its table must exist. */
 export const LEDGER_MIGRATION =
   '2026.10.04T12.00.00.core.add-parquet-l1-imports';

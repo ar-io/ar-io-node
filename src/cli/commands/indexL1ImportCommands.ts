@@ -18,13 +18,24 @@ import * as path from 'node:path';
 import Sqlite from 'better-sqlite3';
 import { Logger } from 'winston';
 
-import { ImportRefused, runImport } from '../../lib/parquet-l1/import.js';
+import {
+  applyImportPragmas,
+  ImportRefused,
+  runImport,
+} from '../../lib/parquet-l1/import.js';
 import type { IndexL1ImportCLIOptions, JsonSerializable } from '../types.js';
 import { requiredStringFromOptions } from '../utils.js';
 
 export interface IndexL1ImportDeps {
   log: Logger;
 }
+
+/**
+ * Page cache for the import, in MiB. Large enough to hold the working set
+ * of the indexes being maintained, small enough to leave room for a
+ * gateway's other databases on a modest box.
+ */
+export const DEFAULT_CACHE_MIB = 1024;
 
 export async function indexL1ImportCLICommand(
   options: IndexL1ImportCLIOptions,
@@ -37,6 +48,13 @@ export async function indexL1ImportCLICommand(
   if (maxBands !== undefined && (!Number.isInteger(maxBands) || maxBands < 1)) {
     throw new Error(`--max-bands must be a positive whole number`);
   }
+  const cacheMib =
+    options.cacheMib === undefined
+      ? DEFAULT_CACHE_MIB
+      : Number(options.cacheMib);
+  if (!Number.isInteger(cacheMib) || cacheMib < 1) {
+    throw new Error('--cache-mib must be a positive whole number');
+  }
 
   const started = Date.now();
   let db: Sqlite.Database;
@@ -47,8 +65,7 @@ export async function indexL1ImportCLICommand(
       `Cannot open ${coreDb}: ${(error as Error).message}`,
     );
   }
-  // The gateway's own setting; an import writes far more than a normal run.
-  db.pragma('journal_mode = WAL');
+  applyImportPragmas(db, cacheMib);
 
   const { Database } = await import('duckdb-async');
   const duck = await Database.create(':memory:');
@@ -61,6 +78,7 @@ export async function indexL1ImportCLICommand(
     await duck.exec(
       `SET memory_limit = '1GB'; SET threads = 2; SET temp_directory = '${spill.replace(/'/g, "''")}'; SET max_temp_directory_size = '16GB'; SET autoinstall_known_extensions = false; SET autoload_known_extensions = false;`,
     );
+    log.info('Importing', { coreDb, cacheMib });
     const run = await runImport({
       db,
       duck,
