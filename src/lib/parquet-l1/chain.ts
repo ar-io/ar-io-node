@@ -140,17 +140,31 @@ export function nextHashListMerkle(previous: ChainBlock): Buffer {
  * Shared by {@link checkBlockChain} and the streaming verifier, so the two
  * cannot drift on the era rules.
  */
+/**
+ * The block below carries no `hash_list_merkle` where it must have one.
+ * Not a seed and not unrebuildable: a defect, and treating it as a skip
+ * is how a forged block escapes the chain binding — null out its merkle
+ * and the block above it is never compared.
+ */
+export const PREDECESSOR_HAS_NO_MERKLE = 'predecessor-has-no-merkle';
+
 export function expectedHashListMerkle(
   height: number,
   previous: ChainBlock | undefined,
   seedFold: Buffer | undefined,
-): Buffer | null | undefined {
+): Buffer | null | undefined | typeof PREDECESSOR_HAS_NO_MERKLE {
   if (height < FORK_1_6) return null;
   if (height === FORK_1_6) return seedFold;
   if (height === FORK_2_0) return undefined;
-  if (previous === undefined || empty(previous.hash_list_merkle)) {
-    return undefined;
-  }
+  // Nothing below to build from; the caller has no predecessor at all.
+  if (previous === undefined) return undefined;
+  // Reaching here means the height is above the 1.6 fork, so a
+  // contiguous predecessor is at or above it too and carries a merkle;
+  // a block that does not follow the one below it is reported as
+  // non-contiguous before this. An empty value is therefore a broken
+  // row, never a seed, and skipping it is how a forged block would
+  // escape the binding.
+  if (empty(previous.hash_list_merkle)) return PREDECESSOR_HAS_NO_MERKLE;
   return nextHashListMerkle(previous);
 }
 
@@ -210,7 +224,14 @@ export function checkBlockChain(
     }
 
     const expected = expectedHashListMerkle(h, previous, seedFold);
-    if (expected === undefined) {
+    if (expected === PREDECESSOR_HAS_NO_MERKLE) {
+      report.hashListChecked += 1;
+      fail(
+        h,
+        'hash_list_merkle',
+        `the block below carries no hash_list_merkle`,
+      );
+    } else if (expected === undefined) {
       report.hashListSkipped += 1;
     } else {
       report.hashListChecked += 1;

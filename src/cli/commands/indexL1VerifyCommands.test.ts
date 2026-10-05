@@ -159,6 +159,43 @@ describe('indexL1VerifyCLICommand', () => {
     assert.deepEqual(JSON.parse(JSON.stringify(result)), result);
   });
 
+  it('does not let one node satisfy --anchor-min by being listed twice', async () => {
+    // The whole point of a minimum is to remove a single point of
+    // trust, so the same URL repeated, or differing only by a trailing
+    // slash, must count once.
+    const asked: string[] = [];
+    await assert.rejects(
+      indexL1VerifyCLICommand(
+        {
+          coreDb,
+          anchorFrom: 'http://a.example,http://a.example/,http://a.example',
+        },
+        {
+          log,
+          fetchIndepHash: async (url, h) => {
+            asked.push(url);
+            const db = new Sqlite(coreDb);
+            try {
+              return (
+                db
+                  .prepare(
+                    'SELECT indep_hash FROM stable_blocks WHERE height = ?',
+                  )
+                  .pluck()
+                  .get(h) as Buffer
+              ).toString('base64url');
+            } finally {
+              db.close();
+            }
+          },
+        },
+      ),
+      'one node listed three times is still one node',
+    );
+    assert.deepEqual([...new Set(asked)], ['http://a.example']);
+    assert.equal(asked.length, 1, 'and it was only asked once');
+  });
+
   it('fails when a source disagrees about the anchor', async () => {
     let thrown: Record<string, unknown> | undefined;
     try {

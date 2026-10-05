@@ -82,10 +82,17 @@ export async function indexL1VerifyCLICommand(
   const coreDb = requiredStringFromOptions(options, 'coreDb');
   const wantFrom = height(options.from, '--from');
   const wantTo = height(options.to, '--to');
-  const sources = (options.anchorFrom ?? '')
-    .split(',')
-    .map((url) => url.trim())
-    .filter((url) => url.length > 0);
+  // Deduplicated, and trailing slashes removed first, or the same node
+  // listed twice satisfies --anchor-min on its own — which is precisely
+  // the single point of trust the anchor exists to remove.
+  const sources = [
+    ...new Set(
+      (options.anchorFrom ?? '')
+        .split(',')
+        .map((url) => url.trim().replace(/\/+$/, ''))
+        .filter((url) => url.length > 0),
+    ),
+  ];
   const minSources =
     options.anchorMin === undefined ? 2 : Number(options.anchorMin);
   if (!Number.isInteger(minSources) || minSources < 1) {

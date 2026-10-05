@@ -49,7 +49,12 @@
  */
 import Sqlite from 'better-sqlite3';
 
-import { ChainBlock, expectedHashListMerkle, foldSeed } from './chain.js';
+import {
+  ChainBlock,
+  expectedHashListMerkle,
+  foldSeed,
+  PREDECESSOR_HAS_NO_MERKLE,
+} from './chain.js';
 
 /** The first post-2.0 block. Its segment commits its own `weave_size`. */
 export const FORK_2_0_HEIGHT = 422_250;
@@ -410,7 +415,14 @@ export function verifyRange(
       previous as unknown as ChainBlock,
       seedFold,
     );
-    if (want === undefined) {
+    if (want === PREDECESSOR_HAS_NO_MERKLE) {
+      merkleChecked += 1;
+      add(merkle, {
+        height: block.height,
+        found: 'the block below carries no hash_list_merkle',
+        expected: 'every block above the 1.6 fork has one',
+      });
+    } else if (want === undefined) {
       merkleSkipped += 1;
     } else {
       merkleChecked += 1;

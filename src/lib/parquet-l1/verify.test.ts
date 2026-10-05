@@ -130,6 +130,24 @@ describe('verifyRange', () => {
     assert.equal(failed(result, 'hash_list_merkle')?.ok, true);
   });
 
+  it('fails when the block below carries no hash_list_merkle', () => {
+    // Not a seed and not unrebuildable. Skipping it is how a forged
+    // block escapes the binding: null out its merkle and the block
+    // above it is never compared, so the anchor stops binding it.
+    db.prepare(
+      'UPDATE stable_blocks SET hash_list_merkle = NULL WHERE height = ?',
+    ).run(FIRST + 2);
+    const result = run();
+    assert.equal(result.ok, false);
+    const check = failed(result, 'hash_list_merkle');
+    assert.equal(check?.ok, false);
+    assert.ok(
+      check?.failures?.some((f) => f.height === FIRST + 3),
+      'the block above the gap is reported, not skipped',
+    );
+    assert.equal(result.merkleSkipped, 0, 'nothing was skipped away');
+  });
+
   it('catches a tampered hash_list_merkle', () => {
     db.prepare(
       'UPDATE stable_blocks SET hash_list_merkle = ? WHERE height = ?',
