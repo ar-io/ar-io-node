@@ -51,7 +51,7 @@ export interface ImportableBand {
 export interface ImportOutcome {
   id: string;
   heightRange: [number, number];
-  result: 'imported' | 'already_held' | 'refused';
+  result: 'imported' | 'refused';
   reason?: string;
   rows?: number;
   missingTransactions?: number;
@@ -760,6 +760,16 @@ export async function runImport({
   }
   const progress = readProgress(db);
   const { steps, skipped } = planImport(bands, progress);
+  if (progress.unfinished.length > 0) {
+    // An earlier run was interrupted. Its band is imported again over
+    // what it wrote, and anything it had reached above that band is
+    // rewritten with it, so say so rather than leaving an operator to
+    // wonder why the run starts below what `stable_blocks` holds.
+    log.warn('An earlier run left a band unfinished; importing it again', {
+      bands: progress.unfinished.map((b) => b.id),
+      fromHeight: progress.haveTo + 1,
+    });
+  }
   log.info('Planned an import', {
     bandsOnDisk: bands.length,
     toImport: steps.length,

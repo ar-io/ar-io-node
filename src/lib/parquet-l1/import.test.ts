@@ -44,17 +44,19 @@ function emptyCore(file: string): Sqlite.Database {
   return db;
 }
 
-/** The test logger, with every `info` it is given kept for assertions. */
+/** The test logger, with every `info` and `warn` kept for assertions. */
 function spyLog(): {
   log: Logger;
   lines: Array<[string, Record<string, unknown>]>;
 } {
   const lines: Array<[string, Record<string, unknown>]> = [];
   const spy = Object.create(log) as Logger;
-  spy.info = ((message: string, meta: Record<string, unknown>) => {
-    lines.push([message, meta ?? {}]);
-    return log.info(message, meta);
-  }) as Logger['info'];
+  for (const level of ['info', 'warn'] as const) {
+    spy[level] = ((message: string, meta: Record<string, unknown>) => {
+      lines.push([message, meta ?? {}]);
+      return log[level](message, meta);
+    }) as Logger[typeof level];
+  }
   return { log: spy, lines };
 }
 
@@ -760,12 +762,7 @@ describe('assertDiskSpace', () => {
   it('imports rather than refusing when free space cannot be read', async () => {
     const { log: spy, lines } = spyLog();
     await assertDiskSpace('/x/core.db', [rows(46_600_000)], {
-      log: Object.assign(spy, {
-        warn: ((m: string, meta: Record<string, unknown>) => {
-          lines.push([m, meta]);
-          return log.warn(m, meta);
-        }) as Logger['warn'],
-      }),
+      log: spy,
       statfs: async () => {
         throw new Error('ENOSYS');
       },
@@ -946,7 +943,17 @@ describe('runImport', () => {
 
     // Put the band back as published and run again.
     await fsp.writeFile(file, good);
-    const again = await runImport({ db, duck, bandsDir, log, batchRows: 9 });
+    const { log: spy, lines } = spyLog();
+    const again = await runImport({
+      db,
+      duck,
+      bandsDir,
+      log: spy,
+      batchRows: 9,
+    });
+    const warned = lines.find(([m]) => /left a band unfinished/.test(m));
+    assert.ok(warned, 'the run said an earlier one was interrupted');
+    assert.deepEqual(warned?.[1].bands, [path.basename(second)]);
     assert.ok(
       again.outcomes.some(
         (o) => o.heightRange[0] === FIRST + 10 && o.result === 'imported',
