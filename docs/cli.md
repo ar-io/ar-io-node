@@ -457,11 +457,27 @@ trusted block hash pins the total size of every transaction beneath it.
 | `--to` | Highest height to check. Defaults to the fork, or the highest held if lower |
 | `--anchor-from` | Comma-separated nodes to ask for the anchor block hashes. Omitted, nothing outside the index vouches for it |
 | `--anchor-min` | How many sources must answer per anchor height (default 2) |
+| `--skip-tx-root` | Leave out the `tx_root` recomputation, the one check that reads every transaction |
 
 An index reaching below the fork is checked up to the fork and no
 further: above it `tx_root` is the stronger proof, and reading on costs
 tens of millions of rows for nothing. An index starting above the fork is
 read whole. Measured: 422,251 blocks in **2.7 seconds**.
+
+**`tx_root`.** Above the 2.0 fork the command recomputes each block's
+`tx_root` from its transactions, proving their data roots, sizes and
+positions. It does **not** prove their ids: Arweave drops the id before
+building the tree, so an id reaches `tx_root` only through the sort
+order. A block holding a format-1 transaction with data is counted out,
+because that leaf is the root of data an index does not store — those
+are [`index-l1-audit`](#index-l1-audit)'s job.
+
+This is the only check that reads every transaction rather than a sum
+over them, and it dominates the cost: on the whole chain it is about 40
+minutes against three and a half for everything else. `--skip-tx-root`
+leaves it out for a quick pass, and the result reports
+`streamedPassSeconds` beside `seconds` so the two are visible
+separately.
 
 **The chain binding.** `hash_list_merkle` is a running commitment to every
 block hash below it, and the command rebuilds that recurrence the whole
@@ -514,10 +530,13 @@ anchored — so **a whole-chain run shows `anchored: false` by design**,
 and it is the default range that carries the anchored accounting.
 
 Measured over the whole chain on 2026-10-06 (2,014,816 blocks, a 118.80 GB
-`core.db`, 4 independent Arweave nodes): every height present and linked,
-2,014,814 `hash_list_merkle` comparisons with one skip (the 2.0 seed), and
-the accounting identity holding on 812,969 blocks with 1,201,846 past the
-threshold. 2 minutes 27 seconds. The boundary falls at height 812,969,
+`core.db`, anchored against a raw Arweave node and two public peers):
+every height present and linked, 2,014,814 `hash_list_merkle` comparisons
+with one skip (the 2.0 seed), the accounting identity holding on 812,969
+blocks with 1,201,846 past the threshold, and **1,383,754 blocks'
+transaction sets reproducing the `tx_root` they carry** with 208,812
+counted out for `index-l1-audit`. 44 minutes, of which 3.5 is everything
+but `tx_root`. The boundary falls at height 812,969,
 which is fork 2.5 — the fork that introduced the strict data split, so
 scoping by weave offset lands exactly where the protocol changed.
 
@@ -541,6 +560,7 @@ scoping by weave offset lands exactly where the protocol changed.
     { "name": "contiguous", "ok": true, "detail": "..." },
     { "name": "linked", "ok": true, "detail": "..." },
     { "name": "hash_list_merkle", "ok": true, "detail": "..." },
+    { "name": "tx_root", "ok": true, "detail": "..." },
     { "name": "anchor_hash", "ok": true, "detail": "422249: 3 sources agree; ..." },
     { "name": "block_size", "ok": true, "detail": "..." },
     { "name": "weave_accounting", "ok": true, "detail": "..." },

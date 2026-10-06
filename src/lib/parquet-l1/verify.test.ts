@@ -15,6 +15,7 @@ import { buildCoreDb } from '../../../test/parquet-l1-core-db.js';
 import {
   anchorHeights,
   checkAnchors,
+  checkTxRoots,
   chooseRange,
   FORK_2_0_HEIGHT,
   MAX_FAILURES_REPORTED,
@@ -369,6 +370,80 @@ describe('verifyRange above the strict data split', () => {
     const result = verifyRange(db, { from: 1_899_999, to: 1_900_009 });
     assert.equal(result.ok, false);
     assert.equal(failed(result, 'block_size')?.failures?.[0].height, 1_900_005);
+  });
+});
+
+describe('checkTxRoots', () => {
+  let dir: string;
+  let db: Sqlite.Database;
+  const FIRST = 1_900_000;
+
+  beforeEach(async () => {
+    dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'parquet-l1-txroot-'));
+    const file = path.join(dir, 'core.db');
+    await buildCoreDb(file, FIRST, 10);
+    db = new Sqlite(file);
+  });
+  afterEach(async () => {
+    db?.close();
+    await fsp.rm(dir, { recursive: true, force: true });
+  });
+
+  const run = () =>
+    checkTxRoots(db, { from: FIRST - 1, to: FIRST + 9, forkHeight: 0 });
+
+  it("recomputes every block's tx_root from its transactions", async () => {
+    // The gap this closes: the band builder checked tx_root, the
+    // verifier never did, so an imported core.db had the strongest
+    // per-block proof available to it left unused.
+    const { check, checked, skipped } = await run();
+    assert.equal(check.ok, true);
+    assert.equal(skipped, 0);
+    assert.ok(checked > 0);
+    assert.match(check.detail, /reproduce the tx_root they carry/);
+  });
+
+  it('catches a block whose transactions do not reproduce its tx_root', async () => {
+    db.prepare('UPDATE stable_blocks SET tx_root = ? WHERE height = ?').run(
+      Buffer.alloc(32, 5),
+      FIRST + 3,
+    );
+    const { check } = await run();
+    assert.equal(check.ok, false);
+    assert.equal(check.failures?.[0].height, FIRST + 3);
+  });
+
+  it('catches a transaction removed from a block', async () => {
+    db.prepare(
+      'DELETE FROM stable_transactions WHERE height = ? AND block_transaction_index = 0',
+    ).run(FIRST + 2);
+    const { check } = await run();
+    assert.equal(check.ok, false);
+    assert.equal(check.failures?.[0].height, FIRST + 2);
+  });
+
+  it('counts out a block holding a format-1 transaction with data', async () => {
+    // Its leaf is the root of that data, which an index does not store,
+    // so it is index-l1-audit's job and not a failure here.
+    db.prepare(
+      'UPDATE stable_transactions SET format = 1 WHERE height = ? AND block_transaction_index = 0',
+    ).run(FIRST + 5);
+    const { check, skipped } = await run();
+    assert.equal(skipped, 1);
+    assert.equal(check.ok, true, 'skipped, not failed');
+    assert.match(check.detail, /needs index-l1-audit/);
+  });
+
+  it('does nothing below the fork, where tx_root does not exist', async () => {
+    // With the real fork height, a range under it has nothing to check.
+    const { check, checked, skipped } = await checkTxRoots(db, {
+      from: 100,
+      to: 200,
+    });
+    assert.equal(checked, 0);
+    assert.equal(skipped, 0);
+    assert.equal(check.ok, true);
+    assert.match(check.detail, /above the 2\.0 fork/);
   });
 });
 

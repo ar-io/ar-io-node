@@ -18,6 +18,7 @@ import {
   AnchorAnswer,
   anchorHeights,
   checkAnchors,
+  checkTxRoots,
   chooseRange,
   stableHeightRange,
   verifyRange,
@@ -119,6 +120,23 @@ export async function indexL1VerifyCLICommand(
     log.info('Checking the L1 index', { coreDb, from, to });
     const result = verifyRange(db, { from, to });
 
+    // Separate because it is the only check that reads every
+    // transaction rather than a sum over them, so it costs minutes
+    // where the rest cost seconds. Skipped on request for a quick pass.
+    let txRoots = { checked: 0, skipped: 0, seconds: 0 };
+    if (options.skipTxRoot !== true) {
+      const began = Date.now();
+      const out = await checkTxRoots(db, { from, to });
+      result.checks.push(out.check);
+      result.ok = result.ok && out.check.ok;
+      txRoots = {
+        checked: out.checked,
+        skipped: out.skipped,
+        seconds: (Date.now() - began) / 1000,
+      };
+      log.info('Recomputed tx_root', txRoots);
+    }
+
     // Everything above is the index agreeing with itself. This is the
     // only part that asks anyone else, and it is what turns the chain
     // binding into a statement about the real Arweave chain.
@@ -177,6 +195,9 @@ export async function indexL1VerifyCLICommand(
       ...(result.weaveSize !== undefined
         ? { weaveSize: result.weaveSize, accountedFor: result.accountedFor }
         : {}),
+      txRootChecked: txRoots.checked,
+      txRootSkipped: txRoots.skipped,
+      txRootSeconds: Math.round(txRoots.seconds * 10) / 10,
       merkleChecked: result.merkleChecked,
       merkleSkipped: result.merkleSkipped,
       accountingChecked: result.accountingChecked,
@@ -207,7 +228,11 @@ export async function indexL1VerifyCLICommand(
           : {}),
         ...(c.more !== undefined ? { more: c.more } : {}),
       })),
-      seconds: Math.round(result.seconds * 10) / 10,
+      // Everything, not just the streamed pass: tx_root runs outside
+      // `verifyRange`'s own timer and dominates a whole-chain run, so
+      // reporting that pass alone understated the cost tenfold.
+      seconds: Math.round((result.seconds + txRoots.seconds) * 10) / 10,
+      streamedPassSeconds: Math.round(result.seconds * 10) / 10,
     };
     // A failed check has to fail the command. `runCommand` prints a
     // thrown result on stderr and exits 1; returning it would print the

@@ -62,6 +62,7 @@ export interface IndexL1ImportCLIOptions extends GlobalCLIOptions {
 
 export interface IndexL1VerifyCLIOptions extends GlobalCLIOptions {
   coreDb?: string;
+  skipTxRoot?: boolean;
   from?: string;
   to?: string;
   anchorFrom?: string;

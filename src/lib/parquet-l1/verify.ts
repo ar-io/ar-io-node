@@ -51,6 +51,8 @@ import Sqlite from 'better-sqlite3';
 
 import {
   ChainBlock,
+  ChainTransaction,
+  checkTxRoot,
   expectedHashListMerkle,
   foldSeed,
   PREDECESSOR_HAS_NO_MERKLE,
@@ -526,4 +528,104 @@ export function verifyRange(
   }
   result.seconds = (Date.now() - started) / 1000;
   return result;
+}
+
+/**
+ * Recomputes `tx_root` for every block in range that holds enough to do
+ * it, proving each transaction's data root, size and position.
+ *
+ * Kept apart from {@link verifyRange} for two reasons. It is the only
+ * check that has to read every transaction rather than a sum over them,
+ * so it costs minutes where the rest cost seconds. And it is async,
+ * where the rest are a single streamed pass.
+ *
+ * Two kinds of block are counted out rather than failed:
+ *
+ * - below the 2.0 fork, where `tx_root` does not exist;
+ * - holding a format-1 transaction with data, whose leaf is the root of
+ *   that data — which an index does not store. Those need the data
+ *   fetched, which is `index-l1-audit`'s job.
+ *
+ * What this does **not** prove is the transactions' ids: Arweave drops
+ * the id before building the tree, so an id reaches `tx_root` only
+ * through the sort order.
+ */
+export async function checkTxRoots(
+  db: Sqlite.Database,
+  {
+    from,
+    to,
+    forkHeight = FORK_2_0_HEIGHT,
+  }: { from: number; to: number; forkHeight?: number },
+): Promise<{ check: VerifyCheck; checked: number; skipped: number }> {
+  const check: VerifyCheck = { name: 'tx_root', ok: true, detail: '' };
+  let checked = 0;
+  let skipped = 0;
+  const low = Math.max(from, forkHeight);
+  if (to < low) {
+    check.detail =
+      'no block in this range is above the 2.0 fork, where tx_root begins';
+    return { check, checked, skipped };
+  }
+
+  const roots = db
+    .prepare(
+      'SELECT height, tx_root FROM stable_blocks WHERE height BETWEEN ? AND ? ORDER BY height',
+    )
+    .iterate(low, to) as IterableIterator<{
+    height: number;
+    tx_root: Buffer | null;
+  }>;
+  // One pass over the transactions, in block order, so a block's rows
+  // are complete the moment the height moves on.
+  const rows = db
+    .prepare(
+      `SELECT height, id, format, data_size, data_root FROM stable_transactions
+       WHERE height BETWEEN ? AND ? ORDER BY height, block_transaction_index`,
+    )
+    .iterate(low, to) as IterableIterator<{
+    height: number;
+    id: Buffer;
+    format: number;
+    data_size: number | null;
+    data_root: Buffer | null;
+  }>;
+
+  let pending = rows.next();
+  for (const block of roots) {
+    const txs: ChainTransaction[] = [];
+    while (!pending.done && pending.value.height < block.height) {
+      pending = rows.next();
+    }
+    while (!pending.done && pending.value.height === block.height) {
+      txs.push({
+        id: pending.value.id,
+        format: pending.value.format,
+        data_size: Number(pending.value.data_size ?? 0),
+        data_root: pending.value.data_root,
+      });
+      pending = rows.next();
+    }
+    const ok = await checkTxRoot(
+      { height: block.height, tx_root: block.tx_root },
+      txs,
+    );
+    if (ok === undefined) {
+      skipped += 1;
+      continue;
+    }
+    checked += 1;
+    if (!ok) {
+      add(check, {
+        height: block.height,
+        found: `${txs.length} transactions that do not reproduce it`,
+        expected: block.tx_root?.toString('base64url') ?? 'empty',
+      });
+    }
+  }
+  check.detail =
+    checked === 0
+      ? `no block between ${low} and ${to} could have its tx_root recomputed`
+      : `${checked} blocks' transaction sets reproduce the tx_root they carry; ${skipped} hold a format-1 transaction with data, which needs index-l1-audit`;
+  return { check, checked, skipped };
 }

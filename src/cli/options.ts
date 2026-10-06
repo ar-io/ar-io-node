@@ -108,6 +108,11 @@ export const optionMap = {
     description:
       'Highest block height to check. For an index reaching below the 2.0 fork, defaults to the fork (422250) or the highest held if lower; for one starting at or above it, to the highest held',
   },
+  skipTxRoot: {
+    alias: '--skip-tx-root',
+    description:
+      'Leave out the tx_root recomputation, the one check that reads every transaction. Everything else is seconds; this is minutes over a whole chain',
+  },
   dataFrom: {
     alias: '--data-from <url>',
     description:
@@ -209,6 +214,7 @@ export const indexL1ImportOptions: CommanderOption[] = [
 
 export const indexL1VerifyOptions: CommanderOption[] = [
   optionMap.coreDbReadOnly,
+  optionMap.skipTxRoot,
   optionMap.fromHeight,
   optionMap.toHeight,
   optionMap.anchorFrom,
