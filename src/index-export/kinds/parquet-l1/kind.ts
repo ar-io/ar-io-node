@@ -36,9 +36,8 @@ import {
   L1_SUB_SPAN,
   l1RangeOf,
   l1SubRangeOf,
-  MAX_BAND_FILE_BYTES,
-  parseBandFile,
   ParquetL1Band,
+  readBandDirectory,
 } from '../../../lib/parquet-l1/layout.js';
 import * as metrics from '../../metrics.js';
 import {
@@ -94,27 +93,13 @@ export async function deriveL1Bands(
   publisher: string,
 ): Promise<L1PublishedBand[]> {
   const tag = bandPublisherTag(publisher);
-  const all: L1PublishedBand[] = [];
-  for (const name of await fs.readdir(publishDir).catch(() => [] as string[])) {
-    if (name.startsWith('.')) continue;
-    const dir = path.join(publishDir, name);
-    const file = path.join(dir, BAND_FILE);
-    const stat = await fs.stat(file).catch(() => undefined);
-    if (stat === undefined || stat.size > MAX_BAND_FILE_BYTES) continue;
-    let band: ParquetL1Band;
-    try {
-      band = parseBandFile(await fs.readFile(file, 'utf8'));
-    } catch {
-      continue;
-    }
-    all.push({
-      id: name,
-      dir,
-      from: band.heightRange[0],
-      to: band.heightRange[1],
-      band,
-    });
-  }
+  const all: L1PublishedBand[] = (await readBandDirectory(publishDir)).map(
+    (found) => ({
+      ...found,
+      from: found.band.heightRange[0],
+      to: found.band.heightRange[1],
+    }),
+  );
   const superseded = supersededBands(
     all.map(({ id, band }) => ({
       id,

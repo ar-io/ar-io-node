@@ -310,3 +310,45 @@ export function bandTablesDigest(band: ParquetL1Band): Buffer {
     )
     .digest();
 }
+
+/** A band directory that could be read: its name, its path, and its description. */
+export interface BandOnDisk {
+  id: string;
+  dir: string;
+  band: ParquetL1Band;
+}
+
+/**
+ * Every band of a directory whose `band.json` could be read.
+ *
+ * Shared by the publisher's view of what it has published and the
+ * importer's view of what it may import, so the two cannot drift on what
+ * counts as readable. A directory is passed over — never thrown on —
+ * when it has no description, when the description is bigger than a
+ * description should be, or when it does not parse: the directory holds
+ * whatever a publisher and a subscriber left there, and one unreadable
+ * band must not stop the rest being used.
+ *
+ * Callers add their own rules on top: the importer checks the name
+ * against the heights inside, the publisher filters by publisher tag.
+ */
+export async function readBandDirectory(dir: string): Promise<BandOnDisk[]> {
+  const fs = await import('node:fs/promises');
+  const path = await import('node:path');
+  const found: BandOnDisk[] = [];
+  for (const name of await fs.readdir(dir).catch(() => [] as string[])) {
+    if (name.startsWith('.')) continue;
+    const bandDir = path.join(dir, name);
+    const file = path.join(bandDir, BAND_FILE);
+    const stat = await fs.stat(file).catch(() => undefined);
+    if (stat === undefined || stat.size > MAX_BAND_FILE_BYTES) continue;
+    let band: ParquetL1Band;
+    try {
+      band = parseBandFile(await fs.readFile(file, 'utf8'));
+    } catch {
+      continue;
+    }
+    found.push({ id: name, dir: bandDir, band });
+  }
+  return found;
+}

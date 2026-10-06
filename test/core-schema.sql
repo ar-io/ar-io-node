@@ -206,3 +206,16 @@ CREATE INDEX stable_blocks_weave_size_idx ON stable_blocks (weave_size);
 CREATE INDEX new_blocks_weave_size_idx ON new_blocks (weave_size);
 CREATE INDEX stable_blocks_block_timestamp_idx
   ON stable_blocks (block_timestamp);
+CREATE TABLE parquet_l1_imports (
+  band_id TEXT PRIMARY KEY,
+  height_from INTEGER NOT NULL,
+  height_to INTEGER NOT NULL,
+  -- Digest of the band's per-table row digests: the same band rebuilt with
+  -- different rows is a different import.
+  band_digest BLOB NOT NULL,
+  rows_imported INTEGER,
+  started_at INTEGER NOT NULL,
+  completed_at INTEGER
+);
+CREATE INDEX parquet_l1_imports_height_from_idx
+  ON parquet_l1_imports (height_from);

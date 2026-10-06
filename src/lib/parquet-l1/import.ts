@@ -33,10 +33,9 @@ import { Logger } from 'winston';
 import {
   BAND_FILE,
   bandTablesDigest,
-  MAX_BAND_FILE_BYTES,
   PARQUET_L1_TABLES,
   ParquetL1Band,
-  parseBandFile,
+  readBandDirectory,
   TableSpec,
 } from './layout.js';
 import { IMPORT_ORDER, readTable } from './read.js';
@@ -122,23 +121,12 @@ export function idHeightRange(id: string): [number, number] | undefined {
  */
 export async function readBands(dir: string): Promise<ImportableBand[]> {
   const bands: ImportableBand[] = [];
-  for (const name of await fs.readdir(dir).catch(() => [] as string[])) {
-    if (name.startsWith('.')) continue;
-    const named = idHeightRange(name);
+  for (const found of await readBandDirectory(dir)) {
+    const named = idHeightRange(found.id);
     if (named === undefined) continue;
-    const bandDir = path.join(dir, name);
-    const file = path.join(bandDir, BAND_FILE);
-    const stat = await fs.stat(file).catch(() => undefined);
-    if (stat === undefined || stat.size > MAX_BAND_FILE_BYTES) continue;
-    let band: ParquetL1Band;
-    try {
-      band = parseBandFile(await fs.readFile(file, 'utf8'));
-    } catch {
-      continue;
-    }
-    const [from, to] = band.heightRange;
+    const [from, to] = found.band.heightRange;
     if (from !== named[0] || to !== named[1]) continue;
-    bands.push({ id: name, dir: bandDir, band });
+    bands.push(found);
   }
   return bands.sort(
     (a, b) =>
