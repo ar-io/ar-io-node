@@ -28,20 +28,10 @@
  */
 import type { Database } from 'duckdb-async';
 
-import {
-  ChainTransaction,
-  checkTxRoot,
-  expectedHashListMerkle,
-  foldSeed,
-  PREDECESSOR_HAS_NO_MERKLE,
-} from './chain.js';
+import { ChainTransaction, checkTxRoot } from './chain.js';
 import { ParquetL1Band, readBandDirectory } from './layout.js';
-import {
-  addFailure,
-  FORK_2_0_HEIGHT,
-  STRICT_DATA_SPLIT_THRESHOLD,
-  VerifyCheck,
-} from './verify.js';
+import { BlockWalker, CheckedBlock } from './verify-steps.js';
+import { addFailure, FORK_2_0_HEIGHT, VerifyCheck } from './verify.js';
 
 export class BandsRefused extends Error {}
 
@@ -63,16 +53,6 @@ export interface BandsVerifyResult {
 
 /** Heights read per query, so one window's rows are not all held at once. */
 export const WINDOW = 10_000;
-
-interface BlockRow {
-  height: number;
-  indep_hash: Buffer;
-  previous_block: Buffer | null;
-  block_size: number;
-  weave_size: number;
-  tx_root: Buffer | null;
-  hash_list_merkle: Buffer | null;
-}
 
 const asBuffer = (value: unknown): Buffer | null =>
   value === null || value === undefined
@@ -165,42 +145,10 @@ export async function verifyBands(
        ORDER BY height, block_transaction_index`,
     )) as Array<Record<string, unknown>>;
 
-  const contiguous: VerifyCheck = {
-    name: 'contiguous',
-    ok: true,
-    detail: 'every height the bands cover is present, exactly once',
-  };
-  const linked: VerifyCheck = {
-    name: 'linked',
-    ok: true,
-    detail: "each block's previous_block is the hash of the block below it",
-  };
-  const merkle: VerifyCheck = {
-    name: 'hash_list_merkle',
-    ok: true,
-    detail: '',
-  };
-  const sizes: VerifyCheck = {
-    name: 'block_size',
-    ok: true,
-    detail: "each block's block_size is how much it grew the weave",
-  };
-  const accounting: VerifyCheck = {
-    name: 'weave_accounting',
-    ok: true,
-    detail: '',
-  };
   const roots: VerifyCheck = { name: 'tx_root', ok: true, detail: '' };
-
-  let previous: BlockRow | undefined;
-  let seen = 0;
-  let merkleChecked = 0;
-  let merkleSkipped = 0;
-  let accChecked = 0;
-  let accSkipped = 0;
+  const walker = new BlockWalker(low, high);
   let rootsChecked = 0;
   let rootsSkipped = 0;
-  let seedFold: Buffer | undefined = low === 0 ? Buffer.alloc(0) : undefined;
 
   for (let at = low; at <= high; at += window) {
     const end = Math.min(high, at + window - 1);
@@ -208,8 +156,6 @@ export async function verifyBands(
     // Grouped as they arrive, so a block's transactions are to hand
     // without a second query per height.
     const byHeight = new Map<number, ChainTransaction[]>();
-    // Always read: the weave accounting needs the sizes even when
-    // `tx_root` is not being recomputed.
     for (const row of await txsOf(at, end)) {
       const height = Number(row.height);
       const list = byHeight.get(height) ?? [];
@@ -223,93 +169,22 @@ export async function verifyBands(
     }
 
     for (const raw of blocks) {
-      const block: BlockRow = {
+      const block: CheckedBlock = {
         height: Number(raw.height),
-        indep_hash: asBuffer(raw.indep_hash) as Buffer,
+        indep_hash: asBuffer(raw.indep_hash),
         previous_block: asBuffer(raw.previous_block),
         block_size: Number(raw.block_size),
         weave_size: Number(raw.weave_size),
         tx_root: asBuffer(raw.tx_root),
         hash_list_merkle: asBuffer(raw.hash_list_merkle),
       };
-      seen += 1;
       const txs = byHeight.get(block.height) ?? [];
-
-      if (previous === undefined) {
-        if (block.height !== low) {
-          addFailure(contiguous, {
-            height: low,
-            found: `the range starts at ${block.height}`,
-            expected: `${low}`,
-          });
-        }
-      } else if (block.height !== previous.height + 1) {
-        addFailure(contiguous, {
-          height: previous.height + 1,
-          found: `the next block is ${block.height}`,
-          expected: `${previous.height + 1}`,
-        });
-        previous = block;
-        seedFold = foldSeed(seedFold, block);
-        continue;
-      } else {
-        if (
-          block.previous_block === null ||
-          !block.previous_block.equals(previous.indep_hash)
-        ) {
-          addFailure(linked, {
-            height: block.height,
-            found: block.previous_block?.toString('base64url') ?? 'null',
-            expected: previous.indep_hash.toString('base64url'),
-          });
-        }
-        const want = expectedHashListMerkle(block.height, previous, seedFold);
-        if (want === PREDECESSOR_HAS_NO_MERKLE) {
-          merkleChecked += 1;
-          addFailure(merkle, {
-            height: block.height,
-            found: 'the block below carries no hash_list_merkle',
-            expected: 'every block above the 1.6 fork has one',
-          });
-        } else if (want === undefined) {
-          merkleSkipped += 1;
-        } else {
-          merkleChecked += 1;
-          const got = block.hash_list_merkle;
-          const ok =
-            want === null
-              ? got === null || got.length === 0
-              : got !== null && want.equals(got);
-          if (!ok) {
-            addFailure(merkle, {
-              height: block.height,
-              found: got === null ? 'null' : got.toString('base64url'),
-              expected: want === null ? 'empty' : want.toString('base64url'),
-            });
-          }
-        }
-        const grew = block.weave_size - previous.weave_size;
-        if (grew !== block.block_size) {
-          addFailure(sizes, {
-            height: block.height,
-            found: `block_size ${block.block_size}`,
-            expected: `weave grew by ${grew}`,
-          });
-        }
-        if (block.weave_size <= STRICT_DATA_SPLIT_THRESHOLD) {
-          accChecked += 1;
-          const total = txs.reduce((sum, tx) => sum + Number(tx.data_size), 0);
-          if (grew !== total) {
-            addFailure(accounting, {
-              height: block.height,
-              found: `transactions total ${total}`,
-              expected: `weave grew by ${grew}`,
-            });
-          }
-        } else {
-          accSkipped += 1;
-        }
-      }
+      // The same judgement the core.db verifier makes, from the same
+      // code: only the reading differs between the two.
+      walker.step(
+        block,
+        txs.reduce((sum, tx) => sum + Number(tx.data_size), 0),
+      );
 
       if (txRoot && block.height >= FORK_2_0_HEIGHT) {
         const ok = await checkTxRoot(
@@ -329,37 +204,18 @@ export async function verifyBands(
           }
         }
       }
-
-      seedFold = foldSeed(seedFold, block);
-      previous = block;
     }
   }
 
-  const expected = high - low + 1;
-  if (seen !== expected) {
-    addFailure(contiguous, {
-      height: high,
-      found: `${seen} blocks`,
-      expected: `${expected}`,
-    });
-  }
-
-  merkle.detail =
-    merkleChecked === 0
-      ? 'no block in this range has a rebuildable hash_list_merkle'
-      : `${merkleChecked} blocks commit to every block hash below them; ${merkleSkipped} are seeds or below the 1.6 fork`;
-  accounting.detail =
-    accSkipped === 0
-      ? "each block grew the weave by exactly its transactions' data_size"
-      : `${accChecked} blocks grew the weave by exactly their transactions' data_size; ${accSkipped} are past the padding threshold, where that no longer holds`;
+  const { checks, totals } = walker.finish();
+  // `walker.finish()` already worded the five it owns.
   roots.detail = !txRoot
     ? 'not checked'
     : rootsChecked === 0
       ? 'no block in this range could have its tx_root recomputed'
       : `${rootsChecked} blocks' transaction sets reproduce the tx_root they carry; ${rootsSkipped} hold a format-1 transaction with data, which needs index-l1-audit`;
-
-  const checks = [contiguous, linked, merkle, sizes, accounting];
   if (txRoot) checks.push(roots);
+
   return {
     bandsDir,
     bands: ordered.map((b) => ({
@@ -367,14 +223,14 @@ export async function verifyBands(
       heightRange: [b.from, b.to] as [number, number],
     })),
     heightRange: [low, high],
-    blocks: seen,
+    blocks: totals.blocks,
     checks,
     txRootChecked: rootsChecked,
     txRootSkipped: rootsSkipped,
-    merkleChecked,
-    merkleSkipped,
-    accountingChecked: accChecked,
-    accountingSkipped: accSkipped,
+    merkleChecked: totals.merkleChecked,
+    merkleSkipped: totals.merkleSkipped,
+    accountingChecked: totals.accountingChecked,
+    accountingSkipped: totals.accountingSkipped,
     ok: checks.every((c) => c.ok),
     seconds: (Date.now() - started) / 1000,
   };

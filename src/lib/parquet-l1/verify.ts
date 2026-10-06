@@ -49,14 +49,9 @@
  */
 import Sqlite from 'better-sqlite3';
 
-import {
-  ChainBlock,
-  ChainTransaction,
-  checkTxRoot,
-  expectedHashListMerkle,
-  foldSeed,
-  PREDECESSOR_HAS_NO_MERKLE,
-} from './chain.js';
+import { BlockWalker, CheckedBlock } from './verify-steps.js';
+
+import { ChainTransaction, checkTxRoot } from './chain.js';
 
 /** The first post-2.0 block. Its segment commits its own `weave_size`. */
 export const FORK_2_0_HEIGHT = 422_250;
@@ -204,16 +199,6 @@ export function checkAnchors(
   return check;
 }
 
-interface BlockRow {
-  height: number;
-  indep_hash: Buffer | null;
-  previous_block: Buffer | null;
-  block_size: number;
-  weave_size: number;
-  tx_root: Buffer | null;
-  hash_list_merkle: Buffer | null;
-}
-
 /** The heights a `core.db` holds, or `undefined` when it holds none. */
 export function stableHeightRange(
   db: Sqlite.Database,
@@ -299,58 +284,30 @@ export function verifyRange(
     );
   }
 
-  const contiguous: VerifyCheck = {
-    name: 'contiguous',
-    ok: true,
-    detail: 'every height in the range is present, exactly once',
-  };
-  const linked: VerifyCheck = {
-    name: 'linked',
-    ok: true,
-    detail: "each block's previous_block is the hash of the block below it",
-  };
-  const sizes: VerifyCheck = {
-    name: 'block_size',
-    ok: true,
-    detail: "each block's block_size is how much it grew the weave",
-  };
-  const accounting: VerifyCheck = {
-    name: 'weave_accounting',
-    ok: true,
-    detail: '',
-  };
-  const merkle: VerifyCheck = {
-    name: 'hash_list_merkle',
-    ok: true,
-    detail: '',
-  };
-
   // height is `INTEGER PRIMARY KEY`, so this is a rowid range scan, and
-  // the transaction sums come off (height, block_transaction_index). Both
-  // arrive in height order, so they merge in one pass and nothing larger
-  // than a row is held.
+  // the transaction sums come off (height, block_transaction_index).
+  // Both arrive in height order, so they merge in one pass and nothing
+  // larger than a row is held.
   const blocks = db
     .prepare(
       `SELECT height, indep_hash, previous_block, block_size, weave_size,
               tx_root, hash_list_merkle
        FROM stable_blocks WHERE height BETWEEN ? AND ? ORDER BY height`,
     )
-    .iterate(from, to) as IterableIterator<BlockRow>;
+    .iterate(from, to) as IterableIterator<CheckedBlock>;
   const sums = db
     .prepare(
       `SELECT height, SUM(data_size) AS total FROM stable_transactions
        WHERE height BETWEEN ? AND ? GROUP BY height ORDER BY height`,
     )
-    // `from + 1` only saves reading a row: the merge skips anything
-    // below the first block it compares anyway, and the first block of
-    // the range is never compared.
+    // `from + 1` only saves reading a row: the walker never counts the
+    // first block of the range, whose weave is where the sum starts.
     .iterate(from + 1, to) as IterableIterator<{
     height: number;
     total: number | null;
   }>;
 
   let pending = sums.next();
-  /** The transactions' data_size at a height, 0 where it holds none. */
   const txBytesAt = (height: number): number => {
     while (!pending.done && pending.value.height < height) {
       pending = sums.next();
@@ -361,152 +318,26 @@ export function verifyRange(
     return total;
   };
 
-  let previous: BlockRow | undefined;
-  let seen = 0;
-  let accounted = 0;
-  let checked = 0;
-  let skipped = 0;
-  let merkleChecked = 0;
-  let merkleSkipped = 0;
-  // The 1.6 seed folds every hash from height 0, so only a run starting
-  // there can rebuild it.
-  let seedFold: Buffer | undefined = from === 0 ? Buffer.alloc(0) : undefined;
-  let base: number | undefined;
-  for (const block of blocks) {
-    seen += 1;
-    if (previous === undefined) {
-      if (block.height !== from) {
-        addFailure(contiguous, {
-          height: from,
-          found: `the range starts at ${block.height}`,
-          expected: `${from}`,
-        });
-      }
-      base = block.weave_size;
-      seedFold = foldSeed(seedFold, block as unknown as ChainBlock);
-      previous = block;
-      continue;
-    }
-    if (block.height !== previous.height + 1) {
-      addFailure(contiguous, {
-        height: previous.height + 1,
-        found: `the next block is ${block.height}`,
-        expected: `${previous.height + 1}`,
-      });
-      // Nothing below can be judged across a hole: the weave difference
-      // would span the missing blocks and read as a mismatch everywhere
-      // after it, burying the gap that caused it.
-      previous = block;
-      continue;
-    }
-    if (
-      previous.indep_hash === null ||
-      block.previous_block === null ||
-      !block.previous_block.equals(previous.indep_hash)
-    ) {
-      addFailure(linked, {
-        height: block.height,
-        found: block.previous_block?.toString('base64url') ?? 'null',
-        expected: previous.indep_hash?.toString('base64url') ?? 'null',
-      });
-    }
-    // `hash_list_merkle` is a running commitment to every block hash
-    // below, so checking the recurrence the whole way means one trusted
-    // hash at the top pins every `indep_hash` under it. Without it, the
-    // chain is only as good as `previous_block`, which an index that
-    // made the whole thing up would satisfy just as well.
-    const want = expectedHashListMerkle(
-      block.height,
-      previous as unknown as ChainBlock,
-      seedFold,
-    );
-    if (want === PREDECESSOR_HAS_NO_MERKLE) {
-      merkleChecked += 1;
-      addFailure(merkle, {
-        height: block.height,
-        found: 'the block below carries no hash_list_merkle',
-        expected: 'every block above the 1.6 fork has one',
-      });
-    } else if (want === undefined) {
-      merkleSkipped += 1;
-    } else {
-      merkleChecked += 1;
-      const got = block.hash_list_merkle;
-      const ok =
-        want === null
-          ? got === null || got.length === 0
-          : got !== null && want.equals(got);
-      if (!ok) {
-        addFailure(merkle, {
-          height: block.height,
-          found: got === null ? 'null' : got.toString('base64url'),
-          expected: want === null ? 'empty' : want.toString('base64url'),
-        });
-      }
-    }
+  const walker = new BlockWalker(from, to);
+  for (const block of blocks) walker.step(block, txBytesAt(block.height));
+  const { checks, totals } = walker.finish();
 
-    const grew = block.weave_size - previous.weave_size;
-    if (grew !== block.block_size) {
-      addFailure(sizes, {
-        height: block.height,
-        found: `block_size ${block.block_size}`,
-        expected: `weave grew by ${grew}`,
-      });
-    }
-    const txBytes = txBytesAt(block.height);
-    if (block.weave_size <= STRICT_DATA_SPLIT_THRESHOLD) {
-      checked += 1;
-      accounted += txBytes;
-      if (grew !== txBytes) {
-        addFailure(accounting, {
-          height: block.height,
-          found: `transactions total ${txBytes}`,
-          expected: `weave grew by ${grew}`,
-        });
-      }
-    } else {
-      skipped += 1;
-    }
-    seedFold = foldSeed(seedFold, block as unknown as ChainBlock);
-    previous = block;
-  }
-
-  const expected = to - from + 1;
-  if (seen !== expected) {
-    addFailure(contiguous, {
-      height: to,
-      found: `${seen} blocks`,
-      expected: `${expected}`,
-    });
-  }
-
-  accounting.detail =
-    skipped === 0
-      ? "each block grew the weave by exactly its transactions' data_size"
-      : `${checked} blocks grew the weave by exactly their transactions' data_size; ${skipped} are past the padding threshold, where that no longer holds`;
-
-  merkle.detail =
-    merkleChecked === 0
-      ? 'no block in this range has a rebuildable hash_list_merkle'
-      : `${merkleChecked} blocks commit to every block hash below them; ${merkleSkipped} are seeds or below the 1.6 fork`;
-
-  const checks = [contiguous, linked, merkle, sizes, accounting];
   const result: VerifyResult = {
     heightRange: [from, to],
-    blocks: seen,
+    blocks: totals.blocks,
     // Anchored only when the top commits its own weave size AND nothing
     // in between was skipped: a gap in the accounting breaks the chain
     // of differences the anchor is supposed to pin.
-    anchored: to >= forkHeight && skipped === 0,
-    accountingChecked: checked,
-    accountingSkipped: skipped,
-    merkleChecked,
-    merkleSkipped,
+    anchored: to >= forkHeight && totals.accountingSkipped === 0,
+    accountingChecked: totals.accountingChecked,
+    accountingSkipped: totals.accountingSkipped,
+    merkleChecked: totals.merkleChecked,
+    merkleSkipped: totals.merkleSkipped,
     checks,
     ok: checks.every((c) => c.ok),
     seconds: 0,
   };
-  if (previous !== undefined && base !== undefined && skipped === 0) {
+  if (totals.blocks > 0 && totals.accountingSkipped === 0) {
     const total: VerifyCheck = {
       name: 'anchor',
       ok: true,
@@ -515,14 +346,13 @@ export function verifyRange(
           ? `weave_size at ${to} is committed by that block, and the range accounts for all of it`
           : `weave_size at ${to} is not committed by a post-2.0 block, so this only shows the range is self-consistent`,
     };
-    const weave = previous.weave_size - base;
-    result.weaveSize = String(weave);
-    result.accountedFor = String(accounted);
-    if (weave !== accounted) {
+    result.weaveSize = String(totals.weaveGrew);
+    result.accountedFor = String(totals.accountedFor);
+    if (totals.weaveGrew !== totals.accountedFor) {
       addFailure(total, {
         height: to,
-        found: `transactions account for ${accounted} bytes`,
-        expected: `the weave grew by ${weave}`,
+        found: `transactions account for ${totals.accountedFor} bytes`,
+        expected: `the weave grew by ${totals.weaveGrew}`,
       });
     }
     if (result.anchored) result.anchorHeight = to;
@@ -533,26 +363,6 @@ export function verifyRange(
   return result;
 }
 
-/**
- * Recomputes `tx_root` for every block in range that holds enough to do
- * it, proving each transaction's data root, size and position.
- *
- * Kept apart from {@link verifyRange} for two reasons. It is the only
- * check that has to read every transaction rather than a sum over them,
- * so it costs minutes where the rest cost seconds. And it is async,
- * where the rest are a single streamed pass.
- *
- * Two kinds of block are counted out rather than failed:
- *
- * - below the 2.0 fork, where `tx_root` does not exist;
- * - holding a format-1 transaction with data, whose leaf is the root of
- *   that data — which an index does not store. Those need the data
- *   fetched, which is `index-l1-audit`'s job.
- *
- * What this does **not** prove is the transactions' ids: Arweave drops
- * the id before building the tree, so an id reaches `tx_root` only
- * through the sort order.
- */
 export async function checkTxRoots(
   db: Sqlite.Database,
   {
