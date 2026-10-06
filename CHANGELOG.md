@@ -66,8 +66,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   (the full set is 111 GB) and reports the 95% upper bound on the error
   rate. The data source need not be trusted: wrong data can only cause a
   false alarm, never a false pass. Read-only. Measured on the full chain:
-  150 of 208,812 sampled, all matched, bounding the error rate at 2.0%.
-  See [docs/cli.md](docs/cli.md).
+  1000 of 208,812 sampled, all 1000 matched, bounding the error rate at
+  0.3%. See [docs/cli.md](docs/cli.md).
 
 - L1 index bands (`parquet-l1`): the Arweave base layer (blocks,
   transactions, tags in plaintext, owners) as Parquet, one fixed height
@@ -157,6 +157,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   Every other path on a sandbox host is unchanged.
 
 ### Fixed
+
+- A CLI result larger than the 64 KiB pipe buffer was truncated mid-token,
+  so stdout held JSON that would not parse. `process.exit` discards
+  whatever is still buffered and a write to a pipe is asynchronous, which
+  a file hid because those writes are synchronous — the shapes that broke
+  are the documented ones, `| jq` and `docker run`. The result is now
+  written in full before the process exits. Found by a 1000-block
+  `index-l1-audit`, and it applied to every command.
 
 - `tools/index-swarm-setup --engine-port` and `--public-host` did nothing
   without `--torrent`: moving an existing engine to another peer port printed

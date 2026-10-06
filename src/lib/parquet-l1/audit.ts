@@ -50,6 +50,13 @@ export const AUDIT_CONCURRENCY = 3;
 /** Blocks sampled when none is asked for. */
 export const DEFAULT_SAMPLE = 100;
 
+/**
+ * Matching blocks listed in the result. Every block that did *not* match
+ * is always listed, however many there are; the ones that did are the
+ * noise, and a thousand of them is 65 KB of JSON nobody reads.
+ */
+export const MAX_MATCHES_LISTED = 20;
+
 export class AuditRefused extends Error {}
 
 export interface AuditedBlock {

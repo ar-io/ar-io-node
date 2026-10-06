@@ -604,10 +604,12 @@ the `data` field of `/tx/{id}` and not the data route. `/raw/{id}` and
 `data_size` and a disagreement is reported as `unavailable`, so a bad
 source is never recorded as a bad index.
 
-**Measured** on the full chain (2026-10-06, 150 blocks sampled of 208,812,
-data from turbo-gateway.com): 150 matched, 0 mismatched, 0 unavailable,
-704 `data_root`s derived from 94.6 MB. With no mismatch in 150 samples the
-95% upper bound on the error rate is 2.0%.
+**Measured** on the full chain (2026-10-06, data from turbo-gateway.com):
+**1000 blocks sampled of 208,812, all 1000 matched**, 0 mismatched, 0
+unavailable, 546 MB fetched in 25 minutes. With no mismatch in 1000
+samples the 95% upper bound on the error rate is **0.3%**. An earlier
+150-block pass bounded it at 2.0%, so the cost of a tighter bound is
+roughly linear in the sample.
 
 ### `index-l1-audit` result
 
@@ -630,7 +632,10 @@ data from turbo-gateway.com): 150 matched, 0 mismatched, 0 unavailable,
 ```
 
 `population` is how many blocks in range the index cannot check alone, and
-`sampled` how many of them were. A block's `result` is `match`, `mismatch`
+`sampled` how many of them were. `blocks` lists **every** block that did
+not match, and at most 20 that did (`matchesListed`), because the counts
+carry the result and a thousand matches is tens of kilobytes nobody
+reads. A block's `result` is `match`, `mismatch`
 or `unavailable` (with a `reason`); only the first two count toward the
 rate. `errorRateUpperBound95` appears when nothing mismatched — it is the
 rule of three, `3/n`, and says how little a clean sample rules out.
@@ -648,7 +653,7 @@ script or an agent can drive it without parsing prose.
 | | Success | Failure |
 | --- | --- | --- |
 | Exit code | `0` | `1` (`130` when interrupted with Ctrl-C) |
-| stdout | Exactly one JSON value, the command's result | Empty |
+| stdout | Exactly one JSON value, the command's result, written in full before the process exits | Empty |
 | stderr | Log lines (`info:`, `warn:`) only | Log lines, then either one line of error text, or (for a band refused by the header check, or a failed verify) the result as JSON |
 
 - **Read stdout, branch on the exit code.** Never parse stderr for success;

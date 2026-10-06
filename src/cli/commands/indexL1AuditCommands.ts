@@ -19,6 +19,7 @@ import { Logger } from 'winston';
 import {
   AuditRefused,
   DEFAULT_SAMPLE,
+  MAX_MATCHES_LISTED,
   runAudit,
 } from '../../lib/parquet-l1/audit.js';
 import { FORK_2_0 } from '../../lib/parquet-l1/chain.js';
@@ -132,7 +133,15 @@ export async function indexL1AuditCLICommand(
       heightRange: [from, to],
       ...summary,
       ok: summary.mismatched === 0 && summary.matched > 0,
-      blocks: blocks.map((b) => ({
+      // Everything that did not match, and only a sample of what did:
+      // the counts above carry the result, and a thousand matches is
+      // tens of kilobytes of JSON that tells a reader nothing.
+      blocks: [
+        ...blocks.filter((b) => b.result !== 'match'),
+        ...blocks
+          .filter((b) => b.result === 'match')
+          .slice(0, MAX_MATCHES_LISTED),
+      ].map((b) => ({
         height: b.height,
         result: b.result,
         ...(b.reason !== undefined ? { reason: b.reason } : {}),
@@ -140,6 +149,7 @@ export async function indexL1AuditCLICommand(
         derived: b.derived,
         bytesFetched: b.bytesFetched,
       })),
+      matchesListed: Math.min(summary.matched, MAX_MATCHES_LISTED),
     };
     // A mismatch is a finding. So is auditing nothing at all: a run where
     // every block was unavailable proves no more than not running it.

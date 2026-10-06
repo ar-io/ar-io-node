@@ -27,11 +27,34 @@ function stringifyJsonForCLIDisplay(json: unknown): string {
   return JSON.stringify(json, null, 2);
 }
 
-function logCommandOutput(output: JsonSerializable): void {
-  console.log(stringifyJsonForCLIDisplay(output));
+/**
+ * Writes to a stream and waits for the bytes to reach the OS.
+ *
+ * `process.exit` throws away whatever is still buffered, and a write to a
+ * pipe is asynchronous — so a result larger than the pipe buffer (64 KiB)
+ * was being cut mid-token, leaving stdout holding JSON that will not
+ * parse. A file hid it, because those writes are synchronous; the shapes
+ * that broke are exactly the documented ones, `| jq` and `docker run`.
+ */
+export async function writeAndFlush(
+  stream: NodeJS.WriteStream,
+  text: string,
+): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    stream.write(text, (error) =>
+      error === null || error === undefined ? resolve() : reject(error),
+    );
+  });
 }
 
-function exitWithErrorLog(error: unknown, debug = false): never {
+async function logCommandOutput(output: JsonSerializable): Promise<void> {
+  await writeAndFlush(
+    process.stdout,
+    stringifyJsonForCLIDisplay(output) + '\n',
+  );
+}
+
+async function exitWithErrorLog(error: unknown, debug = false): Promise<never> {
   let errorLog: string;
   if (error instanceof Error) {
     errorLog = error.message;
@@ -41,7 +64,7 @@ function exitWithErrorLog(error: unknown, debug = false): never {
   } else {
     errorLog = stringifyJsonForCLIDisplay(error);
   }
-  console.error(errorLog);
+  await writeAndFlush(process.stderr, errorLog + '\n');
   process.exit(1);
 }
 
@@ -57,10 +80,10 @@ export async function runCommand<O extends GlobalCLIOptions>(
   const options = command.optsWithGlobals<O>();
   try {
     const output = await action(options);
-    logCommandOutput(output);
+    await logCommandOutput(output);
     process.exit(0);
   } catch (error) {
-    exitWithErrorLog(error, options.debug);
+    await exitWithErrorLog(error, options.debug);
   }
 }
 
