@@ -360,11 +360,14 @@ whole chain accordingly rather than multiplying the single-band figure.
 Allow about 2 GB of WAL beside the database while a band is landing, and
 the band's own size on disk.
 
-The whole chain was, at the time of writing, 23 bands and 12.8 GB on disk
-holding 468,501,488 rows to height 2,014,135 — the tip band is rebuilt as
-the chain grows, so expect those numbers to have moved. Expect **about
-120 GB of `core.db`** (a gateway that indexed the same chain itself holds
-120.7 GB) and the best part of a day. `--max-bands` splits that across several runs; the ledger makes each
+**The whole chain, measured end to end** on 2026-10-06: 23 bands,
+468,563,825 rows to height 2,014,815, leaving a **118.80 GB `core.db`**
+in about **14.6 hours** of wall clock on 12 cores (the first 8 bands ran
+on SQLite's default cache before `--cache-mib` existed; the remaining 15
+took 11.9 hours with 8 GiB). A gateway that indexed the same chain itself
+holds 120.7 GB, so the result is the size it should be. The tip band is
+rebuilt as the chain grows, so expect the row count and the top height to
+have moved. `--max-bands` splits that across several runs; the ledger makes each
 one pick up where the last stopped.
 
 No `ANALYZE` or `VACUUM` is wanted afterwards. The rows are written in
@@ -480,9 +483,10 @@ gateway's `/peers` lists them. Each anchor height needs `--anchor-min`
 sources to answer (default 2) and every source that answers must agree —
 **one source is a single point of trust, which is what the anchor exists
 to remove**, so a single reachable source fails the check. Sources that
-cannot be reached are reported but do not count as disagreement. The
-command works offline without it, and says so rather than implying
-anything vouches for the index.
+cannot be reached are reported but do not count as disagreement, and
+repeats of the same URL — including ones differing only by a trailing
+slash — count once. The command works offline without it, and says so
+rather than implying anything vouches for the index.
 
 Both sides of the fork are anchored automatically: the fork-2.0 seed
 breaks the recurrence, so heights below it are anchored at 422,249 and
@@ -501,10 +505,19 @@ independent gateways, which is corroboration rather than proof. Do not
 describe pre-2.0 membership as cryptographically verified.
 
 Above the weave offset where Arweave began padding each transaction to a
-chunk boundary (`STRICT_DATA_SPLIT_THRESHOLD`, 30,607,159,107,830, which
-the weave passed around height 800,000) the identity stops holding. Those
-blocks are counted as skipped rather than reported as wrong, and a range
-with any skipped block is not reported as anchored.
+chunk boundary (`STRICT_DATA_SPLIT_THRESHOLD`, 30,607,159,107,830) the
+identity stops holding. Those blocks are counted as skipped rather than
+reported as wrong, and a range with any skipped block is not reported as
+anchored — so **a whole-chain run shows `anchored: false` by design**,
+and it is the default range that carries the anchored accounting.
+
+Measured over the whole chain on 2026-10-06 (2,014,816 blocks, a 118.80 GB
+`core.db`, 4 independent Arweave nodes): every height present and linked,
+2,014,814 `hash_list_merkle` comparisons with one skip (the 2.0 seed), and
+the accounting identity holding on 812,969 blocks with 1,201,846 past the
+threshold. 2 minutes 27 seconds. The boundary falls at height 812,969,
+which is fork 2.5 — the fork that introduced the strict data split, so
+scoping by weave offset lands exactly where the protocol changed.
 
 ### `index-l1-verify` result
 
