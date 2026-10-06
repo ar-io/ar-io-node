@@ -114,7 +114,10 @@ export interface VerifyResult {
   seconds: number;
 }
 
-const add = (check: VerifyCheck, failure: VerifyFailure): void => {
+export const addFailure = (
+  check: VerifyCheck,
+  failure: VerifyFailure,
+): void => {
   check.ok = false;
   check.failures ??= [];
   if (check.failures.length < MAX_FAILURES_REPORTED) {
@@ -176,7 +179,7 @@ export function checkAnchors(
     const replied = forHeight.filter((a) => a.indepHash !== undefined);
     for (const answer of replied) {
       if (answer.indepHash !== mine) {
-        add(check, {
+        addFailure(check, {
           height,
           found: `${answer.url} says ${answer.indepHash}`,
           expected: mine,
@@ -184,7 +187,7 @@ export function checkAnchors(
       }
     }
     if (replied.length < minSources) {
-      add(check, {
+      addFailure(check, {
         height,
         found: `${replied.length} of ${forHeight.length} sources answered`,
         expected: `at least ${minSources}`,
@@ -373,7 +376,7 @@ export function verifyRange(
     seen += 1;
     if (previous === undefined) {
       if (block.height !== from) {
-        add(contiguous, {
+        addFailure(contiguous, {
           height: from,
           found: `the range starts at ${block.height}`,
           expected: `${from}`,
@@ -385,7 +388,7 @@ export function verifyRange(
       continue;
     }
     if (block.height !== previous.height + 1) {
-      add(contiguous, {
+      addFailure(contiguous, {
         height: previous.height + 1,
         found: `the next block is ${block.height}`,
         expected: `${previous.height + 1}`,
@@ -401,7 +404,7 @@ export function verifyRange(
       block.previous_block === null ||
       !block.previous_block.equals(previous.indep_hash)
     ) {
-      add(linked, {
+      addFailure(linked, {
         height: block.height,
         found: block.previous_block?.toString('base64url') ?? 'null',
         expected: previous.indep_hash?.toString('base64url') ?? 'null',
@@ -419,7 +422,7 @@ export function verifyRange(
     );
     if (want === PREDECESSOR_HAS_NO_MERKLE) {
       merkleChecked += 1;
-      add(merkle, {
+      addFailure(merkle, {
         height: block.height,
         found: 'the block below carries no hash_list_merkle',
         expected: 'every block above the 1.6 fork has one',
@@ -434,7 +437,7 @@ export function verifyRange(
           ? got === null || got.length === 0
           : got !== null && want.equals(got);
       if (!ok) {
-        add(merkle, {
+        addFailure(merkle, {
           height: block.height,
           found: got === null ? 'null' : got.toString('base64url'),
           expected: want === null ? 'empty' : want.toString('base64url'),
@@ -444,7 +447,7 @@ export function verifyRange(
 
     const grew = block.weave_size - previous.weave_size;
     if (grew !== block.block_size) {
-      add(sizes, {
+      addFailure(sizes, {
         height: block.height,
         found: `block_size ${block.block_size}`,
         expected: `weave grew by ${grew}`,
@@ -455,7 +458,7 @@ export function verifyRange(
       checked += 1;
       accounted += txBytes;
       if (grew !== txBytes) {
-        add(accounting, {
+        addFailure(accounting, {
           height: block.height,
           found: `transactions total ${txBytes}`,
           expected: `weave grew by ${grew}`,
@@ -470,7 +473,7 @@ export function verifyRange(
 
   const expected = to - from + 1;
   if (seen !== expected) {
-    add(contiguous, {
+    addFailure(contiguous, {
       height: to,
       found: `${seen} blocks`,
       expected: `${expected}`,
@@ -516,7 +519,7 @@ export function verifyRange(
     result.weaveSize = String(weave);
     result.accountedFor = String(accounted);
     if (weave !== accounted) {
-      add(total, {
+      addFailure(total, {
         height: to,
         found: `transactions account for ${accounted} bytes`,
         expected: `the weave grew by ${weave}`,
@@ -616,7 +619,7 @@ export async function checkTxRoots(
     }
     checked += 1;
     if (!ok) {
-      add(check, {
+      addFailure(check, {
         height: block.height,
         found: `${txs.length} transactions that do not reproduce it`,
         expected: block.tx_root?.toString('base64url') ?? 'empty',

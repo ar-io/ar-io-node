@@ -420,9 +420,33 @@ one field to check before starting the gateway.
 
 ## `index-l1-verify`
 
-Checks this gateway's L1 index against the weave size the chain itself
-commits to, and against its own internal arithmetic. Read-only, so the
-gateway can stay up.
+Checks an L1 index against the weave size the chain itself commits to,
+and against its own internal arithmetic. Read-only, so the gateway can
+stay up.
+
+Two views of the same index. `--core-db` is the **operator's**: does this
+gateway's own database hold a faithful chain? `--bands-dir` is the
+**consumer's**: a directory of bands can be checked with no gateway and
+no database at all, which is what the format being content-addressed and
+signed is for. Anyone deciding whether to install someone else's bands —
+another gateway, an analyst, an agent — can establish they are faithful
+before importing a byte, or without ever importing.
+
+```bash
+# the consumer's view: no gateway involved
+ar-io-node index-l1-verify --bands-dir data/indexes/installed/parquet-l1
+```
+
+Measured on the published bands (2026-10-06): 500,000 blocks over 24
+bands in 32 seconds, reading the Parquet in height windows so a 12.8 GB
+set never has to fit in memory. A set of bands that overlaps, or leaves a
+hole, is refused rather than partly checked — a consumer holding a broken
+set has a different problem from one holding a faithful one.
+
+Both views drive the **same** chain rules, in `chain.ts`, over different
+readers, and a differential test runs the two over one chain and requires
+identical verdicts and counts. A rule reimplemented twice is a rule that
+drifts.
 
 ```bash
 docker compose -f docker-compose.yaml -f docker-compose.override.yaml \
@@ -610,7 +634,8 @@ ar-io-node index-l1-audit --core-db data/sqlite/core.db \
 
 | Option | |
 |---|---|
-| `--core-db` | The gateway's `core.db`. Opened read-only. Required |
+| `--core-db` | The gateway's `core.db`. Opened read-only |
+| `--bands-dir` | A directory of bands to check instead, with no gateway and no database |
 | `--data-from` | An Arweave node or gateway to fetch transaction data from. Required |
 | `--sample` | How many blocks to audit (default 100) |
 | `--from`, `--to` | Bound the height range |

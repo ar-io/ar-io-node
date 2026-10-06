@@ -23,9 +23,79 @@ import {
   stableHeightRange,
   verifyRange,
   VerifyRefused,
+  type VerifyCheck,
+  type VerifyFailure,
 } from '../../lib/parquet-l1/verify.js';
+import { verifyBands } from '../../lib/parquet-l1/verify-bands.js';
 import type { IndexL1VerifyCLIOptions, JsonSerializable } from '../types.js';
 import { requiredStringFromOptions } from '../utils.js';
+
+/** Checks a directory of bands, with no database involved. */
+async function verifyBandsCLI(
+  options: IndexL1VerifyCLIOptions,
+  log: Logger,
+): Promise<JsonSerializable> {
+  const bandsDir = options.bandsDir as string;
+  const whole = (value: string | undefined, flag: string) => {
+    if (value === undefined) return undefined;
+    const n = Number(value);
+    if (!Number.isSafeInteger(n) || n < 0) {
+      throw new VerifyRefused(`${flag} must be a whole height, 0 or above`);
+    }
+    return n;
+  };
+  const { Database } = await import('duckdb-async');
+  const duck = await Database.create(':memory:');
+  try {
+    await duck.exec(
+      `SET memory_limit = '2GB'; SET threads = 2; SET autoinstall_known_extensions = false; SET autoload_known_extensions = false;`,
+    );
+    log.info('Checking bands', { bandsDir });
+    const out = await verifyBands(duck, bandsDir, {
+      ...(whole(options.from, '--from') !== undefined
+        ? { from: whole(options.from, '--from') as number }
+        : {}),
+      ...(whole(options.to, '--to') !== undefined
+        ? { to: whole(options.to, '--to') as number }
+        : {}),
+      txRoot: options.skipTxRoot !== true,
+    });
+    log.info('Checked bands', { ok: out.ok, blocks: out.blocks });
+    const answer = {
+      bandsDir: out.bandsDir,
+      bands: out.bands.length,
+      heightRange: out.heightRange,
+      blocks: out.blocks,
+      txRootChecked: out.txRootChecked,
+      txRootSkipped: out.txRootSkipped,
+      merkleChecked: out.merkleChecked,
+      merkleSkipped: out.merkleSkipped,
+      accountingChecked: out.accountingChecked,
+      accountingSkipped: out.accountingSkipped,
+      ok: out.ok,
+      checks: out.checks.map((c: VerifyCheck) => ({
+        name: c.name,
+        ok: c.ok,
+        detail: c.detail,
+        ...(c.failures !== undefined
+          ? {
+              failures: c.failures.map((f: VerifyFailure) => ({
+                height: f.height,
+                found: f.found,
+                expected: f.expected,
+              })),
+            }
+          : {}),
+        ...(c.more !== undefined ? { more: c.more } : {}),
+      })),
+      seconds: Math.round(out.seconds * 10) / 10,
+    };
+    if (!out.ok) throw answer;
+    return answer;
+  } finally {
+    await duck.close();
+  }
+}
 
 export interface IndexL1VerifyDeps {
   log: Logger;
@@ -80,6 +150,16 @@ export async function indexL1VerifyCLICommand(
   options: IndexL1VerifyCLIOptions,
   { log, fetchIndepHash = httpIndepHash }: IndexL1VerifyDeps,
 ): Promise<JsonSerializable> {
+  // Bands are the consumer's view: a directory of them can be checked
+  // with no gateway and no `core.db`, which is the whole point of the
+  // format being content-addressed and signed.
+  if (
+    options.bandsDir !== undefined &&
+    options.bandsDir.length > 0 &&
+    options.coreDb === undefined
+  ) {
+    return verifyBandsCLI(options, log);
+  }
   const coreDb = requiredStringFromOptions(options, 'coreDb');
   const wantFrom = height(options.from, '--from');
   const wantTo = height(options.to, '--to');

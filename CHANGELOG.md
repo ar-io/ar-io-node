@@ -55,7 +55,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   1,592,566 on the live chain; the rest hold a format-1 transaction with
   data and need `index-l1-audit`), and checks contiguity, block linkage
   and `block_size`. `--skip-tx-root` leaves out the one check that reads
-  every transaction. `--anchor-from` fetches that
+  every transaction. `--bands-dir` checks a directory of bands with no
+  gateway and no database, which is how a consumer verifies someone
+  else's index before installing it; both views drive the same chain
+  rules and a differential test holds them together. `--anchor-from` fetches that
   trusted hash from independent Arweave nodes (both sides of the fork,
   since its seed breaks the recurrence) and requires several to agree —
   one source is a single point of trust, so one reachable source fails. It does not prove which

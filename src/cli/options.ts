@@ -108,6 +108,11 @@ export const optionMap = {
     description:
       'Highest block height to check. For an index reaching below the 2.0 fork, defaults to the fork (422250) or the highest held if lower; for one starting at or above it, to the highest held',
   },
+  verifyBandsDir: {
+    alias: '--bands-dir <path>',
+    description:
+      'Check a directory of bands instead of a core.db: no gateway and no database, which is how a consumer verifies them before installing',
+  },
   skipTxRoot: {
     alias: '--skip-tx-root',
     description:
@@ -214,6 +219,7 @@ export const indexL1ImportOptions: CommanderOption[] = [
 
 export const indexL1VerifyOptions: CommanderOption[] = [
   optionMap.coreDbReadOnly,
+  optionMap.verifyBandsDir,
   optionMap.skipTxRoot,
   optionMap.fromHeight,
   optionMap.toHeight,
