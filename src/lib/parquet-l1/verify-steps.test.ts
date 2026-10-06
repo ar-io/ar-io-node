@@ -24,7 +24,7 @@ describe('BlockWalker and the fork-1.6 seed', () => {
   const chain = (upTo: number) => {
     const blocks: CheckedBlock[] = [];
     let previous: Buffer | null = null;
-    let fold = Buffer.alloc(0);
+    let fold: Buffer = Buffer.alloc(0);
     for (let height = 0; height <= upTo; height += 1) {
       const indep = Buffer.from(
         crypto.createHash('sha384').update(`b${height}`).digest(),
