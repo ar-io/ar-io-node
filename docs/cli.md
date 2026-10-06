@@ -558,6 +558,86 @@ expected) and `more` for the rest. **When `ok` is false the command fails**:
 the same JSON goes to stderr and the exit code is 1, so a script cannot
 read a broken index as a good one.
 
+## `index-l1-audit`
+
+Checks the blocks [`index-l1-verify`](#index-l1-verify) has to skip.
+
+Above the 2.0 fork a block's `tx_root` recomputes from its transactions,
+which proves the exact set the block carried. One case escapes it: a
+format-1 transaction's leaf is the root of **its data**, and an index does
+not store that — `data_root` is a format-2 field. So any post-fork block
+holding a v1 transaction with data cannot be checked from the index alone.
+On the live chain that is **208,812 blocks of 1,592,566**, 13% of
+everything above the fork.
+
+This closes the gap by fetching that data, deriving each `data_root`, and
+recomputing `tx_root`.
+
+```bash
+ar-io-node index-l1-audit --core-db data/sqlite/core.db \
+  --data-from https://arweave.net --sample 200
+```
+
+| Option | |
+|---|---|
+| `--core-db` | The gateway's `core.db`. Opened read-only. Required |
+| `--data-from` | An Arweave node or gateway to fetch transaction data from. Required |
+| `--sample` | How many blocks to audit (default 100) |
+| `--from`, `--to` | Bound the height range |
+
+**It samples rather than sweeps.** The full set is about 912,729
+transactions and 111 GB; a few hundred blocks costs a few hundred requests
+and bounds the error rate. Blocks are chosen at random, so a publisher
+cannot know in advance which will be looked at.
+
+**The data source does not have to be trusted.** The check is the
+comparison against `tx_root`, which the block's own identity hash commits
+to. Data that is wrong, truncated or someone else's produces a mismatch,
+never a false pass — forging one would mean finding data whose merkle root
+reproduces a committed root. A bad source can cry wolf; it cannot hide a
+fault.
+
+It must still be the transaction's **own** data, which is why this reads
+the `data` field of `/tx/{id}` and not the data route. `/raw/{id}` and
+`/{id}` resolve *content*: a 1,614-byte transaction came back as an
+8,847-byte SVG, with a 200. The fetched length is checked against
+`data_size` and a disagreement is reported as `unavailable`, so a bad
+source is never recorded as a bad index.
+
+**Measured** on the full chain (2026-10-06, 150 blocks sampled of 208,812,
+data from turbo-gateway.com): 150 matched, 0 mismatched, 0 unavailable,
+704 `data_root`s derived from 94.6 MB. With no mismatch in 150 samples the
+95% upper bound on the error rate is 2.0%.
+
+### `index-l1-audit` result
+
+```json
+{
+  "coreDb": "data/sqlite/core.db",
+  "heightRange": [422250, 2014815],
+  "population": 208812,
+  "sampled": 150,
+  "matched": 150,
+  "mismatched": 0,
+  "unavailable": 0,
+  "bytesFetched": 94600000,
+  "errorRateUpperBound95": 0.02,
+  "ok": true,
+  "blocks": [
+    { "height": 453548, "result": "match", "transactions": 1, "derived": 1, "bytesFetched": 1 }
+  ]
+}
+```
+
+`population` is how many blocks in range the index cannot check alone, and
+`sampled` how many of them were. A block's `result` is `match`, `mismatch`
+or `unavailable` (with a `reason`); only the first two count toward the
+rate. `errorRateUpperBound95` appears when nothing mismatched — it is the
+rule of three, `3/n`, and says how little a clean sample rules out.
+`mismatchRate` replaces it once something does. The command exits 1 on any
+mismatch, and also when nothing could be audited, because a run that
+checked nothing proves no more than not running it.
+
 ## For scripts and agents
 
 Every `ar-io-node` command is non-interactive and answers in one shape, so a

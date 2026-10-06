@@ -108,6 +108,16 @@ export const optionMap = {
     description:
       'Highest block height to check. For an index reaching below the 2.0 fork, defaults to the fork (422250) or the highest held if lower; for one starting at or above it, to the highest held',
   },
+  dataFrom: {
+    alias: '--data-from <url>',
+    description:
+      'An Arweave node or gateway to fetch transaction data from. Required, and it need not be trusted: wrong data can only cause a false alarm, never a false pass',
+  },
+  sample: {
+    alias: '--sample <n>',
+    description:
+      'How many blocks to audit (default 100). The full set is about 111 GB, so this samples',
+  },
   anchorFrom: {
     alias: '--anchor-from <urls>',
     description:
@@ -203,6 +213,14 @@ export const indexL1VerifyOptions: CommanderOption[] = [
   optionMap.toHeight,
   optionMap.anchorFrom,
   optionMap.anchorMin,
+];
+
+export const indexL1AuditOptions: CommanderOption[] = [
+  optionMap.coreDbReadOnly,
+  optionMap.dataFrom,
+  optionMap.sample,
+  optionMap.fromHeight,
+  optionMap.toHeight,
 ];
 
 export const indexBandExportOptions: CommanderOption[] = [

@@ -58,6 +58,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   pre-2.0 block a transaction belonged to. See
   [docs/cli.md](docs/cli.md).
 
+- `ar-io-node index-l1-audit` checks the blocks `index-l1-verify` has to
+  skip. A format-1 transaction's `tx_root` leaf is the root of its data,
+  which an index does not store, so 208,812 post-fork blocks of 1,592,566
+  cannot be proved from the index alone. This fetches that data, derives
+  each `data_root` and recomputes `tx_root`. It samples rather than sweeps
+  (the full set is 111 GB) and reports the 95% upper bound on the error
+  rate. The data source need not be trusted: wrong data can only cause a
+  false alarm, never a false pass. Read-only. Measured on the full chain:
+  150 of 208,812 sampled, all matched, bounding the error rate at 2.0%.
+  See [docs/cli.md](docs/cli.md).
+
 - L1 index bands (`parquet-l1`): the Arweave base layer (blocks,
   transactions, tags in plaintext, owners) as Parquet, one fixed height
   range per band (whole 100,000-height history bands over 5,000-height
