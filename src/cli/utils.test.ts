@@ -18,6 +18,8 @@ describe('writeAndFlush', () => {
     let acknowledged = false;
     let release: (() => void) | undefined;
     const stream = {
+      on: () => undefined,
+      off: () => undefined,
       write: (_text: string, cb: (e?: Error | null) => void) => {
         release = () => {
           acknowledged = true;
@@ -42,6 +44,8 @@ describe('writeAndFlush', () => {
 
   it('passes a write failure on rather than swallowing it', async () => {
     const stream = {
+      on: () => undefined,
+      off: () => undefined,
       write: (_text: string, cb: (e?: Error | null) => void) => {
         cb(new Error('EPIPE'));
         return false;
@@ -50,9 +54,33 @@ describe('writeAndFlush', () => {
     await assert.rejects(writeAndFlush(stream, 'x'), /EPIPE/);
   });
 
+  it('listens for the stream error a closed pipe emits after the callback', async () => {
+    // EPIPE arrives twice: once in the callback, then as an `error`
+    // event. With nothing listening that event is unhandled and kills
+    // the process before the caller's error path runs.
+    const events: string[] = [];
+    const stream = {
+      on: (name: string) => events.push(`on:${name}`),
+      off: (name: string) => events.push(`off:${name}`),
+      write: (_t: string, cb: (e?: Error | null) => void) => {
+        cb(null);
+        return true;
+      },
+    } as unknown as NodeJS.WriteStream;
+    await writeAndFlush(stream, 'x');
+    assert.ok(events.includes('on:error'), 'an error listener was attached');
+    assert.deepEqual(
+      events.filter((e) => e === 'off:error'),
+      [],
+      'and not removed inside the callback, which would be too early',
+    );
+  });
+
   it('resolves for a write the stream takes immediately', async () => {
     const written: string[] = [];
     const stream = {
+      on: () => undefined,
+      off: () => undefined,
       write: (text: string, cb: (e?: Error | null) => void) => {
         written.push(text);
         cb();

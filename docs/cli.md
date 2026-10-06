@@ -294,8 +294,10 @@ contiguity is still enforced: a gap *inside* it is refused.
 
 **Mind the hole.** A backfill done in stages leaves heights uncovered
 between runs, and the block importer rewinds across a gap. The command
-works out what will still be missing, warns, and carries it in the result
-as `holes`. It does not refuse — staged backfill would be impossible if
+works out what will still be missing — from every run of heights
+`core.db` actually holds, not its lowest and highest, so a gap left
+*between* two earlier backfills is seen — warns, and carries it in the
+result as `holes`. It does not refuse — staged backfill would be impossible if
 it did — so **check `holes` is empty before starting the gateway**.
 
 Two things `--from` does not do. It will not redo a band the ledger
@@ -563,10 +565,18 @@ read a broken index as a good one.
 Checks the blocks [`index-l1-verify`](#index-l1-verify) has to skip.
 
 Above the 2.0 fork a block's `tx_root` recomputes from its transactions,
-which proves the exact set the block carried. One case escapes it: a
-format-1 transaction's leaf is the root of **its data**, and an index does
-not store that — `data_root` is a format-2 field. So any post-fork block
-holding a v1 transaction with data cannot be checked from the index alone.
+proving each one's **data root, size and position** in the block. It does
+not prove their **ids**: Arweave drops the id before building the tree, so
+an id reaches `tx_root` only through the sort order. Ids are bound by the
+block's own identity hash, which no index can recompute — so this checks
+each v1 id against the signature it must be the SHA-256 of, which makes it
+a real transaction's id without proving that transaction was in this
+block.
+
+One case escapes `tx_root` entirely: a format-1 transaction's leaf is the
+root of **its data**, and an index does not store that — `data_root` is a
+format-2 field. So any post-fork block holding a v1 transaction with data
+cannot be checked from the index alone.
 On the live chain that is **208,812 blocks of 1,592,566**, 13% of
 everything above the fork.
 
@@ -636,8 +646,10 @@ roughly linear in the sample.
 not match, and at most 20 that did (`matchesListed`), because the counts
 carry the result and a thousand matches is tens of kilobytes nobody
 reads. A block's `result` is `match`, `mismatch`
-or `unavailable` (with a `reason`); only the first two count toward the
-rate. `errorRateUpperBound95` appears when nothing mismatched — it is the
+or `unavailable` (with a `reason`). **Any unavailable block fails the
+run** and suppresses the rate: a source that withheld exactly the blocks
+it had corrupted would otherwise hand back a clean-looking audit of
+whatever it chose to serve. `errorRateUpperBound95` appears when nothing mismatched — it is the
 rule of three, `3/n`, and says how little a clean sample rules out.
 `mismatchRate` replaces it once something does. The command exits 1 on any
 mismatch, and also when nothing could be audited, because a run that

@@ -854,15 +854,18 @@ describe('planImport backfilling below what is held', () => {
 
 describe('remainingHoles', () => {
   it('finds nothing when the run meets what is held', () => {
-    assert.deepEqual(remainingHoles([200, 299], [[0, 199]]), []);
+    assert.deepEqual(remainingHoles([[200, 299]], [[0, 199]]), []);
   });
 
   it('finds nothing for a fresh database filled from the bottom', () => {
     assert.deepEqual(
-      remainingHoles(undefined, [
-        [0, 99],
-        [100, 199],
-      ]),
+      remainingHoles(
+        [],
+        [
+          [0, 99],
+          [100, 199],
+        ],
+      ),
       [],
     );
   });
@@ -870,15 +873,15 @@ describe('remainingHoles', () => {
   it('finds the gap a staged backfill leaves behind', () => {
     // Importing 0-99 under a gateway holding 200+ leaves 100-199
     // missing, and the block importer rewinds across it.
-    assert.deepEqual(remainingHoles([200, 299], [[0, 99]]), [[100, 199]]);
+    assert.deepEqual(remainingHoles([[200, 299]], [[0, 99]]), [[100, 199]]);
   });
 
   it('finds a gap above what is held', () => {
-    assert.deepEqual(remainingHoles([0, 99], [[200, 299]]), [[100, 199]]);
+    assert.deepEqual(remainingHoles([[0, 99]], [[200, 299]]), [[100, 199]]);
   });
 
   it('is not confused by overlap, which a band rewriting its range causes', () => {
-    assert.deepEqual(remainingHoles([150, 299], [[0, 199]]), []);
+    assert.deepEqual(remainingHoles([[150, 299]], [[0, 199]]), []);
   });
 
   it('is not confused by a range wholly inside another', () => {
@@ -886,7 +889,7 @@ describe('remainingHoles', () => {
     // contained range makes everything after it look like a gap.
     assert.deepEqual(
       remainingHoles(
-        [0, 500],
+        [[0, 500]],
         [
           [100, 200],
           [450, 600],
@@ -896,10 +899,26 @@ describe('remainingHoles', () => {
     );
   });
 
+  it('sees a gap inside what is held, which min and max cannot', () => {
+    // Two staged backfills leave 0-99 and 200-299. Taking only the
+    // lowest and highest height says 0-299 and reports nothing
+    // missing, and the gateway then rewinds across 100-199.
+    assert.deepEqual(
+      remainingHoles(
+        [
+          [0, 99],
+          [200, 299],
+        ],
+        [],
+      ),
+      [[100, 199]],
+    );
+  });
+
   it('reports several gaps, lowest first', () => {
     assert.deepEqual(
       remainingHoles(
-        [500, 599],
+        [[500, 599]],
         [
           [0, 99],
           [200, 299],

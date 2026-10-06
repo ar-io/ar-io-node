@@ -336,7 +336,9 @@ plaintext in a band and Parquet is columnar. Good for scans and
 aggregates, no use for point lookups, and it serves no gateway route.
 
 <a id="l1-audit"></a> **L1 audit** — Checking the `tx_root` of blocks an
-index cannot check alone, with `ar-io-node index-l1-audit`. A format-1
+index cannot check alone, with `ar-io-node index-l1-audit`. `tx_root`
+proves each transaction's data root, size and position, not its id, so
+ids are checked against the signatures they must be the SHA-256 of. A format-1
 transaction's `tx_root` leaf is the root of its data, which an index does
 not store, so 13% of post-fork blocks need the data fetched before their
 transaction set can be proved. Samples rather than sweeps, and the data

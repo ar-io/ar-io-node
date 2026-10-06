@@ -19,6 +19,7 @@ import { Logger } from 'winston';
 import {
   AuditRefused,
   DEFAULT_SAMPLE,
+  type FetchTxData,
   MAX_MATCHES_LISTED,
   runAudit,
 } from '../../lib/parquet-l1/audit.js';
@@ -29,7 +30,7 @@ import { requiredStringFromOptions } from '../utils.js';
 
 export interface IndexL1AuditDeps {
   log: Logger;
-  fetchTxData?: (id: string) => Promise<Buffer>;
+  fetchTxData?: FetchTxData;
 }
 
 /** How long one transaction's data has to arrive. */
@@ -44,18 +45,29 @@ export const FETCH_TIMEOUT_MS = 30_000;
  * caller checks the length against `data_size` regardless, and a wrong
  * root can only cause a false alarm, never a false pass.
  */
-function txDataFetcher(base: string) {
+function txDataFetcher(base: string): FetchTxData {
   const root = base.replace(/\/+$/, '');
-  return async (id: string): Promise<Buffer> => {
+  return async (id: string) => {
     const response = await fetch(`${root}/tx/${id}`, {
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const body = (await response.json()) as { data?: unknown };
+    const body = (await response.json()) as {
+      data?: unknown;
+      signature?: unknown;
+    };
     if (typeof body.data !== 'string') {
       throw new Error('the transaction carries no data field');
     }
-    return Buffer.from(body.data, 'base64url');
+    return {
+      data: Buffer.from(body.data, 'base64url'),
+      // Carried so the caller can check the id is the SHA-256 of it.
+      // `tx_root` does not bind ids, so this is what makes an id in the
+      // index a real transaction's rather than one it chose to write.
+      ...(typeof body.signature === 'string' && body.signature.length > 0
+        ? { signature: Buffer.from(body.signature, 'base64url') }
+        : {}),
+    };
   };
 }
 
@@ -132,7 +144,13 @@ export async function indexL1AuditCLICommand(
       coreDb,
       heightRange: [from, to],
       ...summary,
-      ok: summary.mismatched === 0 && summary.matched > 0,
+      // Unavailable counts against it: a source that selectively
+      // withholds could otherwise hand back a clean-looking audit of
+      // whatever it chose to serve.
+      ok:
+        summary.mismatched === 0 &&
+        summary.unavailable === 0 &&
+        summary.matched > 0,
       // Everything that did not match, and only a sample of what did:
       // the counts above carry the result, and a thousand matches is
       // tens of kilobytes of JSON that tells a reader nothing.
@@ -151,8 +169,9 @@ export async function indexL1AuditCLICommand(
       })),
       matchesListed: Math.min(summary.matched, MAX_MATCHES_LISTED),
     };
-    // A mismatch is a finding. So is auditing nothing at all: a run where
-    // every block was unavailable proves no more than not running it.
+    // A mismatch is a finding, and so is a block that could not be
+    // checked: an audit of only what a source chose to serve proves
+    // nothing about what it withheld.
     if (!answer.ok) throw answer;
     return answer;
   } finally {

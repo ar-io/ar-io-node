@@ -352,15 +352,18 @@ export function applyImportPragmas(
  * that promise for free. Filling in underneath cannot, so the hole is
  * worked out directly and reported.
  *
- * `held` is the range `stable_blocks` covers, or `undefined` when it is
- * empty. Ranges are inclusive. The result is the gaps between the
+ * `held` is every run of heights `stable_blocks` covers — not its lowest
+ * and highest, which would miss a gap in the middle. Two staged
+ * backfills can leave 0-99 and 200-299, where min and max alone say
+ * 0-299 and report nothing missing, and the gateway then rewinds across
+ * 100-199. Ranges are inclusive, and the result is the gaps between the
  * union's pieces, lowest first.
  */
 export function remainingHoles(
-  held: readonly [number, number] | undefined,
+  held: ReadonlyArray<readonly [number, number]>,
   planned: ReadonlyArray<readonly [number, number]>,
 ): Array<[number, number]> {
-  const pieces = [...planned, ...(held !== undefined ? [held] : [])]
+  const pieces = [...planned, ...held]
     .filter(([from, to]) => to >= from)
     .sort((a, b) => a[0] - b[0]);
   if (pieces.length === 0) return [];
@@ -371,6 +374,28 @@ export function remainingHoles(
     reach = Math.max(reach, to);
   }
   return holes;
+}
+
+/**
+ * The runs of consecutive heights `stable_blocks` holds.
+ *
+ * Gaps-and-islands: a height minus its row number is constant across a
+ * run, so grouping by that difference gives each run's ends. A full scan
+ * of the height index, which is the right price for an offline tool that
+ * is about to write tens of gigabytes — and the only way to see a gap in
+ * the middle, which `MIN`/`MAX` cannot.
+ */
+export function heldRuns(db: Sqlite.Database): Array<[number, number]> {
+  return (
+    db
+      .prepare(
+        `SELECT MIN(height) AS lo, MAX(height) AS hi FROM (
+           SELECT height, height - ROW_NUMBER() OVER (ORDER BY height) AS run
+           FROM stable_blocks)
+         GROUP BY run ORDER BY lo`,
+      )
+      .all() as Array<{ lo: number; hi: number }>
+  ).map((r) => [r.lo, r.hi]);
 }
 
 /** The migration this importer was written against; its table must exist. */
@@ -886,9 +911,7 @@ export async function runImport({
   });
   const planned = steps.slice(0, limit ?? steps.length);
   const holes = remainingHoles(
-    progress.blocksFrom < 0
-      ? undefined
-      : [progress.blocksFrom, progress.blocksTo],
+    heldRuns(db),
     planned.map((b) => b.band.heightRange),
   );
   if (holes.length > 0) {

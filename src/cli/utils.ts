@@ -41,8 +41,21 @@ export async function writeAndFlush(
   text: string,
 ): Promise<void> {
   await new Promise<void>((resolve, reject) => {
+    // A closed pipe calls back with EPIPE and *then* emits `error`. With
+    // nothing listening that is an unhandled event, which kills the
+    // process before the caller's error path runs. The listener outlives
+    // the callback for that reason; removing it in the callback is too
+    // early.
+    const settled = (outcome: () => void) => {
+      setImmediate(() => stream.off('error', swallow));
+      outcome();
+    };
+    const swallow = () => undefined;
+    stream.on('error', swallow);
     stream.write(text, (error) =>
-      error === null || error === undefined ? resolve() : reject(error),
+      error === null || error === undefined
+        ? settled(resolve)
+        : settled(() => reject(error)),
     );
   });
 }

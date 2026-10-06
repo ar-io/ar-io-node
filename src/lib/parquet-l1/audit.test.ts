@@ -10,6 +10,7 @@ import * as fsp from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
+import crypto from 'node:crypto';
 import Sqlite from 'better-sqlite3';
 
 import { GOLDEN_BLOCKS } from '../../../test/parquet-l1-golden-blocks.js';
@@ -245,14 +246,14 @@ describe('summarise', () => {
     assert.equal(s.errorRateUpperBound95, undefined);
   });
 
-  it('does not count what it could not check toward either', () => {
+  it('bounds nothing when a block could not be checked', () => {
+    // A source that withheld exactly the blocks it corrupted would
+    // otherwise leave only matches in the arithmetic, and a bound over
+    // what it chose to serve says nothing about what it did not.
     const s = summarise(1000, [block('match'), block('unavailable')]);
     assert.equal(s.unavailable, 1);
-    assert.equal(
-      s.errorRateUpperBound95,
-      3 / 1,
-      'one checked, so it bounds nothing useful',
-    );
+    assert.equal(s.errorRateUpperBound95, undefined);
+    assert.equal(s.mismatchRate, undefined);
   });
 
   it('says nothing about a rate when it checked nothing', () => {
@@ -347,8 +348,37 @@ describe('unverifiableBlocks and auditBlock', () => {
     assert.deepEqual(unverifiableBlocks(db, { from: 0, to: 400_000 }), []);
   });
 
+  it('rejects an id the signature at that id does not hash to', async () => {
+    // tx_root binds a transaction's data root and byte range, not its
+    // id: Arweave drops the id before building the tree. So the id in
+    // the index is checked against the signature it must be the
+    // SHA-256 of, or an index could name any id it liked.
+    const out = await auditBlock(db, H, async () => ({
+      data: Buffer.alloc(4, 1),
+      signature: Buffer.from('not the signature for this id'),
+    }));
+    assert.equal(out.result, 'mismatch');
+    assert.match(out.reason ?? '', /the signature at this id hashes to/);
+  });
+
+  it('accepts an id that is the SHA-256 of its signature', async () => {
+    const signature = Buffer.from('a signature');
+    const id = crypto.createHash('sha256').update(signature).digest();
+    db.prepare('UPDATE stable_transactions SET id = ? WHERE id = ?').run(
+      id,
+      V1,
+    );
+    const out = await auditBlock(db, H, async () => ({
+      data: Buffer.alloc(4, 1),
+      signature,
+    }));
+    assert.equal(out.reason, undefined, 'the id check passed');
+  });
+
   it('reports a mismatch when the derived root does not reproduce tx_root', async () => {
-    const out = await auditBlock(db, H, async () => Buffer.alloc(4, 1));
+    const out = await auditBlock(db, H, async () => ({
+      data: Buffer.alloc(4, 1),
+    }));
     assert.equal(out.result, 'mismatch');
     assert.equal(out.derived, 1);
     assert.equal(out.bytesFetched, 4);
@@ -358,7 +388,9 @@ describe('unverifiableBlocks and auditBlock', () => {
     // The data route can return someone else's bytes with a 200. Blaming
     // the index for that would turn a bad source into a false alarm
     // against an honest publisher.
-    const out = await auditBlock(db, H, async () => Buffer.alloc(9, 1));
+    const out = await auditBlock(db, H, async () => ({
+      data: Buffer.alloc(9, 1),
+    }));
     assert.equal(out.result, 'unavailable');
     assert.match(out.reason ?? '', /9 bytes where data_size says 4/);
   });
@@ -372,7 +404,9 @@ describe('unverifiableBlocks and auditBlock', () => {
   });
 
   it('reports a height the index does not hold', async () => {
-    const out = await auditBlock(db, 999_999, async () => Buffer.alloc(0));
+    const out = await auditBlock(db, 999_999, async () => ({
+      data: Buffer.alloc(0),
+    }));
     assert.equal(out.result, 'unavailable');
     assert.match(out.reason ?? '', /no block at this height/);
   });
@@ -382,7 +416,7 @@ describe('unverifiableBlocks and auditBlock', () => {
       runAudit(db, {
         from: 0,
         to: 400_000,
-        fetchTxData: async () => Buffer.alloc(0),
+        fetchTxData: async () => ({ data: Buffer.alloc(0) }),
       }),
       (e: Error) =>
         e instanceof AuditRefused && /needs auditing/.test(e.message),
@@ -393,7 +427,7 @@ describe('unverifiableBlocks and auditBlock', () => {
     const { summary, blocks } = await runAudit(db, {
       from: 0,
       to: 600_000,
-      fetchTxData: async () => Buffer.alloc(4, 1),
+      fetchTxData: async () => ({ data: Buffer.alloc(4, 1) }),
     });
     assert.equal(summary.population, 1);
     assert.equal(summary.sampled, 1);

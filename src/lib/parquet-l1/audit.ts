@@ -8,8 +8,16 @@
 /**
  * Auditing the blocks whose `tx_root` an index cannot check on its own.
  *
- * Above the 2.0 fork a block's `tx_root` recomputes from its transactions,
- * which proves the exact set the block carried. One case escapes it: a
+ * Above the 2.0 fork a block's `tx_root` recomputes from its
+ * transactions, proving each one's data root, size and position in the
+ * block. It does **not** prove their ids: Arweave drops the id before
+ * building the tree, so an id reaches `tx_root` only through the sort
+ * order. The ids are bound by the block's own identity hash, which no
+ * index can recompute. This checks each id against the signature it must
+ * be the SHA-256 of, which makes it a real transaction's id, and stops
+ * short of proving that transaction was in this block.
+ *
+ * One case escapes `tx_root` entirely: a
  * format-1 transaction's leaf is the root of *its data*, and an index does
  * not store that (`data_root` is a format-2 field). So any post-fork block
  * holding a v1 transaction with data cannot be checked from the index
@@ -35,6 +43,7 @@
  * transaction's `data` field is the authority, and the length is checked
  * against `data_size` before the bytes are used.
  */
+import crypto from 'node:crypto';
 import Sqlite from 'better-sqlite3';
 
 import {
@@ -140,8 +149,13 @@ interface TxRow {
   data_root: Buffer | null;
 }
 
-/** Fetches one transaction's own data, by base64url id. */
-export type FetchTxData = (id: string) => Promise<Buffer>;
+/**
+ * Fetches one transaction by base64url id: its own data, and the
+ * signature that id is derived from.
+ */
+export type FetchTxData = (
+  id: string,
+) => Promise<{ data: Buffer; signature?: Buffer }>;
 
 /**
  * Audits one block: derives a `data_root` for each format-1 transaction
@@ -180,9 +194,9 @@ export async function auditBlock(
     const size = Number(row.data_size ?? 0);
     if (row.format !== 1 || size <= 0) continue;
     const id = row.id.toString('base64url');
-    let data: Buffer;
+    let fetched: { data: Buffer; signature?: Buffer };
     try {
-      data = await fetchTxData(id);
+      fetched = await fetchTxData(id);
     } catch (error) {
       return {
         height,
@@ -192,6 +206,30 @@ export async function auditBlock(
         derived,
         bytesFetched,
       };
+    }
+    const data = fetched.data;
+    // `tx_root` binds each transaction's data root and byte range, and
+    // not its id: Arweave drops the id before building the tree
+    // (`ar_block.erl`, `[{Root, Offset} || {{_, Root}, Offset} <- ...]`).
+    // So an id in the index is checked here instead, against the
+    // signature it must be the SHA-256 of. That makes it a real
+    // transaction's id rather than anything the index chose to write.
+    if (fetched.signature !== undefined) {
+      const fromSignature = crypto
+        .createHash('sha256')
+        .update(fetched.signature)
+        .digest()
+        .toString('base64url');
+      if (fromSignature !== id) {
+        return {
+          height,
+          result: 'mismatch',
+          reason: `${id}: the signature at this id hashes to ${fromSignature}`,
+          transactions: rows.length,
+          derived,
+          bytesFetched,
+        };
+      }
     }
     // The data route resolves content and can return bytes that are not
     // this transaction's. A wrong length is the cheap tell, and catching
@@ -258,7 +296,10 @@ export function summarise(
     unavailable,
     bytesFetched: blocks.reduce((sum, b) => sum + b.bytesFetched, 0),
   };
-  if (checked > 0) {
+  // A source that withholds data for exactly the blocks it corrupted
+  // would otherwise leave only matching blocks in the arithmetic, and a
+  // bound computed on what was conveniently available says nothing.
+  if (checked > 0 && unavailable === 0) {
     if (mismatched === 0) {
       // Rule of three: seeing none in n samples puts the 95% upper bound
       // at about 3/n. It says how little the sample rules out, which is
