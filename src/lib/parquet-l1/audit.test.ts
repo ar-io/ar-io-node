@@ -275,6 +275,19 @@ describe('unverifiableBlocks and auditBlock', () => {
   let db: Sqlite.Database;
   const H = 500_000;
   const V1 = Buffer.alloc(32, 1);
+  /**
+   * A fetcher whose signature hashes to the id the index holds, so the
+   * id check passes and the test is about whatever else it is about.
+   * Finding such a signature is why the real check is sound: here the
+   * row's id is set from the signature instead.
+   */
+  const signed = (data: Buffer) => {
+    const signature = Buffer.from('signature for the audited transaction');
+    return {
+      id: crypto.createHash('sha256').update(signature).digest(),
+      fetch: async () => ({ data, signature }),
+    };
+  };
   const V2 = Buffer.alloc(32, 2);
 
   beforeEach(async () => {
@@ -348,6 +361,20 @@ describe('unverifiableBlocks and auditBlock', () => {
     assert.deepEqual(unverifiableBlocks(db, { from: 0, to: 400_000 }), []);
   });
 
+  it('will not pass a block whose source withholds the signature', async () => {
+    // The gap this closes: tx_root does not bind ids, so in a
+    // single-transaction block a source serving the original data under
+    // a tampered id reproduces tx_root exactly. Skipping the id check
+    // when the signature is absent would let it pass by declining to
+    // answer, so an absent signature is unavailable -- which fails the
+    // run.
+    const out = await auditBlock(db, H, async () => ({
+      data: Buffer.alloc(4, 1),
+    }));
+    assert.equal(out.result, 'unavailable');
+    assert.match(out.reason ?? '', /no signature/);
+  });
+
   it('rejects an id the signature at that id does not hash to', async () => {
     // tx_root binds a transaction's data root and byte range, not its
     // id: Arweave drops the id before building the tree. So the id in
@@ -376,9 +403,12 @@ describe('unverifiableBlocks and auditBlock', () => {
   });
 
   it('reports a mismatch when the derived root does not reproduce tx_root', async () => {
-    const out = await auditBlock(db, H, async () => ({
-      data: Buffer.alloc(4, 1),
-    }));
+    const { id, fetch } = signed(Buffer.alloc(4, 1));
+    db.prepare('UPDATE stable_transactions SET id = ? WHERE id = ?').run(
+      id,
+      V1,
+    );
+    const out = await auditBlock(db, H, fetch);
     assert.equal(out.result, 'mismatch');
     assert.equal(out.derived, 1);
     assert.equal(out.bytesFetched, 4);
@@ -388,9 +418,12 @@ describe('unverifiableBlocks and auditBlock', () => {
     // The data route can return someone else's bytes with a 200. Blaming
     // the index for that would turn a bad source into a false alarm
     // against an honest publisher.
-    const out = await auditBlock(db, H, async () => ({
-      data: Buffer.alloc(9, 1),
-    }));
+    const { id, fetch } = signed(Buffer.alloc(9, 1));
+    db.prepare('UPDATE stable_transactions SET id = ? WHERE id = ?').run(
+      id,
+      V1,
+    );
+    const out = await auditBlock(db, H, fetch);
     assert.equal(out.result, 'unavailable');
     assert.match(out.reason ?? '', /9 bytes where data_size says 4/);
   });
@@ -427,7 +460,7 @@ describe('unverifiableBlocks and auditBlock', () => {
     const { summary, blocks } = await runAudit(db, {
       from: 0,
       to: 600_000,
-      fetchTxData: async () => ({ data: Buffer.alloc(4, 1) }),
+      fetchTxData: signed(Buffer.alloc(4, 1)).fetch,
     });
     assert.equal(summary.population, 1);
     assert.equal(summary.sampled, 1);

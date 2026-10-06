@@ -30,12 +30,17 @@
  * where a sample of a few hundred blocks costs a few hundred requests and
  * bounds the error rate.
  *
- * **The data source does not have to be trusted.** The check is the
- * comparison against `tx_root`, which the block's own identity hash
- * commits to. Data that is wrong, truncated or someone else's produces a
- * mismatch, never a false pass — forging a pass would mean finding data
- * whose merkle root reproduces a committed root. So a bad source can cry
- * wolf and cannot hide a real fault.
+ * **The data source does not have to be trusted**, and what makes that
+ * true is that both halves are mandatory. The data has to reproduce a
+ * `tx_root` the block's identity hash commits to, and the signature has
+ * to hash to the id the index holds. Forging either means a preimage.
+ *
+ * Neither half is sufficient alone. `tx_root` does not bind ids, so in a
+ * block holding one transaction — where the sort order cannot betray a
+ * changed id — a source serving the original data under a tampered id
+ * would reproduce `tx_root` exactly. That is why an absent signature is
+ * `unavailable` rather than a skip: treating it as a skip would let a
+ * source pass by declining to answer.
  *
  * It must still be the transaction's *own* data. The data route (`/raw/`,
  * `/{id}`) resolves content and will happily return something else: a
@@ -214,22 +219,36 @@ export async function auditBlock(
     // So an id in the index is checked here instead, against the
     // signature it must be the SHA-256 of. That makes it a real
     // transaction's id rather than anything the index chose to write.
-    if (fetched.signature !== undefined) {
-      const fromSignature = crypto
-        .createHash('sha256')
-        .update(fetched.signature)
-        .digest()
-        .toString('base64url');
-      if (fromSignature !== id) {
-        return {
-          height,
-          result: 'mismatch',
-          reason: `${id}: the signature at this id hashes to ${fromSignature}`,
-          transactions: rows.length,
-          derived,
-          bytesFetched,
-        };
-      }
+    // Required, not best-effort. Skipping the check when a source omits
+    // the signature is itself a way to pass: in a block holding one
+    // transaction the sort order cannot betray a changed id, so a source
+    // that serves the original data under a tampered id and leaves the
+    // signature out would reproduce `tx_root` exactly. Every transaction
+    // has a signature, so an absent one is the source failing to answer.
+    if (fetched.signature === undefined) {
+      return {
+        height,
+        result: 'unavailable',
+        reason: `${id}: the source returned no signature, so the id could not be checked`,
+        transactions: rows.length,
+        derived,
+        bytesFetched,
+      };
+    }
+    const fromSignature = crypto
+      .createHash('sha256')
+      .update(fetched.signature)
+      .digest()
+      .toString('base64url');
+    if (fromSignature !== id) {
+      return {
+        height,
+        result: 'mismatch',
+        reason: `${id}: the signature at this id hashes to ${fromSignature}`,
+        transactions: rows.length,
+        derived,
+        bytesFetched,
+      };
     }
     // The data route resolves content and can return bytes that are not
     // this transaction's. A wrong length is the cheap tell, and catching

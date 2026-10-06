@@ -600,12 +600,18 @@ transactions and 111 GB; a few hundred blocks costs a few hundred requests
 and bounds the error rate. Blocks are chosen at random, so a publisher
 cannot know in advance which will be looked at.
 
-**The data source does not have to be trusted.** The check is the
-comparison against `tx_root`, which the block's own identity hash commits
-to. Data that is wrong, truncated or someone else's produces a mismatch,
-never a false pass — forging one would mean finding data whose merkle root
-reproduces a committed root. A bad source can cry wolf; it cannot hide a
-fault.
+**The data source does not have to be trusted**, and what makes that true
+is that both halves are required. The data has to reproduce a `tx_root`
+the block's identity hash commits to, **and** the signature has to hash
+to the id the index holds. Forging either means a preimage, so a bad
+source can cry wolf but cannot hide a fault.
+
+Neither half is enough alone. `tx_root` does not bind ids, so in a block
+holding one transaction — where the sort order cannot betray a changed
+id — a source serving the original data under a tampered id would
+reproduce `tx_root` exactly. That is why a missing signature is
+`unavailable` and not a skip: a source must not be able to pass by
+declining to answer.
 
 It must still be the transaction's **own** data, which is why this reads
 the `data` field of `/tx/{id}` and not the data route. `/raw/{id}` and
