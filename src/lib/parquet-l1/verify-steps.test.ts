@@ -11,8 +11,10 @@ import { describe, it } from 'node:test';
 import { FORK_1_6 } from './chain.js';
 import { BlockWalker, CheckedBlock } from './verify-steps.js';
 
-const sha384 = (...parts: Buffer[]) =>
-  crypto.createHash('sha384').update(Buffer.concat(parts)).digest();
+const sha384 = (...parts: Buffer[]): Buffer =>
+  Buffer.from(
+    crypto.createHash('sha384').update(Buffer.concat(parts)).digest(),
+  );
 
 describe('BlockWalker and the fork-1.6 seed', () => {
   // No built chain can span this fork — `nextHashListMerkle` treats
@@ -24,7 +26,9 @@ describe('BlockWalker and the fork-1.6 seed', () => {
     let previous: Buffer | null = null;
     let fold = Buffer.alloc(0);
     for (let height = 0; height <= upTo; height += 1) {
-      const indep = crypto.createHash('sha384').update(`b${height}`).digest();
+      const indep = Buffer.from(
+        crypto.createHash('sha384').update(`b${height}`).digest(),
+      );
       blocks.push({
         height,
         indep_hash: indep,
