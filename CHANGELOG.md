@@ -10,8 +10,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - `docs/index-swarm.md` documents querying a published dataset over HTTP: a
   `parquet-l1` band is Parquet and the byte routes serve ranges, so a client
-  can read a dataset in place with no install, no import and no gateway of its
-  own, fetching only the footer and the row groups a predicate selects. The
+  can read a dataset where it sits, with no band files to download, no import
+  into a database and no gateway of its own, fetching only the footer and the
+  row groups a predicate selects. DuckDB installs its own `httpfs` and `json`
+  extensions on first use. The
   signed document is the catalog, since HTTP has no directory listing to glob.
   Because `Repr-Digest` is co-signable and commits to the whole file, a ranged
   read still carries a signature over the digest of the file it read from.
@@ -180,9 +182,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - The nginx guidance for `/ar-io/indexes` in `docs/index-swarm.md` named the
   wrong remedy and understated the cost. It said to set `proxy_buffering off`,
   which does not fix anything: when a location has a cache zone, nginx strips
-  the client's `Range` from the upstream request so it can store the whole
-  object, before it has seen any `Cache-Control`, so no response header helps
-  either. The fix is `proxy_cache off` for the prefix, with no trailing slash,
+  the client's `Range` from the upstream request and fetches the whole object
+  so it can store it, before it has seen any `Cache-Control`, so no response
+  header helps either. What the client sees then depends on whether the
+  response was cacheable: a gateway that does not meter sends `public` and
+  nginx answers the range from its cache, while a metering gateway sends
+  `private`, nothing is stored, and nginx returns `200` with the whole body on
+  every request. A cache zone is wrong on both branches, since the whole file
+  crosses from the gateway either way and band files reach 1.35 GB. The fix is
+  `proxy_cache off` for the prefix, with no trailing slash,
   since a `proxy_pass` location whose prefix ends in `/` answers the unslashed
   form with a `301` and the document every subscriber polls lives there, with
   HTTPSig signing `@path`. The stated band size (7 to 30 MB) also predated

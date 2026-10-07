@@ -1057,9 +1057,11 @@ it could fetch. The gateway mounts `data/indexes` read only: it serves
 ## Querying a dataset over HTTP
 
 A `parquet-l1` band is Parquet, and the byte routes serve ranges, so a client
-can query a published dataset in place without installing anything, without
-an import, and without a gateway of its own. Any engine that reads Parquet
-over HTTP range requests works; the examples below use DuckDB's `httpfs`.
+can query a published dataset where it sits: no band files to download, no
+import into a database, and no gateway of its own. Any engine that reads
+Parquet over HTTP range requests works. The examples below use DuckDB, which
+needs its `httpfs` and `json` extensions, and installs them itself on first
+use.
 
 **The signed document is the catalog.** There is no directory listing, so a
 client cannot glob over HTTP: it reads `/ar-io/indexes`, picks the dataset by
@@ -1177,20 +1179,33 @@ Things to decide or check:
 
   `proxy_buffering off` on its own is not enough, and no response header can
   substitute for this. When a location has a cache zone, nginx strips the
-  client's `Range` from the upstream request so it can store the whole
-  object, which happens before it has seen any `Cache-Control`. A
+  client's `Range` from the upstream request and fetches the whole object so
+  it can store it, which happens before it has seen any `Cache-Control`. A
   `proxy_cache_bypass` keyed on `$upstream_http_cache_control` cannot help
-  either: that variable is empty when the bypass is evaluated. Measured
-  against a 541 MB band file on 2026-10-07: core and envoy both answered a
-  100-byte range with `206`; the same request through an nginx edge with a
-  cache zone returned `200` and all 541,753,181 bytes, after which the
-  metered route answered `402` because the full transfer had consumed the
-  allowance.
+  either: that variable is empty when the bypass is evaluated.
 
-  The cost is not only a slow resume. It makes
-  [querying a dataset over HTTP](#querying-a-dataset-over-http) impossible,
-  breaks BitTorrent WebSeeds (BEP-19), which fetch pieces by range, and fills
-  the cache with objects that evict everything else.
+  **What the client then sees depends on whether the response was
+  cacheable**, so the symptom differs between gateways:
+
+  | The gateway's `Cache-Control` for a file by name | Through a cache zone |
+  |---|---|
+  | `public, no-cache` (not metering) | nginx stores it and answers from cache, so the client does get a `206` |
+  | `private, no-cache` (metering) | nothing can be stored, so nginx has no cached object to answer a range from and returns `200` with the whole body, on **every** request |
+
+  Measured on 2026-10-07, both against a controlled 5 MB upstream and against
+  a real 541 MB band file. A cacheable upstream answered a 100-byte range
+  with `206` and 100 bytes. An uncacheable one answered `200` with all
+  5,000,000 bytes, twice, never caching. On a metered gateway the same
+  request returned `200` and all 541,753,181 bytes, after which the route
+  answered `402` because the transfer had consumed the allowance.
+
+  **A cache zone is wrong even on the branch that returns `206`.** The whole
+  file still crosses from the gateway on the first range request, so the
+  latency and the egress are paid either way, and band files of up to 1.35 GB
+  still fill a zone sized for small objects. On a metering gateway it is
+  worse than wrong: it makes
+  [querying a dataset over HTTP](#querying-a-dataset-over-http) impossible
+  and breaks BitTorrent WebSeeds (BEP-19), which fetch pieces by range.
 
   Note the prefix has **no trailing slash**. nginx answers a request for a
   `proxy_pass` location whose prefix ends in `/` with a `301` to the slashed
@@ -1517,11 +1532,15 @@ accepting a replayed older document.
 ## Troubleshooting
 
 **A range request on a band file returns `200` and the whole file** — a proxy
-in front has a cache zone for the prefix. This fails quietly, because a `200`
+in front has a cache zone for the prefix, and this gateway's byte responses
+are `private` because it meters them, so nothing can be cached and nginx has
+no stored object to answer a range from. This fails quietly, because a `200`
 carrying more bytes than were asked for looks like a success to anything that
 does not check the status, and it breaks WebSeeds, media seeking and
-[querying over HTTP](#querying-a-dataset-over-http) alike. Confirm by
-comparing the layers, innermost first:
+[querying over HTTP](#querying-a-dataset-over-http) alike. A gateway that does
+not meter sends `public` instead and will appear to work, while still pulling
+each whole file once and filling the cache with it. Confirm by comparing the
+layers, innermost first:
 
 ```bash
 BAND=.../transactions.parquet      # a band file from /ar-io/indexes
