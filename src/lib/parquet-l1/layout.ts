@@ -26,9 +26,51 @@
  * The exporter that writes bands and the kind that checks them both read
  * this module, so the two cannot drift.
  */
+import { FORK_2_0 } from './chain.js';
 
-/** The layout version, in each band's `band.json`. */
-export const PARQUET_L1_SCHEMA = 'l1-1';
+/** The layout version a band is written with, in its `band.json`. */
+export const PARQUET_L1_SCHEMA = 'l1-2';
+
+/**
+ * The versions a reader accepts, oldest first.
+ *
+ * `l1-1` wrote `blocks.tx_root` as `core.db` held it. Below the 2.0 fork
+ * that field is not committed by the block hash and cannot be recomputed,
+ * so a gateway keeps whatever its header source gave it, and the network
+ * disagrees: of 346 pre-fork blocks compared between two publishers on
+ * 2026-10-07, one side held 32 bytes and the other nothing, every time.
+ * Two honest publishers could therefore never write identical pre-fork
+ * bands, which defeats comparing their digests. `l1-2` writes one canonical
+ * value instead ({@link canonicalTxRoot}).
+ */
+export const PARQUET_L1_SCHEMAS = ['l1-1', 'l1-2'] as const;
+export type ParquetL1Schema = (typeof PARQUET_L1_SCHEMAS)[number];
+
+/**
+ * What a band stores for a block's `tx_root`: the stored bytes at and above
+ * the 2.0 fork, and `null` below it, where the protocol has no such field
+ * and gateways hold whatever their header source gave them — 32 bytes,
+ * nothing, or the empty string this gateway writes.
+ *
+ * Only below the fork. From the fork up, empty bytes are the real value of
+ * a block with no transactions, every publisher stores them the same way,
+ * and a band keeps them as they are.
+ *
+ * This is why {@link PARQUET_L1_SCHEMA} is `l1-2`: the rows, and so the
+ * digests, differ from `l1-1` for every band holding a pre-fork block.
+ */
+export function canonicalTxRoot(
+  height: number,
+  txRoot: Buffer | Uint8Array | string | null | undefined,
+): Buffer | null {
+  if (height < FORK_2_0) return null;
+  if (txRoot === null || txRoot === undefined) return null;
+  return Buffer.isBuffer(txRoot)
+    ? txRoot
+    : typeof txRoot === 'string'
+      ? Buffer.from(txRoot, 'utf8')
+      : Buffer.from(txRoot);
+}
 
 /**
  * Bands cover two nested fixed grids, so every publisher cuts the chain at
@@ -184,7 +226,8 @@ export const PARQUET_L1_TABLES: TableSpec[] = [
 /** What a band says about itself, in `band.json`. */
 export interface ParquetL1Band {
   version: 1;
-  schema: typeof PARQUET_L1_SCHEMA;
+  /** The version this band was written with, not the one we write. */
+  schema: ParquetL1Schema;
   /** The heights the band covers, both included. */
   heightRange: [number, number];
   /** Per table: rows, and a digest of the rows, independent of the Parquet bytes. */
@@ -216,11 +259,15 @@ export function parseBandFile(text: string): ParquetL1Band {
   }
   const band = raw as Record<string, unknown>;
   if (band.version !== 1) throw new Error(`${BAND_FILE}: version must be 1`);
-  if (band.schema !== PARQUET_L1_SCHEMA) {
+  // Every version this build can read, so a subscriber keeps importing a
+  // publisher that has not upgraded yet.
+  if (!PARQUET_L1_SCHEMAS.includes(band.schema as ParquetL1Schema)) {
     throw new Error(
-      `${BAND_FILE}: schema ${JSON.stringify(band.schema)} is not ${PARQUET_L1_SCHEMA}`,
+      `${BAND_FILE}: schema ${JSON.stringify(band.schema)} is not one of ` +
+        PARQUET_L1_SCHEMAS.join(', '),
     );
   }
+  const schema = band.schema as ParquetL1Schema;
   const range = band.heightRange;
   if (
     !Array.isArray(range) ||
@@ -275,7 +322,7 @@ export function parseBandFile(text: string): ParquetL1Band {
   }
   return {
     version: 1,
-    schema: PARQUET_L1_SCHEMA,
+    schema,
     heightRange: [range[0], range[1]],
     tables: parsedTables,
     ...(supersedes !== undefined ? { supersedes } : {}),

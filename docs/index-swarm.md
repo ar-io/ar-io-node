@@ -565,6 +565,26 @@ can't build them, and its runs say so (`incomplete`, not retried).
   Only the tip is ever rebuilt, so a subscriber re-downloads at most ~35 MB
   a day rather than a whole range. The top is one below the stable top, so
   the block above every band's last is there to anchor it.
+- **Pre-fork `tx_root` is normalised.** Below the Arweave 2.0 fork (height
+  422,250) a block hash does not commit `tx_root`, and it cannot be
+  recomputed, so each gateway keeps whatever its header source gave it — and
+  the network disagrees. Comparing two publishers of the same chain on
+  2026-10-07 found 346 pre-fork blocks where one side held 32 bytes and the
+  other nothing, never two different values; raw nodes disagree with each
+  other the same way (block 56,769 is empty on two and set on a third).
+  Left alone, that would make it impossible for two honest publishers to
+  produce the same pre-fork band, which is the one check nobody else can do
+  for them. So a band writes `tx_root` as the stored bytes from the fork up
+  and `null` below it, whatever `core.db` holds (32 bytes, nothing, or the
+  empty string this gateway writes). Nothing is lost: no check reads a
+  pre-fork `tx_root`, because there is nothing to check it against.
+
+  This is layout `l1-2` (`band.json`'s `schema`). A reader accepts `l1-1`
+  too, so a subscriber keeps importing from a publisher that hasn't
+  upgraded, and an import never erases a `tx_root` the gateway indexed
+  itself. Upgrading a publisher rebuilds the bands holding pre-fork blocks —
+  the five ranges below 500,000 — because their rows, and so their ids,
+  change; the rest keep their ids and are not rebuilt.
 - **Checks before publishing.** Every block links to the one before it and
   is linked to by the one above, each `hash_list_merkle` follows from the
   previous block, each block's `tx_root` is recomputed from its transactions
@@ -576,6 +596,16 @@ can't build them, and its runs say so (`incomplete`, not retried).
   tags: a row a fork left in `core.db` is counted (`strayTransactions`),
   never published. A range that fails is rejected, naming the heights, and
   nothing is written.
+
+  **What these checks do not cover:** the order transactions sit in within a
+  block (`block_transaction_index`). Arweave sorts a block's transactions by
+  `(format, id)` before building `tx_root`, so recomputing it proves the set
+  — ids, formats, sizes and data roots — at every height, and the order at
+  none. Comparing two publishers' `block_transactions` digests does cover
+  it, which is how two reversed blocks (184,686 and 188,324) were found on
+  vilenarios.com in October 2026; against a raw node's `/block/height/<h>`
+  it is cheap to settle one block, and that is the check to run when the
+  digests for a range disagree.
 - **Refused reads.** The gateway writes to `core.db` while the export reads
   it, so during a WAL checkpoint SQLite can refuse a read, reporting it as a
   write to a read-only database. That costs the whole band, so it is built

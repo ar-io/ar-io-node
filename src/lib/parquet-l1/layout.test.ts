@@ -10,10 +10,13 @@ import { describe, it } from 'node:test';
 import {
   BAND_FILE,
   BAND_FILES,
+  canonicalTxRoot,
   PARQUET_L1_SCHEMA,
+  PARQUET_L1_SCHEMAS,
   PARQUET_L1_TABLES,
   parseBandFile,
 } from './layout.js';
+import { FORK_2_0 } from './chain.js';
 
 const digest = 'a'.repeat(64);
 const valid = () => ({
@@ -92,6 +95,21 @@ describe('parseBandFile', () => {
     assert.deepEqual(band.supersedes, ['l1-h0-99999-old']);
   });
 
+  it('reads a band written to an older layout, keeping its version', () => {
+    const band = parseBandFile(JSON.stringify({ ...valid(), schema: 'l1-1' }));
+    assert.equal(band.schema, 'l1-1');
+    assert.notEqual(band.schema, PARQUET_L1_SCHEMA);
+  });
+
+  it('accepts every layout this build can read', () => {
+    for (const schema of PARQUET_L1_SCHEMAS) {
+      assert.equal(
+        parseBandFile(JSON.stringify({ ...valid(), schema })).schema,
+        schema,
+      );
+    }
+  });
+
   it('refuses anything malformed, naming what', () => {
     const refuse = (change: (band: any) => void, pattern: RegExp) => {
       const band: any = valid();
@@ -115,5 +133,34 @@ describe('parseBandFile', () => {
     refuse((b) => (b.tables.blocks.rows = -1), /table blocks needs/);
     refuse((b) => (b.supersedes = 'one'), /supersedes must be a list/);
     refuse((b) => (b.supersedes = ['']), /supersedes must be a list/);
+  });
+});
+
+describe('canonicalTxRoot', () => {
+  const root = Buffer.alloc(32, 7);
+
+  it('drops a pre-fork tx_root, whatever a gateway stored', () => {
+    // The field is not committed by a pre-fork block hash and cannot be
+    // recomputed, so publishers hold different things: 32 bytes, nothing,
+    // or the empty string an ar-io-node writes. All of them mean absent.
+    for (const stored of [root, null, undefined, Buffer.alloc(0), '']) {
+      assert.equal(canonicalTxRoot(0, stored), null);
+      assert.equal(canonicalTxRoot(FORK_2_0 - 1, stored), null);
+    }
+  });
+
+  it('keeps a tx_root from the fork up', () => {
+    assert.deepEqual(canonicalTxRoot(FORK_2_0, root), root);
+    assert.deepEqual(canonicalTxRoot(FORK_2_0 + 1_000_000, root), root);
+    assert.deepEqual(canonicalTxRoot(FORK_2_0, new Uint8Array(root)), root);
+  });
+
+  it('keeps empty bytes from the fork up: a block with no transactions', () => {
+    // Above the fork an empty tx_root is the real value, and every
+    // publisher stores it, so normalising it would change rows for nothing.
+    assert.deepEqual(canonicalTxRoot(FORK_2_0, Buffer.alloc(0)), Buffer.alloc(0));
+    assert.deepEqual(canonicalTxRoot(FORK_2_0, ''), Buffer.alloc(0));
+    assert.equal(canonicalTxRoot(FORK_2_0, null), null);
+    assert.equal(canonicalTxRoot(FORK_2_0, undefined), null);
   });
 });

@@ -15,17 +15,23 @@ import {
   L1_SUB_SPAN,
   l1RangeOf,
   l1SubRangeOf,
+  PARQUET_L1_SCHEMA,
   type ParquetL1Band,
 } from '../../../lib/parquet-l1/layout.js';
 import { isTransientSqliteError, L1CheckError } from './export.js';
 import { L1PublishedBand, planL1, withReadRetry } from './kind.js';
 
-const band = (id: string, from: number, to: number): L1PublishedBand => ({
+const band = (
+  id: string,
+  from: number,
+  to: number,
+  schema: string = PARQUET_L1_SCHEMA,
+): L1PublishedBand => ({
   id,
   dir: `/x/${id}`,
   from,
   to,
-  band: { heightRange: [from, to] } as ParquetL1Band,
+  band: { heightRange: [from, to], schema } as ParquetL1Band,
 });
 
 describe('the fixed grids', () => {
@@ -83,6 +89,39 @@ describe('planL1', () => {
       band('l1-h105000-106000-p-tip', 105_000, 106_000),
     ];
     assert.deepEqual(planL1(bands, 106_000), []);
+  });
+
+  it('rebuilds a band written to an older layout, and supersedes it', () => {
+    // A layout change rewrites rows, so the band's digest — and its id —
+    // change with it. Without this a publisher that upgraded would keep
+    // serving its old bands for ever and never match another publisher.
+    const bands = [
+      band('l1-h0-99999-p-old', 0, 99_999, 'l1-1'),
+      band('l1-h100000-104999-p-b', 100_000, 104_999),
+      band('l1-h105000-106000-p-tip', 105_000, 106_000),
+    ];
+    assert.deepEqual(planL1(bands, 106_000), [
+      {
+        role: 'h',
+        heightRange: [0, 99_999],
+        supersedes: ['l1-h0-99999-p-old'],
+      },
+    ]);
+  });
+
+  it('rebuilds an older-layout tip too', () => {
+    const bands = [
+      band('l1-h0-99999-p-a', 0, 99_999),
+      band('l1-h100000-104999-p-b', 100_000, 104_999),
+      band('l1-h105000-106000-p-tip', 105_000, 106_000, 'l1-1'),
+    ];
+    assert.deepEqual(planL1(bands, 106_000), [
+      {
+        role: 'd',
+        heightRange: [105_000, 106_000],
+        supersedes: ['l1-h105000-106000-p-tip'],
+      },
+    ]);
   });
 
   it('rebuilds only the tip as the top moves, superseding the tip before it', () => {

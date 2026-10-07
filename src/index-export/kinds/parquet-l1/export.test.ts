@@ -12,7 +12,10 @@ import * as path from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import Sqlite from 'better-sqlite3';
 
-import { PARQUET_L1_TABLES } from '../../../lib/parquet-l1/layout.js';
+import {
+  PARQUET_L1_SCHEMA,
+  PARQUET_L1_TABLES,
+} from '../../../lib/parquet-l1/layout.js';
 import { readTable } from '../../../lib/parquet-l1/read.js';
 import { ParquetL1Kind } from '../../../index-swarm/kinds/parquet-l1.js';
 import { buildCoreDb } from '../../../../test/parquet-l1-core-db.js';
@@ -409,5 +412,109 @@ describe('exportL1Band', () => {
     } finally {
       db.close();
     }
+  });
+});
+
+/**
+ * Below the 2.0 fork a block hash does not commit `tx_root`, so it cannot be
+ * recomputed and every gateway keeps whatever its header source gave it. Two
+ * publishers compared on 2026-10-07 disagreed on 346 pre-fork blocks — one
+ * side 32 bytes, the other nothing, every time — which would make matching
+ * digests impossible. A band writes one value instead.
+ */
+describe('exportL1Band below the 2.0 fork', () => {
+  const PRE_FIRST = 300_000;
+  const PRE_COUNT = 10;
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'parquet-l1-prefork-'));
+  });
+
+  afterEach(async () => {
+    await fsp.rm(dir, { recursive: true, force: true });
+  });
+
+  /** A pre-fork `core.db` whose blocks all carry a real 32-byte `tx_root`. */
+  const preForkCore = async (name: string) => {
+    const file = path.join(dir, name);
+    await buildCoreDb(file, PRE_FIRST, PRE_COUNT, { padded: false });
+    const db = new Sqlite(file, { readonly: true });
+    try {
+      // A block with no transactions has no root to store, so not every
+      // height carries one; the point is that some do.
+      const stored = db
+        .prepare(
+          `SELECT COUNT(*) FROM stable_blocks
+           WHERE height >= ? AND LENGTH(tx_root) = 32`,
+        )
+        .pluck()
+        .get(PRE_FIRST) as number;
+      assert.ok(stored > 0, 'the fixture stores a pre-fork tx_root');
+    } finally {
+      db.close();
+    }
+    return file;
+  };
+
+  const exportPreFork = async (coreDbPath: string, work: string) => {
+    const workDir = path.join(dir, work);
+    await fsp.mkdir(workDir);
+    return exportL1Band({
+      coreDbPath,
+      workDir,
+      from: PRE_FIRST,
+      to: PRE_FIRST + PRE_COUNT - 1,
+    });
+  };
+
+  it('writes no tx_root, though core.db holds one for every block', async () => {
+    const result = await exportPreFork(await preForkCore('core.db'), 'work');
+    const { Database } = await import('duckdb-async');
+    const duck = await Database.create(':memory:');
+    try {
+      const rows = (await duck.all(
+        `SELECT height, tx_root FROM read_parquet('${path.join(result.dir, 'blocks.parquet')}')
+         ORDER BY height`,
+      )) as Array<{ height: unknown; tx_root: unknown }>;
+      assert.equal(rows.length, PRE_COUNT);
+      for (const row of rows) {
+        assert.equal(row.tx_root, null, `height ${String(row.height)}`);
+      }
+    } finally {
+      await duck.close();
+    }
+  });
+
+  it('gives two gateways that disagree on a pre-fork tx_root the same band', async () => {
+    const kept = await preForkCore('kept.db');
+    const erased = path.join(dir, 'erased.db');
+    await fsp.copyFile(kept, erased);
+    // The same chain, one gateway holding a tx_root below the fork and the
+    // other the empty string an ar-io-node writes when its source had none.
+    const db = new Sqlite(erased);
+    try {
+      db.prepare(`UPDATE stable_blocks SET tx_root = '' WHERE height >= ?`).run(
+        PRE_FIRST,
+      );
+    } finally {
+      db.close();
+    }
+
+    const a = await exportPreFork(kept, 'work-kept');
+    const b = await exportPreFork(erased, 'work-erased');
+    assert.equal(
+      a.band.tables.blocks.rowDigest,
+      b.band.tables.blocks.rowDigest,
+      'the blocks digest must not depend on a pre-fork tx_root',
+    );
+    for (const table of PARQUET_L1_TABLES) {
+      assert.equal(
+        a.band.tables[table.name].rowDigest,
+        b.band.tables[table.name].rowDigest,
+        `${table.name} digest`,
+      );
+    }
+    assert.equal(a.band.schema, PARQUET_L1_SCHEMA);
   });
 });

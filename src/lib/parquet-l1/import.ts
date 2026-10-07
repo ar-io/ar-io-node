@@ -39,6 +39,7 @@ import {
   TableSpec,
 } from './layout.js';
 import { IMPORT_ORDER, readTable } from './read.js';
+import { FORK_2_0 } from './chain.js';
 
 /** A band on disk, ready to import. */
 export interface ImportableBand {
@@ -579,6 +580,9 @@ export async function importBand(
     hashAt: db
       .prepare('SELECT indep_hash FROM stable_blocks WHERE height = ?')
       .pluck(),
+    // Read before the range is cleared: see `keptTxRoots`.
+    storedTxRoots: db.prepare(`SELECT height, tx_root FROM stable_blocks
+      WHERE height BETWEEN ? AND ? AND tx_root IS NOT NULL`),
     haveTx: db
       .prepare('SELECT 1 FROM stable_transactions WHERE id = ?')
       .pluck(),
@@ -626,6 +630,10 @@ export async function importBand(
   let rows = 0;
   let missingTransactions = 0;
 
+  const blockColumns = spec('blocks').columns;
+  const heightColumn = blockColumns.findIndex((c) => c.name === 'height');
+  const txRootColumn = blockColumns.findIndex((c) => c.name === 'tx_root');
+
   const writers: Record<string, (batch: unknown[][]) => void> = {
     wallets: (batch) => {
       for (const [address, modulus] of batch) {
@@ -637,17 +645,26 @@ export async function importBand(
     },
     blocks: (batch) => {
       for (const r of batch) {
-        insert.blocks.run(
-          ...r.map((v, i) =>
-            v === null || v === undefined
-              ? null
-              : spec('blocks').columns[i].type === 'BLOB'
-                ? asBuffer(v)
-                : typeof v === 'bigint'
-                  ? Number(v)
-                  : v,
-          ),
+        const values = r.map((v, i) =>
+          v === null || v === undefined
+            ? null
+            : spec('blocks').columns[i].type === 'BLOB'
+              ? asBuffer(v)
+              : typeof v === 'bigint'
+                ? Number(v)
+                : v,
         );
+        // An `l1-2` band holds no pre-fork `tx_root` (it is not committed by
+        // the block hash, so publishers disagree), but a gateway that
+        // indexed the chain itself has one. The insert replaces the row, so
+        // keep what is already stored rather than erasing it.
+        if (values[txRootColumn] === null) {
+          // `readTable` casts UBIGINT to VARCHAR (a UBIGINT arrives in node
+          // as a double and would round), so a height here is a string.
+          const kept = keptTxRoots.get(Number(values[heightColumn]));
+          if (kept !== undefined) values[txRootColumn] = kept;
+        }
+        insert.blocks.run(...values);
       }
     },
     transactions: (batch) => {
@@ -768,6 +785,26 @@ export async function importBand(
     bandDigest(band),
     Math.floor(Date.now() / 1000),
   );
+  // An `l1-2` band holds no pre-fork `tx_root`: below the fork the field is
+  // not committed by the block hash, publishers disagree on it, and writing
+  // one value is what lets their digests match. A gateway that indexed the
+  // chain itself does have one, and importing a band must not erase it — so
+  // keep what is stored, before the range is cleared, and put it back.
+  const keptTxRoots = new Map<number, Buffer>();
+  if (from < FORK_2_0) {
+    for (const row of insert.storedTxRoots.all(
+      from,
+      Math.min(to, FORK_2_0 - 1),
+    ) as Array<{ height: number; tx_root: Buffer | string | null }>) {
+      const stored = row.tx_root;
+      if (stored !== null && stored.length > 0) {
+        keptTxRoots.set(
+          row.height,
+          Buffer.isBuffer(stored) ? stored : Buffer.from(stored, 'utf8'),
+        );
+      }
+    }
+  }
   insert.clearLinks.run(from, to);
   insert.clearTags.run(from, to);
   insert.clearTxs.run(from, to);

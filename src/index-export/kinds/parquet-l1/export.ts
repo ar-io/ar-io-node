@@ -42,6 +42,7 @@ import {
 import { RowDigest } from '../../../lib/parquet-l1/digest.js';
 import {
   BAND_FILE,
+  canonicalTxRoot,
   PARQUET_L1_SCHEMA,
   PARQUET_L1_TABLES,
   ParquetL1Band,
@@ -293,6 +294,13 @@ export async function exportL1Band({
         sql.blocks.all(start, end) as Array<Record<string, any>>,
         table('blocks'),
       );
+      // One value for a pre-fork `tx_root`, whatever this gateway's header
+      // source gave it, so two publishers of the same chain write the same
+      // rows. Nothing checks a pre-fork `tx_root`: `checkTxRoot` skips
+      // below the fork, where the protocol has no such field.
+      for (const block of blocks) {
+        block.tx_root = canonicalTxRoot(block.height, block.tx_root);
+      }
       const txs = normalizeBytes(
         sql.transactions.all(start, end) as Array<Record<string, any>>,
         table('transactions'),

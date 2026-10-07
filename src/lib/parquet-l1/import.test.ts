@@ -1336,3 +1336,111 @@ describe('runImport', () => {
     );
   });
 });
+
+/**
+ * An `l1-2` band holds no pre-fork `tx_root`: publishers disagree on it, so
+ * one canonical value is what lets their digests match. A gateway that
+ * indexed the chain itself does hold one, and importing a band — which
+ * clears and rewrites its range — must not erase it.
+ */
+describe('importBand below the 2.0 fork', () => {
+  const PRE_FIRST = 300_000;
+  const PRE_COUNT = 10;
+  let dir: string;
+  let duck: Database;
+  let entry: ImportableBand;
+  let target: Sqlite.Database;
+
+  const txRoots = (db: Sqlite.Database) =>
+    db
+      .prepare(
+        `SELECT height, tx_root FROM stable_blocks WHERE height >= ?
+         ORDER BY height`,
+      )
+      .all(PRE_FIRST) as Array<{ height: number; tx_root: Buffer | null }>;
+
+  beforeEach(async () => {
+    dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'parquet-l1-import-pre-'));
+    const source = path.join(dir, 'source.db');
+    const workDir = path.join(dir, 'work');
+    await fsp.mkdir(workDir);
+    await buildCoreDb(source, PRE_FIRST, PRE_COUNT, { padded: false });
+    const result = await exportL1Band({
+      coreDbPath: source,
+      workDir,
+      from: PRE_FIRST,
+      to: PRE_FIRST + PRE_COUNT - 1,
+    });
+    entry = {
+      id: `l1-h${PRE_FIRST}-${PRE_FIRST + PRE_COUNT - 1}-test-0`,
+      dir: result.dir,
+      band: result.band,
+    };
+    const { Database } = await import('duckdb-async');
+    duck = await Database.create(':memory:');
+    target = emptyCore(path.join(dir, 'core.db'));
+  });
+
+  afterEach(async () => {
+    target?.close();
+    await duck?.close();
+    await fsp.rm(dir, { recursive: true, force: true });
+  });
+
+  it('imports a band that carries no pre-fork tx_root', async () => {
+    await importBand(target, duck, entry, { log, batchRows: 7 });
+    const got = txRoots(target);
+    assert.equal(got.length, PRE_COUNT);
+    for (const row of got) {
+      assert.equal(row.tx_root, null, `height ${row.height}`);
+    }
+  });
+
+  it('keeps a tx_root this gateway already indexed', async () => {
+    // The gateway's own copy of the same heights, with the tx_root its
+    // header source gave it.
+    const own = path.join(dir, 'own.db');
+    await buildCoreDb(own, PRE_FIRST, PRE_COUNT, { padded: false });
+    const mine = new Sqlite(own, { readonly: true });
+    let stored: Array<{ height: number; tx_root: Buffer | null }>;
+    try {
+      stored = txRoots(mine);
+      target.exec('DELETE FROM stable_blocks');
+      const copy = target.prepare(`INSERT INTO stable_blocks (height,
+        indep_hash, nonce, hash, block_timestamp, diff, last_retarget,
+        reward_pool, block_size, weave_size, tx_root, tx_count,
+        missing_tx_count)
+        VALUES (?, ?, x'00', x'00', 0, '1', 0, '0', 0, 0, ?, 0, 0)`);
+      for (const row of stored) {
+        copy.run(row.height, Buffer.alloc(48, row.height % 251), row.tx_root);
+      }
+    } finally {
+      mine.close();
+    }
+    // A block with no transactions has no root to keep; the ones that do
+    // are what must survive.
+    const held = new Map(
+      stored
+        .filter((r) => r.tx_root !== null && r.tx_root.length === 32)
+        .map((r) => [r.height, r.tx_root as Buffer]),
+    );
+    assert.ok(held.size > 0, 'the gateway starts with pre-fork tx_roots');
+
+    await importBand(target, duck, entry, { log, batchRows: 7 });
+
+    const got = txRoots(target);
+    assert.equal(got.length, PRE_COUNT);
+    for (const row of got) {
+      const kept = held.get(row.height);
+      if (kept === undefined) {
+        assert.equal(row.tx_root, null, `height ${row.height} stays empty`);
+      } else {
+        assert.deepEqual(
+          row.tx_root,
+          kept,
+          `height ${row.height} must not be erased`,
+        );
+      }
+    }
+  });
+});

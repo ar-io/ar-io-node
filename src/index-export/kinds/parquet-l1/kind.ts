@@ -36,6 +36,7 @@ import {
   L1_SUB_SPAN,
   l1RangeOf,
   l1SubRangeOf,
+  PARQUET_L1_SCHEMA,
   ParquetL1Band,
   readBandDirectory,
 } from '../../../lib/parquet-l1/layout.js';
@@ -143,6 +144,7 @@ export function planL1(
 ): L1Step[] {
   if (top < 0) return [];
   const steps: L1Step[] = [];
+  const current = (b: L1PublishedBand) => b.band.schema === PARQUET_L1_SCHEMA;
   const covers = (from: number, to: number) => [
     ...new Set([
       ...superseded.filter((id) => {
@@ -152,13 +154,21 @@ export function planL1(
       ...bands
         .filter(
           (b) =>
-            b.from >= from && b.to <= to && !(b.from === from && b.to === to),
+            b.from >= from &&
+            b.to <= to &&
+            // A band of this exact range still counts as covered when it
+            // was written to an older layout: the rebuilt one has to
+            // supersede it, or a subscriber would keep both.
+            (!(b.from === from && b.to === to) || !current(b)),
         )
         .map((b) => b.id),
     ]),
   ];
+  // A range is only covered by a band of the layout this build writes, so
+  // upgrading a publisher rebuilds what the new layout changes instead of
+  // leaving the network split across versions.
   const have = (from: number, to: number) =>
-    bands.some((b) => b.from === from && b.to === to);
+    bands.some((b) => b.from === from && b.to === to && current(b));
 
   // Whole history ranges, oldest first.
   const [activeFrom] = l1RangeOf(top);
@@ -185,7 +195,7 @@ export function planL1(
       });
     }
   }
-  if (!bands.some((b) => b.from === tipFrom && b.to >= top)) {
+  if (!bands.some((b) => b.from === tipFrom && b.to >= top && current(b))) {
     steps.push({
       role: 'd',
       heightRange: [tipFrom, top],
