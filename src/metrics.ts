@@ -1069,6 +1069,22 @@ export const getDataStreamSizeHistogram = new promClient.Histogram({
   buckets: [102400, 1048576, 10485760, 104857600], // 100KB, 1MB, 10MB, 100MB
 });
 
+// A gateway answering 429 is skipped until its Retry-After has passed (see
+// GatewayThrottle). Cooldowns counts each time a gateway enters one; skips
+// counts the requests that went straight to the next gateway or tier instead
+// of queueing for a throttled one.
+export const gatewayThrottleCooldownsTotal = new promClient.Counter({
+  name: 'gateway_throttle_cooldowns_total',
+  help: 'Count of times an upstream gateway answered 429 and was put in a cooldown',
+  labelNames: ['gateway_url'] as const,
+});
+
+export const gatewayThrottleSkipsTotal = new promClient.Counter({
+  name: 'gateway_throttle_skips_total',
+  help: 'Count of requests that skipped an upstream gateway because it was in a 429 cooldown',
+  labelNames: ['gateway_url'] as const,
+});
+
 // Incremented when GatewaysDataSource sent a Range request but the upstream
 // answered with a full 200 body instead of a 206 partial-content response.
 // `outcome` distinguishes the cases:
