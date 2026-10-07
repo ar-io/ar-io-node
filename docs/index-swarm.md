@@ -501,6 +501,45 @@ digests, then its footer and schema against the layout and the row counts in
 itself reads nothing there: an importer does, checking the rows against the
 chain as it goes. The sidecar loads DuckDB only to check these bands.
 
+#### Querying bands in place, without importing
+
+Importing is for a gateway, whose serving path reads SQLite. Anything that
+only wants to **ask questions** of L1 — analytics, research, a dashboard,
+a one-off lookup — can query the Parquet directly and skip the import
+entirely. That matters because the two costs are nowhere near each other:
+the whole chain is 12.8 GB to download and about 120 GB and many hours to
+import.
+
+```bash
+duckdb -c "
+  SELECT CAST(tag_value AS VARCHAR) AS app, COUNT(*) AS n
+  FROM read_parquet('data/indexes/installed/parquet-l1/*/tags.parquet')
+  WHERE CAST(tag_name AS VARCHAR) = 'App-Name'
+  GROUP BY app ORDER BY n DESC LIMIT 10"
+```
+
+Measured over all 23 bands of the whole chain (2 CPUs, 2026-10-05): that
+aggregate over 305,575,346 tag rows takes **18 seconds**, and joining
+80,320,699 transactions to their blocks for a per-year count takes the
+same. The files glob across bands, so a query spans the chain or one
+height range by naming fewer of them.
+
+Two properties of the band format make this work, and both are
+deliberate:
+
+- **Tags are plaintext.** `core.db` stores SHA-1 hashes into `tag_names`
+  and `tag_values`, so the same question against SQLite needs two joins
+  and the dictionaries. In a band, `tag_name = 'App-Name'` is a string
+  comparison.
+- **Parquet is columnar.** The query above reads two columns and skips
+  the rest of the file, which is why 12.8 GB answers in seconds.
+
+**Where it does not substitute for importing.** There are no indexes, so
+it is good at scans and aggregates over a height range and bad at point
+lookups: "give me transaction X" scans a file where SQLite seeks a
+B-tree. It serves no HTTP route, no GraphQL and no trust headers. It is a
+dataset, not a gateway.
+
 #### Producing L1 bands
 
 `index-export` builds them from this gateway's `core.db` (read-only) when

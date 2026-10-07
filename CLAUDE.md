@@ -163,6 +163,36 @@ Five coordinated edits are required:
   files stay current. Down migrations go in `migrations/down/` with the same
   filename.
 
+### Arweave consensus rules are mirrored, and pinned
+
+`src/lib/parquet-l1/chain.ts` reimplements part of Arweave's consensus
+hashing in TypeScript: the `hash_list_merkle` recurrence across its eras,
+`tx_root` with the fork-2.5 padding, and the v1 `data_root` chunking.
+That is deliberate — it is what lets an index be checked against the
+chain without running a node — but it means upstream can change a rule
+and leave us quietly wrong, which is worse than having no verifier.
+
+`test/arweave-consensus-pin.ts` records each upstream function and a
+digest of its text; `chain-drift.test.ts` re-reads them from the
+`repos/arweave` checkout and fails when one changes. It **skips when
+there is no checkout**, so CI is unaffected; run `mr update` to get one.
+
+A failure is a prompt to read the upstream diff, not a verdict: a
+comment and a consensus change look identical to it. If our rule still
+holds, update the pin and say so in the commit.
+
+Two rules that cost real time to get wrong, worth knowing before editing
+`chain.ts`:
+
+- **`tx_root` does not bind transaction ids.** Arweave drops the id
+  before building the tree (`ar_block.erl`, `generate_tx_tree/1`), so an
+  id reaches it only through the sort order.
+- **A v1 `data_root` is not `arweave-js`'s `computeRootHash`.** Arweave
+  splits with `ar_tx:chunk_binary` — fixed chunks, remainder last, no
+  rebalancing — while `arweave-js` rebalances the last two chunks under
+  32 KB. Using the wrong one made 9 of 150 sampled mainnet blocks look
+  corrupt.
+
 ### Auto-verify source adapters
 
 Schema changes to SQLite `stable_*` tables, the Parquet export, or the

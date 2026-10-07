@@ -12,8 +12,8 @@ import * as path from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import Sqlite from 'better-sqlite3';
 
-import { RowDigest } from '../../../lib/parquet-l1/digest.js';
 import { PARQUET_L1_TABLES } from '../../../lib/parquet-l1/layout.js';
+import { readTable } from '../../../lib/parquet-l1/read.js';
 import { ParquetL1Kind } from '../../../index-swarm/kinds/parquet-l1.js';
 import { buildCoreDb } from '../../../../test/parquet-l1-core-db.js';
 import { createTestLogger } from '../../../../test/test-logger.js';
@@ -72,21 +72,25 @@ describe('exportL1Band', () => {
     assert.equal(result.band.tables.wallets.rows, 1);
     assert.deepEqual(result.band.supersedes, ['l1-old']);
 
-    // Recomputed from what DuckDB reads back out of the Parquet files.
+    // Read back through the importer's own reader, which checks each
+    // table's rows against the digest and count the band claims. That is
+    // the contract between the two halves, so it is worth asserting here
+    // rather than recomputing the digest a second way.
     const { Database } = await import('duckdb-async');
     const duck = await Database.create(':memory:');
     try {
       for (const table of PARQUET_L1_TABLES) {
-        const rows = (await duck.all(
-          `SELECT * FROM read_parquet('${path.join(result.dir, table.file)}')`,
-        )) as Array<Record<string, unknown>>;
-        const digest = new RowDigest(table.columns);
-        for (const row of rows)
-          digest.add(table.columns.map((c) => row[c.name]));
+        const read = await readTable(
+          duck,
+          result.dir,
+          table,
+          result.band,
+          async () => undefined,
+        );
         assert.equal(
-          digest.hex(),
-          result.band.tables[table.name].rowDigest,
-          `${table.name} digest`,
+          read,
+          result.band.tables[table.name].rows,
+          `${table.name} rows`,
         );
       }
     } finally {

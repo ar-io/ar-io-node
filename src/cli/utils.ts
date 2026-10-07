@@ -27,11 +27,47 @@ function stringifyJsonForCLIDisplay(json: unknown): string {
   return JSON.stringify(json, null, 2);
 }
 
-function logCommandOutput(output: JsonSerializable): void {
-  console.log(stringifyJsonForCLIDisplay(output));
+/**
+ * Writes to a stream and waits for the bytes to reach the OS.
+ *
+ * `process.exit` throws away whatever is still buffered, and a write to a
+ * pipe is asynchronous — so a result larger than the pipe buffer (64 KiB)
+ * was being cut mid-token, leaving stdout holding JSON that will not
+ * parse. A file hid it, because those writes are synchronous; the shapes
+ * that broke are exactly the documented ones, `| jq` and `docker run`.
+ */
+export async function writeAndFlush(
+  stream: NodeJS.WriteStream,
+  text: string,
+): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    // A closed pipe calls back with EPIPE and *then* emits `error`. With
+    // nothing listening that is an unhandled event, which kills the
+    // process before the caller's error path runs. The listener outlives
+    // the callback for that reason; removing it in the callback is too
+    // early.
+    const settled = (outcome: () => void) => {
+      setImmediate(() => stream.off('error', swallow));
+      outcome();
+    };
+    const swallow = () => undefined;
+    stream.on('error', swallow);
+    stream.write(text, (error) =>
+      error === null || error === undefined
+        ? settled(resolve)
+        : settled(() => reject(error)),
+    );
+  });
 }
 
-function exitWithErrorLog(error: unknown, debug = false): never {
+async function logCommandOutput(output: JsonSerializable): Promise<void> {
+  await writeAndFlush(
+    process.stdout,
+    stringifyJsonForCLIDisplay(output) + '\n',
+  );
+}
+
+async function exitWithErrorLog(error: unknown, debug = false): Promise<never> {
   let errorLog: string;
   if (error instanceof Error) {
     errorLog = error.message;
@@ -41,7 +77,7 @@ function exitWithErrorLog(error: unknown, debug = false): never {
   } else {
     errorLog = stringifyJsonForCLIDisplay(error);
   }
-  console.error(errorLog);
+  await writeAndFlush(process.stderr, errorLog + '\n');
   process.exit(1);
 }
 
@@ -57,10 +93,10 @@ export async function runCommand<O extends GlobalCLIOptions>(
   const options = command.optsWithGlobals<O>();
   try {
     const output = await action(options);
-    logCommandOutput(output);
+    await logCommandOutput(output);
     process.exit(0);
   } catch (error) {
-    exitWithErrorLog(error, options.debug);
+    await exitWithErrorLog(error, options.debug);
   }
 }
 

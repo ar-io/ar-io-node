@@ -128,6 +128,56 @@ export function nextHashListMerkle(previous: ChainBlock): Buffer {
 }
 
 /**
+ * What a block's `hash_list_merkle` must be, given the block below it and
+ * the running fold for the 1.6 seed.
+ *
+ * - `Buffer` — it must equal this.
+ * - `null` — it must be empty (every height below the 1.6 fork).
+ * - `undefined` — not checkable here: the 1.6 seed without a run that
+ *   starts at height 0 to fold, the 2.0 seed (not rebuildable from stored
+ *   fields), or no usable block below.
+ *
+ * Shared by {@link checkBlockChain} and the streaming verifier, so the two
+ * cannot drift on the era rules.
+ */
+/**
+ * The block below carries no `hash_list_merkle` where it must have one.
+ * Not a seed and not unrebuildable: a defect, and treating it as a skip
+ * is how a forged block escapes the chain binding — null out its merkle
+ * and the block above it is never compared.
+ */
+export const PREDECESSOR_HAS_NO_MERKLE = 'predecessor-has-no-merkle';
+
+export function expectedHashListMerkle(
+  height: number,
+  previous: ChainBlock | undefined,
+  seedFold: Buffer | undefined,
+): Buffer | null | undefined | typeof PREDECESSOR_HAS_NO_MERKLE {
+  if (height < FORK_1_6) return null;
+  if (height === FORK_1_6) return seedFold;
+  if (height === FORK_2_0) return undefined;
+  // Nothing below to build from; the caller has no predecessor at all.
+  if (previous === undefined) return undefined;
+  // Reaching here means the height is above the 1.6 fork, so a
+  // contiguous predecessor is at or above it too and carries a merkle;
+  // a block that does not follow the one below it is reported as
+  // non-contiguous before this. An empty value is therefore a broken
+  // row, never a seed, and skipping it is how a forged block would
+  // escape the binding.
+  if (empty(previous.hash_list_merkle)) return PREDECESSOR_HAS_NO_MERKLE;
+  return nextHashListMerkle(previous);
+}
+
+/** The 1.6 seed folds heights 0 to 94,998; this accumulates one block. */
+export function foldSeed(
+  seedFold: Buffer | undefined,
+  block: Pick<ChainBlock, 'height' | 'indep_hash'>,
+): Buffer | undefined {
+  if (seedFold === undefined || block.height > FORK_1_6 - 2) return seedFold;
+  return sha384(seedFold, block.indep_hash);
+}
+
+/**
  * Checks block links and `hash_list_merkle` over consecutive blocks, sorted
  * by height. `prior` is the block just below the first, when there is one.
  */
@@ -173,19 +223,15 @@ export function checkBlockChain(
       }
     }
 
-    let expected: Buffer | null | undefined;
-    if (h < FORK_1_6) {
-      expected = null;
-    } else if (h === FORK_1_6) {
-      expected = seedFold;
-    } else if (h === FORK_2_0) {
-      expected = undefined;
-    } else if (previous === undefined || empty(previous.hash_list_merkle)) {
-      expected = undefined;
-    } else {
-      expected = nextHashListMerkle(previous);
-    }
-    if (expected === undefined) {
+    const expected = expectedHashListMerkle(h, previous, seedFold);
+    if (expected === PREDECESSOR_HAS_NO_MERKLE) {
+      report.hashListChecked += 1;
+      fail(
+        h,
+        'hash_list_merkle',
+        `the block below carries no hash_list_merkle`,
+      );
+    } else if (expected === undefined) {
       report.hashListSkipped += 1;
     } else {
       report.hashListChecked += 1;
@@ -197,13 +243,49 @@ export function checkBlockChain(
       if (!ok) fail(h, 'hash_list_merkle');
     }
 
-    // The fold for the 1.6 seed takes heights 0 to 94,998.
-    if (seedFold !== undefined && h <= FORK_1_6 - 2) {
-      seedFold = sha384(seedFold, block.indep_hash);
-    }
+    seedFold = foldSeed(seedFold, block);
     previous = block;
   }
   return report;
+}
+
+/**
+ * The `data_root` of a format-1 transaction's data, as the chain computes
+ * it.
+ *
+ * **Not** `arweave-js`'s `computeRootHash`. Arweave splits v1 data into
+ * fixed {@link CHUNK}-sized pieces with the remainder last and no
+ * rebalancing (`ar_tx:chunk_binary`), while `arweave-js`'s `chunkData`
+ * rebalances the final two chunks when the last would fall under 32 KB
+ * (`MIN_CHUNK_SIZE`). The two agree on data of a single chunk, and on data
+ * whose remainder is 32 KB or more; they disagree otherwise, which on
+ * mainnet is common enough to have shown up in 9 of 150 sampled blocks.
+ *
+ * Data that is an exact multiple of {@link CHUNK} ends with a zero-length
+ * chunk, which both implementations include in the tree, so that case
+ * needs no special handling here.
+ */
+export async function v1DataRoot(data: Uint8Array): Promise<Buffer> {
+  const chunks: Array<{
+    dataHash: Uint8Array;
+    minByteRange: number;
+    maxByteRange: number;
+  }> = [];
+  let cursor = 0;
+  for (;;) {
+    const size = Math.min(CHUNK, data.length - cursor);
+    const piece = data.subarray(cursor, cursor + size);
+    chunks.push({
+      dataHash: crypto.createHash('sha256').update(piece).digest(),
+      minByteRange: cursor,
+      maxByteRange: cursor + size,
+    });
+    cursor += size;
+    // `chunk_binary` recurses while the rest is at least a chunk, so the
+    // last piece is the remainder, empty when the data divides exactly.
+    if (size < CHUNK) break;
+  }
+  return Buffer.from((await buildLayers(await generateLeaves(chunks))).id);
 }
 
 let emptyRoot: Promise<Buffer> | undefined;
@@ -215,9 +297,21 @@ let emptyRoot: Promise<Buffer> | undefined;
 export async function computeTxRoot(
   height: number,
   txs: ChainTransaction[],
+  /**
+   * Data roots for format-1 transactions that carry data, keyed by the
+   * base64url id. An index does not store these — a v1 transaction's root
+   * comes from its data, which only whoever holds the data can derive — so
+   * without them a block holding one cannot be checked at all. Supply them
+   * and it can. See `index-l1-audit`.
+   */
+  suppliedDataRoots?: ReadonlyMap<string, Buffer>,
 ): Promise<Buffer | undefined> {
   if (txs.length === 0) return Buffer.alloc(0);
-  if (txs.some((tx) => tx.format === 1 && BigInt(tx.data_size) > 0n)) {
+  const needsData = (tx: ChainTransaction) =>
+    tx.format === 1 && BigInt(tx.data_size) > 0n;
+  const suppliedFor = (tx: ChainTransaction) =>
+    suppliedDataRoots?.get(tx.id.toString('base64url'));
+  if (txs.some((tx) => needsData(tx) && suppliedFor(tx) === undefined)) {
     return undefined;
   }
   emptyRoot ??= computeRootHash(new Uint8Array(0)).then((root) =>
@@ -240,8 +334,11 @@ export async function computeTxRoot(
     leaves.push({
       // A format-1 transaction's root comes from its data: with none, the
       // root of empty data, not an empty binary.
-      dataHash:
-        tx.format === 1 ? formatOneRoot : (tx.data_root ?? Buffer.alloc(0)),
+      dataHash: needsData(tx)
+        ? (suppliedFor(tx) as Buffer)
+        : tx.format === 1
+          ? formatOneRoot
+          : (tx.data_root ?? Buffer.alloc(0)),
       minByteRange: 0,
       maxByteRange: end,
     });
@@ -272,9 +369,10 @@ export async function computeTxRoot(
 export async function checkTxRoot(
   block: Pick<ChainBlock, 'height' | 'tx_root'>,
   txs: ChainTransaction[],
+  suppliedDataRoots?: ReadonlyMap<string, Buffer>,
 ): Promise<boolean | undefined> {
   if (block.height < FORK_2_0) return undefined;
-  const root = await computeTxRoot(block.height, txs);
+  const root = await computeTxRoot(block.height, txs, suppliedDataRoots);
   if (root === undefined) return undefined;
   if (root.length === 0) return empty(block.tx_root);
   return block.tx_root !== null && root.equals(block.tx_root);

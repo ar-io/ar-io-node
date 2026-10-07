@@ -9,7 +9,13 @@ import crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import { describe, it } from 'node:test';
 
-import { ChainBlock, checkBlockChain, checkTxRoot, FORK_1_6 } from './chain.js';
+import {
+  ChainBlock,
+  checkBlockChain,
+  checkTxRoot,
+  foldSeed,
+  FORK_1_6,
+} from './chain.js';
 
 /** Arweave mainnet rows (see the fixture's `source`). */
 const fixture = JSON.parse(
@@ -183,5 +189,40 @@ describe('checkTxRoot', () => {
       true,
       'an empty block stores an empty root',
     );
+  });
+});
+
+describe('foldSeed', () => {
+  const block = (height: number, byte: number) => ({
+    height,
+    indep_hash: Buffer.alloc(48, byte),
+  });
+
+  // The fork-1.6 seed folds heights 0 to 94,998, and no fixture can
+  // span that: `nextHashListMerkle` treats both 95,000 and 422,250 as
+  // seeds, so a built chain cannot cross either. The driver's use of
+  // this is covered only by the mainnet run, where it reproduces the
+  // seed at 95,000. The function itself is covered here.
+  it('accumulates while below the last folded height', () => {
+    const one = foldSeed(Buffer.alloc(0), block(0, 1));
+    assert.ok(one !== undefined && one.length === 48, 'folded to a hash');
+    const two = foldSeed(one, block(1, 2));
+    assert.notDeepEqual(two, one, 'each block changes it');
+  });
+
+  it('stops folding once past the last height the seed covers', () => {
+    const at = foldSeed(Buffer.alloc(0), block(FORK_1_6 - 2, 3));
+    const past = foldSeed(at, block(FORK_1_6 - 1, 4));
+    assert.deepEqual(past, at, 'heights above 94,998 are not folded in');
+  });
+
+  it('stays undefined for a run that did not start at height 0', () => {
+    assert.equal(foldSeed(undefined, block(50_000, 5)), undefined);
+  });
+
+  it('is order-sensitive, as a fold over block hashes must be', () => {
+    const ab = foldSeed(foldSeed(Buffer.alloc(0), block(0, 1)), block(1, 2));
+    const ba = foldSeed(foldSeed(Buffer.alloc(0), block(0, 2)), block(1, 1));
+    assert.notDeepEqual(ab, ba);
   });
 });

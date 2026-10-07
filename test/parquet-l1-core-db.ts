@@ -30,7 +30,21 @@ export async function buildCoreDb(
   {
     genesis = false,
     signatures = false,
-  }: { genesis?: boolean; signatures?: boolean } = {},
+    padded = true,
+    weaveStart = 1_000_000,
+  }: {
+    genesis?: boolean;
+    signatures?: boolean;
+    /** The weave size the anchor block sits at, for the chain's era. */
+    weaveStart?: number;
+    /**
+     * Whether the weave grows by each transaction's data padded to a
+     * chunk, as it has since Arweave passed `STRICT_DATA_SPLIT_THRESHOLD`
+     * (around height 800,000), or by the raw `data_size`, as it did
+     * below that. The default matches the heights these fixtures use.
+     */
+    padded?: boolean;
+  } = {},
 ): Promise<void> {
   const db = new Sqlite(file);
   db.exec(fs.readFileSync('test/core-schema.sql', 'utf8'));
@@ -45,7 +59,7 @@ export async function buildCoreDb(
     block_transaction_index, format, last_tx, owner_address, target, quantity,
     reward, data_size, data_root, content_type, tag_count, offset, indexed_at,
     signature)
-    VALUES (?, ?, ?, 2, ?, ?, NULL, '1000000000000', '42', ?, ?, 'text/plain', ?, ?, 5, ?)`);
+    VALUES (?, ?, ?, 2, ?, ?, NULL, '500000000000000000', '42', ?, ?, 'text/plain', ?, ?, 5, ?)`);
   const insertTagName = db.prepare(
     'INSERT OR IGNORE INTO tag_names (hash, name) VALUES (?, ?)',
   );
@@ -65,7 +79,7 @@ export async function buildCoreDb(
     height: first - 1,
     indep_hash: random(48),
     previous_block: random(48),
-    weave_size: 1_000_000,
+    weave_size: weaveStart,
     tx_root: Buffer.alloc(0),
     hash_list_merkle: random(48),
   };
@@ -120,7 +134,8 @@ export async function buildCoreDb(
       };
     });
     const size = txs.reduce(
-      (s, t) => s + Math.ceil(t.data_size / 262144) * 262144,
+      (s, t) =>
+        s + (padded ? Math.ceil(t.data_size / 262144) * 262144 : t.data_size),
       0,
     );
     const block: ChainBlock = {

@@ -324,6 +324,34 @@ range, in Parquet, with a `band.json` of per-table row counts and row
 digests. Lets a new gateway import its L1 index instead of indexing the
 chain, and apps query it in place.
 
+<a id="l1-import"></a> **L1 import** — Filling a gateway's `core.db` from
+published [Parquet L1 bands](#parquet-l1) with `ar-io-node index-l1-import`,
+instead of indexing the chain block by block. Offline, idempotent, and
+recorded band by band in `parquet_l1_imports` so it resumes.
+
+<a id="query-in-place"></a> **Query in place** — Reading
+[Parquet L1 bands](#parquet-l1) directly with DuckDB or Polars instead of
+importing them into a gateway's `core.db`. Possible because tags are
+plaintext in a band and Parquet is columnar. Good for scans and
+aggregates, no use for point lookups, and it serves no gateway route.
+
+<a id="l1-audit"></a> **L1 audit** — Checking the `tx_root` of blocks an
+index cannot check alone, with `ar-io-node index-l1-audit`. `tx_root`
+proves each transaction's data root, size and position, not its id, so
+ids are checked against the signatures they must be the SHA-256 of. A format-1
+transaction's `tx_root` leaf is the root of its data, which an index does
+not store, so 13% of post-fork blocks need the data fetched before their
+transaction set can be proved. Samples rather than sweeps, and the data
+source need not be trusted.
+
+<a id="l1-verify"></a> **L1 verify** — Checking an L1 index against the
+weave size the chain commits to, with `ar-io-node index-l1-verify`. Below
+the 2.0 fork a block grew the weave by exactly its transactions'
+`data_size`, and the first post-2.0 block commits the running total, so
+one trusted block hash pins the size of every transaction beneath it.
+Proves nothing was invented, dropped or resized; does not prove which
+pre-2.0 block a transaction belonged to.
+
 <a id="fold"></a> **Fold** — Building a band from an earlier band's entries
 plus newer rows from the index, so entries the index has since dropped (such
 as ClickHouse rows past their TTL) are kept. A folded entry counts as being at

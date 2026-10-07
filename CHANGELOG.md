@@ -8,6 +8,74 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- `ar-io-node index-l1-import` fills a gateway's `core.db` from installed
+  `parquet-l1` bands, so a new gateway starts from a published index rather
+  than walking the chain block by block. It runs with the gateway stopped
+  and refuses a database another writer holds, one still holding unstable
+  blocks, or one that has not run the import migration. Bands land in
+  height order, each recorded in `parquet_l1_imports` as it commits, so a
+  run that stops can be run again and carries on. A band is written to the
+  ledger before its first row and completed after its last, and importing
+  it clears its height range first, so a band a crash left part way is
+  imported again over whatever it managed to write — progress is read from
+  the ledger rather than from `stable_blocks`, which a band fills long
+  before its transactions. Every write is idempotent, so a band imported
+  twice leaves `core.db` exactly as importing it once does. A transaction a
+  block lists that its band lacks becomes a `missing_transactions` row for
+  the usual backfill. The run is refused up front if the filesystem has no
+  room for it, says where it is once a minute while a band lands, and
+  exits 1 with the result on stderr if a band is refused. `--cache-mib`
+  sets the SQLite page cache (default 1024): a bootstrap spends its time
+  maintaining indexes, and the 2 MB SQLite default makes the rate decay as
+  the database fills. `--from` and `--to` fill in history beneath a
+  gateway that began mid-chain, which the default upward-only run could
+  not do; a band rewrites only its own range, so importing below what is
+  held cannot disturb it. Because that can leave a hole between staged
+  runs, and the block importer rewinds across one, the result carries
+  `holes` and the run warns when any remain.
+  Measured on vilenarios.com: the busiest 100,000 heights (46,606,658 rows)
+  import in about half an hour and leave a 12.1 GB `core.db`; the whole
+  chain is 468,501,488 rows and about 120 GB. See
+  [docs/cli.md](docs/cli.md).
+
+- `ar-io-node index-l1-verify` checks a gateway's L1 index against the
+  weave size the chain commits to. Above the 2.0 fork a block's `tx_root`
+  proves its transactions; below it, a pre-2.0 identity hash cannot be
+  recomputed from an index at all (it commits to the full wallet list, the
+  recall block's whole binary, and every transaction's data and
+  signature). What is left is exact accounting: a pre-2.0 block grew the
+  weave by its transactions' `data_size`, those differences telescope, and
+  the first post-2.0 block commits the running total — so one trusted
+  block hash pins the size of every transaction beneath it. Read-only, so
+  the gateway can stay up; 422,251 blocks in about 4 seconds. It also
+  rebuilds the `hash_list_merkle` recurrence — a running commitment to
+  every block hash below, folded from height 0 for the fork-1.6 seed — so
+  one trusted block hash pins every `indep_hash` beneath it, recomputes
+  each post-fork block's `tx_root` from its transactions (1,383,754 of
+  1,592,566 on the live chain; the rest hold a format-1 transaction with
+  data and need `index-l1-audit`), and checks contiguity, block linkage
+  and `block_size`. `--skip-tx-root` leaves out the one check that reads
+  every transaction. `--bands-dir` checks a directory of bands with no
+  gateway and no database, which is how a consumer verifies someone
+  else's index before installing it; both views drive the same chain
+  rules and a differential test holds them together. `--anchor-from` fetches that
+  trusted hash from independent Arweave nodes (both sides of the fork,
+  since its seed breaks the recurrence) and requires several to agree —
+  one source is a single point of trust, so one reachable source fails. It does not prove which
+  pre-2.0 block a transaction belonged to. See
+  [docs/cli.md](docs/cli.md).
+
+- `ar-io-node index-l1-audit` checks the blocks `index-l1-verify` has to
+  skip. A format-1 transaction's `tx_root` leaf is the root of its data,
+  which an index does not store, so 208,812 post-fork blocks of 1,592,566
+  cannot be proved from the index alone. This fetches that data, derives
+  each `data_root` and recomputes `tx_root`. It samples rather than sweeps
+  (the full set is 111 GB) and reports the 95% upper bound on the error
+  rate. The data source need not be trusted: wrong data can only cause a
+  false alarm, never a false pass. Read-only. Measured on the full chain:
+  1000 of 208,812 sampled, all 1000 matched, bounding the error rate at
+  0.3%. See [docs/cli.md](docs/cli.md).
+
 - L1 index bands (`parquet-l1`): the Arweave base layer (blocks,
   transactions, tags in plaintext, owners) as Parquet, one fixed height
   range per band (whole 100,000-height history bands over 5,000-height
@@ -96,6 +164,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   Every other path on a sandbox host is unchanged.
 
 ### Fixed
+
+- A CLI result larger than the 64 KiB pipe buffer was truncated mid-token,
+  so stdout held JSON that would not parse. `process.exit` discards
+  whatever is still buffered and a write to a pipe is asynchronous, which
+  a file hid because those writes are synchronous — the shapes that broke
+  are the documented ones, `| jq` and `docker run`. The result is now
+  written in full before the process exits. Found by a 1000-block
+  `index-l1-audit`, and it applied to every command.
 
 - `tools/index-swarm-setup --engine-port` and `--public-host` did nothing
   without `--torrent`: moving an existing engine to another peer port printed

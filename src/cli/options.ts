@@ -99,6 +99,78 @@ export const optionMap = {
     alias: '--to <height>',
     description: 'Highest block height to export. Required',
   },
+  fromHeight: {
+    alias: '--from <height>',
+    description: 'Lowest block height to check. Defaults to the lowest held',
+  },
+  toHeight: {
+    alias: '--to <height>',
+    description:
+      'Highest block height to check. For an index reaching below the 2.0 fork, defaults to the fork (422250) or the highest held if lower; for one starting at or above it, to the highest held',
+  },
+  verifyBandsDir: {
+    alias: '--bands-dir <path>',
+    description:
+      'Check a directory of bands instead of a core.db: no gateway and no database, which is how a consumer verifies them before installing',
+  },
+  skipTxRoot: {
+    alias: '--skip-tx-root',
+    description:
+      'Leave out the tx_root recomputation, the one check that reads every transaction. Everything else is seconds; this is minutes over a whole chain',
+  },
+  dataFrom: {
+    alias: '--data-from <url>',
+    description:
+      'An Arweave node or gateway to fetch transaction data from. Required, and it need not be trusted: wrong data can only cause a false alarm, never a false pass',
+  },
+  sample: {
+    alias: '--sample <n>',
+    description:
+      'How many blocks to audit (default 100). The full set is about 111 GB, so this samples',
+  },
+  anchorFrom: {
+    alias: '--anchor-from <urls>',
+    description:
+      'Comma-separated Arweave nodes or gateways to ask for the anchor block hashes. Raw nodes (port 1984) are a different implementation, so their agreement is worth most',
+  },
+  anchorMin: {
+    alias: '--anchor-min <n>',
+    description:
+      'How many sources must answer for each anchor height (default 2)',
+  },
+  bandsDir: {
+    alias: '--bands-dir <path>',
+    description:
+      'A directory of parquet-l1 bands, as the index-swarm sidecar installs them (data/indexes/installed/parquet-l1). Required',
+  },
+  coreDb: {
+    alias: '--core-db <path>',
+    description: "The gateway's core.db. It must be stopped. Required",
+  },
+  coreDbReadOnly: {
+    alias: '--core-db <path>',
+    description:
+      "The gateway's core.db. Opened read-only, so it can stay up. Required",
+  },
+  importFrom: {
+    alias: '--from <height>',
+    description:
+      'Start here instead of continuing above what core.db holds. How a gateway that began mid-chain fills in the history beneath it',
+  },
+  importTo: {
+    alias: '--to <height>',
+    description:
+      'Stop after the band covering this height, so a backfill need not redo what is already held',
+  },
+  cacheMib: {
+    alias: '--cache-mib <n>',
+    description:
+      'SQLite page cache for the import, in MiB (default 1024). The biggest lever on a long bootstrap: too small and every insert becomes random I/O as the indexes grow',
+  },
+  maxBands: {
+    alias: '--max-bands <n>',
+    description: 'Import at most this many bands, then stop',
+  },
   force: {
     alias: '--force',
     description: 'Replace --output if it exists',
@@ -134,6 +206,33 @@ export const indexBandVerifyOptions: CommanderOption[] = [
   optionMap.gatewayUrl,
   optionMap.readTimeout,
   optionMap.sampleSize,
+];
+
+export const indexL1ImportOptions: CommanderOption[] = [
+  optionMap.bandsDir,
+  optionMap.coreDb,
+  optionMap.importFrom,
+  optionMap.importTo,
+  optionMap.maxBands,
+  optionMap.cacheMib,
+];
+
+export const indexL1VerifyOptions: CommanderOption[] = [
+  optionMap.coreDbReadOnly,
+  optionMap.verifyBandsDir,
+  optionMap.skipTxRoot,
+  optionMap.fromHeight,
+  optionMap.toHeight,
+  optionMap.anchorFrom,
+  optionMap.anchorMin,
+];
+
+export const indexL1AuditOptions: CommanderOption[] = [
+  optionMap.coreDbReadOnly,
+  optionMap.dataFrom,
+  optionMap.sample,
+  optionMap.fromHeight,
+  optionMap.toHeight,
 ];
 
 export const indexBandExportOptions: CommanderOption[] = [

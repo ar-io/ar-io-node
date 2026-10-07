@@ -51,6 +51,33 @@ export interface IndexBandVerifyCLIOptions extends GlobalCLIOptions {
   sampleSize?: string;
 }
 
+export interface IndexL1ImportCLIOptions extends GlobalCLIOptions {
+  bandsDir?: string;
+  coreDb?: string;
+  maxBands?: string;
+  cacheMib?: string;
+  from?: string;
+  to?: string;
+}
+
+export interface IndexL1VerifyCLIOptions extends GlobalCLIOptions {
+  coreDb?: string;
+  bandsDir?: string;
+  skipTxRoot?: boolean;
+  from?: string;
+  to?: string;
+  anchorFrom?: string;
+  anchorMin?: string;
+}
+
+export interface IndexL1AuditCLIOptions extends GlobalCLIOptions {
+  coreDb?: string;
+  dataFrom?: string;
+  sample?: string;
+  from?: string;
+  to?: string;
+}
+
 export interface IndexBandExportCLIOptions extends GlobalCLIOptions {
   source?: string;
   from?: string;
