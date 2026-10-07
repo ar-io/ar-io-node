@@ -8,6 +8,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- `docs/index-swarm.md` documents querying a published dataset over HTTP: a
+  `parquet-l1` band is Parquet and the byte routes serve ranges, so a client
+  can read a dataset in place with no install, no import and no gateway of its
+  own, fetching only the footer and the row groups a predicate selects. The
+  signed document is the catalog, since HTTP has no directory listing to glob.
+  Because `Repr-Digest` is co-signable and commits to the whole file, a ranged
+  read still carries a signature over the digest of the file it read from.
+  Measured against a 24-band dataset covering heights 0 to 2,016,168 whose
+  `transactions.parquet` files total 5.51 GB: a 100-block window across all 24
+  bands in 0.1 s, and the full height span and row count in 0.6 s, over HTTPS,
+  with nothing written to disk.
+
 - `ar-io-node index-l1-import` fills a gateway's `core.db` from installed
   `parquet-l1` bands, so a new gateway starts from a published index rather
   than walking the chain block by block. It runs with the gateway stopped
@@ -164,6 +176,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   Every other path on a sandbox host is unchanged.
 
 ### Fixed
+
+- The nginx guidance for `/ar-io/indexes` in `docs/index-swarm.md` named the
+  wrong remedy and understated the cost. It said to set `proxy_buffering off`,
+  which does not fix anything: when a location has a cache zone, nginx strips
+  the client's `Range` from the upstream request so it can store the whole
+  object, before it has seen any `Cache-Control`, so no response header helps
+  either. The fix is `proxy_cache off` for the prefix, with no trailing slash,
+  since a `proxy_pass` location whose prefix ends in `/` answers the unslashed
+  form with a `301` and the document every subscriber polls lives there, with
+  HTTPSig signing `@path`. The stated band size (7 to 30 MB) also predated
+  `parquet-l1`, whose files reach 541 MB. Core and envoy answer ranges
+  correctly, so the default stack was never affected; the guidance only
+  mattered once an operator added a cache, and it failed quietly, because a
+  `200` carrying more bytes than were asked for looks like success. Verified
+  against a 541 MB band file: a 100-byte range returned all 541,753,181 bytes
+  through a cache zone and `206` with it off.
 
 - A CLI result larger than the 64 KiB pipe buffer was truncated mid-token,
   so stdout held JSON that would not parse. `process.exit` discards
