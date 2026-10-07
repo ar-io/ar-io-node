@@ -261,6 +261,22 @@ export const TRUSTED_GATEWAYS_REQUEST_TIMEOUT_MS = +env.varOrDefault(
   '10000',
 );
 
+// A trusted gateway answering 429 is skipped until its Retry-After has passed,
+// instead of every request queueing for one of its sockets and getting another
+// 429 (see GatewayThrottle). The cooldown is the response's Retry-After, capped
+// at GATEWAYS_THROTTLE_BACKOFF_MAX_MS; without a usable Retry-After it is
+// GATEWAYS_THROTTLE_BACKOFF_DEFAULT_MS.
+export const GATEWAYS_THROTTLE_BACKOFF_ENABLED =
+  env.varOrDefault('GATEWAYS_THROTTLE_BACKOFF_ENABLED', 'true') === 'true';
+export const GATEWAYS_THROTTLE_BACKOFF_DEFAULT_MS = env.nonNegativeIntOrDefault(
+  'GATEWAYS_THROTTLE_BACKOFF_DEFAULT_MS',
+  30_000,
+);
+export const GATEWAYS_THROTTLE_BACKOFF_MAX_MS = env.nonNegativeIntOrDefault(
+  'GATEWAYS_THROTTLE_BACKOFF_MAX_MS',
+  300_000,
+);
+
 // The outbound agents' settings live with the agents (see the module).
 export {
   GATEWAY_AGENT_IDLE_SOCKET_TIMEOUT_MS,

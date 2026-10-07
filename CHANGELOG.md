@@ -8,6 +8,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **A trusted gateway that answers 429 is skipped until its `Retry-After` has
+  passed** (`GATEWAYS_THROTTLE_BACKOFF_ENABLED`, default `true`). Before, every
+  request still went to it first: it waited for one of that gateway's sockets,
+  often until the connection timeout, then got another 429. On
+  turbo-gateway.com, arweave.net (a priority-2 fallback) answered one node's
+  cold-item requests with `429` and `retry-after: 299` about 24,000 times a
+  day, and 60% of those requests had waited 2-5 s for a socket, so cold items
+  took ~3 s on that node against ~0.1 s on its sibling. The cooldown is the
+  response's `Retry-After` (seconds or an HTTP date), capped at
+  `GATEWAYS_THROTTLE_BACKOFF_MAX_MS` (300 s); without one it is
+  `GATEWAYS_THROTTLE_BACKOFF_DEFAULT_MS` (30 s). Both gateway data sources
+  share one set of cooldowns, and a throttled gateway is asked once per item
+  rather than once per path. New metrics:
+  `gateway_throttle_cooldowns_total{gateway_url}` and
+  `gateway_throttle_skips_total{gateway_url}`.
+
 - `ar-io-node index-l1-import` fills a gateway's `core.db` from installed
   `parquet-l1` bands, so a new gateway starts from a published index rather
   than walking the chain block by block. It runs with the gateway stopped
@@ -164,6 +180,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   Every other path on a sandbox host is unchanged.
 
 ### Fixed
+
+- A 404 or 429 from a trusted gateway was logged as a warning, although the
+  code meant to log those routine outcomes at debug: the check read a field
+  that is only set for an unexpected 2xx, while axios reports a 4xx on its
+  rejection. On turbo-gateway.com that was ~24,000 warnings a day from one
+  fallback gateway's 429s.
 
 - A CLI result larger than the 64 KiB pipe buffer was truncated mid-token,
   so stdout held JSON that would not parse. `process.exit` discards
