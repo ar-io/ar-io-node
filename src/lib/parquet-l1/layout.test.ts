@@ -10,10 +10,16 @@ import { describe, it } from 'node:test';
 import {
   BAND_FILE,
   BAND_FILES,
+  canonicalDataRoot,
+  canonicalTxRoot,
+  firstTagValue,
+  isCurrentLayout,
   PARQUET_L1_SCHEMA,
+  PARQUET_L1_SCHEMAS,
   PARQUET_L1_TABLES,
   parseBandFile,
 } from './layout.js';
+import { FORK_2_0 } from './chain.js';
 
 const digest = 'a'.repeat(64);
 const valid = () => ({
@@ -92,6 +98,21 @@ describe('parseBandFile', () => {
     assert.deepEqual(band.supersedes, ['l1-h0-99999-old']);
   });
 
+  it('reads a band written to an older layout, keeping its version', () => {
+    const band = parseBandFile(JSON.stringify({ ...valid(), schema: 'l1-1' }));
+    assert.equal(band.schema, 'l1-1');
+    assert.notEqual(band.schema, PARQUET_L1_SCHEMA);
+  });
+
+  it('accepts every layout this build can read', () => {
+    for (const schema of PARQUET_L1_SCHEMAS) {
+      assert.equal(
+        parseBandFile(JSON.stringify({ ...valid(), schema })).schema,
+        schema,
+      );
+    }
+  });
+
   it('refuses anything malformed, naming what', () => {
     const refuse = (change: (band: any) => void, pattern: RegExp) => {
       const band: any = valid();
@@ -115,5 +136,96 @@ describe('parseBandFile', () => {
     refuse((b) => (b.tables.blocks.rows = -1), /table blocks needs/);
     refuse((b) => (b.supersedes = 'one'), /supersedes must be a list/);
     refuse((b) => (b.supersedes = ['']), /supersedes must be a list/);
+  });
+});
+
+describe('canonicalTxRoot', () => {
+  const root = Buffer.alloc(32, 7);
+
+  it('drops a pre-fork tx_root, whatever a gateway stored', () => {
+    // The field is not committed by a pre-fork block hash and cannot be
+    // recomputed, so publishers hold different things: 32 bytes, nothing,
+    // or the empty string an ar-io-node writes. All of them mean absent.
+    for (const stored of [root, null, undefined, Buffer.alloc(0), '']) {
+      assert.equal(canonicalTxRoot(0, stored), null);
+      assert.equal(canonicalTxRoot(FORK_2_0 - 1, stored), null);
+    }
+  });
+
+  it('keeps a tx_root from the fork up', () => {
+    assert.deepEqual(canonicalTxRoot(FORK_2_0, root), root);
+    assert.deepEqual(canonicalTxRoot(FORK_2_0 + 1_000_000, root), root);
+    assert.deepEqual(canonicalTxRoot(FORK_2_0, new Uint8Array(root)), root);
+  });
+
+  it('keeps empty bytes from the fork up: a block with no transactions', () => {
+    // Above the fork an empty tx_root is the real value, and every
+    // publisher stores it, so normalising it would change rows for nothing.
+    assert.deepEqual(
+      canonicalTxRoot(FORK_2_0, Buffer.alloc(0)),
+      Buffer.alloc(0),
+    );
+    assert.deepEqual(canonicalTxRoot(FORK_2_0, ''), Buffer.alloc(0));
+    assert.equal(canonicalTxRoot(FORK_2_0, null), null);
+    assert.equal(canonicalTxRoot(FORK_2_0, undefined), null);
+  });
+});
+
+describe('isCurrentLayout', () => {
+  it('counts only the current layout, or a band confirmed identical under it', () => {
+    const none = new Set<string>();
+    assert.equal(isCurrentLayout(PARQUET_L1_SCHEMA, 'x', none), true);
+    assert.equal(isCurrentLayout('l1-1', 'x', none), false);
+    assert.equal(isCurrentLayout('l1-1', 'x', new Set(['x'])), true);
+    assert.equal(isCurrentLayout('l1-1', 'x', new Set(['y'])), false);
+  });
+});
+
+describe('canonicalDataRoot', () => {
+  const root = Buffer.alloc(32, 9);
+
+  it('drops a format-1 data_root, which no header carries', () => {
+    assert.equal(canonicalDataRoot(1, root), null);
+    assert.equal(canonicalDataRoot(1, Buffer.alloc(0)), null);
+    assert.equal(canonicalDataRoot(1, null), null);
+  });
+
+  it('keeps a format-2 data_root as signed, empty or not', () => {
+    assert.deepEqual(canonicalDataRoot(2, root), root);
+    assert.deepEqual(canonicalDataRoot(2, Buffer.alloc(0)), Buffer.alloc(0));
+    assert.equal(canonicalDataRoot(2, null), null);
+  });
+});
+
+describe('firstTagValue', () => {
+  const tag = (index: number, name: string, value: string) => ({
+    index,
+    name: Buffer.from(name),
+    value: Buffer.from(value),
+  });
+
+  it('takes the lowest-positioned match, wherever it sits in the list', () => {
+    // Two Content-Type tags, as on lM58RgBOp1lV… (video/MP2T, then text/vtt).
+    const tags = [
+      tag(4, 'Content-Type', 'text/vtt'),
+      tag(1, 'App-Name', 'x'),
+      tag(0, 'Content-Type', 'video/MP2T'),
+    ];
+    assert.equal(firstTagValue(tags, 'Content-Type'), 'video/MP2T');
+  });
+
+  it('compares names without case, and values as written', () => {
+    assert.equal(
+      firstTagValue([tag(2, 'content-encoding', 'UTF-8')], 'Content-Encoding'),
+      'UTF-8',
+    );
+  });
+
+  it('is null when there is no such tag', () => {
+    assert.equal(
+      firstTagValue([tag(0, 'App-Name', 'x')], 'Content-Type'),
+      null,
+    );
+    assert.equal(firstTagValue([], 'Content-Type'), null);
   });
 });

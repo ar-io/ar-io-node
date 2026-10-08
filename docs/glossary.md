@@ -324,6 +324,14 @@ range, in Parquet, with a `band.json` of per-table row counts and row
 digests. Lets a new gateway import its L1 index instead of indexing the
 chain, and apps query it in place.
 
+<a id="canonical-band-columns"></a> **Canonical band columns** — The values a
+[Parquet L1 band](#parquet-l1) writes, from layout `l1-2`, for columns a
+gateway fills in itself rather than reading off the chain: null for a pre-2.0
+`tx_root` and a format-1 `data_root`, and `content_type`/`content_encoding`
+from the transaction's first such tag. They let two honest publishers write
+identical bands, so their digests can check each other. See
+[L1 bands](index-swarm.md#l1-bands-parquet-l1).
+
 <a id="l1-import"></a> **L1 import** — Filling a gateway's `core.db` from
 published [Parquet L1 bands](#parquet-l1) with `ar-io-node index-l1-import`,
 instead of indexing the chain block by block. Offline, idempotent, and
@@ -337,8 +345,10 @@ aggregates, no use for point lookups, and it serves no gateway route.
 
 <a id="l1-audit"></a> **L1 audit** — Checking the `tx_root` of blocks an
 index cannot check alone, with `ar-io-node index-l1-audit`. `tx_root`
-proves each transaction's data root, size and position, not its id, so
-ids are checked against the signatures they must be the SHA-256 of. A format-1
+proves each transaction's data root and size, and its position in Arweave's
+`(format, id)` sort, but not its id, nor the order the block lists it in. So
+ids are checked against the signatures they must be the SHA-256 of, and block
+order only by comparing publishers or a raw node's `/block/height/<h>`. A format-1
 transaction's `tx_root` leaf is the root of its data, which an index does
 not store, so 13% of post-fork blocks need the data fetched before their
 transaction set can be proved. Samples rather than sweeps, and the data

@@ -166,6 +166,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **`parquet-l1` bands are now layout `l1-2`: three columns a gateway fills
+  in for itself are written one canonical way**, so two honest publishers
+  of the same chain write identical bands and can check each other by
+  digest. Comparing turbo-gateway.com with vilenarios.com across the whole
+  chain found every chain-committed column in agreement and these
+  disagreeing: `blocks.tx_root` below the 2.0 fork (346 blocks; the block
+  hash doesn't commit it, and nodes disagree) is now null; a format-1
+  `transactions.data_root` (352 transactions; the header carries none) is
+  now null; and `content_type`/`content_encoding` (86 transactions with two
+  Content-Type tags) now come from the band's own tags, first by position.
+  The last of these differed because the indexer kept the *last* matching
+  tag before r70 and the first since. No check reads the nulled columns.
+  Readers accept `l1-1` and `l1-2`, and an import keeps a pre-fork
+  `tx_root` or format-1 `data_root` the gateway already holds. **Upgrading
+  a publisher rebuilds every band once** (about nine hours for the whole
+  chain): an `l1-1` band can't be judged without it. A band whose rows
+  didn't change keeps its id and files, so subscribers download only the
+  ranges that did, and the service records it in `state.json`
+  (`layoutConfirmed`) so it isn't rebuilt again. See the "L1 bands" section
+  of [docs/index-swarm.md](docs/index-swarm.md).
+
 - `GET /ar-io/offsets/:id` answers are now signed (HTTPSIG), with a
   `Content-Digest` binding the body and an `X-AR-IO-Root-Transaction-Id`
   header, so an answer is the gateway's attributable claim. An answer from a

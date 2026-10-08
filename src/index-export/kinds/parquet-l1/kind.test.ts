@@ -15,17 +15,23 @@ import {
   L1_SUB_SPAN,
   l1RangeOf,
   l1SubRangeOf,
+  PARQUET_L1_SCHEMA,
   type ParquetL1Band,
 } from '../../../lib/parquet-l1/layout.js';
 import { isTransientSqliteError, L1CheckError } from './export.js';
 import { L1PublishedBand, planL1, withReadRetry } from './kind.js';
 
-const band = (id: string, from: number, to: number): L1PublishedBand => ({
+const band = (
+  id: string,
+  from: number,
+  to: number,
+  schema: string = PARQUET_L1_SCHEMA,
+): L1PublishedBand => ({
   id,
   dir: `/x/${id}`,
   from,
   to,
-  band: { heightRange: [from, to] } as ParquetL1Band,
+  band: { heightRange: [from, to], schema } as ParquetL1Band,
 });
 
 describe('the fixed grids', () => {
@@ -83,6 +89,100 @@ describe('planL1', () => {
       band('l1-h105000-106000-p-tip', 105_000, 106_000),
     ];
     assert.deepEqual(planL1(bands, 106_000), []);
+  });
+
+  it('rebuilds a band written to an older layout, and supersedes it', () => {
+    // A layout change rewrites rows, so the band's digest — and its id —
+    // change with it. Without this a publisher that upgraded would keep
+    // serving its old bands for ever and never match another publisher.
+    const bands = [
+      band('l1-h0-99999-p-old', 0, 99_999, 'l1-1'),
+      band('l1-h100000-104999-p-b', 100_000, 104_999),
+      band('l1-h105000-106000-p-tip', 105_000, 106_000),
+    ];
+    assert.deepEqual(planL1(bands, 106_000), [
+      {
+        role: 'h',
+        heightRange: [0, 99_999],
+        supersedes: ['l1-h0-99999-p-old'],
+      },
+    ]);
+  });
+
+  it('rebuilds an older-layout band at any height, since its rows may differ', () => {
+    // l1-2's rules reach format-1 data_root and content_type above the fork,
+    // so an l1-1 band can't be called current without rebuilding it.
+    const bands = [
+      band('l1-h0-99999-p-a', 0, 99_999),
+      band('l1-h100000-199999-p-a', 100_000, 199_999),
+      band('l1-h200000-299999-p-a', 200_000, 299_999),
+      band('l1-h300000-399999-p-a', 300_000, 399_999),
+      band('l1-h400000-499999-p-a', 400_000, 499_999),
+      band('l1-h500000-599999-p-old', 500_000, 599_999, 'l1-1'),
+      band('l1-h600000-604999-p-a', 600_000, 604_999),
+      band('l1-h605000-606000-p-tip', 605_000, 606_000),
+    ];
+    assert.deepEqual(planL1(bands, 606_000), [
+      {
+        role: 'h',
+        heightRange: [500_000, 599_999],
+        supersedes: ['l1-h500000-599999-p-old'],
+      },
+    ]);
+  });
+
+  it('counts an older-layout band rebuilt and found identical as current', () => {
+    // The rebuild gave the same rows, so the same id: the files stay, and the
+    // confirmation is what stops the planner rebuilding it every run.
+    const bands = [
+      band('l1-h0-99999-p-a', 0, 99_999),
+      band('l1-h100000-104999-p-old', 100_000, 104_999, 'l1-1'),
+      band('l1-h105000-106000-p-old', 105_000, 106_000, 'l1-1'),
+    ];
+    assert.equal(planL1(bands, 106_000).length, 2);
+    assert.deepEqual(
+      planL1(
+        bands,
+        106_000,
+        [],
+        new Set(['l1-h100000-104999-p-old', 'l1-h105000-106000-p-old']),
+      ),
+      [],
+    );
+  });
+
+  it('rebuilds an older-layout band that straddles the fork', () => {
+    const bands = [
+      band('l1-h0-99999-p-a', 0, 99_999),
+      band('l1-h100000-199999-p-a', 100_000, 199_999),
+      band('l1-h200000-299999-p-a', 200_000, 299_999),
+      band('l1-h300000-399999-p-a', 300_000, 399_999),
+      band('l1-h400000-499999-p-old', 400_000, 499_999, 'l1-1'),
+      band('l1-h500000-504999-p-a', 500_000, 504_999),
+      band('l1-h505000-506000-p-tip', 505_000, 506_000),
+    ];
+    assert.deepEqual(planL1(bands, 506_000), [
+      {
+        role: 'h',
+        heightRange: [400_000, 499_999],
+        supersedes: ['l1-h400000-499999-p-old'],
+      },
+    ]);
+  });
+
+  it('rebuilds an older-layout tip too', () => {
+    const bands = [
+      band('l1-h0-99999-p-a', 0, 99_999),
+      band('l1-h100000-104999-p-b', 100_000, 104_999),
+      band('l1-h105000-106000-p-tip', 105_000, 106_000, 'l1-1'),
+    ];
+    assert.deepEqual(planL1(bands, 106_000), [
+      {
+        role: 'd',
+        heightRange: [105_000, 106_000],
+        supersedes: ['l1-h105000-106000-p-tip'],
+      },
+    ]);
   });
 
   it('rebuilds only the tip as the top moves, superseding the tip before it', () => {
