@@ -542,6 +542,11 @@ export async function importBand(
 ): Promise<{ rows: number; missingTransactions: number }> {
   const { band, dir } = entry;
   const [from, to] = band.heightRange;
+  // Format-1 data roots this gateway holds for the band's range, kept across
+  // the clear below. A temporary table, not a map: a busy range can hold
+  // hundreds of thousands of format-1 transactions. See `keepDataRoots`.
+  db.exec(`CREATE TEMP TABLE IF NOT EXISTS parquet_l1_kept_data_roots
+    (id BLOB PRIMARY KEY, data_root BLOB NOT NULL)`);
   const insert = {
     wallets: db.prepare(
       'INSERT OR IGNORE INTO wallets (address, public_modulus) VALUES (?, ?)',
@@ -580,6 +585,18 @@ export async function importBand(
     hashAt: db
       .prepare('SELECT indep_hash FROM stable_blocks WHERE height = ?')
       .pluck(),
+    // A band holds no format-1 data_root (the header carries none, so
+    // gateways disagree), but a gateway that computed one keeps it. Keyed by
+    // transaction id, which names the same transaction on any fork.
+    forgetKeptDataRoots: db.prepare('DELETE FROM parquet_l1_kept_data_roots'),
+    keepDataRoots: db.prepare(`INSERT INTO parquet_l1_kept_data_roots
+      SELECT id, data_root FROM stable_transactions
+      WHERE height BETWEEN ? AND ? AND format = 1
+        AND data_root IS NOT NULL AND length(data_root) > 0`),
+    restoreDataRoots: db.prepare(`UPDATE stable_transactions
+      SET data_root = k.data_root
+      FROM parquet_l1_kept_data_roots k
+      WHERE stable_transactions.id = k.id`),
     // Read before the range is cleared: see `keptTxRoots`.
     storedTxRoots:
       db.prepare(`SELECT height, indep_hash, tx_root FROM stable_blocks
@@ -820,6 +837,8 @@ export async function importBand(
       }
     }
   }
+  insert.forgetKeptDataRoots.run();
+  insert.keepDataRoots.run(from, to);
   insert.clearLinks.run(from, to);
   insert.clearTags.run(from, to);
   insert.clearTxs.run(from, to);
@@ -865,6 +884,8 @@ export async function importBand(
         batchRows,
       );
     }
+    insert.restoreDataRoots.run();
+    insert.forgetKeptDataRoots.run();
     insert.countMissing.run(from, to);
     insert.completed.run(rows, Math.floor(Date.now() / 1000), entry.id);
     // After this band's own row is complete, so it is not caught by it.

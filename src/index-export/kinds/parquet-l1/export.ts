@@ -42,7 +42,10 @@ import {
 import { RowDigest } from '../../../lib/parquet-l1/digest.js';
 import {
   BAND_FILE,
+  BandTag,
+  canonicalDataRoot,
   canonicalTxRoot,
+  firstTagValue,
   PARQUET_L1_SCHEMA,
   PARQUET_L1_TABLES,
   ParquetL1Band,
@@ -374,17 +377,9 @@ export async function exportL1Band({
         // Tags in the table's order: by id, then position, within the height.
         const tags: unknown[][] = [];
         for (const tx of blockTxs) {
-          await write(
-            'transactions',
-            table('transactions').columns.map((c) =>
-              c.name === 'is_data_item'
-                ? false
-                : c.name === 'anchor'
-                  ? tx.last_tx
-                  : tx[c.name],
-            ),
-          );
-          owners.add(tx.owner_address.toString('hex'));
+          // The tags first: the row's content type and encoding come from
+          // them, by one rule, not from whatever core.db holds.
+          const txTags: BandTag[] = [];
           for (const tag of sql.tags.all(
             tx.id,
             tx.height,
@@ -403,12 +398,33 @@ export async function exportL1Band({
                 `Transaction ${tx.id.toString('base64url')} at ${tx.height} has a tag missing from the dictionary`,
               );
             }
+            txTags.push({ index: tag.transaction_tag_index, name, value });
+          }
+          const canonical: Record<string, unknown> = {
+            data_root: canonicalDataRoot(tx.format, tx.data_root),
+            content_type: firstTagValue(txTags, 'Content-Type'),
+            content_encoding: firstTagValue(txTags, 'Content-Encoding'),
+          };
+          await write(
+            'transactions',
+            table('transactions').columns.map((c) =>
+              c.name === 'is_data_item'
+                ? false
+                : c.name === 'anchor'
+                  ? tx.last_tx
+                  : c.name in canonical
+                    ? canonical[c.name]
+                    : tx[c.name],
+            ),
+          );
+          owners.add(tx.owner_address.toString('hex'));
+          for (const tag of txTags) {
             tags.push([
               tx.height,
               tx.id,
-              tag.transaction_tag_index,
-              name,
-              value,
+              tag.index,
+              tag.name,
+              tag.value,
               false,
             ]);
           }

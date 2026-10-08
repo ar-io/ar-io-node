@@ -141,11 +141,13 @@ export function planL1(
   bands: L1PublishedBand[],
   top: number,
   superseded: string[] = [],
+  /** Older-layout bands already rebuilt and found identical; see {@link isCurrentLayout}. */
+  confirmed: ReadonlySet<string> = new Set(),
 ): L1Step[] {
   if (top < 0) return [];
   const steps: L1Step[] = [];
   const current = (b: L1PublishedBand) =>
-    isCurrentLayout(b.band.schema, b.from);
+    isCurrentLayout(b.band.schema, b.id, confirmed);
   const covers = (from: number, to: number) => [
     ...new Set([
       ...superseded.filter((id) => {

@@ -565,26 +565,42 @@ can't build them, and its runs say so (`incomplete`, not retried).
   Only the tip is ever rebuilt, so a subscriber re-downloads at most ~35 MB
   a day rather than a whole range. The top is one below the stable top, so
   the block above every band's last is there to anchor it.
-- **Pre-fork `tx_root` is normalised.** Below the Arweave 2.0 fork (height
-  422,250) a block hash does not commit `tx_root`, and it cannot be
-  recomputed, so each gateway keeps whatever its header source gave it — and
-  the network disagrees. Comparing two publishers of the same chain on
-  2026-10-07 found 346 pre-fork blocks where one side held 32 bytes and the
-  other nothing, never two different values; raw nodes disagree with each
-  other the same way (block 56,769 is empty on two and set on a third).
-  Left alone, that would make it impossible for two honest publishers to
-  produce the same pre-fork band, which is the one check nobody else can do
-  for them. So a band writes `tx_root` as the stored bytes from the fork up
-  and `null` below it, whatever `core.db` holds (32 bytes, nothing, or the
-  empty string this gateway writes). Nothing is lost: no check reads a
-  pre-fork `tx_root`, because there is nothing to check it against.
+- **Columns the chain doesn't fix are normalised.** A band is meant to be
+  a function of the chain: two honest publishers of the same chain should
+  write byte-identical rows, so comparing their digests per range checks
+  each other's index. Comparing turbo-gateway.com and vilenarios.com across
+  the whole chain in October 2026 found every chain-committed column in
+  agreement, and three columns that a gateway fills in for itself
+  disagreeing. A band now writes one canonical value for each, whatever
+  `core.db` holds:
+
+  | Column | Written as | Why |
+  |---|---|---|
+  | `blocks.tx_root` below the 2.0 fork (422,250) | null | Not committed by a pre-fork block hash and impossible to recompute, so a gateway keeps whatever its header source gave it. 346 blocks differed, always 32 bytes against nothing; raw nodes disagree the same way (56,769 is empty on two and set on a third). |
+  | `transactions.data_root` on format 1 | null | A format-1 header carries none (a node returns `""`); some gateways hold one computed from the data. 352 differed. Format 2 signs its `data_root`, so it is kept. |
+  | `transactions.content_type`, `content_encoding` | the first `Content-Type` / `Content-Encoding` tag by position, names compared without case; null if none | Derived from the band's own tags. ar-io-node took the *last* matching tag until r70 (commit `40d5548e`, 2026-02-14) and the first since, so a stored value depends on the release that indexed the row: 86 transactions with two Content-Type tags differed though their tags were identical. |
+
+  Nothing is lost for verification: no check reads a pre-fork `tx_root`,
+  and `tx_root` recomputation derives a format-1 transaction's root from its
+  data, never from the stored column.
 
   This is layout `l1-2` (`band.json`'s `schema`). A reader accepts `l1-1`
   too, so a subscriber keeps importing from a publisher that hasn't
-  upgraded, and an import never erases a `tx_root` the gateway indexed
-  itself. Upgrading a publisher rebuilds the bands holding pre-fork blocks —
-  the five ranges below 500,000 — because their rows, and so their ids,
-  change; the rest keep their ids and are not rebuilt.
+  upgraded. An import never erases a pre-fork `tx_root` or a format-1
+  `data_root` the gateway already holds for the same block or transaction;
+  it keeps them across the range it rewrites. An import interrupted part
+  way can lose those kept values (it commits in chunks), and they come back
+  null, which is the canonical value anyway.
+
+  **Upgrading a publisher rebuilds every band once.** The rules reach
+  format-1 transactions and multi-tag rows at any height, so an `l1-1` band
+  can't be judged without rebuilding it (about nine hours for the whole
+  chain on vilenarios.com). A rebuilt band whose rows didn't change has the
+  same id as before, since the id comes from the rows: its files are left
+  alone, so subscribers download nothing, and the service records it as
+  confirmed under `l1-2` (`layoutConfirmed` in `state.json`) so it isn't
+  rebuilt again. Only ranges whose rows changed get new ids.
+
 - **Checks before publishing.** Every block links to the one before it and
   is linked to by the one above, each `hash_list_merkle` follows from the
   previous block, each block's `tx_root` is recomputed from its transactions

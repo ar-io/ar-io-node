@@ -109,9 +109,9 @@ describe('planL1', () => {
     ]);
   });
 
-  it('keeps an older-layout band above the fork, whose rows did not change', () => {
-    // l1-2 changed only pre-fork tx_root, so rebuilding these would cost
-    // hours and produce the same rows under the same id.
+  it('rebuilds an older-layout band at any height, since its rows may differ', () => {
+    // l1-2's rules reach format-1 data_root and content_type above the fork,
+    // so an l1-1 band can't be called current without rebuilding it.
     const bands = [
       band('l1-h0-99999-p-a', 0, 99_999),
       band('l1-h100000-199999-p-a', 100_000, 199_999),
@@ -119,10 +119,36 @@ describe('planL1', () => {
       band('l1-h300000-399999-p-a', 300_000, 399_999),
       band('l1-h400000-499999-p-a', 400_000, 499_999),
       band('l1-h500000-599999-p-old', 500_000, 599_999, 'l1-1'),
-      band('l1-h600000-604999-p-old', 600_000, 604_999, 'l1-1'),
-      band('l1-h605000-606000-p-old', 605_000, 606_000, 'l1-1'),
+      band('l1-h600000-604999-p-a', 600_000, 604_999),
+      band('l1-h605000-606000-p-tip', 605_000, 606_000),
     ];
-    assert.deepEqual(planL1(bands, 606_000), []);
+    assert.deepEqual(planL1(bands, 606_000), [
+      {
+        role: 'h',
+        heightRange: [500_000, 599_999],
+        supersedes: ['l1-h500000-599999-p-old'],
+      },
+    ]);
+  });
+
+  it('counts an older-layout band rebuilt and found identical as current', () => {
+    // The rebuild gave the same rows, so the same id: the files stay, and the
+    // confirmation is what stops the planner rebuilding it every run.
+    const bands = [
+      band('l1-h0-99999-p-a', 0, 99_999),
+      band('l1-h100000-104999-p-old', 100_000, 104_999, 'l1-1'),
+      band('l1-h105000-106000-p-old', 105_000, 106_000, 'l1-1'),
+    ];
+    assert.equal(planL1(bands, 106_000).length, 2);
+    assert.deepEqual(
+      planL1(
+        bands,
+        106_000,
+        [],
+        new Set(['l1-h100000-104999-p-old', 'l1-h105000-106000-p-old']),
+      ),
+      [],
+    );
   });
 
   it('rebuilds an older-layout band that straddles the fork', () => {

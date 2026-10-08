@@ -1522,3 +1522,91 @@ describe('importBand below the 2.0 fork', () => {
     });
   }
 });
+
+/**
+ * A band holds no format-1 data_root: the header carries none, so gateways
+ * disagree. A gateway that computed one keeps it through an import, which
+ * clears and rewrites the band's range.
+ */
+describe('importBand, a format-1 data_root', () => {
+  const PRE_FIRST = 300_000;
+  const PRE_COUNT = 10;
+  let dir: string;
+  let duck: Database;
+
+  beforeEach(async () => {
+    dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'parquet-l1-import-f1-'));
+    const { Database } = await import('duckdb-async');
+    duck = await Database.create(':memory:');
+  });
+  afterEach(async () => {
+    await duck?.close();
+    await fsp.rm(dir, { recursive: true, force: true });
+  });
+
+  it('keeps a root this gateway computed, and imports null where it has none', async () => {
+    const source = path.join(dir, 'source.db');
+    await buildCoreDb(source, PRE_FIRST, PRE_COUNT, { padded: false });
+    // Every transaction format 1, as before 2.0, with the roots it was built with.
+    const src = new Sqlite(source);
+    src
+      .prepare('UPDATE stable_transactions SET format = 1 WHERE height >= ?')
+      .run(PRE_FIRST);
+    const roots = new Map(
+      (
+        src
+          .prepare(
+            'SELECT id, data_root FROM stable_transactions WHERE height >= ?',
+          )
+          .all(PRE_FIRST) as Array<{ id: Buffer; data_root: Buffer }>
+      ).map((r) => [r.id.toString('hex'), r.data_root]),
+    );
+    src.close();
+    assert.ok(roots.size > 0);
+
+    const workDir = path.join(dir, 'work');
+    await fsp.mkdir(workDir);
+    const result = await exportL1Band({
+      coreDbPath: source,
+      workDir,
+      from: PRE_FIRST,
+      to: PRE_FIRST + PRE_COUNT - 1,
+    });
+    const entry: ImportableBand = {
+      id: `l1-h${PRE_FIRST}-${PRE_FIRST + PRE_COUNT - 1}-test-0`,
+      dir: result.dir,
+      band: result.band,
+    };
+
+    // The gateway that indexed this chain itself: its own core.db.
+    const own = path.join(dir, 'own.db');
+    await fsp.copyFile(source, own);
+    const target = new Sqlite(own);
+    target.exec(fs.readFileSync(MIGRATION, 'utf8'));
+    // ...except one transaction it never computed a root for.
+    const [firstHex] = roots.keys();
+    target
+      .prepare('UPDATE stable_transactions SET data_root = NULL WHERE id = ?')
+      .run(Buffer.from(firstHex, 'hex'));
+    try {
+      await importBand(target, duck, entry, { log, batchRows: 7 });
+      const got = new Map(
+        (
+          target
+            .prepare(
+              'SELECT id, data_root FROM stable_transactions WHERE height >= ?',
+            )
+            .all(PRE_FIRST) as Array<{ id: Buffer; data_root: Buffer | null }>
+        ).map((r) => [r.id.toString('hex'), r.data_root]),
+      );
+      assert.equal(got.size, roots.size);
+      for (const [hex, root] of roots) {
+        if (hex === firstHex)
+          assert.equal(got.get(hex), null, 'none held, none invented');
+        else assert.deepEqual(got.get(hex), root, `${hex.slice(0, 8)} kept`);
+      }
+    } finally {
+      target.close();
+    }
+  });
+});

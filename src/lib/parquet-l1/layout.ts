@@ -34,6 +34,11 @@ export const PARQUET_L1_SCHEMA = 'l1-2';
 /**
  * The versions a reader accepts, oldest first.
  *
+ * `l1-1` copied three columns from `core.db` that the chain doesn't fix, so
+ * two honest publishers wrote different rows; `l1-2` writes one canonical
+ * value for each ({@link canonicalTxRoot}, {@link canonicalDataRoot},
+ * {@link firstTagValue}). The first of them:
+ *
  * `l1-1` wrote `blocks.tx_root` as `core.db` held it. Below the 2.0 fork
  * that field is not committed by the block hash and cannot be recomputed,
  * so a gateway keeps whatever its header source gave it, and the network
@@ -47,20 +52,69 @@ export const PARQUET_L1_SCHEMAS = ['l1-1', 'l1-2'] as const;
 export type ParquetL1Schema = (typeof PARQUET_L1_SCHEMAS)[number];
 
 /**
- * Whether a band written to `schema`, starting at height `from`, holds the
- * rows this build would write. Only those need no rebuild.
+ * What a band stores for a transaction's `data_root`: null for format 1.
  *
- * `l1-2` changed nothing but pre-fork `tx_root`, so an `l1-1` band that
- * starts at or above the fork already holds `l1-2`'s rows (and the same id,
- * which comes from the rows). Rebuilding it would cost hours for nothing:
- * of a whole chain's bands, only the five ranges below 500,000 change.
+ * A format-1 header carries no `data_root` (a node returns `""`); one can be
+ * computed from the data, and some gateways hold a computed root while
+ * others hold nothing. Two publishers compared on 2026-10-08 disagreed on 352
+ * format-1 transactions this way. Format 2 signs its `data_root`, so every
+ * publisher holds the same one and it is kept, empty or not.
+ */
+export function canonicalDataRoot(
+  format: number,
+  dataRoot: Buffer | Uint8Array | null | undefined,
+): Buffer | null {
+  if (format === 1 || dataRoot === null || dataRoot === undefined) return null;
+  return Buffer.isBuffer(dataRoot) ? dataRoot : Buffer.from(dataRoot);
+}
+
+/** One tag of a transaction, as a band stores it. */
+export interface BandTag {
+  index: number;
+  name: Buffer;
+  value: Buffer;
+}
+
+/**
+ * The value of a transaction's first tag called `name`, by position, compared
+ * without case, as UTF-8; null when there is none. How a band derives
+ * `content_type` (`Content-Type`) and `content_encoding` (`Content-Encoding`)
+ * from its own tags rather than copying whatever `core.db` holds.
+ *
+ * It is ar-io-node's rule since r70 (commit 40d5548e, 2026-02-14). Before
+ * that the indexer kept the last match, so a gateway's stored value depends
+ * on the release that indexed the row: 86 transactions with two
+ * Content-Type tags differed between two publishers on 2026-10-08, though
+ * their tags were identical.
+ */
+export function firstTagValue(tags: BandTag[], name: string): string | null {
+  const wanted = name.toLowerCase();
+  let best: BandTag | undefined;
+  for (const tag of tags) {
+    if (tag.name.toString('utf8').toLowerCase() !== wanted) continue;
+    if (best === undefined || tag.index < best.index) best = tag;
+  }
+  return best === undefined ? null : best.value.toString('utf8');
+}
+
+/**
+ * Whether a band holds the rows this build would write: written to the
+ * current layout, or rebuilt under it and found identical (`confirmed`, ids
+ * the exporter recorded). An older band can't be judged without rebuilding
+ * it: `l1-2`'s rules touch format-1 `data_root` and `content_type` at any
+ * height, not only below the fork.
+ *
+ * A rebuild that produces the same rows produces the same id (the id comes
+ * from the rows), so the old files stay as they are and only the
+ * confirmation is new. Without it the planner would rebuild that band on
+ * every run.
  */
 export function isCurrentLayout(
   schema: ParquetL1Schema,
-  from: number,
+  id: string,
+  confirmed: ReadonlySet<string>,
 ): boolean {
-  if (schema === PARQUET_L1_SCHEMA) return true;
-  return schema === 'l1-1' && from >= FORK_2_0;
+  return schema === PARQUET_L1_SCHEMA || confirmed.has(id);
 }
 
 /**
