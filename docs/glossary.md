@@ -256,6 +256,14 @@ torrent: the first 16 hex characters of SHA-256 over one line per file,
 that publishers of the same bytes share one infohash, and so that the
 WebSeed address `<torrent name>/<file>` cannot change meaning.
 
+<a id="piece-layer"></a> **Piece Layer** — In a BitTorrent v2 (BEP 52)
+torrent, the hashes of one file's SHA-256 Merkle tree (built over 16 KiB
+blocks) at the level of whole pieces, carried outside the info dictionary.
+Hashed up to the file's `pieces root`, which the infohash covers, it lets a
+reader check any piece of a band file on its own. Band torrents use 256 KiB
+pieces so a byte-range reader can verify what it fetched without the rest of
+the file.
+
 <a id="band"></a> **Band** — One immutable unit of a published index, normally
 covering a block height range. Bands let a subscriber re-fetch only what
 changed: older height bands stay put while a rolling tip band is rebuilt on

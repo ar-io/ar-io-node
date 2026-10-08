@@ -446,7 +446,10 @@ describe('Subscriber', () => {
     };
 
     /** Publish with torrents on, the publisher's engine in `swarm`. */
-    const publishTorrents = async (seeder?: MemoryTransport) => {
+    const publishTorrents = async (
+      seeder?: MemoryTransport,
+      pieceLength?: number,
+    ) => {
       await new Publisher({
         log,
         state: pubState,
@@ -462,6 +465,7 @@ describe('Subscriber', () => {
         torrents: {
           ...(seeder !== undefined ? { transport: seeder } : {}),
           trackers: [],
+          ...(pieceLength !== undefined ? { pieceLength } : {}),
         },
       }).scanOnce();
     };
@@ -597,6 +601,50 @@ describe('Subscriber', () => {
         existsSync(keptTorrent(seeded.infohashV1!)),
         'the torrent is kept for re-seeding',
       );
+    });
+
+    it('keeps an installed band through its publisher moving it to a new torrent, and seeds the new one', async () => {
+      await makeBand('band-a');
+      const swarm = new MemorySwarm();
+      const publisherEngine = new MemoryTransport(swarm);
+      // Published before the piece length changed.
+      await publishTorrents(publisherEngine, 4 * 1024 * 1024);
+      const engine = new MemoryTransport(swarm);
+      const subscriber = makeTorrentSubscriber(engine);
+      await subscriber.pollOnce();
+      // A copy: the store hands back the record it later updates in place.
+      const before = {
+        ...(await subState.load()).installed['root-tx-index']['band-a'],
+      };
+      const [{ id: oldId }] = Object.values((await subState.load()).seeding);
+      const installs = await counted('installed', 'torrent');
+      const httpBytes = await bytesBy('http');
+
+      // Same files, same band id; a torrent under new infohashes.
+      clock = new Date(clock.getTime() + 60_000);
+      await publishTorrents(publisherEngine);
+      await subscriber.pollOnce();
+
+      const after = (await subState.load()).installed['root-tx-index'][
+        'band-a'
+      ];
+      assert.equal(after.dir, before.dir, 'the installed copy is kept');
+      assert.notEqual(after.infohashV1, before.infohashV1);
+      assert.equal(await counted('installed', 'torrent'), installs);
+      assert.equal(await bytesBy('http'), httpBytes, 'nothing fetched again');
+      assert.deepEqual(
+        await installedDigests('band-a'),
+        await publishedDigests(),
+      );
+      const seeding = Object.values((await subState.load()).seeding);
+      assert.deepEqual(
+        seeding.map((s) => s.infohashV1),
+        [after.infohashV1],
+        'seeding the new torrent only',
+      );
+      assert.equal(engine.entry(seeding[0].id)?.state, 'seeding');
+      assert.equal(engine.entry(seeding[0].id)?.dir, before.dir);
+      assert.equal(engine.entry(oldId), undefined, 'the old one is dropped');
     });
 
     it('re-seeds an installed band the engine lost', async () => {

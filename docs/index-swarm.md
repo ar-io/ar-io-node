@@ -702,6 +702,30 @@ bytes share one infohash and one swarm, and with the same
 delivering, because engines otherwise pull about half of a band from it even
 with a seeder available, and it is the metered tier.
 
+Every torrent is hybrid (v1 and BEP 52 v2) with 256 KiB pieces. The piece
+size is chosen for readers that are not BitTorrent clients. BEP 52 hashes
+each file into a SHA-256 Merkle tree over 16 KiB blocks; the info dictionary,
+which the signed `infohashV2` covers, holds each file's `pieces root`, and
+the torrent's `piece layers` hold that tree's layer at piece size. A client
+that wants a byte range of a band file, such as DuckDB reading a Parquet
+footer and a few column chunks in a browser, fetches the `.torrent`, checks
+it against the signed infohash, rebuilds the file's root from its layer, and
+then checks each piece it fetches over HTTP against the layer, without
+downloading the rest of the file. Smaller pieces mean less to fetch around
+each range and a bigger layer (32 bytes a piece, 128 KiB per GiB); 256 KiB is
+also Arweave's chunk size. A file's `pieces root` does not depend on the
+piece length, so changing it gives every torrent new infohashes but leaves
+the roots, and the band, as they were. Publishers that agree on the bytes
+agree on the torrent only while they agree on the piece length, which is why
+it is fixed rather than a setting.
+
+When the piece length changes between releases, the publisher rebuilds each
+band's torrent once on its next scan, offers it under the new infohashes and
+stops seeding the old one. Band ids and files are unchanged, so a subscriber
+keeps what it has installed, fetches the new `.torrent` and seeds that
+instead. Subscribers accept any power-of-two piece length from 16 KiB to
+64 MiB, so publishers and subscribers can upgrade in either order.
+
 `INDEX_SWARM_TRACKERS` sets the announce list; point it at this node's own
 tracker (below) by the address peers reach it on. Subscribers pass on to
 their engine only trackers on public hosts, so a name such as `core` or a
