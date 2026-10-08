@@ -1492,7 +1492,13 @@ describe('importBand below the 2.0 fork', () => {
       const digest = new RowDigest(spec.columns);
       await readTable(duck, entry.dir, spec, entry.band, async (rows) => {
         for (const row of rows) digest.add(row);
-      }).catch(() => undefined); // the old digest no longer matches
+      }).catch((error: unknown) => {
+        // Only the digest is expected to differ: the rows were rewritten,
+        // the band.json was not. Anything else is a broken fixture.
+        if (!/do not reproduce the digest/.test((error as Error).message)) {
+          throw error;
+        }
+      });
       entry.band = {
         ...entry.band,
         schema: 'l1-1',
