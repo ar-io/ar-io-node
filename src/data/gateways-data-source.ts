@@ -16,8 +16,12 @@ import {
   buildRangeHeader,
   normalizeAbortError,
   contentEncodingOf,
+  contradictsContentEncoding,
+  hasContentEncodingMagic,
+  parseContentEncoding,
   parseContentLength,
   parseContentRange,
+  undeclaredTaggedEncoding,
 } from '../lib/http-utils.js';
 import { BASE_AGENT_OPTIONS, instrumentAgent } from '../lib/http-agent.js';
 import { GatewayThrottle } from './gateway-throttle.js';
@@ -29,7 +33,11 @@ import {
   parseUpstreamTagHeaders,
   validateHopCount,
 } from '../lib/request-attributes.js';
-import { ByteRangeTransform, attachStallTimeout } from '../lib/stream.js';
+import {
+  ByteRangeTransform,
+  attachStallTimeout,
+  peekFirstChunk,
+} from '../lib/stream.js';
 import * as metrics from '../metrics.js';
 import { startChildSpan } from '../tracing.js';
 import {
@@ -580,6 +588,41 @@ export class GatewaysDataSource implements ContiguousDataSource {
                   }
                 }
 
+                // A gateway older than #964 decodes a Content-Encoding: gzip
+                // item and serves the plain bytes, cut at the encoded length,
+                // without the header. Its tag headers still name the coding,
+                // so the mismatch identifies the body as decoded and
+                // truncated. Fall through rather than serve or cache it.
+                const upstreamTags = parseUpstreamTagHeaders(
+                  response.headers as Record<string, string | string[]>,
+                );
+                const undeclaredEncoding = undeclaredTaggedEncoding({
+                  contentEncoding: response.headers['content-encoding'] as
+                    | string
+                    | undefined,
+                  tags: upstreamTags,
+                });
+                if (undeclaredEncoding !== undefined) {
+                  response.data.destroy();
+                  metrics.upstreamDecodedBodyRejectedTotal.inc({
+                    class: this.constructor.name,
+                    source: gatewayUrl,
+                    encoding: undeclaredEncoding,
+                    reason: 'undeclared',
+                  });
+                  span.addEvent('Gateway response body decoded upstream', {
+                    'gateways.url': gatewayUrl,
+                    'gateways.tier.priority': priority,
+                    'gateways.request.path': path,
+                    'http.content_encoding_tag': undeclaredEncoding,
+                  });
+                  throw new Error(
+                    `Gateway response for ${id} is tagged Content-Encoding: ` +
+                      `${undeclaredEncoding} but sent without that header ` +
+                      `(body decoded upstream)`,
+                  );
+                }
+
                 if (upstreamIgnoredRange) {
                   // Cap the prefix bandwidth we're willing to burn to
                   // slice locally. If region.offset exceeds the cap, the
@@ -669,6 +712,51 @@ export class GatewaysDataSource implements ContiguousDataSource {
                     throw new Error(
                       `Gateway full body (${contentLength}) too small for ` +
                         `requested region [${region.offset}, ${requiredBytes}) for ${id}`,
+                    );
+                  }
+                }
+
+                // A gateway older than #964 can also send a gzip-tagged item
+                // decompressed while still declaring Content-Encoding: gzip.
+                // Where the body starts at the item's first byte, check the
+                // declared coding's magic before handing the stream on. This
+                // runs before attachStallTimeout, whose 'data' listener would
+                // let the stream flow during the peek and drop bytes.
+                const declaredEncoding = response.headers[
+                  'content-encoding'
+                ] as string | undefined;
+                const bodyStartsAtItemStart =
+                  region === undefined ||
+                  upstreamIgnoredRange ||
+                  region.offset === 0;
+                if (
+                  bodyStartsAtItemStart &&
+                  hasContentEncodingMagic(declaredEncoding)
+                ) {
+                  const head = await peekFirstChunk(
+                    stream,
+                    this.requestTimeoutMs,
+                    signal,
+                  );
+                  if (contradictsContentEncoding(head, declaredEncoding)) {
+                    stream.destroy();
+                    const encoding = parseContentEncoding(declaredEncoding);
+                    metrics.upstreamDecodedBodyRejectedTotal.inc({
+                      class: this.constructor.name,
+                      source: gatewayUrl,
+                      encoding,
+                      reason: 'mislabelled',
+                    });
+                    span.addEvent('Gateway response body mislabelled', {
+                      'gateways.url': gatewayUrl,
+                      'gateways.tier.priority': priority,
+                      'gateways.request.path': path,
+                      'http.content_encoding': encoding,
+                    });
+                    throw new Error(
+                      `Gateway response for ${id} declares Content-Encoding: ` +
+                        `${encoding} but its body is not ${encoding}-encoded ` +
+                        `(decoded upstream)`,
                     );
                   }
                 }
@@ -804,9 +892,7 @@ export class GatewaysDataSource implements ContiguousDataSource {
                     headers: response.headers as { [key: string]: string },
                     currentHops: requestAttributesHeaders?.attributes.hops,
                   }),
-                  upstreamTags: parseUpstreamTagHeaders(
-                    response.headers as Record<string, string | string[]>,
-                  ),
+                  upstreamTags,
                 };
               } catch (rawError: any) {
                 clearTimeout(connectionTimer);

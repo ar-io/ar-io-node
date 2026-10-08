@@ -18,10 +18,13 @@ import {
   normalizeAbortError,
   parseContentLength,
   contentEncodingOf,
+  contradictsContentEncoding,
+  hasContentEncodingMagic,
   honouredContentEncoding,
   parseContentEncoding,
   parseContentRange,
   parseNonNegativeInt,
+  undeclaredTaggedEncoding,
   wouldReturn304,
 } from './http-utils.js';
 
@@ -148,6 +151,125 @@ describe('http-utils', () => {
       assert.equal(honouredContentEncoding('identity'), undefined);
       assert.equal(honouredContentEncoding(''), undefined);
       assert.equal(honouredContentEncoding(undefined), undefined);
+    });
+  });
+
+  describe('contradictsContentEncoding', () => {
+    const gzipHead = Buffer.from([0x1f, 0x8b, 0x08, 0x00]);
+    const zstdHead = Buffer.from([0x28, 0xb5, 0x2f, 0xfd, 0x00]);
+    const json = Buffer.from('{"type":"advanced"}');
+
+    it('accepts bodies that start with the declared magic', () => {
+      assert.equal(contradictsContentEncoding(gzipHead, 'gzip'), false);
+      assert.equal(contradictsContentEncoding(gzipHead, ' GZIP '), false);
+      assert.equal(contradictsContentEncoding(zstdHead, 'zstd'), false);
+    });
+
+    it('rejects a decoded body that still declares gzip or zstd', () => {
+      assert.equal(contradictsContentEncoding(json, 'gzip'), true);
+      assert.equal(contradictsContentEncoding(json, 'zstd'), true);
+      assert.equal(contradictsContentEncoding(gzipHead, 'zstd'), true);
+    });
+
+    it('compares a short head as far as it goes', () => {
+      assert.equal(
+        contradictsContentEncoding(Buffer.from([0x1f]), 'gzip'),
+        false,
+      );
+      assert.equal(
+        contradictsContentEncoding(Buffer.from([0x7b]), 'gzip'),
+        true,
+      );
+    });
+
+    it('never rejects codings without magic, no coding, or an empty head', () => {
+      assert.equal(contradictsContentEncoding(json, 'br'), false);
+      assert.equal(contradictsContentEncoding(json, 'deflate'), false);
+      assert.equal(contradictsContentEncoding(json, 'gzip, br'), false);
+      assert.equal(contradictsContentEncoding(json, undefined), false);
+      assert.equal(contradictsContentEncoding(json, 'identity'), false);
+      assert.equal(contradictsContentEncoding(Buffer.alloc(0), 'gzip'), false);
+    });
+
+    it('reports which codings can be checked', () => {
+      assert.equal(hasContentEncodingMagic('gzip'), true);
+      assert.equal(hasContentEncodingMagic('ZSTD'), true);
+      assert.equal(hasContentEncodingMagic('br'), false);
+      assert.equal(hasContentEncodingMagic(undefined), false);
+    });
+  });
+
+  describe('undeclaredTaggedEncoding', () => {
+    const tagged = (value: string) => [
+      { name: 'Content-Type', value: 'application/json' },
+      { name: 'content-encoding', value },
+    ];
+
+    it('names a tagged coding the response does not declare', () => {
+      assert.equal(
+        undeclaredTaggedEncoding({
+          contentEncoding: undefined,
+          tags: tagged('gzip'),
+        }),
+        'gzip',
+      );
+      assert.equal(
+        undeclaredTaggedEncoding({
+          contentEncoding: 'identity',
+          tags: tagged('GZIP'),
+        }),
+        'gzip',
+      );
+    });
+
+    it('names nothing when the response declares an encoding', () => {
+      assert.equal(
+        undeclaredTaggedEncoding({
+          contentEncoding: 'gzip',
+          tags: tagged('gzip'),
+        }),
+        undefined,
+      );
+    });
+
+    it('names nothing for codings gateways never declare', () => {
+      for (const value of ['x-custom', 'gzip, br', 'identity']) {
+        assert.equal(
+          undeclaredTaggedEncoding({
+            contentEncoding: undefined,
+            tags: tagged(value),
+          }),
+          undefined,
+          value,
+        );
+      }
+    });
+
+    it('names nothing without a Content-Encoding tag', () => {
+      assert.equal(
+        undeclaredTaggedEncoding({ contentEncoding: undefined, tags: [] }),
+        undefined,
+      );
+      assert.equal(
+        undeclaredTaggedEncoding({
+          contentEncoding: undefined,
+          tags: undefined,
+        }),
+        undefined,
+      );
+    });
+
+    it('uses only the first Content-Encoding tag', () => {
+      assert.equal(
+        undeclaredTaggedEncoding({
+          contentEncoding: undefined,
+          tags: [
+            { name: 'Content-Encoding', value: 'x-custom' },
+            { name: 'Content-Encoding', value: 'gzip' },
+          ],
+        }),
+        undefined,
+      );
     });
   });
 
