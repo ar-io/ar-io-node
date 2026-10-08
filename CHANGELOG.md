@@ -8,6 +8,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- `docs/index-swarm.md` documents querying a published dataset over HTTP: a
+  `parquet-l1` band is Parquet and the byte routes serve ranges, so a client
+  can read a dataset where it sits, with no band files to download, no import
+  into a database and no gateway of its own, fetching only the footer and the
+  row groups a predicate selects. DuckDB installs its own `httpfs` and `json`
+  extensions on first use. The
+  signed document is the catalog, since HTTP has no directory listing to glob.
+  Because `Repr-Digest` is co-signable and commits to the whole file, a ranged
+  read still carries a signature over the digest of the file it read from.
+  Measured against a 24-band dataset covering heights 0 to 2,016,168 whose
+  `transactions.parquet` files total 5.51 GB: a 100-block window across all 24
+  bands in 0.1 s, and the full height span and row count in 0.6 s, over HTTPS,
+  with nothing written to disk.
+
 - **A trusted gateway that answers 429 is skipped until its `Retry-After` has
   passed** (`GATEWAYS_THROTTLE_BACKOFF_ENABLED`, default `true`). Before, every
   request still went to it first: it waited for one of that gateway's sockets,
@@ -201,6 +215,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   Every other path on a sandbox host is unchanged.
 
 ### Fixed
+
+- The nginx guidance for `/ar-io/indexes` in `docs/index-swarm.md` named the
+  wrong remedy and understated the cost. It said to set `proxy_buffering off`,
+  which does not fix anything: when a location has a cache zone, nginx strips
+  the client's `Range` from the upstream request and fetches the whole object
+  so it can store it, before it has seen any `Cache-Control`, so no response
+  header helps either. What the client sees then depends on whether the
+  response was cacheable: a gateway that does not meter sends `public` and
+  nginx answers the range from its cache, while a metering gateway sends
+  `private`, nothing is stored, and nginx returns `200` with the whole body on
+  every request. A cache zone is wrong on both branches, since the whole file
+  crosses from the gateway either way and band files reach 1.35 GB. The fix is
+  `proxy_cache off` for the prefix, with no trailing slash,
+  since a `proxy_pass` location whose prefix ends in `/` answers the unslashed
+  form with a `301` and the document every subscriber polls lives there, with
+  HTTPSig signing `@path`. The stated band size (7 to 30 MB) also predated
+  `parquet-l1`, whose files reach 541 MB. Core and envoy answer ranges
+  correctly, so the default stack was never affected; the guidance only
+  mattered once an operator added a cache, and it failed quietly, because a
+  `200` carrying more bytes than were asked for looks like success. Verified
+  against a 541 MB band file: a 100-byte range returned all 541,753,181 bytes
+  through a cache zone and `206` with it off.
 
 - **A gateway older than #964 could poison the cache with a decoded copy
   of a gzip-compressed item.** Such gateways serve an item tagged

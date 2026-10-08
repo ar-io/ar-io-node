@@ -1100,6 +1100,77 @@ document is not, so a client that has run out of tokens can still learn what
 it could fetch. The gateway mounts `data/indexes` read only: it serves
 `published/`, loads `installed/`, and never writes to either.
 
+## Querying a dataset over HTTP
+
+A `parquet-l1` band is Parquet, and the byte routes serve ranges, so a client
+can query a published dataset where it sits: no band files to download, no
+import into a database, and no gateway of its own. Any engine that reads
+Parquet over HTTP range requests works. The examples below use DuckDB, which
+needs its `httpfs` and `json` extensions, and installs them itself on first
+use.
+
+**The signed document is the catalog.** There is no directory listing, so a
+client cannot glob over HTTP: it reads `/ar-io/indexes`, picks the dataset by
+`name`, and builds the file URLs from the band ids. That is the right shape,
+because the document is signed and the bands' digests are inside the
+signature.
+
+```bash
+# the band file URLs for a dataset, from the signed document
+curl -s https://<gateway>/ar-io/indexes \
+  | jq -r '.indexes[] | select(.name=="parquet-l1") | .bands[].id' \
+  | sed 's|^|https://<gateway>/ar-io/indexes/parquet-l1/|; s|$|/transactions.parquet|'
+```
+
+```sql
+INSTALL httpfs; LOAD httpfs;
+SELECT count(*)
+FROM read_parquet([
+  'https://<gateway>/ar-io/indexes/parquet-l1/<band-id>/transactions.parquet',
+  ...
+])
+WHERE height BETWEEN 1500000 AND 1500099;
+```
+
+Only the Parquet footer and the row groups a predicate selects cross the
+network. Measured on 2026-10-07 against a 24-band dataset covering heights
+0 to 2,016,168, whose `transactions.parquet` files total 5.51 GB on the
+server: a 100-block window across all 24 bands answered in 0.1 s, and
+`min(height)`, `max(height)` and `count(*)` across the whole dataset in
+0.6 s, over HTTPS, with nothing written to disk. The second figure reads
+footer statistics rather than scanning columns, so it is a metadata result
+and not a scan rate.
+
+**A ranged read is still signed.** `Repr-Digest` is co-signable, and it
+commits to the whole file rather than the returned range, so a client doing
+predicate pushdown holds a signature over the digest of the file it is
+reading bytes from. A client that wants to check it reads `signature-input`,
+`signature` and `repr-digest` from any `206`.
+
+Three things to know before pointing a pipeline at this:
+
+- **A cache in front breaks it.** This depends entirely on range requests
+  working end to end, which is the one thing a proxy with a cache zone
+  silently takes away. See [running behind nginx](#running-behind-nginx).
+- **The byte routes are metered.** The rate limiter and x402 apply as they do
+  to data, so an analytical client is a paying or allowlisted client. The
+  document itself is free.
+- **Only a publisher serves these routes.** They resolve against this
+  gateway's own publication, so a subscriber that has installed the same
+  bands answers `404`: it shares them over BitTorrent, not over HTTP. Query a
+  publisher, or install the bands and read them from disk.
+
+Reading installed bands from disk needs no HTTP at all, and is the right
+choice for repeated heavy queries:
+
+```sql
+SELECT * FROM read_parquet('data/indexes/installed/parquet-l1/*/transactions.parquet')
+WHERE height BETWEEN 1000000 AND 1000100;
+```
+
+To load a dataset into the gateway's own SQLite instead, see
+[`cli.md`](cli.md) (`index-l1-import`, which needs the gateway stopped).
+
 ## Running behind nginx
 
 Most gateways sit behind nginx, and many cache. The routes are built to be
@@ -1137,10 +1208,55 @@ Things to decide or check:
   sequence is refused as a replay, and the next poll gets the current one.
   But it hides a publisher outage from outside, so prefer no cache for the
   document.
-- **Large files.** Band files are 7–30 MB. Set `proxy_buffering off` (or large
-  enough temp limits) for `/ar-io/indexes`. With `proxy_cache` on and no
-  `slice` module, nginx fetches a whole file on a cache miss even for a range
-  request, so a resuming client waits for the full file.
+- **Large files, and why a cache in front breaks ranges.** A `root-tx-index`
+  band file is 7–30 MB, but a `parquet-l1` band is a different scale: its
+  `transactions.parquet` alone reaches 541 MB, and a whole band 1.35 GB.
+  **Turn the cache off for the prefix, not just the buffering:**
+
+  ```nginx
+  location ^~ /ar-io/indexes {
+      proxy_pass http://127.0.0.1:3000;
+      proxy_cache off;              # the fix: see below
+      proxy_buffering off;          # stream, do not stage a 1.35 GB body
+      proxy_max_temp_file_size 0;
+      proxy_read_timeout 300s;
+  }
+  ```
+
+  `proxy_buffering off` on its own is not enough, and no response header can
+  substitute for this. When a location has a cache zone, nginx strips the
+  client's `Range` from the upstream request and fetches the whole object so
+  it can store it, which happens before it has seen any `Cache-Control`. A
+  `proxy_cache_bypass` keyed on `$upstream_http_cache_control` cannot help
+  either: that variable is empty when the bypass is evaluated.
+
+  **What the client then sees depends on whether the response was
+  cacheable**, so the symptom differs between gateways:
+
+  | The gateway's `Cache-Control` for a file by name | Through a cache zone |
+  |---|---|
+  | `public, no-cache` (not metering) | nginx stores it and answers from cache, so the client does get a `206` |
+  | `private, no-cache` (metering) | nothing can be stored, so nginx has no cached object to answer a range from and returns `200` with the whole body, on **every** request |
+
+  Measured on 2026-10-07, both against a controlled 5 MB upstream and against
+  a real 541 MB band file. A cacheable upstream answered a 100-byte range
+  with `206` and 100 bytes. An uncacheable one answered `200` with all
+  5,000,000 bytes, twice, never caching. On a metered gateway the same
+  request returned `200` and all 541,753,181 bytes, after which the route
+  answered `402` because the transfer had consumed the allowance.
+
+  **A cache zone is wrong even on the branch that returns `206`.** The whole
+  file still crosses from the gateway on the first range request, so the
+  latency and the egress are paid either way, and band files of up to 1.35 GB
+  still fill a zone sized for small objects. On a metering gateway it is
+  worse than wrong: it makes
+  [querying a dataset over HTTP](#querying-a-dataset-over-http) impossible
+  and breaks BitTorrent WebSeeds (BEP-19), which fetch pieces by range.
+
+  Note the prefix has **no trailing slash**. nginx answers a request for a
+  `proxy_pass` location whose prefix ends in `/` with a `301` to the slashed
+  form, and the document at `/ar-io/indexes` is what every subscriber polls.
+  HTTPSig signs `@path`, so a redirect moves the signed path.
 - **More than one node.** Only the node holding the observer key signs. If
   a load balancer spreads `/ar-io/indexes*` across nodes that don't publish,
   subscribers get `404`s from those nodes; if two nodes publish with the
@@ -1460,6 +1576,39 @@ sequences already seen, which is what stops a re-enabled subscriber from
 accepting a replayed older document.
 
 ## Troubleshooting
+
+**A range request on a band file returns `200` and the whole file** — a proxy
+in front has a cache zone for the prefix, and this gateway's byte responses
+are `private` because it meters them, so nothing can be cached and nginx has
+no stored object to answer a range from. This fails quietly, because a `200`
+carrying more bytes than were asked for looks like a success to anything that
+does not check the status, and it breaks WebSeeds, media seeking and
+[querying over HTTP](#querying-a-dataset-over-http) alike. A gateway that does
+not meter sends `public` instead and will appear to work, while still pulling
+each whole file once and filling the cache with it. Confirm by comparing the
+layers, innermost first:
+
+```bash
+BAND=.../transactions.parquet      # a band file from /ar-io/indexes
+for u in http://localhost:4000 http://localhost:3000 https://<gateway>; do
+  echo "$u: $(curl -s -o /dev/null -w '%{http_code} %{size_download}' -r 0-99 "$u/ar-io/indexes/$BAND")"
+done
+```
+
+Core and envoy answer `206 100`. A layer that answers `200` with the full
+size is the one to fix, with `proxy_cache off` for the prefix (see
+[running behind nginx](#running-behind-nginx)). Check **every** server block
+that serves the gateway: a TLS listener and an internal cache listener often
+live in different files, and fixing one leaves the other broken. Note also
+that `nginx -s reload` retires old workers gracefully, so a request made
+immediately after a reload can still be answered by the old configuration;
+re-test a few seconds later before concluding the change did not work.
+
+**`402` on a band file right after a full-file transfer** — the byte routes
+are metered like data, so one accidental whole-file download can consume an
+address's allowance and the next range request is refused. Not a
+configuration fault; allowlist the client in
+`RATE_LIMITER_IPS_AND_CIDRS_ALLOWLIST`, or wait for the limit to refill.
 
 **`index-swarm idle: nothing configured`** — neither `INDEX_SWARM_PUBLISH` nor
 `INDEX_SWARM_SUBSCRIBE` is set. This is the default and is not an error.
