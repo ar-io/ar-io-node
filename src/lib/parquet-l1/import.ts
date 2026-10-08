@@ -656,22 +656,22 @@ export async function importBand(
                 ? Number(v)
                 : v,
         );
-        // An `l1-2` band holds no pre-fork `tx_root` (it is not committed by
-        // the block hash, so publishers disagree), but a gateway that
-        // indexed the chain itself has one. The insert replaces the row, so
-        // keep what is already stored rather than erasing it.
-        if (values[txRootColumn] === null) {
-          // `readTable` casts UBIGINT to VARCHAR (a UBIGINT arrives in node
-          // as a double and would round), so a height here is a string.
-          const kept = keptTxRoots.get(Number(values[heightColumn]));
-          // Only for the same block: a row the band replaces may be a fork
-          // the chain dropped, and its root belongs to that block alone.
-          if (
-            kept !== undefined &&
-            kept.indepHash.equals(values[hashColumn] as Buffer)
-          ) {
-            values[txRootColumn] = kept.txRoot;
-          }
+        // A pre-fork `tx_root` is not committed by the block hash, so a
+        // band's is just its publisher's header source talking: an `l1-2`
+        // band holds none, and an `l1-1` band holds whatever the publisher
+        // stored — empty bytes from vilenarios.com, 32 bytes elsewhere. A
+        // gateway that indexed the block itself keeps its own, whatever the
+        // band says: the insert replaces the row, so put it back.
+        // `readTable` casts UBIGINT to VARCHAR (a UBIGINT arrives in node as
+        // a double and would round), so a height here is a string.
+        const kept = keptTxRoots.get(Number(values[heightColumn]));
+        // Only for the same block: a row the band replaces may be a fork
+        // the chain dropped, and its root belongs to that block alone.
+        if (
+          kept !== undefined &&
+          kept.indepHash.equals(values[hashColumn] as Buffer)
+        ) {
+          values[txRootColumn] = kept.txRoot;
         }
         insert.blocks.run(...values);
       }

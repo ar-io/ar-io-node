@@ -15,6 +15,10 @@ import type { Database } from 'duckdb-async';
 
 import { exportL1Band } from '../../index-export/kinds/parquet-l1/export.js';
 import { buildCoreDb } from '../../../test/parquet-l1-core-db.js';
+import { FORK_2_0 } from './chain.js';
+import { RowDigest } from './digest.js';
+import { PARQUET_L1_TABLES } from './layout.js';
+import { readTable } from './read.js';
 import { createTestLogger } from '../../../test/test-logger.js';
 import type { Logger } from 'winston';
 import {
@@ -1467,4 +1471,48 @@ describe('importBand below the 2.0 fork', () => {
       assert.equal(row.tx_root, null, `height ${row.height}`);
     }
   });
+
+  for (const [label, sql] of [
+    ['empty bytes, as vilenarios.com published', "''::BLOB"],
+    ['a different 32-byte root', "repeat('\\x11', 32)::BLOB"],
+  ] as const) {
+    it(`keeps its own root over an l1-1 band holding ${label}`, async () => {
+      // An l1-1 band carries a pre-fork tx_root as its publisher stored it.
+      // Rewrite the exported blocks so it does, and re-describe the rows.
+      const file = path.join(entry.dir, 'blocks.parquet');
+      const rewritten = `${file}.l1-1`;
+      await duck.all(`COPY (
+          SELECT * REPLACE (
+            CASE WHEN height < ${FORK_2_0} THEN ${sql} ELSE tx_root END
+              AS tx_root)
+          FROM read_parquet('${file}') ORDER BY height
+        ) TO '${rewritten}' (FORMAT parquet)`);
+      await fsp.rename(rewritten, file);
+      const spec = PARQUET_L1_TABLES.find((t) => t.name === 'blocks')!;
+      const digest = new RowDigest(spec.columns);
+      await readTable(duck, entry.dir, spec, entry.band, async (rows) => {
+        for (const row of rows) digest.add(row);
+      }).catch(() => undefined); // the old digest no longer matches
+      entry.band = {
+        ...entry.band,
+        schema: 'l1-1',
+        tables: {
+          ...entry.band.tables,
+          blocks: { ...entry.band.tables.blocks, rowDigest: digest.hex() },
+        },
+      };
+
+      const held = seedBlocksFrom(source);
+      assert.ok(held.size > 0, 'the gateway starts with pre-fork tx_roots');
+
+      await importBand(target, duck, entry, { log, batchRows: 7 });
+
+      for (const row of txRoots(target)) {
+        const kept = held.get(row.height);
+        if (kept !== undefined) {
+          assert.deepEqual(row.tx_root, kept, `height ${row.height} kept`);
+        }
+      }
+    });
+  }
 });
