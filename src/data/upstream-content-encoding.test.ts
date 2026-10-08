@@ -26,6 +26,12 @@ import { createTestLogger } from '../../test/test-logger.js';
  * `Content-Encoding: gzip`, which clients cannot decode (ar-io/ar-io-node,
  * turbo-gateway.com 2026-09-30).
  *
+ * Gateways older than that fix still do it, and cut the decoded body at the
+ * encoded length, so the bytes they serve are both decoded and truncated
+ * (docs.ar.io /api/search, vilenarios.com 2026-10-07). Their
+ * `X-Arweave-Tag-Content-Encoding` header still names the coding, which is
+ * how such a response is recognised and refused.
+ *
  * These tests use a real HTTP server and the real axios, since mocking axios
  * would hide exactly the behaviour at issue.
  */
@@ -33,6 +39,11 @@ describe('upstream data sources and Content-Encoding', () => {
   const log = createTestLogger({ suite: 'upstream-content-encoding' });
   const ID = 'fZMMYJWN-kn5nk2mNpDKR1hh3hwpBljKvPvtWLQVVa0';
   const PLAIN_ID = 'plainPLAINplainPLAINplainPLAINplainPLAIN123';
+  // Served the way a pre-#964 gateway serves a gzip item: decoded, cut at the
+  // encoded length, no Content-Encoding, tag header intact.
+  const DECODED_ID = 'decodedDECODEDdecodedDECODEDdecodedDECODED1';
+  // Tagged with a coding no gateway names in Content-Encoding.
+  const CUSTOM_ID = 'customCUSTOMcustomCUSTOMcustomCUSTOMcustom1';
   const json = Buffer.from(JSON.stringify({ report: 'x'.repeat(20_000) }));
   const gzipped = gzipSync(json);
 
@@ -43,11 +54,22 @@ describe('upstream data sources and Content-Encoding', () => {
   before(async () => {
     server = http.createServer((req, res) => {
       acceptEncodings.push(req.headers['accept-encoding']);
-      const encoded = req.url?.includes(ID) === true;
-      const body = encoded ? gzipped : json;
+      const url = req.url ?? '';
+      const encoded = url.includes(ID);
+      const decoded = url.includes(DECODED_ID);
+      const custom = url.includes(CUSTOM_ID);
+      const body = encoded
+        ? gzipped
+        : decoded
+          ? json.subarray(0, gzipped.length)
+          : json;
       res.writeHead(200, {
         'Content-Type': 'application/json',
         ...(encoded ? { 'Content-Encoding': 'gzip' } : {}),
+        ...(encoded || decoded
+          ? { 'X-Arweave-Tag-Content-Encoding': 'gzip' }
+          : {}),
+        ...(custom ? { 'X-Arweave-Tag-Content-Encoding': 'x-custom' } : {}),
         'Content-Length': body.length,
         'X-AR-IO-Verified': 'true',
         'X-AR-IO-Trusted': 'true',
@@ -114,6 +136,25 @@ describe('upstream data sources and Content-Encoding', () => {
         it('reports no encoding for an unencoded response', async () => {
           const data = await sources()[name].getData({
             id: PLAIN_ID,
+            requestAttributes: { hops: 0 } as any,
+          });
+
+          assert.deepStrictEqual(await readAll(data), json);
+          assert.strictEqual(data.sourceContentEncoding, undefined);
+        });
+
+        it('refuses a body tagged gzip but sent without Content-Encoding', async () => {
+          await assert.rejects(
+            sources()[name].getData({
+              id: DECODED_ID,
+              requestAttributes: { hops: 0 } as any,
+            }),
+          );
+        });
+
+        it('accepts a tag naming a coding gateways do not declare', async () => {
+          const data = await sources()[name].getData({
+            id: CUSTOM_ID,
             requestAttributes: { hops: 0 } as any,
           });
 

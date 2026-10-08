@@ -132,6 +132,41 @@ export function honouredContentEncoding(
 }
 
 /**
+ * The coding an upstream's `X-Arweave-Tag-Content-Encoding` header names when
+ * the response itself carries no `Content-Encoding`, or `undefined` when the
+ * two agree.
+ *
+ * A gateway that serves an item stored encoded sends `Content-Encoding` for
+ * every honoured coding its tag names (see {@link honouredContentEncoding}).
+ * A tag naming one with no header means the bytes were decoded somewhere
+ * upstream. Gateways older than ar-io-node #964 did this: they decoded the
+ * gzip body and cut it at the encoded length, so the bytes are both decoded
+ * and truncated, and must not be served or cached.
+ *
+ * Only the first `Content-Encoding` tag counts, as when indexing (#966).
+ *
+ * @example
+ * undeclaredTaggedEncoding({ contentEncoding: undefined, tags: [{ name: 'Content-Encoding', value: 'gzip' }] }) // 'gzip'
+ * undeclaredTaggedEncoding({ contentEncoding: 'gzip', tags: [{ name: 'Content-Encoding', value: 'gzip' }] }) // undefined
+ * undeclaredTaggedEncoding({ contentEncoding: undefined, tags: [{ name: 'Content-Encoding', value: 'x-custom' }] }) // undefined
+ */
+export function undeclaredTaggedEncoding({
+  contentEncoding,
+  tags,
+}: {
+  contentEncoding: string | string[] | undefined;
+  tags: { name: string; value: string }[] | undefined;
+}): string | undefined {
+  if (parseContentEncoding(contentEncoding) !== undefined) {
+    return undefined;
+  }
+  const tag = tags?.find(
+    (candidate) => candidate.name.toLowerCase() === 'content-encoding',
+  );
+  return honouredContentEncoding(tag?.value);
+}
+
+/**
  * `{ sourceContentEncoding }` for an upstream `Content-Encoding` header that
  * names an encoding, or `{}` when the bytes are not encoded; for spreading into
  * a `ContiguousData` result.

@@ -181,6 +181,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **A gateway older than #964 could poison the cache with a truncated,
+  decoded copy of a gzip-compressed item.** Such a gateway serves an item
+  tagged `Content-Encoding: gzip` unzipped, cut at the compressed length, and
+  without the header. Fetched from a trusted gateway or an AR.IO peer, those
+  bytes were cached and served as the item, with a `Content-Digest` over the
+  wrong bytes. On vilenarios.com, docs.ar.io's 14.5 MiB search index came back
+  as its first 2.5 MiB of plain JSON. Both sources now refuse a response whose
+  `X-Arweave-Tag-Content-Encoding` names a coding (`gzip`, `br`, `deflate`,
+  `zstd`) that the response does not declare, and try the next source. New
+  metric: `upstream_decoded_body_rejected_total{class,source,encoding}`. A
+  response without tag headers is still accepted, so items cached before
+  this fix need purging.
+
 - A 404 or 429 from a trusted gateway was logged as a warning, although the
   code meant to log those routine outcomes at debug: the check read a field
   that is only set for an unexpected 2xx, while axios reports a 4xx on its

@@ -22,6 +22,7 @@ import {
   parseContentEncoding,
   parseContentRange,
   parseNonNegativeInt,
+  undeclaredTaggedEncoding,
   wouldReturn304,
 } from './http-utils.js';
 
@@ -148,6 +149,80 @@ describe('http-utils', () => {
       assert.equal(honouredContentEncoding('identity'), undefined);
       assert.equal(honouredContentEncoding(''), undefined);
       assert.equal(honouredContentEncoding(undefined), undefined);
+    });
+  });
+
+  describe('undeclaredTaggedEncoding', () => {
+    const tagged = (value: string) => [
+      { name: 'Content-Type', value: 'application/json' },
+      { name: 'content-encoding', value },
+    ];
+
+    it('names a tagged coding the response does not declare', () => {
+      assert.equal(
+        undeclaredTaggedEncoding({
+          contentEncoding: undefined,
+          tags: tagged('gzip'),
+        }),
+        'gzip',
+      );
+      assert.equal(
+        undeclaredTaggedEncoding({
+          contentEncoding: 'identity',
+          tags: tagged('GZIP'),
+        }),
+        'gzip',
+      );
+    });
+
+    it('names nothing when the response declares an encoding', () => {
+      assert.equal(
+        undeclaredTaggedEncoding({
+          contentEncoding: 'gzip',
+          tags: tagged('gzip'),
+        }),
+        undefined,
+      );
+    });
+
+    it('names nothing for codings gateways never declare', () => {
+      for (const value of ['x-custom', 'gzip, br', 'identity']) {
+        assert.equal(
+          undeclaredTaggedEncoding({
+            contentEncoding: undefined,
+            tags: tagged(value),
+          }),
+          undefined,
+          value,
+        );
+      }
+    });
+
+    it('names nothing without a Content-Encoding tag', () => {
+      assert.equal(
+        undeclaredTaggedEncoding({ contentEncoding: undefined, tags: [] }),
+        undefined,
+      );
+      assert.equal(
+        undeclaredTaggedEncoding({
+          contentEncoding: undefined,
+          tags: undefined,
+        }),
+        undefined,
+      );
+    });
+
+    it('uses only the first Content-Encoding tag', () => {
+      assert.equal(
+        undeclaredTaggedEncoding({
+          contentEncoding: undefined,
+          tags: [
+            { name: 'Content-Encoding', value: 'x-custom' },
+            { name: 'Content-Encoding', value: 'gzip' },
+          ],
+        }),
+        undefined,
+      );
     });
   });
 

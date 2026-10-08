@@ -1116,6 +1116,12 @@ export const gatewayContentTypeRejectedTotal = new promClient.Counter({
   labelNames: ['gateway_url', 'priority', 'content_type'] as const,
 });
 
+export const upstreamDecodedBodyRejectedTotal = new promClient.Counter({
+  name: 'upstream_decoded_body_rejected_total',
+  help: 'Count of upstream data responses rejected because their Content-Encoding tag header names a coding the response does not declare, meaning the body was decoded upstream (pre-#964 gateways).',
+  labelNames: ['class', 'source', 'encoding'] as const,
+});
+
 // Time from an outbound gateway request needing a socket (Agent.addRequest) to a
 // socket being assigned (the request's 'socket' event). This is the phase BEFORE
 // bytes hit the wire, so it surfaces keep-alive pool waits and socket-reuse

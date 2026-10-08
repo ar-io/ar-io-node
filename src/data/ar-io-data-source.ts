@@ -31,6 +31,7 @@ import {
   normalizeAbortError,
   contentEncodingOf,
   parseContentRange,
+  undeclaredTaggedEncoding,
 } from '../lib/http-utils.js';
 import { ByteRangeTransform, attachStallTimeout } from '../lib/stream.js';
 import { PeerRequestLimiter } from './peer-request-limiter.js';
@@ -502,6 +503,35 @@ export class ArIODataSource implements ContiguousDataSource {
       throw new Error('Peer does not indicate data is verified or trusted');
     }
 
+    // A peer older than #964 serves a Content-Encoding: gzip item decoded and
+    // cut at the encoded length, without the header, while its tag headers
+    // still name the coding. Reject so the next peer or source is tried.
+    const upstreamTags = parseUpstreamTagHeaders(
+      response.headers as Record<string, string | string[]>,
+    );
+    const undeclaredEncoding = undeclaredTaggedEncoding({
+      contentEncoding: response.headers['content-encoding'] as
+        | string
+        | undefined,
+      tags: upstreamTags,
+    });
+    if (undeclaredEncoding !== undefined) {
+      stream.destroy();
+      metrics.upstreamDecodedBodyRejectedTotal.inc({
+        class: this.constructor.name,
+        source: peer,
+        encoding: undeclaredEncoding,
+      });
+      this.log.warn('Peer sent a tagged-encoded item decoded', {
+        peer,
+        encoding: undeclaredEncoding,
+      });
+      throw new Error(
+        `Peer response is tagged Content-Encoding: ${undeclaredEncoding} ` +
+          'but sent without that header (body decoded upstream)',
+      );
+    }
+
     const contentLength =
       parseInt(
         (response.headers['content-length'] as string | undefined) ?? '0',
@@ -613,9 +643,7 @@ export class ArIODataSource implements ContiguousDataSource {
       ),
       cached: false,
       requestAttributes,
-      upstreamTags: parseUpstreamTagHeaders(
-        response.headers as Record<string, string | string[]>,
-      ),
+      upstreamTags,
     };
   }
 }

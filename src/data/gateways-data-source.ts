@@ -18,6 +18,7 @@ import {
   contentEncodingOf,
   parseContentLength,
   parseContentRange,
+  undeclaredTaggedEncoding,
 } from '../lib/http-utils.js';
 import { BASE_AGENT_OPTIONS, instrumentAgent } from '../lib/http-agent.js';
 import { GatewayThrottle } from './gateway-throttle.js';
@@ -580,6 +581,40 @@ export class GatewaysDataSource implements ContiguousDataSource {
                   }
                 }
 
+                // A gateway older than #964 decodes a Content-Encoding: gzip
+                // item and serves the plain bytes, cut at the encoded length,
+                // without the header. Its tag headers still name the coding,
+                // so the mismatch identifies the body as decoded and
+                // truncated. Fall through rather than serve or cache it.
+                const upstreamTags = parseUpstreamTagHeaders(
+                  response.headers as Record<string, string | string[]>,
+                );
+                const undeclaredEncoding = undeclaredTaggedEncoding({
+                  contentEncoding: response.headers['content-encoding'] as
+                    | string
+                    | undefined,
+                  tags: upstreamTags,
+                });
+                if (undeclaredEncoding !== undefined) {
+                  response.data.destroy();
+                  metrics.upstreamDecodedBodyRejectedTotal.inc({
+                    class: this.constructor.name,
+                    source: gatewayUrl,
+                    encoding: undeclaredEncoding,
+                  });
+                  span.addEvent('Gateway response body decoded upstream', {
+                    'gateways.url': gatewayUrl,
+                    'gateways.tier.priority': priority,
+                    'gateways.request.path': path,
+                    'http.content_encoding_tag': undeclaredEncoding,
+                  });
+                  throw new Error(
+                    `Gateway response for ${id} is tagged Content-Encoding: ` +
+                      `${undeclaredEncoding} but sent without that header ` +
+                      `(body decoded upstream)`,
+                  );
+                }
+
                 if (upstreamIgnoredRange) {
                   // Cap the prefix bandwidth we're willing to burn to
                   // slice locally. If region.offset exceeds the cap, the
@@ -804,9 +839,7 @@ export class GatewaysDataSource implements ContiguousDataSource {
                     headers: response.headers as { [key: string]: string },
                     currentHops: requestAttributesHeaders?.attributes.hops,
                   }),
-                  upstreamTags: parseUpstreamTagHeaders(
-                    response.headers as Record<string, string | string[]>,
-                  ),
+                  upstreamTags,
                 };
               } catch (rawError: any) {
                 clearTimeout(connectionTimer);
