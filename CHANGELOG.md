@@ -187,7 +187,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   sampled gateway fails only if all `OFFSET_SAMPLE_COUNT` (default 4)
   offsets fail; timeouts, error statuses and bad proofs all count. With
   `OFFSET_OBSERVATION_ENFORCEMENT_ENABLED=true` (the default) that fails the
-  observation, and the epoch result is still a 2-of-3 majority. This is not
+  observation, and the epoch result is still a 2-of-3 majority. A check the
+  observer could not judge itself (its own chain lookups failed) is
+  reported as `inconclusive` and never fails a gateway. This is not
   new behaviour. Enforcement was on by default from Release 54 to Release
   63, but the continuous observer that became the only service mode in
   Release 64 never ran the check, so the `OFFSET_*` settings have done
