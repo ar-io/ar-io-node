@@ -370,6 +370,41 @@ describe('peekFirstChunk', () => {
     assert.equal(stream.destroyed, true);
   });
 
+  it('rejects with an AbortError and destroys the stream on abort', async () => {
+    const stream = new PassThrough();
+    const controller = new AbortController();
+    setImmediate(() => controller.abort());
+
+    await assert.rejects(
+      peekFirstChunk(stream, 10_000, controller.signal),
+      (error: Error) => error.name === 'AbortError',
+    );
+    assert.equal(stream.destroyed, true);
+  });
+
+  it('rejects at once for an already-aborted signal', async () => {
+    const stream = new PassThrough();
+    stream.write(Buffer.from('abc'));
+
+    await assert.rejects(
+      peekFirstChunk(stream, 10_000, AbortSignal.abort()),
+      (error: Error) => error.name === 'AbortError',
+    );
+    assert.equal(stream.destroyed, true);
+  });
+
+  it('stops listening for abort once the peek resolves', async () => {
+    const stream = new PassThrough();
+    const controller = new AbortController();
+    stream.end(Buffer.from('abc'));
+
+    await peekFirstChunk(stream, 10_000, controller.signal);
+    controller.abort();
+
+    assert.equal(stream.destroyed, false);
+    assert.deepEqual(await collect(stream), Buffer.from('abc'));
+  });
+
   it('rejects on a stream error', async () => {
     const stream = new PassThrough();
     setImmediate(() => stream.destroy(new Error('boom')));

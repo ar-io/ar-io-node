@@ -221,7 +221,11 @@ export class ArIODataSource implements ContiguousDataSource {
         (region === undefined || region.offset === 0) &&
         hasContentEncodingMagic(declaredEncoding)
       ) {
-        const head = await peekFirstChunk(response.data, this.requestTimeoutMs);
+        const head = await peekFirstChunk(
+          response.data,
+          this.requestTimeoutMs,
+          signal,
+        );
         if (contradictsContentEncoding(head, declaredEncoding)) {
           response.data.destroy();
           const encoding = parseContentEncoding(declaredEncoding);

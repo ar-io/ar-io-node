@@ -151,18 +151,30 @@ export function attachStallTimeout(
  * those bytes would be lost.
  *
  * If no data arrives within `timeoutMs`, the stream is destroyed and the
- * promise rejects.
+ * promise rejects. If `signal` aborts first, the stream is destroyed and the
+ * promise rejects with an `AbortError`.
  */
 export function peekFirstChunk(
   stream: Readable,
   timeoutMs: number,
+  signal?: AbortSignal,
 ): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const cleanup = () => {
       clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
       stream.off('data', onData);
       stream.off('end', onEnd);
       stream.off('error', onError);
+    };
+    // The caller has stopped wanting the bytes (client disconnect, or a hedged
+    // request that lost): release the connection now, not at the timeout.
+    const onAbort = () => {
+      cleanup();
+      stream.destroy();
+      const error = new Error('Peek aborted');
+      error.name = 'AbortError';
+      reject(error);
     };
     const onData = (chunk: Buffer) => {
       stream.pause();
@@ -186,6 +198,11 @@ export function peekFirstChunk(
       reject(new Error(`No data received within ${timeoutMs}ms`));
     }, timeoutMs).unref();
 
+    if (signal?.aborted === true) {
+      onAbort();
+      return;
+    }
+    signal?.addEventListener('abort', onAbort, { once: true });
     stream.on('data', onData);
     stream.on('end', onEnd);
     stream.on('error', onError);

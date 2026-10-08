@@ -736,6 +736,7 @@ export class GatewaysDataSource implements ContiguousDataSource {
                   const head = await peekFirstChunk(
                     stream,
                     this.requestTimeoutMs,
+                    signal,
                   );
                   if (contradictsContentEncoding(head, declaredEncoding)) {
                     stream.destroy();
