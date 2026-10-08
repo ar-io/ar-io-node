@@ -62,7 +62,7 @@ import {
   StateStore,
 } from './state.js';
 import { ArtifactKind } from './kinds/types.js';
-import { buildTorrent } from './torrent.js';
+import { buildTorrent, DEFAULT_PIECE_LENGTH } from './torrent.js';
 import { savedIn, TorrentTransport } from './transport/types.js';
 
 // Moved to the publication library, where the index-export service uses it too.
@@ -194,6 +194,12 @@ export interface PublisherTorrents {
   transport?: TorrentTransport;
   /** Announce URLs, written into every torrent. */
   trackers: string[];
+  /**
+   * Injectable for tests; {@link DEFAULT_PIECE_LENGTH} otherwise. Not an
+   * operator setting: publishers of the same bytes agree on a torrent only
+   * while they agree on this.
+   */
+  pieceLength?: number;
 }
 
 /**
@@ -486,8 +492,11 @@ export class Publisher {
   ): Promise<BandTorrent | undefined> {
     if (this.torrents === undefined) return undefined;
     const { trackers } = this.torrents;
+    const pieceLength = this.torrents.pieceLength ?? DEFAULT_PIECE_LENGTH;
     const name = torrentNameForFiles(band.files);
-    const key = JSON.stringify({ name, trackers });
+    // The piece length is in the key so a change to it rebuilds every band's
+    // torrent once, under new infohashes; the band ids and files stay put.
+    const key = JSON.stringify({ name, trackers, pieceLength });
     const state = await this.state.load();
     const cached = state.describeCache[dir]?.torrent;
     if (cached?.key === key) {
@@ -504,6 +513,7 @@ export class Publisher {
         name,
         files: band.files.map((f) => f.name),
         trackers,
+        pieceLength,
       });
     } catch (error: any) {
       // Still offered over HTTP; only the swarm is missing for it.

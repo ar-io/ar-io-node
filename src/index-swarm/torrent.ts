@@ -37,8 +37,24 @@ import {
   bdecodeWithSpans,
 } from '../lib/bencode.js';
 
-/** 4 MiB, the piece length the design fixes for every band. */
-export const DEFAULT_PIECE_LENGTH = 4 * 1024 * 1024;
+/**
+ * 256 KiB, the piece length every band's torrent is built with.
+ *
+ * The piece layer is what lets a reader check a byte range without the
+ * whole file: BEP 52 hashes each file into a Merkle tree over 16 KiB
+ * blocks, and the torrent carries that tree's layer at piece size. A
+ * client holding the signed `infohashV2` rebuilds the file's `pieces
+ * root` from the layer, then checks each piece it fetched against it. A
+ * smaller piece means less to fetch around a range (a parquet footer, one
+ * column chunk) and a bigger layer: 32 bytes a piece, 128 KiB per GiB.
+ *
+ * 256 KiB is Arweave's chunk size, so a piece lines up with the unit an
+ * Arweave `data_root` proves. The pieces root does not depend on the
+ * piece length, so changing it changes the torrent and its infohashes but
+ * never what a file's root says. Publishers holding the same bytes write
+ * byte-identical torrents only while they agree on this value.
+ */
+export const DEFAULT_PIECE_LENGTH = 256 * 1024;
 
 /** Largest piece length a subscriber accepts: 64 MiB. */
 const MAX_PIECE_LENGTH = 64 * 1024 * 1024;
@@ -54,6 +70,7 @@ export interface BuildTorrentOptions {
   name: string;
   /** `hybrid` (v1 + v2, the default) or `v1`. */
   format?: 'hybrid' | 'v1';
+  /** A power of two of at least 16 KiB; {@link DEFAULT_PIECE_LENGTH} when unset. */
   pieceLength?: number;
   /** BEP 19 WebSeed URLs, outside the info dictionary. */
   webSeeds?: string[];

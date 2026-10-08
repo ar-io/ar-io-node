@@ -180,6 +180,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Index-swarm torrents are built with 256 KiB pieces, down from 4 MiB**, so
+  a browser can verify a byte range of a band file against the signed
+  `infohashV2` without the whole file: it rebuilds the file's BEP 52
+  `pieces root` from the torrent's piece layer and checks each piece it
+  reads. Reading a Parquet band this way fetches about a seventh of what
+  4 MiB pieces would. A file's `pieces root` does not depend on the piece
+  length, so only the torrents change: on its first scan after the upgrade a
+  publisher rebuilds every band's torrent once and offers it under new
+  infohashes, and subscribers keep their installed bands and seed the new
+  torrents. Band ids and files are unchanged. See `docs/index-swarm.md`.
+
 - **`parquet-l1` bands are now layout `l1-2`: three columns a gateway fills
   in for itself are written one canonical way**, so two honest publishers
   of the same chain write identical bands and can check each other by
