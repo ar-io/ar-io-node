@@ -174,9 +174,13 @@ export async function buildCoreDb(
         h * 10 + tx.bti,
         tx.signature,
       );
+      // Tag 0 is the Content-Type the row's content_type is stored from, as
+      // an indexer would derive it; a band derives it the same way.
       for (let t = 0; t < 2; t++) {
-        const name = Buffer.from(`Name-${t}`);
-        const value = Buffer.from(`value-${h}-${tx.bti}-${t}`);
+        const name = Buffer.from(t === 0 ? 'Content-Type' : `Name-${t}`);
+        const value = Buffer.from(
+          t === 0 ? 'text/plain' : `value-${h}-${tx.bti}-${t}`,
+        );
         insertTagName.run(sha1(name), name);
         insertTagValue.run(sha1(value), value);
         insertTag.run(sha1(name), sha1(value), h, tx.bti, t, tx.id);

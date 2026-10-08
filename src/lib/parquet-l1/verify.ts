@@ -51,10 +51,15 @@ import Sqlite from 'better-sqlite3';
 
 import { BlockWalker, CheckedBlock } from './verify-steps.js';
 
-import { ChainTransaction, checkTxRoot } from './chain.js';
+import { ChainTransaction, checkTxRoot, FORK_2_0 } from './chain.js';
 
-/** The first post-2.0 block. Its segment commits its own `weave_size`. */
-export const FORK_2_0_HEIGHT = 422_250;
+/**
+ * The first post-2.0 block. Its segment commits its own `weave_size`.
+ *
+ * One constant, defined with the other fork heights in `chain.ts`: two
+ * copies of a consensus height are two things to get wrong.
+ */
+export const FORK_2_0_HEIGHT = FORK_2_0;
 
 /**
  * The weave offset past which Arweave pads each transaction's data to a

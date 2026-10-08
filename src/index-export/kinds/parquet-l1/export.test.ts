@@ -12,7 +12,10 @@ import * as path from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import Sqlite from 'better-sqlite3';
 
-import { PARQUET_L1_TABLES } from '../../../lib/parquet-l1/layout.js';
+import {
+  PARQUET_L1_SCHEMA,
+  PARQUET_L1_TABLES,
+} from '../../../lib/parquet-l1/layout.js';
 import { readTable } from '../../../lib/parquet-l1/read.js';
 import { ParquetL1Kind } from '../../../index-swarm/kinds/parquet-l1.js';
 import { buildCoreDb } from '../../../../test/parquet-l1-core-db.js';
@@ -408,6 +411,246 @@ describe('exportL1Band', () => {
       }
     } finally {
       db.close();
+    }
+  });
+});
+
+/**
+ * Below the 2.0 fork a block hash does not commit `tx_root`, so it cannot be
+ * recomputed and every gateway keeps whatever its header source gave it. Two
+ * publishers compared on 2026-10-07 disagreed on 346 pre-fork blocks — one
+ * side 32 bytes, the other nothing, every time — which would make matching
+ * digests impossible. A band writes one value instead.
+ */
+describe('exportL1Band below the 2.0 fork', () => {
+  const PRE_FIRST = 300_000;
+  const PRE_COUNT = 10;
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'parquet-l1-prefork-'));
+  });
+
+  afterEach(async () => {
+    await fsp.rm(dir, { recursive: true, force: true });
+  });
+
+  /** A pre-fork `core.db` whose blocks all carry a real 32-byte `tx_root`. */
+  const preForkCore = async (name: string) => {
+    const file = path.join(dir, name);
+    await buildCoreDb(file, PRE_FIRST, PRE_COUNT, { padded: false });
+    const db = new Sqlite(file, { readonly: true });
+    try {
+      // A block with no transactions has no root to store, so not every
+      // height carries one; the point is that some do.
+      const stored = db
+        .prepare(
+          `SELECT COUNT(*) FROM stable_blocks
+           WHERE height >= ? AND LENGTH(tx_root) = 32`,
+        )
+        .pluck()
+        .get(PRE_FIRST) as number;
+      assert.ok(stored > 0, 'the fixture stores a pre-fork tx_root');
+    } finally {
+      db.close();
+    }
+    return file;
+  };
+
+  const exportPreFork = async (coreDbPath: string, work: string) => {
+    const workDir = path.join(dir, work);
+    await fsp.mkdir(workDir);
+    return exportL1Band({
+      coreDbPath,
+      workDir,
+      from: PRE_FIRST,
+      to: PRE_FIRST + PRE_COUNT - 1,
+    });
+  };
+
+  it('writes no tx_root, though core.db holds one for every block', async () => {
+    const result = await exportPreFork(await preForkCore('core.db'), 'work');
+    const { Database } = await import('duckdb-async');
+    const duck = await Database.create(':memory:');
+    try {
+      const rows = (await duck.all(
+        `SELECT height, tx_root FROM read_parquet('${path.join(result.dir, 'blocks.parquet')}')
+         ORDER BY height`,
+      )) as Array<{ height: unknown; tx_root: unknown }>;
+      assert.equal(rows.length, PRE_COUNT);
+      for (const row of rows) {
+        assert.equal(row.tx_root, null, `height ${String(row.height)}`);
+      }
+    } finally {
+      await duck.close();
+    }
+  });
+
+  it('gives two gateways that disagree on a pre-fork tx_root the same band', async () => {
+    const kept = await preForkCore('kept.db');
+    const erased = path.join(dir, 'erased.db');
+    await fsp.copyFile(kept, erased);
+    // The same chain, one gateway holding a tx_root below the fork and the
+    // other the empty string an ar-io-node writes when its source had none.
+    const db = new Sqlite(erased);
+    try {
+      db.prepare(`UPDATE stable_blocks SET tx_root = '' WHERE height >= ?`).run(
+        PRE_FIRST,
+      );
+    } finally {
+      db.close();
+    }
+
+    const a = await exportPreFork(kept, 'work-kept');
+    const b = await exportPreFork(erased, 'work-erased');
+    assert.equal(
+      a.band.tables.blocks.rowDigest,
+      b.band.tables.blocks.rowDigest,
+      'the blocks digest must not depend on a pre-fork tx_root',
+    );
+    for (const table of PARQUET_L1_TABLES) {
+      assert.equal(
+        a.band.tables[table.name].rowDigest,
+        b.band.tables[table.name].rowDigest,
+        `${table.name} digest`,
+      );
+    }
+    assert.equal(a.band.schema, PARQUET_L1_SCHEMA);
+  });
+});
+
+/**
+ * Columns a gateway fills in itself, so two honest publishers held different
+ * values for the same chain (compared 2026-10-08): pre-fork tx_root, a
+ * format-1 data_root, and content_type/content_encoding where a transaction
+ * has two of the tag, which an indexer before r70 took the last of.
+ */
+describe('exportL1Band, columns the chain does not fix', () => {
+  const FIRST_PRE = 300_000;
+  const COUNT_PRE = 10;
+  const sha1 = (b: Buffer) => crypto.createHash('sha1').update(b).digest();
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'parquet-l1-canonical-'));
+  });
+  afterEach(async () => {
+    await fsp.rm(dir, { recursive: true, force: true });
+  });
+
+  /**
+   * The fixture with one transaction made awkward: format 1 with a computed
+   * data_root, and a second Content-Type tag and a Content-Encoding tag
+   * after its first Content-Type.
+   */
+  const awkwardCore = async (name: string) => {
+    const file = path.join(dir, name);
+    await buildCoreDb(file, FIRST_PRE, COUNT_PRE, { padded: false });
+    const db = new Sqlite(file);
+    try {
+      const tx = db
+        .prepare(
+          `SELECT id, height, block_transaction_index AS bti FROM stable_transactions
+           WHERE height >= ? ORDER BY height, block_transaction_index LIMIT 1`,
+        )
+        .get(FIRST_PRE) as { id: Buffer; height: number; bti: number };
+      db.prepare(
+        'UPDATE stable_transactions SET format = 1, tag_count = 4 WHERE id = ?',
+      ).run(tx.id);
+      for (const [index, n, v] of [
+        [2, 'Content-Type', 'text/vtt'],
+        [3, 'Content-Encoding', 'gzip'],
+      ] as const) {
+        const nb = Buffer.from(n);
+        const vb = Buffer.from(v);
+        db.prepare(
+          'INSERT OR IGNORE INTO tag_names (hash, name) VALUES (?, ?)',
+        ).run(sha1(nb), nb);
+        db.prepare(
+          'INSERT OR IGNORE INTO tag_values (hash, value) VALUES (?, ?)',
+        ).run(sha1(vb), vb);
+        db.prepare(
+          `INSERT INTO stable_transaction_tags (tag_name_hash, tag_value_hash,
+            height, block_transaction_index, transaction_tag_index, transaction_id)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+        ).run(sha1(nb), sha1(vb), tx.height, tx.bti, index, tx.id);
+      }
+      return { file, id: tx.id };
+    } finally {
+      db.close();
+    }
+  };
+
+  const exportIt = async (coreDbPath: string, work: string) => {
+    const workDir = path.join(dir, work);
+    await fsp.mkdir(workDir);
+    return exportL1Band({
+      coreDbPath,
+      workDir,
+      from: FIRST_PRE,
+      to: FIRST_PRE + COUNT_PRE - 1,
+    });
+  };
+
+  it('writes no format-1 data_root, and takes content type and encoding from the first tag', async () => {
+    const { file, id } = await awkwardCore('core.db');
+    const stored = new Sqlite(file, { readonly: true });
+    const before = stored
+      .prepare(
+        'SELECT length(data_root) AS len, content_type FROM stable_transactions WHERE id = ?',
+      )
+      .get(id) as { len: number; content_type: string };
+    stored.close();
+    assert.equal(before.len, 32, 'core.db holds a computed format-1 root');
+
+    const result = await exportIt(file, 'work');
+    const { Database } = await import('duckdb-async');
+    const duck = await Database.create(':memory:');
+    try {
+      const [row] = (await duck.all(
+        `SELECT format, data_root, content_type, content_encoding
+         FROM read_parquet('${path.join(result.dir, 'transactions.parquet')}')
+         WHERE id = from_hex('${id.toString('hex')}')`,
+      )) as Array<Record<string, unknown>>;
+      assert.equal(Number(row.format), 1);
+      assert.equal(row.data_root, null);
+      assert.equal(
+        row.content_type,
+        'text/plain',
+        'the first Content-Type, not text/vtt',
+      );
+      assert.equal(row.content_encoding, 'gzip');
+    } finally {
+      await duck.close();
+    }
+  });
+
+  it('gives two gateways that differ only in these columns the same band', async () => {
+    const a = await awkwardCore('a.db');
+    const b = path.join(dir, 'b.db');
+    await fsp.copyFile(a.file, b);
+    // The second gateway: an empty pre-fork tx_root, no computed format-1
+    // root, the last Content-Type (as before r70), and no stored encoding.
+    const db = new Sqlite(b);
+    try {
+      db.prepare(`UPDATE stable_blocks SET tx_root = '' WHERE height >= ?`).run(
+        FIRST_PRE,
+      );
+      db.prepare(
+        `UPDATE stable_transactions SET data_root = NULL, content_type = 'text/vtt',
+           content_encoding = NULL WHERE id = ?`,
+      ).run(a.id);
+    } finally {
+      db.close();
+    }
+    const one = await exportIt(a.file, 'work-a');
+    const two = await exportIt(b, 'work-b');
+    for (const table of PARQUET_L1_TABLES) {
+      assert.equal(
+        one.band.tables[table.name].rowDigest,
+        two.band.tables[table.name].rowDigest,
+        `${table.name} digest`,
+      );
     }
   });
 });

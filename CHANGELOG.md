@@ -22,6 +22,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   bands in 0.1 s, and the full height span and row count in 0.6 s, over HTTPS,
   with nothing written to disk.
 
+- **A trusted gateway that answers 429 is skipped until its `Retry-After` has
+  passed** (`GATEWAYS_THROTTLE_BACKOFF_ENABLED`, default `true`). Before, every
+  request still went to it first: it waited for one of that gateway's sockets,
+  often until the connection timeout, then got another 429. On
+  turbo-gateway.com, arweave.net (a priority-2 fallback) answered one node's
+  cold-item requests with `429` and `retry-after: 299` about 24,000 times a
+  day, and 60% of those requests had waited 2-5 s for a socket, so cold items
+  took ~3 s on that node against ~0.1 s on its sibling. The cooldown is the
+  response's `Retry-After` (seconds or an HTTP date), capped at
+  `GATEWAYS_THROTTLE_BACKOFF_MAX_MS` (300 s); without one it is
+  `GATEWAYS_THROTTLE_BACKOFF_DEFAULT_MS` (30 s). Both gateway data sources
+  share one set of cooldowns, and a throttled gateway is asked once per item
+  rather than once per path. New metrics:
+  `gateway_throttle_cooldowns_total{gateway_url}` and
+  `gateway_throttle_skips_total{gateway_url}`.
+
 - `ar-io-node index-l1-import` fills a gateway's `core.db` from installed
   `parquet-l1` bands, so a new gateway starts from a published index rather
   than walking the chain block by block. It runs with the gateway stopped
@@ -164,6 +180,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **`parquet-l1` bands are now layout `l1-2`: three columns a gateway fills
+  in for itself are written one canonical way**, so two honest publishers
+  of the same chain write identical bands and can check each other by
+  digest. Comparing turbo-gateway.com with vilenarios.com across the whole
+  chain found every chain-committed column in agreement and these
+  disagreeing: `blocks.tx_root` below the 2.0 fork (346 blocks; the block
+  hash doesn't commit it, and nodes disagree) is now null; a format-1
+  `transactions.data_root` (352 transactions; the header carries none) is
+  now null; and `content_type`/`content_encoding` (86 transactions with two
+  Content-Type tags) now come from the band's own tags, first by position.
+  The last of these differed because the indexer kept the *last* matching
+  tag before r70 and the first since. No check reads the nulled columns.
+  Readers accept `l1-1` and `l1-2`, and an import keeps a pre-fork
+  `tx_root` or format-1 `data_root` the gateway already holds. **Upgrading
+  a publisher rebuilds every band once** (about nine hours for the whole
+  chain): an `l1-1` band can't be judged without it. A band whose rows
+  didn't change keeps its id and files, so subscribers download only the
+  ranges that did, and the service records it in `state.json`
+  (`layoutConfirmed`) so it isn't rebuilt again. See the "L1 bands" section
+  of [docs/index-swarm.md](docs/index-swarm.md).
+
 - `GET /ar-io/offsets/:id` answers are now signed (HTTPSIG), with a
   `Content-Digest` binding the body and an `X-AR-IO-Root-Transaction-Id`
   header, so an answer is the gateway's attributable claim. An answer from a
@@ -200,6 +237,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `200` carrying more bytes than were asked for looks like success. Verified
   against a 541 MB band file: a 100-byte range returned all 541,753,181 bytes
   through a cache zone and `206` with it off.
+
+- **A gateway older than #964 could poison the cache with a decoded copy
+  of a gzip-compressed item.** Such gateways serve an item tagged
+  `Content-Encoding: gzip` unzipped: some without the header and cut at the
+  compressed length, some still declaring `Content-Encoding: gzip`. Fetched
+  from a trusted gateway or an AR.IO peer, those bytes were cached and served
+  as the item, with a `Content-Digest` over the wrong bytes. On vilenarios.com,
+  docs.ar.io's 14.5 MiB search index came back as its first 2.5 MiB of plain
+  JSON. Both sources now refuse, and try the next source for, a response
+  whose body does not start with the magic bytes of the `gzip` or `zstd`
+  coding it declares, and one whose `X-Arweave-Tag-Content-Encoding` names a
+  coding (`gzip`, `br`, `deflate`, `zstd`) the response does not declare. New
+  metric: `upstream_decoded_body_rejected_total{class,source,encoding,reason}`.
+  A decoded body sent with neither the header nor tag headers still cannot be
+  told apart, so do not trust gateways older than #964, and purge items
+  cached before this fix.
+
+- A 404 or 429 from a trusted gateway was logged as a warning, although the
+  code meant to log those routine outcomes at debug: the check read a field
+  that is only set for an unexpected 2xx, while axios reports a 4xx on its
+  rejection. On turbo-gateway.com that was ~24,000 warnings a day from one
+  fallback gateway's 429s.
 
 - A CLI result larger than the 64 KiB pipe buffer was truncated mid-token,
   so stdout held JSON that would not parse. `process.exit` discards

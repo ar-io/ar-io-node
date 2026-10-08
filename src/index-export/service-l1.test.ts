@@ -15,6 +15,7 @@ import { bandPublisherTag } from '../lib/index-band/build.js';
 import {
   BAND_FILE,
   L1_SPAN,
+  PARQUET_L1_SCHEMA,
   PARQUET_L1_TABLES,
 } from '../lib/parquet-l1/layout.js';
 import { buildCoreDb } from '../../test/parquet-l1-core-db.js';
@@ -86,7 +87,7 @@ describe('ExportService parquet-l1', () => {
         path.join(config().l1PublishDir, id, BAND_FILE),
         JSON.stringify({
           version: 1,
-          schema: 'l1-1',
+          schema: PARQUET_L1_SCHEMA,
           heightRange: [from, to],
           tables: Object.fromEntries(
             PARQUET_L1_TABLES.map((t) => [

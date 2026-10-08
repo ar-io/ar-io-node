@@ -565,6 +565,42 @@ can't build them, and its runs say so (`incomplete`, not retried).
   Only the tip is ever rebuilt, so a subscriber re-downloads at most ~35 MB
   a day rather than a whole range. The top is one below the stable top, so
   the block above every band's last is there to anchor it.
+- **Columns the chain doesn't fix are normalised.** A band is meant to be
+  a function of the chain: two honest publishers of the same chain should
+  write byte-identical rows, so comparing their digests per range checks
+  each other's index. Comparing turbo-gateway.com and vilenarios.com across
+  the whole chain in October 2026 found every chain-committed column in
+  agreement, and three columns that a gateway fills in for itself
+  disagreeing. A band now writes one canonical value for each, whatever
+  `core.db` holds:
+
+  | Column | Written as | Why |
+  |---|---|---|
+  | `blocks.tx_root` below the 2.0 fork (422,250) | null | Not committed by a pre-fork block hash and impossible to recompute, so a gateway keeps whatever its header source gave it. 346 blocks differed, always 32 bytes against nothing; raw nodes disagree the same way (56,769 is empty on two and set on a third). |
+  | `transactions.data_root` on format 1 | null | A format-1 header carries none (a node returns `""`); some gateways hold one computed from the data. 352 differed. Format 2 signs its `data_root`, so it is kept. |
+  | `transactions.content_type`, `content_encoding` | the first `Content-Type` / `Content-Encoding` tag by position, names compared without case; null if none | Derived from the band's own tags. ar-io-node took the *last* matching tag until r70 (commit `40d5548e`, 2026-02-14) and the first since, so a stored value depends on the release that indexed the row: 86 transactions with two Content-Type tags differed though their tags were identical. |
+
+  Nothing is lost for verification: no check reads a pre-fork `tx_root`,
+  and `tx_root` recomputation derives a format-1 transaction's root from its
+  data, never from the stored column.
+
+  This is layout `l1-2` (`band.json`'s `schema`). A reader accepts `l1-1`
+  too, so a subscriber keeps importing from a publisher that hasn't
+  upgraded. An import never erases a pre-fork `tx_root` or a format-1
+  `data_root` the gateway already holds for the same block or transaction;
+  it keeps them across the range it rewrites. An import interrupted part
+  way can lose those kept values (it commits in chunks), and they come back
+  null, which is the canonical value anyway.
+
+  **Upgrading a publisher rebuilds every band once.** The rules reach
+  format-1 transactions and multi-tag rows at any height, so an `l1-1` band
+  can't be judged without rebuilding it (about nine hours for the whole
+  chain on vilenarios.com). A rebuilt band whose rows didn't change has the
+  same id as before, since the id comes from the rows: its files are left
+  alone, so subscribers download nothing, and the service records it as
+  confirmed under `l1-2` (`layoutConfirmed` in `state.json`) so it isn't
+  rebuilt again. Only ranges whose rows changed get new ids.
+
 - **Checks before publishing.** Every block links to the one before it and
   is linked to by the one above, each `hash_list_merkle` follows from the
   previous block, each block's `tx_root` is recomputed from its transactions
@@ -576,6 +612,16 @@ can't build them, and its runs say so (`incomplete`, not retried).
   tags: a row a fork left in `core.db` is counted (`strayTransactions`),
   never published. A range that fails is rejected, naming the heights, and
   nothing is written.
+
+  **What these checks do not cover:** the order transactions sit in within a
+  block (`block_transaction_index`). Arweave sorts a block's transactions by
+  `(format, id)` before building `tx_root`, so recomputing it proves the set
+  — ids, formats, sizes and data roots — at every height, and the order at
+  none. Comparing two publishers' `block_transactions` digests does cover
+  it, which is how two reversed blocks (184,686 and 188,324) were found on
+  vilenarios.com in October 2026; against a raw node's `/block/height/<h>`
+  it is cheap to settle one block, and that is the check to run when the
+  digests for a range disagree.
 - **Refused reads.** The gateway writes to `core.db` while the export reads
   it, so during a WAL checkpoint SQLite can refuse a read, reporting it as a
   write to a read-only database. That costs the whole band, so it is built

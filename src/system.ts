@@ -25,6 +25,7 @@ import { BlockOffsetMapping } from './arweave/block-offset-mapping.js';
 import { ArweavePeerManager } from './peers/arweave-peer-manager.js';
 import * as config from './config.js';
 import { GatewaysDataSource } from './data/gateways-data-source.js';
+import { GatewayThrottle } from './data/gateway-throttle.js';
 import { FilteredContiguousDataSource } from './data/filtered-contiguous-data-source.js';
 import { ReadThroughDataCache } from './data/read-through-data-cache.js';
 import { SamplingContiguousDataSource } from './data/sampling-contiguous-data-source.js';
@@ -898,15 +899,26 @@ const peerRequestLimiter = new PeerRequestLimiter(
   config.PEER_MAX_CONCURRENT_OUTBOUND,
 );
 
+// One set of 429 cooldowns for both data sources: they ask the same gateways,
+// so a gateway throttling one is throttling the other.
+const gatewayThrottle = new GatewayThrottle({
+  log,
+  enabled: config.GATEWAYS_THROTTLE_BACKOFF_ENABLED,
+  defaultMs: config.GATEWAYS_THROTTLE_BACKOFF_DEFAULT_MS,
+  maxMs: config.GATEWAYS_THROTTLE_BACKOFF_MAX_MS,
+});
+
 const baseGatewaysDataSource = new GatewaysDataSource({
   log,
   trustedGatewaysUrls: config.TRUSTED_GATEWAYS_URLS,
+  throttle: gatewayThrottle,
 });
 
 const rootBundleGatewaysDataSource = new GatewaysDataSource({
   log,
   trustedGatewaysUrls: config.TRUSTED_GATEWAYS_URLS,
   fallbackToBasePath: true,
+  throttle: gatewayThrottle,
 });
 
 // Wrap with filtering for general gateway forwarding

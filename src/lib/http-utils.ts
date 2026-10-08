@@ -132,6 +132,93 @@ export function honouredContentEncoding(
 }
 
 /**
+ * The coding an upstream's `X-Arweave-Tag-Content-Encoding` header names when
+ * the response itself carries no `Content-Encoding`, or `undefined` when the
+ * two agree.
+ *
+ * A gateway that serves an item stored encoded sends `Content-Encoding` for
+ * every honoured coding its tag names (see {@link honouredContentEncoding}).
+ * A tag naming one with no header means the bytes were decoded somewhere
+ * upstream. Gateways older than ar-io-node #964 did this: they decoded the
+ * gzip body and cut it at the encoded length, so the bytes are both decoded
+ * and truncated, and must not be served or cached.
+ *
+ * Only the first `Content-Encoding` tag counts, as when indexing (#966).
+ *
+ * @example
+ * undeclaredTaggedEncoding({ contentEncoding: undefined, tags: [{ name: 'Content-Encoding', value: 'gzip' }] }) // 'gzip'
+ * undeclaredTaggedEncoding({ contentEncoding: 'gzip', tags: [{ name: 'Content-Encoding', value: 'gzip' }] }) // undefined
+ * undeclaredTaggedEncoding({ contentEncoding: undefined, tags: [{ name: 'Content-Encoding', value: 'x-custom' }] }) // undefined
+ */
+export function undeclaredTaggedEncoding({
+  contentEncoding,
+  tags,
+}: {
+  contentEncoding: string | string[] | undefined;
+  tags: { name: string; value: string }[] | undefined;
+}): string | undefined {
+  if (parseContentEncoding(contentEncoding) !== undefined) {
+    return undefined;
+  }
+  const tag = tags?.find(
+    (candidate) => candidate.name.toLowerCase() === 'content-encoding',
+  );
+  return honouredContentEncoding(tag?.value);
+}
+
+/**
+ * Leading bytes every body in a content coding starts with, for the codings
+ * that have them (`br` and raw `deflate` do not).
+ */
+const CONTENT_ENCODING_MAGIC: ReadonlyMap<string, Buffer> = new Map([
+  ['gzip', Buffer.from([0x1f, 0x8b])],
+  ['zstd', Buffer.from([0x28, 0xb5, 0x2f, 0xfd])],
+]);
+
+/**
+ * Whether a response declaring `contentEncoding` can be checked against its
+ * first bytes with {@link contradictsContentEncoding}.
+ */
+export function hasContentEncodingMagic(
+  contentEncoding: string | string[] | undefined,
+): boolean {
+  const normalized = parseContentEncoding(contentEncoding);
+  return normalized !== undefined && CONTENT_ENCODING_MAGIC.has(normalized);
+}
+
+/**
+ * True when a body's first bytes rule out the coding its `Content-Encoding`
+ * declares: a `gzip` body that does not start `1f 8b`, or a `zstd` body that
+ * does not start `28 b5 2f fd`.
+ *
+ * Gateways older than ar-io-node #964 can serve a gzip-tagged item already
+ * decompressed while still declaring `Content-Encoding: gzip`, so clients
+ * fail to decode it. A coding with no fixed magic, or an empty `head`, is
+ * never contradicted; a `head` shorter than the magic is compared as far as
+ * it goes.
+ *
+ * @example
+ * contradictsContentEncoding(Buffer.from('{"a"'), 'gzip') // true
+ * contradictsContentEncoding(Buffer.from([0x1f, 0x8b, 8]), 'gzip') // false
+ * contradictsContentEncoding(Buffer.from('{"a"'), 'br') // false
+ */
+export function contradictsContentEncoding(
+  head: Buffer,
+  contentEncoding: string | string[] | undefined,
+): boolean {
+  const normalized = parseContentEncoding(contentEncoding);
+  const magic =
+    normalized !== undefined
+      ? CONTENT_ENCODING_MAGIC.get(normalized)
+      : undefined;
+  if (magic === undefined || head.length === 0) {
+    return false;
+  }
+  const length = Math.min(head.length, magic.length);
+  return !head.subarray(0, length).equals(magic.subarray(0, length));
+}
+
+/**
  * `{ sourceContentEncoding }` for an upstream `Content-Encoding` header that
  * names an encoding, or `{}` when the bytes are not encoded; for spreading into
  * a `ContiguousData` result.

@@ -39,7 +39,7 @@ import {
   planFold,
   PlanInput,
 } from './kinds/root-tx/planner.js';
-import { l1RangeOf } from '../lib/parquet-l1/layout.js';
+import { l1RangeOf, PARQUET_L1_SCHEMA } from '../lib/parquet-l1/layout.js';
 import {
   deriveL1Bands,
   L1_INDEX,
@@ -714,7 +714,17 @@ export class ExportService {
       );
       const state = indexState(await loadState(this.stateFile), L1_INDEX);
       const bands = await deriveL1Bands(config.l1PublishDir, config.publisher);
-      const steps = planL1(bands, top, state.supersededHistory?.d ?? []);
+      const confirmed = new Set(
+        Object.entries(state.layoutConfirmed ?? {})
+          .filter(([, schema]) => schema === PARQUET_L1_SCHEMA)
+          .map(([id]) => id),
+      );
+      const steps = planL1(
+        bands,
+        top,
+        state.supersededHistory?.d ?? [],
+        confirmed,
+      );
       const held = state.lastRejection;
       for (const [i, step] of steps.entries()) {
         // A rejected band waits for an operator's run, rather than being
@@ -838,6 +848,17 @@ export class ExportService {
         if (state.lastRejection?.heightRange?.[0] === step.heightRange[0]) {
           delete state.lastRejection;
         }
+      }
+      // Rebuilt under this layout and identical: the band on disk is current.
+      if (
+        step.result === 'unchanged' &&
+        step.reason === 'same_id' &&
+        step.id !== undefined
+      ) {
+        state.layoutConfirmed = {
+          ...state.layoutConfirmed,
+          [step.id]: PARQUET_L1_SCHEMA,
+        };
       }
       if (step.result === 'rejected' && step.reason !== 'held') {
         state.lastRejection = {

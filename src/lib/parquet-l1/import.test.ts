@@ -15,6 +15,10 @@ import type { Database } from 'duckdb-async';
 
 import { exportL1Band } from '../../index-export/kinds/parquet-l1/export.js';
 import { buildCoreDb } from '../../../test/parquet-l1-core-db.js';
+import { FORK_2_0 } from './chain.js';
+import { RowDigest } from './digest.js';
+import { PARQUET_L1_TABLES } from './layout.js';
+import { readTable } from './read.js';
 import { createTestLogger } from '../../../test/test-logger.js';
 import type { Logger } from 'winston';
 import {
@@ -1334,5 +1338,275 @@ describe('runImport', () => {
       (e: Error) =>
         e instanceof ImportRefused && /holds no bands/.test(e.message),
     );
+  });
+});
+
+/**
+ * An `l1-2` band holds no pre-fork `tx_root`: publishers disagree on it, so
+ * one canonical value is what lets their digests match. A gateway that
+ * indexed the chain itself does hold one, and importing a band — which
+ * clears and rewrites its range — must not erase it.
+ */
+describe('importBand below the 2.0 fork', () => {
+  const PRE_FIRST = 300_000;
+  const PRE_COUNT = 10;
+  let dir: string;
+  let source: string;
+  let duck: Database;
+  let entry: ImportableBand;
+  let target: Sqlite.Database;
+
+  /** Puts another `core.db`'s blocks (hashes and roots) into the target. */
+  const seedBlocksFrom = (file: string) => {
+    const other = new Sqlite(file, { readonly: true });
+    try {
+      const rows = other
+        .prepare(
+          `SELECT height, indep_hash, tx_root FROM stable_blocks
+           WHERE height >= ? ORDER BY height`,
+        )
+        .all(PRE_FIRST) as Array<{
+        height: number;
+        indep_hash: Buffer;
+        tx_root: Buffer | null;
+      }>;
+      target.exec('DELETE FROM stable_blocks');
+      const copy = target.prepare(`INSERT INTO stable_blocks (height,
+        indep_hash, nonce, hash, block_timestamp, diff, last_retarget,
+        reward_pool, block_size, weave_size, tx_root, tx_count,
+        missing_tx_count)
+        VALUES (?, ?, x'00', x'00', 0, '1', 0, '0', 0, 0, ?, 0, 0)`);
+      for (const row of rows) copy.run(row.height, row.indep_hash, row.tx_root);
+      return new Map(
+        rows
+          .filter((r) => r.tx_root !== null && r.tx_root.length === 32)
+          .map((r) => [r.height, r.tx_root as Buffer]),
+      );
+    } finally {
+      other.close();
+    }
+  };
+
+  const txRoots = (db: Sqlite.Database) =>
+    db
+      .prepare(
+        `SELECT height, tx_root FROM stable_blocks WHERE height >= ?
+         ORDER BY height`,
+      )
+      .all(PRE_FIRST) as Array<{ height: number; tx_root: Buffer | null }>;
+
+  beforeEach(async () => {
+    dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'parquet-l1-import-pre-'));
+    source = path.join(dir, 'source.db');
+    const workDir = path.join(dir, 'work');
+    await fsp.mkdir(workDir);
+    await buildCoreDb(source, PRE_FIRST, PRE_COUNT, { padded: false });
+    const result = await exportL1Band({
+      coreDbPath: source,
+      workDir,
+      from: PRE_FIRST,
+      to: PRE_FIRST + PRE_COUNT - 1,
+    });
+    entry = {
+      id: `l1-h${PRE_FIRST}-${PRE_FIRST + PRE_COUNT - 1}-test-0`,
+      dir: result.dir,
+      band: result.band,
+    };
+    const { Database } = await import('duckdb-async');
+    duck = await Database.create(':memory:');
+    target = emptyCore(path.join(dir, 'core.db'));
+  });
+
+  afterEach(async () => {
+    target?.close();
+    await duck?.close();
+    await fsp.rm(dir, { recursive: true, force: true });
+  });
+
+  it('imports a band that carries no pre-fork tx_root', async () => {
+    await importBand(target, duck, entry, { log, batchRows: 7 });
+    const got = txRoots(target);
+    assert.equal(got.length, PRE_COUNT);
+    for (const row of got) {
+      assert.equal(row.tx_root, null, `height ${row.height}`);
+    }
+  });
+
+  it('keeps a tx_root this gateway already indexed for the same block', async () => {
+    // The gateway indexed this chain itself: the same blocks, with the
+    // tx_root its header source gave it. A block with no transactions has
+    // no root to keep; the ones that do are what must survive.
+    const held = seedBlocksFrom(source);
+    assert.ok(held.size > 0, 'the gateway starts with pre-fork tx_roots');
+
+    await importBand(target, duck, entry, { log, batchRows: 7 });
+
+    const got = txRoots(target);
+    assert.equal(got.length, PRE_COUNT);
+    for (const row of got) {
+      const kept = held.get(row.height);
+      if (kept === undefined) {
+        assert.equal(row.tx_root, null, `height ${row.height} stays empty`);
+      } else {
+        assert.deepEqual(
+          row.tx_root,
+          kept,
+          `height ${row.height} must not be erased`,
+        );
+      }
+    }
+  });
+
+  it("does not give a dropped fork block's tx_root to the block that replaced it", async () => {
+    // Other blocks at the same heights — a fork the chain dropped — each
+    // with a root. The band's blocks are different blocks, so none applies.
+    const fork = path.join(dir, 'fork.db');
+    await buildCoreDb(fork, PRE_FIRST, PRE_COUNT, { padded: false });
+    const forkRoots = seedBlocksFrom(fork);
+    assert.ok(forkRoots.size > 0, 'the fork blocks carry roots');
+
+    await importBand(target, duck, entry, { log, batchRows: 7 });
+
+    for (const row of txRoots(target)) {
+      assert.equal(row.tx_root, null, `height ${row.height}`);
+    }
+  });
+
+  for (const [label, sql] of [
+    ['empty bytes, as vilenarios.com published', "''::BLOB"],
+    ['a different 32-byte root', "repeat('\\x11', 32)::BLOB"],
+  ] as const) {
+    it(`keeps its own root over an l1-1 band holding ${label}`, async () => {
+      // An l1-1 band carries a pre-fork tx_root as its publisher stored it.
+      // Rewrite the exported blocks so it does, and re-describe the rows.
+      const file = path.join(entry.dir, 'blocks.parquet');
+      const rewritten = `${file}.l1-1`;
+      await duck.all(`COPY (
+          SELECT * REPLACE (
+            CASE WHEN height < ${FORK_2_0} THEN ${sql} ELSE tx_root END
+              AS tx_root)
+          FROM read_parquet('${file}') ORDER BY height
+        ) TO '${rewritten}' (FORMAT parquet)`);
+      await fsp.rename(rewritten, file);
+      const spec = PARQUET_L1_TABLES.find((t) => t.name === 'blocks')!;
+      const digest = new RowDigest(spec.columns);
+      await readTable(duck, entry.dir, spec, entry.band, async (rows) => {
+        for (const row of rows) digest.add(row);
+      }).catch((error: unknown) => {
+        // Only the digest is expected to differ: the rows were rewritten,
+        // the band.json was not. Anything else is a broken fixture.
+        if (!/do not reproduce the digest/.test((error as Error).message)) {
+          throw error;
+        }
+      });
+      entry.band = {
+        ...entry.band,
+        schema: 'l1-1',
+        tables: {
+          ...entry.band.tables,
+          blocks: { ...entry.band.tables.blocks, rowDigest: digest.hex() },
+        },
+      };
+
+      const held = seedBlocksFrom(source);
+      assert.ok(held.size > 0, 'the gateway starts with pre-fork tx_roots');
+
+      await importBand(target, duck, entry, { log, batchRows: 7 });
+
+      for (const row of txRoots(target)) {
+        const kept = held.get(row.height);
+        if (kept !== undefined) {
+          assert.deepEqual(row.tx_root, kept, `height ${row.height} kept`);
+        }
+      }
+    });
+  }
+});
+
+/**
+ * A band holds no format-1 data_root: the header carries none, so gateways
+ * disagree. A gateway that computed one keeps it through an import, which
+ * clears and rewrites the band's range.
+ */
+describe('importBand, a format-1 data_root', () => {
+  const PRE_FIRST = 300_000;
+  const PRE_COUNT = 10;
+  let dir: string;
+  let duck: Database;
+
+  beforeEach(async () => {
+    dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'parquet-l1-import-f1-'));
+    const { Database } = await import('duckdb-async');
+    duck = await Database.create(':memory:');
+  });
+  afterEach(async () => {
+    await duck?.close();
+    await fsp.rm(dir, { recursive: true, force: true });
+  });
+
+  it('keeps a root this gateway computed, and imports null where it has none', async () => {
+    const source = path.join(dir, 'source.db');
+    await buildCoreDb(source, PRE_FIRST, PRE_COUNT, { padded: false });
+    // Every transaction format 1, as before 2.0, with the roots it was built with.
+    const src = new Sqlite(source);
+    src
+      .prepare('UPDATE stable_transactions SET format = 1 WHERE height >= ?')
+      .run(PRE_FIRST);
+    const roots = new Map(
+      (
+        src
+          .prepare(
+            'SELECT id, data_root FROM stable_transactions WHERE height >= ?',
+          )
+          .all(PRE_FIRST) as Array<{ id: Buffer; data_root: Buffer }>
+      ).map((r) => [r.id.toString('hex'), r.data_root]),
+    );
+    src.close();
+    assert.ok(roots.size > 0);
+
+    const workDir = path.join(dir, 'work');
+    await fsp.mkdir(workDir);
+    const result = await exportL1Band({
+      coreDbPath: source,
+      workDir,
+      from: PRE_FIRST,
+      to: PRE_FIRST + PRE_COUNT - 1,
+    });
+    const entry: ImportableBand = {
+      id: `l1-h${PRE_FIRST}-${PRE_FIRST + PRE_COUNT - 1}-test-0`,
+      dir: result.dir,
+      band: result.band,
+    };
+
+    // The gateway that indexed this chain itself: its own core.db.
+    const own = path.join(dir, 'own.db');
+    await fsp.copyFile(source, own);
+    const target = new Sqlite(own);
+    target.exec(fs.readFileSync(MIGRATION, 'utf8'));
+    // ...except one transaction it never computed a root for.
+    const [firstHex] = roots.keys();
+    target
+      .prepare('UPDATE stable_transactions SET data_root = NULL WHERE id = ?')
+      .run(Buffer.from(firstHex, 'hex'));
+    try {
+      await importBand(target, duck, entry, { log, batchRows: 7 });
+      const got = new Map(
+        (
+          target
+            .prepare(
+              'SELECT id, data_root FROM stable_transactions WHERE height >= ?',
+            )
+            .all(PRE_FIRST) as Array<{ id: Buffer; data_root: Buffer | null }>
+        ).map((r) => [r.id.toString('hex'), r.data_root]),
+      );
+      assert.equal(got.size, roots.size);
+      for (const [hex, root] of roots) {
+        if (hex === firstHex)
+          assert.equal(got.get(hex), null, 'none held, none invented');
+        else assert.deepEqual(got.get(hex), root, `${hex.slice(0, 8)} kept`);
+      }
+    } finally {
+      target.close();
+    }
   });
 });

@@ -141,6 +141,77 @@ export function attachStallTimeout(
 }
 
 /**
+ * Resolves with the first chunk of a stream that nothing is reading yet, and
+ * puts the chunk back, so no bytes are consumed. Resolves with an empty buffer
+ * if the stream ends first.
+ *
+ * Leaves the stream paused, as {@link attachStallTimeout} does, so consumers
+ * start it with `pipe()` or `resume()`. Call it before attaching any `'data'`
+ * listener: a stream that already has one can flow while the peek runs, and
+ * those bytes would be lost.
+ *
+ * If no data arrives within `timeoutMs`, the stream is destroyed and the
+ * promise rejects. If `signal` aborts first, the stream is destroyed and the
+ * promise rejects with an `AbortError`.
+ */
+export function peekFirstChunk(
+  stream: Readable,
+  timeoutMs: number,
+  signal?: AbortSignal,
+): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+      stream.off('data', onData);
+      stream.off('end', onEnd);
+      stream.off('error', onError);
+    };
+    // The caller has stopped wanting the bytes (client disconnect, or a hedged
+    // request that lost): release the connection now, not at the timeout.
+    const onAbort = () => {
+      cleanup();
+      stream.destroy();
+      const error = new Error('Peek aborted');
+      error.name = 'AbortError';
+      reject(error);
+    };
+    const onData = (chunk: Buffer) => {
+      stream.pause();
+      cleanup();
+      stream.unshift(chunk);
+      resolve(chunk);
+    };
+    const onEnd = () => {
+      cleanup();
+      resolve(Buffer.alloc(0));
+    };
+    const onError = (error: Error) => {
+      cleanup();
+      reject(error);
+    };
+    const timer = setTimeout(() => {
+      cleanup();
+      // Destroy without an error: the 'error' listener is gone, and an
+      // unhandled 'error' event would be an uncaught exception.
+      stream.destroy();
+      reject(new Error(`No data received within ${timeoutMs}ms`));
+    }, timeoutMs).unref();
+
+    if (signal?.aborted === true) {
+      onAbort();
+      return;
+    }
+    signal?.addEventListener('abort', onAbort, { once: true });
+    stream.on('data', onData);
+    stream.on('end', onEnd);
+    stream.on('error', onError);
+    // A stream paused earlier does not start flowing on a new 'data' listener.
+    stream.resume();
+  });
+}
+
+/**
  * Pipes a readable stream to an HTTP response, logging and destroying
  * the response on stream error.
  */

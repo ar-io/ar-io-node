@@ -74,6 +74,13 @@ export interface IndexState {
    * keeps its old one until the new one installs.
    */
   supersededHistory?: Partial<Record<BandRole, string[]>>;
+  /**
+   * Bands written to an older layout that this service rebuilt under a newer
+   * one and found identical (the same id), with the layout they were
+   * confirmed against. Their files are left alone, since a subscriber
+   * already holds that id; this is what stops them being rebuilt every run.
+   */
+  layoutConfirmed?: Record<string, string>;
 }
 
 /** What the service remembers between runs, per index; the rest is derived from disk. */

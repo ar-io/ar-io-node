@@ -39,6 +39,7 @@ import {
   TableSpec,
 } from './layout.js';
 import { IMPORT_ORDER, readTable } from './read.js';
+import { FORK_2_0 } from './chain.js';
 
 /** A band on disk, ready to import. */
 export interface ImportableBand {
@@ -541,6 +542,11 @@ export async function importBand(
 ): Promise<{ rows: number; missingTransactions: number }> {
   const { band, dir } = entry;
   const [from, to] = band.heightRange;
+  // Format-1 data roots this gateway holds for the band's range, kept across
+  // the clear below. A temporary table, not a map: a busy range can hold
+  // hundreds of thousands of format-1 transactions. See `keepDataRoots`.
+  db.exec(`CREATE TEMP TABLE IF NOT EXISTS parquet_l1_kept_data_roots
+    (id BLOB PRIMARY KEY, data_root BLOB NOT NULL)`);
   const insert = {
     wallets: db.prepare(
       'INSERT OR IGNORE INTO wallets (address, public_modulus) VALUES (?, ?)',
@@ -579,6 +585,22 @@ export async function importBand(
     hashAt: db
       .prepare('SELECT indep_hash FROM stable_blocks WHERE height = ?')
       .pluck(),
+    // A band holds no format-1 data_root (the header carries none, so
+    // gateways disagree), but a gateway that computed one keeps it. Keyed by
+    // transaction id, which names the same transaction on any fork.
+    forgetKeptDataRoots: db.prepare('DELETE FROM parquet_l1_kept_data_roots'),
+    keepDataRoots: db.prepare(`INSERT INTO parquet_l1_kept_data_roots
+      SELECT id, data_root FROM stable_transactions
+      WHERE height BETWEEN ? AND ? AND format = 1
+        AND data_root IS NOT NULL AND length(data_root) > 0`),
+    restoreDataRoots: db.prepare(`UPDATE stable_transactions
+      SET data_root = k.data_root
+      FROM parquet_l1_kept_data_roots k
+      WHERE stable_transactions.id = k.id`),
+    // Read before the range is cleared: see `keptTxRoots`.
+    storedTxRoots:
+      db.prepare(`SELECT height, indep_hash, tx_root FROM stable_blocks
+      WHERE height BETWEEN ? AND ? AND tx_root IS NOT NULL`),
     haveTx: db
       .prepare('SELECT 1 FROM stable_transactions WHERE id = ?')
       .pluck(),
@@ -626,6 +648,11 @@ export async function importBand(
   let rows = 0;
   let missingTransactions = 0;
 
+  const blockColumns = spec('blocks').columns;
+  const heightColumn = blockColumns.findIndex((c) => c.name === 'height');
+  const hashColumn = blockColumns.findIndex((c) => c.name === 'indep_hash');
+  const txRootColumn = blockColumns.findIndex((c) => c.name === 'tx_root');
+
   const writers: Record<string, (batch: unknown[][]) => void> = {
     wallets: (batch) => {
       for (const [address, modulus] of batch) {
@@ -637,17 +664,33 @@ export async function importBand(
     },
     blocks: (batch) => {
       for (const r of batch) {
-        insert.blocks.run(
-          ...r.map((v, i) =>
-            v === null || v === undefined
-              ? null
-              : spec('blocks').columns[i].type === 'BLOB'
-                ? asBuffer(v)
-                : typeof v === 'bigint'
-                  ? Number(v)
-                  : v,
-          ),
+        const values = r.map((v, i) =>
+          v === null || v === undefined
+            ? null
+            : spec('blocks').columns[i].type === 'BLOB'
+              ? asBuffer(v)
+              : typeof v === 'bigint'
+                ? Number(v)
+                : v,
         );
+        // A pre-fork `tx_root` is not committed by the block hash, so a
+        // band's is just its publisher's header source talking: an `l1-2`
+        // band holds none, and an `l1-1` band holds whatever the publisher
+        // stored — empty bytes from vilenarios.com, 32 bytes elsewhere. A
+        // gateway that indexed the block itself keeps its own, whatever the
+        // band says: the insert replaces the row, so put it back.
+        // `readTable` casts UBIGINT to VARCHAR (a UBIGINT arrives in node as
+        // a double and would round), so a height here is a string.
+        const kept = keptTxRoots.get(Number(values[heightColumn]));
+        // Only for the same block: a row the band replaces may be a fork
+        // the chain dropped, and its root belongs to that block alone.
+        if (
+          kept !== undefined &&
+          kept.indepHash.equals(values[hashColumn] as Buffer)
+        ) {
+          values[txRootColumn] = kept.txRoot;
+        }
+        insert.blocks.run(...values);
       }
     },
     transactions: (batch) => {
@@ -768,6 +811,34 @@ export async function importBand(
     bandDigest(band),
     Math.floor(Date.now() / 1000),
   );
+  // An `l1-2` band holds no pre-fork `tx_root`: below the fork the field is
+  // not committed by the block hash, publishers disagree on it, and writing
+  // one value is what lets their digests match. A gateway that indexed the
+  // chain itself does have one, and importing a band must not erase it — so
+  // keep what is stored, before the range is cleared, and put it back.
+  const keptTxRoots = new Map<number, { indepHash: Buffer; txRoot: Buffer }>();
+  if (from < FORK_2_0) {
+    for (const row of insert.storedTxRoots.all(
+      from,
+      Math.min(to, FORK_2_0 - 1),
+    ) as Array<{
+      height: number;
+      indep_hash: Buffer | null;
+      tx_root: Buffer | string | null;
+    }>) {
+      const stored = row.tx_root;
+      if (row.indep_hash !== null && stored !== null && stored.length > 0) {
+        keptTxRoots.set(row.height, {
+          indepHash: row.indep_hash,
+          txRoot: Buffer.isBuffer(stored)
+            ? stored
+            : Buffer.from(stored, 'utf8'),
+        });
+      }
+    }
+  }
+  insert.forgetKeptDataRoots.run();
+  insert.keepDataRoots.run(from, to);
   insert.clearLinks.run(from, to);
   insert.clearTags.run(from, to);
   insert.clearTxs.run(from, to);
@@ -813,6 +884,8 @@ export async function importBand(
         batchRows,
       );
     }
+    insert.restoreDataRoots.run();
+    insert.forgetKeptDataRoots.run();
     insert.countMissing.run(from, to);
     insert.completed.run(rows, Math.floor(Date.now() / 1000), entry.id);
     // After this band's own row is complete, so it is not caught by it.
