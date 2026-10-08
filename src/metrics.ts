@@ -979,12 +979,11 @@ export const arnsNameCacheHydrationFailuresCounter = new promClient.Counter({
  * this counter a partially hydrated cache is invisible to monitoring: the
  * gateway stays healthy and simply 404s the names it never managed to write.
  */
-export const arnsNameCacheHydrationWriteFailuresCounter = new promClient.Counter(
-  {
+export const arnsNameCacheHydrationWriteFailuresCounter =
+  new promClient.Counter({
     name: 'arns_name_cache_hydration_write_failures_total',
     help: 'Total number of registry cache writes that failed during ArNS cache hydration',
-  },
-);
+  });
 
 export const arnsBaseNameCacheEntriesGauge = new promClient.Gauge({
   name: 'arns_base_name_cache_entries',
@@ -1118,8 +1117,8 @@ export const gatewayContentTypeRejectedTotal = new promClient.Counter({
 
 export const upstreamDecodedBodyRejectedTotal = new promClient.Counter({
   name: 'upstream_decoded_body_rejected_total',
-  help: 'Count of upstream data responses rejected because their Content-Encoding tag header names a coding the response does not declare, meaning the body was decoded upstream (pre-#964 gateways).',
-  labelNames: ['class', 'source', 'encoding'] as const,
+  help: 'Count of upstream data responses rejected as decoded upstream (pre-#964 gateways): reason="undeclared" when a Content-Encoding tag header names a coding the response does not declare, reason="mislabelled" when the body does not start with the declared coding\'s magic bytes.',
+  labelNames: ['class', 'source', 'encoding', 'reason'] as const,
 });
 
 // Time from an outbound gateway request needing a socket (Agent.addRequest) to a

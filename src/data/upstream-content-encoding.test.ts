@@ -8,6 +8,7 @@ import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert';
 import http from 'node:http';
 import { AddressInfo } from 'node:net';
+import { randomBytes } from 'node:crypto';
 import { gzipSync } from 'node:zlib';
 
 import { GatewaysDataSource } from './gateways-data-source.js';
@@ -30,7 +31,8 @@ import { createTestLogger } from '../../test/test-logger.js';
  * encoded length, so the bytes they serve are both decoded and truncated
  * (docs.ar.io /api/search, vilenarios.com 2026-10-07). Their
  * `X-Arweave-Tag-Content-Encoding` header still names the coding, which is
- * how such a response is recognised and refused.
+ * how such a response is recognised and refused. Others send the decoded
+ * body under `Content-Encoding: gzip`; its first bytes are not gzip's magic.
  *
  * These tests use a real HTTP server and the real axios, since mocking axios
  * would hide exactly the behaviour at issue.
@@ -42,6 +44,11 @@ describe('upstream data sources and Content-Encoding', () => {
   // Served the way a pre-#964 gateway serves a gzip item: decoded, cut at the
   // encoded length, no Content-Encoding, tag header intact.
   const DECODED_ID = 'decodedDECODEDdecodedDECODEDdecodedDECODED1';
+  // Decoded, yet still declared gzip (an r84 gateway, mipenode.pro 2026-10-08).
+  const MISLABELLED_ID = 'mislabelledMISLABELLEDmislabelledMISLABELL1';
+  // Large enough to arrive in many chunks, so a peek that dropped one shows.
+  const LARGE_ID = 'largeLARGElargeLARGElargeLARGElargeLARGE123';
+  const largeGzipped = gzipSync(randomBytes(3 * 1024 * 1024));
   // Tagged with a coding no gateway names in Content-Encoding.
   const CUSTOM_ID = 'customCUSTOMcustomCUSTOMcustomCUSTOMcustom1';
   const json = Buffer.from(JSON.stringify({ report: 'x'.repeat(20_000) }));
@@ -58,14 +65,21 @@ describe('upstream data sources and Content-Encoding', () => {
       const encoded = url.includes(ID);
       const decoded = url.includes(DECODED_ID);
       const custom = url.includes(CUSTOM_ID);
+      const mislabelled = url.includes(MISLABELLED_ID);
+      const large = url.includes(LARGE_ID);
       const body = encoded
         ? gzipped
-        : decoded
-          ? json.subarray(0, gzipped.length)
-          : json;
+        : large
+          ? largeGzipped
+          : decoded
+            ? json.subarray(0, gzipped.length)
+            : json;
       res.writeHead(200, {
         'Content-Type': 'application/json',
-        ...(encoded ? { 'Content-Encoding': 'gzip' } : {}),
+        ...(encoded || mislabelled || large
+          ? { 'Content-Encoding': 'gzip' }
+          : {}),
+        ...(mislabelled ? { 'X-Arweave-Tag-Content-Encoding': 'gzip' } : {}),
         ...(encoded || decoded
           ? { 'X-Arweave-Tag-Content-Encoding': 'gzip' }
           : {}),
@@ -150,6 +164,27 @@ describe('upstream data sources and Content-Encoding', () => {
               requestAttributes: { hops: 0 } as any,
             }),
           );
+        });
+
+        it('refuses a body declared gzip that is not gzip', async () => {
+          await assert.rejects(
+            sources()[name].getData({
+              id: MISLABELLED_ID,
+              requestAttributes: { hops: 0 } as any,
+            }),
+          );
+        });
+
+        it('passes a multi-chunk gzip body through intact after checking it', async () => {
+          const data = await sources()[name].getData({
+            id: LARGE_ID,
+            requestAttributes: { hops: 0 } as any,
+          });
+
+          const body = await readAll(data);
+          assert.equal(body.length, largeGzipped.length);
+          assert.ok(body.equals(largeGzipped));
+          assert.strictEqual(data.sourceContentEncoding, 'gzip');
         });
 
         it('accepts a tag naming a coding gateways do not declare', async () => {

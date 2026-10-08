@@ -11,6 +11,7 @@ import {
   attachStallTimeout,
   ByteRangeTransform,
   pipeStreamToResponse,
+  peekFirstChunk,
 } from './stream.js';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -300,5 +301,79 @@ describe('pipeStreamToResponse', () => {
     await new Promise<void>((resolve) => res.once('close', resolve));
 
     assert.equal(log.info.mock.calls.length, 0);
+  });
+});
+
+describe('peekFirstChunk', () => {
+  const collect = async (stream: Readable) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of stream) chunks.push(chunk as Buffer);
+    return Buffer.concat(chunks);
+  };
+
+  it('returns the first chunk without consuming it', async () => {
+    const stream = new PassThrough();
+    stream.write(Buffer.from([0x1f, 0x8b, 1, 2]));
+    stream.write(Buffer.from([3, 4]));
+    stream.end();
+
+    const head = await peekFirstChunk(stream, 1000);
+
+    assert.deepEqual(head, Buffer.from([0x1f, 0x8b, 1, 2]));
+    assert.deepEqual(
+      await collect(stream),
+      Buffer.from([0x1f, 0x8b, 1, 2, 3, 4]),
+    );
+  });
+
+  it('leaves the stream paused, so a later stall timeout loses no bytes', async () => {
+    const stream = new PassThrough();
+    const body = Buffer.alloc(256 * 1024, 7);
+    stream.end(body);
+
+    await peekFirstChunk(stream, 1000);
+    assert.equal(stream.isPaused(), true);
+
+    const cleanup = attachStallTimeout(stream, 1000);
+    const sink = new PassThrough();
+    stream.pipe(sink);
+    const received = await collect(sink);
+    cleanup();
+
+    assert.equal(received.length, body.length);
+    assert.deepEqual(received, body);
+  });
+
+  it('starts a stream that was paused before the peek', async () => {
+    const stream = new PassThrough();
+    stream.pause();
+    setImmediate(() => stream.end(Buffer.from('abc')));
+
+    assert.deepEqual(await peekFirstChunk(stream, 1000), Buffer.from('abc'));
+    assert.deepEqual(await collect(stream), Buffer.from('abc'));
+  });
+
+  it('resolves empty when the stream ends with no data', async () => {
+    const stream = new PassThrough();
+    stream.end();
+
+    assert.equal((await peekFirstChunk(stream, 1000)).length, 0);
+  });
+
+  it('rejects and destroys the stream when no data arrives in time', async () => {
+    const stream = new PassThrough();
+    // The peek's timer is unref'd, like the stall timer; hold the loop open.
+    const keepAlive = setTimeout(() => {}, 1000);
+
+    await assert.rejects(peekFirstChunk(stream, 20), /No data received/);
+    clearTimeout(keepAlive);
+    assert.equal(stream.destroyed, true);
+  });
+
+  it('rejects on a stream error', async () => {
+    const stream = new PassThrough();
+    setImmediate(() => stream.destroy(new Error('boom')));
+
+    await assert.rejects(peekFirstChunk(stream, 1000), /boom/);
   });
 });

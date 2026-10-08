@@ -30,10 +30,17 @@ import { SpanStatusCode, Span } from '@opentelemetry/api';
 import {
   normalizeAbortError,
   contentEncodingOf,
+  contradictsContentEncoding,
+  hasContentEncodingMagic,
+  parseContentEncoding,
   parseContentRange,
   undeclaredTaggedEncoding,
 } from '../lib/http-utils.js';
-import { ByteRangeTransform, attachStallTimeout } from '../lib/stream.js';
+import {
+  ByteRangeTransform,
+  attachStallTimeout,
+  peekFirstChunk,
+} from '../lib/stream.js';
 import { PeerRequestLimiter } from './peer-request-limiter.js';
 import { executeHedgedRequest } from '../lib/hedged-request.js';
 
@@ -200,6 +207,35 @@ export class ArIODataSource implements ContiguousDataSource {
             region !== undefined ? '206' : '200'
           }.`,
         );
+      }
+
+      // A peer older than #964 can send a gzip-tagged item decompressed while
+      // still declaring Content-Encoding: gzip. Where the body starts at the
+      // item's first byte, check the declared coding's magic. This runs before
+      // attachStallTimeout, whose 'data' listener would let the stream flow
+      // during the peek and drop bytes.
+      const declaredEncoding = response.headers['content-encoding'] as
+        | string
+        | undefined;
+      if (
+        (region === undefined || region.offset === 0) &&
+        hasContentEncodingMagic(declaredEncoding)
+      ) {
+        const head = await peekFirstChunk(response.data, this.requestTimeoutMs);
+        if (contradictsContentEncoding(head, declaredEncoding)) {
+          response.data.destroy();
+          const encoding = parseContentEncoding(declaredEncoding);
+          metrics.upstreamDecodedBodyRejectedTotal.inc({
+            class: this.constructor.name,
+            source: peerAddress,
+            encoding,
+            reason: 'mislabelled',
+          });
+          throw new Error(
+            `Peer response declares Content-Encoding: ${encoding} but its ` +
+              `body is not ${encoding}-encoded (decoded upstream)`,
+          );
+        }
       }
 
       attachStallTimeout(
@@ -521,6 +557,7 @@ export class ArIODataSource implements ContiguousDataSource {
         class: this.constructor.name,
         source: peer,
         encoding: undeclaredEncoding,
+        reason: 'undeclared',
       });
       this.log.warn('Peer sent a tagged-encoded item decoded', {
         peer,
