@@ -30,9 +30,17 @@ import { SpanStatusCode, Span } from '@opentelemetry/api';
 import {
   normalizeAbortError,
   contentEncodingOf,
+  contradictsContentEncoding,
+  hasContentEncodingMagic,
+  parseContentEncoding,
   parseContentRange,
+  undeclaredTaggedEncoding,
 } from '../lib/http-utils.js';
-import { ByteRangeTransform, attachStallTimeout } from '../lib/stream.js';
+import {
+  ByteRangeTransform,
+  attachStallTimeout,
+  peekFirstChunk,
+} from '../lib/stream.js';
 import { PeerRequestLimiter } from './peer-request-limiter.js';
 import { executeHedgedRequest } from '../lib/hedged-request.js';
 
@@ -199,6 +207,39 @@ export class ArIODataSource implements ContiguousDataSource {
             region !== undefined ? '206' : '200'
           }.`,
         );
+      }
+
+      // A peer older than #964 can send a gzip-tagged item decompressed while
+      // still declaring Content-Encoding: gzip. Where the body starts at the
+      // item's first byte, check the declared coding's magic. This runs before
+      // attachStallTimeout, whose 'data' listener would let the stream flow
+      // during the peek and drop bytes.
+      const declaredEncoding = response.headers['content-encoding'] as
+        | string
+        | undefined;
+      if (
+        (region === undefined || region.offset === 0) &&
+        hasContentEncodingMagic(declaredEncoding)
+      ) {
+        const head = await peekFirstChunk(
+          response.data,
+          this.requestTimeoutMs,
+          signal,
+        );
+        if (contradictsContentEncoding(head, declaredEncoding)) {
+          response.data.destroy();
+          const encoding = parseContentEncoding(declaredEncoding);
+          metrics.upstreamDecodedBodyRejectedTotal.inc({
+            class: this.constructor.name,
+            source: peerAddress,
+            encoding,
+            reason: 'mislabelled',
+          });
+          throw new Error(
+            `Peer response declares Content-Encoding: ${encoding} but its ` +
+              `body is not ${encoding}-encoded (decoded upstream)`,
+          );
+        }
       }
 
       attachStallTimeout(
@@ -502,6 +543,36 @@ export class ArIODataSource implements ContiguousDataSource {
       throw new Error('Peer does not indicate data is verified or trusted');
     }
 
+    // A peer older than #964 serves a Content-Encoding: gzip item decoded and
+    // cut at the encoded length, without the header, while its tag headers
+    // still name the coding. Reject so the next peer or source is tried.
+    const upstreamTags = parseUpstreamTagHeaders(
+      response.headers as Record<string, string | string[]>,
+    );
+    const undeclaredEncoding = undeclaredTaggedEncoding({
+      contentEncoding: response.headers['content-encoding'] as
+        | string
+        | undefined,
+      tags: upstreamTags,
+    });
+    if (undeclaredEncoding !== undefined) {
+      stream.destroy();
+      metrics.upstreamDecodedBodyRejectedTotal.inc({
+        class: this.constructor.name,
+        source: peer,
+        encoding: undeclaredEncoding,
+        reason: 'undeclared',
+      });
+      this.log.warn('Peer sent a tagged-encoded item decoded', {
+        peer,
+        encoding: undeclaredEncoding,
+      });
+      throw new Error(
+        `Peer response is tagged Content-Encoding: ${undeclaredEncoding} ` +
+          'but sent without that header (body decoded upstream)',
+      );
+    }
+
     const contentLength =
       parseInt(
         (response.headers['content-length'] as string | undefined) ?? '0',
@@ -613,9 +684,7 @@ export class ArIODataSource implements ContiguousDataSource {
       ),
       cached: false,
       requestAttributes,
-      upstreamTags: parseUpstreamTagHeaders(
-        response.headers as Record<string, string | string[]>,
-      ),
+      upstreamTags,
     };
   }
 }
