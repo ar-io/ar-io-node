@@ -36,7 +36,7 @@ import {
   L1_SUB_SPAN,
   l1RangeOf,
   l1SubRangeOf,
-  PARQUET_L1_SCHEMA,
+  isCurrentLayout,
   ParquetL1Band,
   readBandDirectory,
 } from '../../../lib/parquet-l1/layout.js';
@@ -144,7 +144,8 @@ export function planL1(
 ): L1Step[] {
   if (top < 0) return [];
   const steps: L1Step[] = [];
-  const current = (b: L1PublishedBand) => b.band.schema === PARQUET_L1_SCHEMA;
+  const current = (b: L1PublishedBand) =>
+    isCurrentLayout(b.band.schema, b.from);
   const covers = (from: number, to: number) => [
     ...new Set([
       ...superseded.filter((id) => {

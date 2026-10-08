@@ -1347,9 +1347,41 @@ describe('importBand below the 2.0 fork', () => {
   const PRE_FIRST = 300_000;
   const PRE_COUNT = 10;
   let dir: string;
+  let source: string;
   let duck: Database;
   let entry: ImportableBand;
   let target: Sqlite.Database;
+
+  /** Puts another `core.db`'s blocks (hashes and roots) into the target. */
+  const seedBlocksFrom = (file: string) => {
+    const other = new Sqlite(file, { readonly: true });
+    try {
+      const rows = other
+        .prepare(
+          `SELECT height, indep_hash, tx_root FROM stable_blocks
+           WHERE height >= ? ORDER BY height`,
+        )
+        .all(PRE_FIRST) as Array<{
+        height: number;
+        indep_hash: Buffer;
+        tx_root: Buffer | null;
+      }>;
+      target.exec('DELETE FROM stable_blocks');
+      const copy = target.prepare(`INSERT INTO stable_blocks (height,
+        indep_hash, nonce, hash, block_timestamp, diff, last_retarget,
+        reward_pool, block_size, weave_size, tx_root, tx_count,
+        missing_tx_count)
+        VALUES (?, ?, x'00', x'00', 0, '1', 0, '0', 0, 0, ?, 0, 0)`);
+      for (const row of rows) copy.run(row.height, row.indep_hash, row.tx_root);
+      return new Map(
+        rows
+          .filter((r) => r.tx_root !== null && r.tx_root.length === 32)
+          .map((r) => [r.height, r.tx_root as Buffer]),
+      );
+    } finally {
+      other.close();
+    }
+  };
 
   const txRoots = (db: Sqlite.Database) =>
     db
@@ -1361,7 +1393,7 @@ describe('importBand below the 2.0 fork', () => {
 
   beforeEach(async () => {
     dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'parquet-l1-import-pre-'));
-    const source = path.join(dir, 'source.db');
+    source = path.join(dir, 'source.db');
     const workDir = path.join(dir, 'work');
     await fsp.mkdir(workDir);
     await buildCoreDb(source, PRE_FIRST, PRE_COUNT, { padded: false });
@@ -1396,34 +1428,11 @@ describe('importBand below the 2.0 fork', () => {
     }
   });
 
-  it('keeps a tx_root this gateway already indexed', async () => {
-    // The gateway's own copy of the same heights, with the tx_root its
-    // header source gave it.
-    const own = path.join(dir, 'own.db');
-    await buildCoreDb(own, PRE_FIRST, PRE_COUNT, { padded: false });
-    const mine = new Sqlite(own, { readonly: true });
-    let stored: Array<{ height: number; tx_root: Buffer | null }>;
-    try {
-      stored = txRoots(mine);
-      target.exec('DELETE FROM stable_blocks');
-      const copy = target.prepare(`INSERT INTO stable_blocks (height,
-        indep_hash, nonce, hash, block_timestamp, diff, last_retarget,
-        reward_pool, block_size, weave_size, tx_root, tx_count,
-        missing_tx_count)
-        VALUES (?, ?, x'00', x'00', 0, '1', 0, '0', 0, 0, ?, 0, 0)`);
-      for (const row of stored) {
-        copy.run(row.height, Buffer.alloc(48, row.height % 251), row.tx_root);
-      }
-    } finally {
-      mine.close();
-    }
-    // A block with no transactions has no root to keep; the ones that do
-    // are what must survive.
-    const held = new Map(
-      stored
-        .filter((r) => r.tx_root !== null && r.tx_root.length === 32)
-        .map((r) => [r.height, r.tx_root as Buffer]),
-    );
+  it('keeps a tx_root this gateway already indexed for the same block', async () => {
+    // The gateway indexed this chain itself: the same blocks, with the
+    // tx_root its header source gave it. A block with no transactions has
+    // no root to keep; the ones that do are what must survive.
+    const held = seedBlocksFrom(source);
     assert.ok(held.size > 0, 'the gateway starts with pre-fork tx_roots');
 
     await importBand(target, duck, entry, { log, batchRows: 7 });
@@ -1441,6 +1450,21 @@ describe('importBand below the 2.0 fork', () => {
           `height ${row.height} must not be erased`,
         );
       }
+    }
+  });
+
+  it("does not give a dropped fork block's tx_root to the block that replaced it", async () => {
+    // Other blocks at the same heights — a fork the chain dropped — each
+    // with a root. The band's blocks are different blocks, so none applies.
+    const fork = path.join(dir, 'fork.db');
+    await buildCoreDb(fork, PRE_FIRST, PRE_COUNT, { padded: false });
+    const forkRoots = seedBlocksFrom(fork);
+    assert.ok(forkRoots.size > 0, 'the fork blocks carry roots');
+
+    await importBand(target, duck, entry, { log, batchRows: 7 });
+
+    for (const row of txRoots(target)) {
+      assert.equal(row.tx_root, null, `height ${row.height}`);
     }
   });
 });

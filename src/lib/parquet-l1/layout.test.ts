@@ -11,6 +11,7 @@ import {
   BAND_FILE,
   BAND_FILES,
   canonicalTxRoot,
+  isCurrentLayout,
   PARQUET_L1_SCHEMA,
   PARQUET_L1_SCHEMAS,
   PARQUET_L1_TABLES,
@@ -158,9 +159,23 @@ describe('canonicalTxRoot', () => {
   it('keeps empty bytes from the fork up: a block with no transactions', () => {
     // Above the fork an empty tx_root is the real value, and every
     // publisher stores it, so normalising it would change rows for nothing.
-    assert.deepEqual(canonicalTxRoot(FORK_2_0, Buffer.alloc(0)), Buffer.alloc(0));
+    assert.deepEqual(
+      canonicalTxRoot(FORK_2_0, Buffer.alloc(0)),
+      Buffer.alloc(0),
+    );
     assert.deepEqual(canonicalTxRoot(FORK_2_0, ''), Buffer.alloc(0));
     assert.equal(canonicalTxRoot(FORK_2_0, null), null);
     assert.equal(canonicalTxRoot(FORK_2_0, undefined), null);
+  });
+});
+
+describe('isCurrentLayout', () => {
+  it('needs only the bands holding pre-fork blocks rebuilt from l1-1', () => {
+    assert.equal(isCurrentLayout(PARQUET_L1_SCHEMA, 0), true);
+    assert.equal(isCurrentLayout('l1-1', 0), false);
+    assert.equal(isCurrentLayout('l1-1', 400_000), false);
+    assert.equal(isCurrentLayout('l1-1', FORK_2_0 - 1), false);
+    assert.equal(isCurrentLayout('l1-1', FORK_2_0), true);
+    assert.equal(isCurrentLayout('l1-1', 500_000), true);
   });
 });

@@ -47,6 +47,23 @@ export const PARQUET_L1_SCHEMAS = ['l1-1', 'l1-2'] as const;
 export type ParquetL1Schema = (typeof PARQUET_L1_SCHEMAS)[number];
 
 /**
+ * Whether a band written to `schema`, starting at height `from`, holds the
+ * rows this build would write. Only those need no rebuild.
+ *
+ * `l1-2` changed nothing but pre-fork `tx_root`, so an `l1-1` band that
+ * starts at or above the fork already holds `l1-2`'s rows (and the same id,
+ * which comes from the rows). Rebuilding it would cost hours for nothing:
+ * of a whole chain's bands, only the five ranges below 500,000 change.
+ */
+export function isCurrentLayout(
+  schema: ParquetL1Schema,
+  from: number,
+): boolean {
+  if (schema === PARQUET_L1_SCHEMA) return true;
+  return schema === 'l1-1' && from >= FORK_2_0;
+}
+
+/**
  * What a band stores for a block's `tx_root`: the stored bytes at and above
  * the 2.0 fork, and `null` below it, where the protocol has no such field
  * and gateways hold whatever their header source gave them — 32 bytes,

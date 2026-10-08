@@ -581,7 +581,8 @@ export async function importBand(
       .prepare('SELECT indep_hash FROM stable_blocks WHERE height = ?')
       .pluck(),
     // Read before the range is cleared: see `keptTxRoots`.
-    storedTxRoots: db.prepare(`SELECT height, tx_root FROM stable_blocks
+    storedTxRoots:
+      db.prepare(`SELECT height, indep_hash, tx_root FROM stable_blocks
       WHERE height BETWEEN ? AND ? AND tx_root IS NOT NULL`),
     haveTx: db
       .prepare('SELECT 1 FROM stable_transactions WHERE id = ?')
@@ -632,6 +633,7 @@ export async function importBand(
 
   const blockColumns = spec('blocks').columns;
   const heightColumn = blockColumns.findIndex((c) => c.name === 'height');
+  const hashColumn = blockColumns.findIndex((c) => c.name === 'indep_hash');
   const txRootColumn = blockColumns.findIndex((c) => c.name === 'tx_root');
 
   const writers: Record<string, (batch: unknown[][]) => void> = {
@@ -662,7 +664,14 @@ export async function importBand(
           // `readTable` casts UBIGINT to VARCHAR (a UBIGINT arrives in node
           // as a double and would round), so a height here is a string.
           const kept = keptTxRoots.get(Number(values[heightColumn]));
-          if (kept !== undefined) values[txRootColumn] = kept;
+          // Only for the same block: a row the band replaces may be a fork
+          // the chain dropped, and its root belongs to that block alone.
+          if (
+            kept !== undefined &&
+            kept.indepHash.equals(values[hashColumn] as Buffer)
+          ) {
+            values[txRootColumn] = kept.txRoot;
+          }
         }
         insert.blocks.run(...values);
       }
@@ -790,18 +799,24 @@ export async function importBand(
   // one value is what lets their digests match. A gateway that indexed the
   // chain itself does have one, and importing a band must not erase it — so
   // keep what is stored, before the range is cleared, and put it back.
-  const keptTxRoots = new Map<number, Buffer>();
+  const keptTxRoots = new Map<number, { indepHash: Buffer; txRoot: Buffer }>();
   if (from < FORK_2_0) {
     for (const row of insert.storedTxRoots.all(
       from,
       Math.min(to, FORK_2_0 - 1),
-    ) as Array<{ height: number; tx_root: Buffer | string | null }>) {
+    ) as Array<{
+      height: number;
+      indep_hash: Buffer | null;
+      tx_root: Buffer | string | null;
+    }>) {
       const stored = row.tx_root;
-      if (stored !== null && stored.length > 0) {
-        keptTxRoots.set(
-          row.height,
-          Buffer.isBuffer(stored) ? stored : Buffer.from(stored, 'utf8'),
-        );
+      if (row.indep_hash !== null && stored !== null && stored.length > 0) {
+        keptTxRoots.set(row.height, {
+          indepHash: row.indep_hash,
+          txRoot: Buffer.isBuffer(stored)
+            ? stored
+            : Buffer.from(stored, 'utf8'),
+        });
       }
     }
   }

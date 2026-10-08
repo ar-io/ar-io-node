@@ -109,6 +109,41 @@ describe('planL1', () => {
     ]);
   });
 
+  it('keeps an older-layout band above the fork, whose rows did not change', () => {
+    // l1-2 changed only pre-fork tx_root, so rebuilding these would cost
+    // hours and produce the same rows under the same id.
+    const bands = [
+      band('l1-h0-99999-p-a', 0, 99_999),
+      band('l1-h100000-199999-p-a', 100_000, 199_999),
+      band('l1-h200000-299999-p-a', 200_000, 299_999),
+      band('l1-h300000-399999-p-a', 300_000, 399_999),
+      band('l1-h400000-499999-p-a', 400_000, 499_999),
+      band('l1-h500000-599999-p-old', 500_000, 599_999, 'l1-1'),
+      band('l1-h600000-604999-p-old', 600_000, 604_999, 'l1-1'),
+      band('l1-h605000-606000-p-old', 605_000, 606_000, 'l1-1'),
+    ];
+    assert.deepEqual(planL1(bands, 606_000), []);
+  });
+
+  it('rebuilds an older-layout band that straddles the fork', () => {
+    const bands = [
+      band('l1-h0-99999-p-a', 0, 99_999),
+      band('l1-h100000-199999-p-a', 100_000, 199_999),
+      band('l1-h200000-299999-p-a', 200_000, 299_999),
+      band('l1-h300000-399999-p-a', 300_000, 399_999),
+      band('l1-h400000-499999-p-old', 400_000, 499_999, 'l1-1'),
+      band('l1-h500000-504999-p-a', 500_000, 504_999),
+      band('l1-h505000-506000-p-tip', 505_000, 506_000),
+    ];
+    assert.deepEqual(planL1(bands, 506_000), [
+      {
+        role: 'h',
+        heightRange: [400_000, 499_999],
+        supersedes: ['l1-h400000-499999-p-old'],
+      },
+    ]);
+  });
+
   it('rebuilds an older-layout tip too', () => {
     const bands = [
       band('l1-h0-99999-p-a', 0, 99_999),
