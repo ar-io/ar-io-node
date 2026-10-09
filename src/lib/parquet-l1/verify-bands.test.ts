@@ -134,6 +134,24 @@ describe('verifyBands', () => {
     );
   });
 
+  it('reports a lookup file it cannot read as a failed check, not an error', async () => {
+    const [first] = (await fsp.readdir(bandsDir)).sort();
+    await fsp.rm(path.join(bandsDir, first, 'lookup_wallet.parquet'));
+    const out = await verifyBands(duck, bandsDir, { window: 7 });
+    assert.equal(out.ok, false);
+    const check = out.checks.find((c) => c.name === 'lookups');
+    assert.equal(check?.ok, false);
+    assert.equal(check?.failures?.length, 1);
+    assert.match(
+      check?.failures?.[0].found ?? '',
+      new RegExp(`^${first}: lookup_wallet\\.parquet: could not be read`),
+    );
+    // The other checks still ran and passed.
+    assert.ok(
+      out.checks.filter((c) => c.name !== 'lookups').every((c) => c.ok),
+    );
+  });
+
   it('names a band whose lookup points somewhere its tables do not', async () => {
     const [second] = (await fsp.readdir(bandsDir)).sort().slice(1);
     const file = path.join(bandsDir, second, 'lookup_tx_id.parquet');

@@ -134,27 +134,38 @@ export async function verifyLookup(
   tables: TableFiles,
   declared: LookupDescription,
 ): Promise<string[]> {
-  const problems: string[] = [];
-  const found = await digestLookup(duck, spec, file);
-  if (found.rows !== declared.rows || found.rowDigest !== declared.rowDigest) {
-    problems.push(
-      `${spec.file}: holds ${found.rows} rows with digest ${found.rowDigest}, its band says ${declared.rows} rows with digest ${declared.rowDigest}`,
-    );
+  // A file that can't be read is a failed check of that file, not an error
+  // that ends the verification: the caller reports every band.
+  try {
+    const problems: string[] = [];
+    const found = await digestLookup(duck, spec, file);
+    if (
+      found.rows !== declared.rows ||
+      found.rowDigest !== declared.rowDigest
+    ) {
+      problems.push(
+        `${spec.file}: holds ${found.rows} rows with digest ${found.rowDigest}, its band says ${declared.rows} rows with digest ${declared.rowDigest}`,
+      );
+    }
+    const columns = spec.columns.map((c) => `"${c.name}"`).join(', ');
+    const have = `SELECT ${columns} FROM read_parquet(${sqlPath(file)})`;
+    const want = `SELECT ${columns} FROM (${spec.derive(tables)})`;
+    const [diff] = (await duck.all(
+      `SELECT
+         (SELECT count(*) FROM (${have} EXCEPT ALL ${want})) AS extra,
+         (SELECT count(*) FROM (${want} EXCEPT ALL ${have})) AS missing`,
+    )) as Array<{ extra: bigint | number; missing: bigint | number }>;
+    const extra = Number(diff.extra);
+    const missing = Number(diff.missing);
+    if (extra > 0 || missing > 0) {
+      problems.push(
+        `${spec.file}: ${extra} rows that its tables do not give, and ${missing} of theirs missing`,
+      );
+    }
+    return problems;
+  } catch (error) {
+    return [
+      `${spec.file}: could not be read (${error instanceof Error ? error.message : String(error)})`,
+    ];
   }
-  const columns = spec.columns.map((c) => `"${c.name}"`).join(', ');
-  const have = `SELECT ${columns} FROM read_parquet(${sqlPath(file)})`;
-  const want = `SELECT ${columns} FROM (${spec.derive(tables)})`;
-  const [diff] = (await duck.all(
-    `SELECT
-       (SELECT count(*) FROM (${have} EXCEPT ALL ${want})) AS extra,
-       (SELECT count(*) FROM (${want} EXCEPT ALL ${have})) AS missing`,
-  )) as Array<{ extra: bigint | number; missing: bigint | number }>;
-  const extra = Number(diff.extra);
-  const missing = Number(diff.missing);
-  if (extra > 0 || missing > 0) {
-    problems.push(
-      `${spec.file}: ${extra} rows that its tables do not give, and ${missing} of theirs missing`,
-    );
-  }
-  return problems;
 }
