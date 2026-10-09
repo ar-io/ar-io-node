@@ -376,12 +376,20 @@ export const PARQUET_L1_LOOKUPS: LookupSpec[] = [
       col('last_height', 'UBIGINT'),
     ],
     orderBy: ['name8', 'val8', 'name', 'value'],
+    // Distinct transactions are counted in two grouping steps, not with
+    // count(DISTINCT id): DuckDB 1.4.2's parallel hash aggregate can fail
+    // combining a DISTINCT aggregate's thread states (an internal error, a
+    // segfault in a release build), about 3 runs in 8 on the 1.9M band. The
+    // rows are the same either way.
     derive: (t) =>
       `SELECT ${sha256_64Sql('tag_name')} AS name8, ${sha256_64Sql('tag_value')} AS val8,
               tag_name AS name, tag_value AS value,
-              count(DISTINCT id)::UBIGINT AS txs,
-              min(height) AS first_height, max(height) AS last_height
-       FROM read_parquet(${sqlPaths(t.tags)})
+              count(*)::UBIGINT AS txs,
+              min(first_height) AS first_height, max(last_height) AS last_height
+       FROM (SELECT tag_name, tag_value, id,
+                    min(height) AS first_height, max(height) AS last_height
+             FROM read_parquet(${sqlPaths(t.tags)})
+             GROUP BY tag_name, tag_value, id)
        GROUP BY tag_name, tag_value`,
   },
 ];
