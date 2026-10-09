@@ -9,6 +9,8 @@ import { Readable } from 'node:stream';
 import rangeParser from 'range-parser';
 import { Request, Response } from 'express';
 
+import { headerNames } from '../constants.js';
+
 /**
  * Generate a random multipart boundary string.
  * Uses same algorithm as Firefox - 50 character boundary optimized for boyer-moore parsing.
@@ -451,6 +453,29 @@ export function calculateRangeResponseSize(
   // Multiple ranges: calculate total including boundaries and headers
   const actualBoundary = boundary ?? generateBoundary();
   return calculateMultipartSize(ranges, dataSize, contentType, actualBoundary);
+}
+
+/**
+ * The entity tag for a data response, without quotes.
+ *
+ * The content digest, except when the request was routed through an ArNS
+ * name: the resolved id is then part of it too. A name can be re-pointed at a
+ * manifest whose file at the same path has the same bytes. With the digest
+ * alone, a cache revalidating its copy gets a 304 and keeps the old response's
+ * headers -- the old X-ArNS-Resolved-Id, root offsets and signature -- for as
+ * long as the bytes stay the same (seen on turbo-gateway.com: a week-old
+ * resolution served behind a 900 s TTL). With the resolution folded in, a 304
+ * means "same bytes, same resolution". Responses not routed through a name
+ * (/raw, /{id}, the index routes) keep the plain digest.
+ *
+ * The ArNS middleware sets X-ArNS-Resolved-Id before the data handler runs, so
+ * reading it from the response is enough.
+ */
+export function dataEtag(res: Response, hash: string): string {
+  const resolvedId = res.getHeader(headerNames.arnsResolvedId);
+  return typeof resolvedId === 'string' && resolvedId !== ''
+    ? `${hash}.${resolvedId}`
+    : hash;
 }
 
 /**

@@ -292,6 +292,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **A response served through an ArNS name kept its old resolution after
+  the name was re-pointed, for as long as the bytes stayed the same.** The
+  entity tag was the content digest alone, so a cache revalidating its copy
+  after the name moved to a manifest whose file at that path had the same
+  bytes got a `304` and kept the old response's headers: the old
+  `X-ArNS-Resolved-Id`, root offsets and signature (seen on
+  turbo-gateway.com, a week-old resolution behind a 900 s TTL). On a response
+  routed through an ArNS name the `ETag` is now
+  `"<digest>.<X-ArNS-Resolved-Id>"`, so a `304` means the same bytes and the
+  same resolution; the 304 and payment predictions use the same tag. `/raw`,
+  `/{id}` and the index routes keep the plain digest. Treat the `ETag` as
+  opaque and read the digest from `X-AR-IO-Digest`.
+
 - **The observer no longer uses a gateway as its own reference.** The
   observed gateway was never excluded from reference lookups, so observing
   `turbo-gateway.com` or `ar-io.net` (the default reference hosts) compared
