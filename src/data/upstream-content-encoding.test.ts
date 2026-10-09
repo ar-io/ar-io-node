@@ -49,10 +49,16 @@ describe('upstream data sources and Content-Encoding', () => {
   // Large enough to arrive in many chunks, so a peek that dropped one shows.
   const LARGE_ID = 'largeLARGElargeLARGElargeLARGElargeLARGE123';
   const largeGzipped = gzipSync(randomBytes(3 * 1024 * 1024));
+  // Declared gzip and sent first byte first, in its own write: a body that is
+  // not gzip but starts 0x1f, and a real gzip body. The first chunk alone
+  // cannot tell them apart.
+  const SPLIT_FAKE_ID = 'splitfakeSPLITFAKEsplitfakeSPLITFAKEsplit1';
+  const SPLIT_GZIP_ID = 'splitgzipSPLITGZIPsplitgzipSPLITGZIPsplit1';
   // Tagged with a coding no gateway names in Content-Encoding.
   const CUSTOM_ID = 'customCUSTOMcustomCUSTOMcustomCUSTOMcustom1';
   const json = Buffer.from(JSON.stringify({ report: 'x'.repeat(20_000) }));
   const gzipped = gzipSync(json);
+  const fakeGzip = Buffer.concat([Buffer.from([0x1f]), json]);
 
   let server: http.Server;
   let baseUrl: string;
@@ -62,6 +68,23 @@ describe('upstream data sources and Content-Encoding', () => {
     server = http.createServer((req, res) => {
       acceptEncodings.push(req.headers['accept-encoding']);
       const url = req.url ?? '';
+      const split = url.includes(SPLIT_FAKE_ID)
+        ? fakeGzip
+        : url.includes(SPLIT_GZIP_ID)
+          ? gzipped
+          : undefined;
+      if (split !== undefined) {
+        res.writeHead(200, {
+          'Content-Type': 'application/json',
+          'Content-Encoding': 'gzip',
+          'Content-Length': split.length,
+          'X-AR-IO-Verified': 'true',
+          'X-AR-IO-Trusted': 'true',
+        });
+        res.write(split.subarray(0, 1));
+        setTimeout(() => res.end(split.subarray(1)), 50);
+        return;
+      }
       const encoded = url.includes(ID);
       const decoded = url.includes(DECODED_ID);
       const custom = url.includes(CUSTOM_ID);
@@ -173,6 +196,25 @@ describe('upstream data sources and Content-Encoding', () => {
               requestAttributes: { hops: 0 } as any,
             }),
           );
+        });
+
+        it('refuses a body declared gzip that is not gzip when its first byte arrives alone', async () => {
+          await assert.rejects(
+            sources()[name].getData({
+              id: SPLIT_FAKE_ID,
+              requestAttributes: { hops: 0 } as any,
+            }),
+          );
+        });
+
+        it('passes a gzip body whose first byte arrives alone through intact', async () => {
+          const data = await sources()[name].getData({
+            id: SPLIT_GZIP_ID,
+            requestAttributes: { hops: 0 } as any,
+          });
+
+          assert.ok((await readAll(data)).equals(gzipped));
+          assert.strictEqual(data.sourceContentEncoding, 'gzip');
         });
 
         it('passes a multi-chunk gzip body through intact after checking it', async () => {

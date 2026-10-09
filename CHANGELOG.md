@@ -281,6 +281,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   against a 541 MB band file: a 100-byte range returned all 541,753,181 bytes
   through a cache zone and `206` with it off.
 
+- **An item tagged `Content-Encoding: gzip` whose bytes are plain was
+  served with `Content-Encoding: gzip`, so every client that decodes failed
+  on it.** A tag is the uploader's claim, not a property of the bytes; a
+  manifest uploaded this way is on mainnet. The data routes now peek at the
+  body before sending headers and, for a coding with fixed leading bytes
+  (`gzip`, `zstd`), drop the header when the body does not start with them.
+  A full `GET` always checks. `HEAD`, ranges and `304` answers, which do
+  not send the body, check only cached bytes, so they never wait on an
+  upstream; uncached, they declare the coding unchecked, and a failed read
+  of cached bytes falls back to it. A copy decoded by a gateway older than #964 and cached fails
+  the same check: the header is wrong for it too, so it is dropped, but such
+  a copy is not the item and should be purged, so each drop is logged as a
+  warning with the item's `verified` flag and counted in the new metric
+  `served_content_encoding_dropped_total{encoding,verified}`. The
+  `X-Arweave-Tag-Content-Encoding` header still names the tag, so a peer
+  running #991 still refuses our copy as possibly decoded upstream and tries
+  its next source, since from the bytes alone the two cases look the same.
+  The check, here and in #991's upstream checks, now reads as many chunks as
+  the coding's magic needs: it compared the first chunk alone, so a body
+  whose first byte arrived by itself, `1f` for gzip, passed as gzip whatever
+  followed, which let a decoded body through upstream.
+
 - **A gateway older than #964 could poison the cache with a decoded copy
   of a gzip-compressed item.** Such gateways serve an item tagged
   `Content-Encoding: gzip` unzipped: some without the header and cut at the

@@ -18,6 +18,7 @@ import {
   normalizeAbortError,
   parseContentLength,
   contentEncodingOf,
+  contentEncodingMagicLength,
   contradictsContentEncoding,
   hasContentEncodingMagic,
   honouredContentEncoding,
@@ -151,6 +152,20 @@ describe('http-utils', () => {
       assert.equal(honouredContentEncoding('identity'), undefined);
       assert.equal(honouredContentEncoding(''), undefined);
       assert.equal(honouredContentEncoding(undefined), undefined);
+    });
+  });
+
+  describe('contentEncodingMagicLength', () => {
+    it('is the length of the coding magic', () => {
+      assert.equal(contentEncodingMagicLength('gzip'), 2);
+      assert.equal(contentEncodingMagicLength(' GZIP '), 2);
+      assert.equal(contentEncodingMagicLength('zstd'), 4);
+    });
+
+    it('is 0 for a coding without magic, or none', () => {
+      assert.equal(contentEncodingMagicLength('br'), 0);
+      assert.equal(contentEncodingMagicLength('deflate'), 0);
+      assert.equal(contentEncodingMagicLength(undefined), 0);
     });
   });
 

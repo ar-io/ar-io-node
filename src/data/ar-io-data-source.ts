@@ -30,6 +30,7 @@ import { SpanStatusCode, Span } from '@opentelemetry/api';
 import {
   normalizeAbortError,
   contentEncodingOf,
+  contentEncodingMagicLength,
   contradictsContentEncoding,
   hasContentEncodingMagic,
   parseContentEncoding,
@@ -39,7 +40,7 @@ import {
 import {
   ByteRangeTransform,
   attachStallTimeout,
-  peekFirstChunk,
+  peekLeadingBytes,
 } from '../lib/stream.js';
 import { PeerRequestLimiter } from './peer-request-limiter.js';
 import { executeHedgedRequest } from '../lib/hedged-request.js';
@@ -221,11 +222,13 @@ export class ArIODataSource implements ContiguousDataSource {
         (region === undefined || region.offset === 0) &&
         hasContentEncodingMagic(declaredEncoding)
       ) {
-        const head = await peekFirstChunk(
+        const { head, stream: peeked } = await peekLeadingBytes(
           response.data,
+          contentEncodingMagicLength(declaredEncoding),
           this.requestTimeoutMs,
           signal,
         );
+        response.data = peeked;
         if (contradictsContentEncoding(head, declaredEncoding)) {
           response.data.destroy();
           const encoding = parseContentEncoding(declaredEncoding);
