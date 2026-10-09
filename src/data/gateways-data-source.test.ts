@@ -188,6 +188,7 @@ describe('GatewayDataSource', () => {
 
       assert.equal(data.size, 123);
       assert.equal(data.sourceContentType, 'application/json');
+      assert.equal(data.sourceContentTypeOrigin, 'upstream');
       assert.equal(data.verified, false);
       assert.equal(data.cached, false);
       assert.deepEqual(data.requestAttributes, {

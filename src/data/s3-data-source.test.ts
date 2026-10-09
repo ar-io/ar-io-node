@@ -143,6 +143,7 @@ describe('S3DataSource', () => {
       assert.equal(result.verified, false);
       assert.equal(result.trusted, true);
       assert.equal(result.sourceContentType, 'text/plain');
+      assert.equal(result.sourceContentTypeOrigin, 'item');
       assert.equal(result.cached, false);
 
       assert.equal((mockAwsClient.S3.HeadObject as any).mock.callCount(), 1);
@@ -267,6 +268,7 @@ describe('S3DataSource', () => {
       const result = await s3DataSource.getData({ id: testId });
 
       assert.equal(result.sourceContentType, 'image/png');
+      assert.equal(result.sourceContentTypeOrigin, 'item');
     });
 
     it('should fall back to response content type when payload content type is not available', async () => {
@@ -288,6 +290,8 @@ describe('S3DataSource', () => {
       const result = await s3DataSource.getData({ id: testId });
 
       assert.equal(result.sourceContentType, 'text/html');
+      // The object's own ContentType is not the item's tag.
+      assert.equal(result.sourceContentTypeOrigin, undefined);
     });
 
     it('should calculate size from content range when available', async () => {

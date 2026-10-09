@@ -727,6 +727,17 @@ requests.
 **Content Type/Encoding** - MIME type and compression format of stored data,
 preserved from the original upload.
 
+**Content Type Source** - Where the content type served for an item came from,
+most trusted first: `indexed` (the item's `Content-Type` tag in this gateway's
+index), `item` (recorded per item from its signed header, or from the
+uploader's per-item record such as Turbo's payload content type), `upstream`
+(recorded per item from a trusted gateway's answer for that ID), and `hash`
+(`contiguous_data.original_source_content_type`, shared by every item with the
+same bytes). An unindexed item used to have only the `hash` value, so two
+uploads of one file with different `Content-Type` tags were both served as the
+first one seen. Per-item values are written once; an `upstream` value yields
+only to an `item` value. In memory, a better-ranked type replaces a worse one.
+
 **Signature Type** - The cryptographic algorithm used to sign a transaction or
 data item (e.g., RSA, ED25519, Ethereum, Solana).
 

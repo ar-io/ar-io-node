@@ -17,7 +17,10 @@ import {
   DataAttributesSource,
   RequestAttributes,
 } from '../types.js';
-import { ReadThroughDataCache } from './read-through-data-cache.js';
+import {
+  ReadThroughDataCache,
+  itemContentTypeToRecord,
+} from './read-through-data-cache.js';
 import * as metrics from '../metrics.js';
 import { TestDestroyedReadable } from './test-utils.js';
 import {
@@ -3203,6 +3206,104 @@ describe('ReadThroughDataCache', function () {
     // signed tags or a trusted upstream; from anywhere else the bytes are
     // served but not cached, so neither an unlabelled copy nor a peer's claim
     // outlives the request.
+    // An unindexed item's content type used to be recorded only per data
+    // hash, shared by every byte-identical upload. It is now also recorded
+    // per ID, ranked by where it came from (see itemContentTypeToRecord).
+    describe('upstream Content-Type', () => {
+      const MANIFEST = 'application/x.arweave-manifest+json';
+      const typedSource = (
+        contentType: string | undefined,
+        origin: 'item' | 'upstream' | undefined,
+        trusted = true,
+      ) =>
+        ({
+          getData: async () => ({
+            stream: Readable.from([Buffer.from('{"manifest":1}')]),
+            size: 14,
+            verified: false,
+            trusted,
+            cached: false,
+            sourceContentType: contentType,
+            sourceContentTypeOrigin: origin,
+          }),
+        }) as ContiguousDataSource;
+      const recorded = () =>
+        (
+          mockDataContentAttributeImporter.queueDataContentAttributes as any
+        ).mock.calls.map((c: any) => [
+          c.arguments[0].contentType,
+          c.arguments[0].itemContentType,
+          c.arguments[0].itemContentTypeSource,
+        ]);
+      const readAll = async (stream: NodeJS.ReadableStream) => {
+        for await (const _ of stream) {
+          // drain
+        }
+      };
+      const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
+      const setup = (source: ContiguousDataSource) => {
+        mock.method(
+          mockDataContentAttributeImporter,
+          'queueDataContentAttributes',
+        );
+        const { store } = makeStatefulStore();
+        const { store: attributesStore, attributes } =
+          makeStatefulAttributesStore();
+        const cache = makeCache({
+          dataSource: source,
+          dataStore: store,
+          dataAttributesStore: attributesStore,
+          dataContentAttributeImporter: mockDataContentAttributeImporter,
+        });
+        return { cache, attributes };
+      };
+
+      it("records the item's own type per ID, ranked item", async () => {
+        const { cache, attributes } = setup(typedSource(MANIFEST, 'item'));
+
+        const result = await cache.getData({
+          id: 'item-id',
+          requestAttributes,
+        });
+        await readAll(result.stream);
+        await settle();
+
+        assert.deepEqual(recorded(), [[MANIFEST, MANIFEST, 'item']]);
+        assert.equal(
+          attributes.get('item-id')?.contentTypeSource,
+          'item',
+          'ranked in memory too',
+        );
+      });
+
+      it("records a trusted gateway's type ranked upstream", async () => {
+        const { cache } = setup(typedSource('text/html', 'upstream'));
+
+        const result = await cache.getData({
+          id: 'item-id',
+          requestAttributes,
+        });
+        await readAll(result.stream);
+        await settle();
+
+        assert.deepEqual(recorded(), [['text/html', 'text/html', 'upstream']]);
+      });
+
+      it('records only the per-hash type for a type of unknown origin', async () => {
+        // For example a type a source took from this gateway's own attributes.
+        const { cache } = setup(typedSource('text/html', undefined));
+
+        const result = await cache.getData({
+          id: 'item-id',
+          requestAttributes,
+        });
+        await readAll(result.stream);
+        await settle();
+
+        assert.deepEqual(recorded(), [['text/html', undefined, undefined]]);
+      });
+    });
+
     describe('upstream Content-Encoding', () => {
       const encodedSource = (
         payload: string,
@@ -4226,6 +4327,92 @@ describe('ReadThroughDataCache short-read rejection', () => {
       counters.finalize,
       1,
       'a lookup failure must not block caching',
+    );
+  });
+});
+
+describe('itemContentTypeToRecord', () => {
+  const MANIFEST = 'application/x.arweave-manifest+json';
+
+  it("records the item's own type, even from an untrusted source", () => {
+    assert.deepStrictEqual(
+      itemContentTypeToRecord({
+        sourceContentType: MANIFEST,
+        sourceContentTypeOrigin: 'item',
+        trusted: false,
+      }),
+      { itemContentType: MANIFEST, itemContentTypeSource: 'item' },
+    );
+  });
+
+  it("records a trusted gateway's type at the upstream rank", () => {
+    assert.deepStrictEqual(
+      itemContentTypeToRecord({
+        sourceContentType: 'text/html',
+        sourceContentTypeOrigin: 'upstream',
+        trusted: true,
+      }),
+      { itemContentType: 'text/html', itemContentTypeSource: 'upstream' },
+    );
+  });
+
+  it("does not record an untrusted gateway's type", () => {
+    assert.equal(
+      itemContentTypeToRecord({
+        sourceContentType: 'text/html',
+        sourceContentTypeOrigin: 'upstream',
+        trusted: false,
+      }),
+      undefined,
+    );
+  });
+
+  it("does not record a gateway's octet-stream placeholder", () => {
+    for (const sourceContentType of [
+      'application/octet-stream',
+      'Application/Octet-Stream; charset=binary',
+    ]) {
+      assert.equal(
+        itemContentTypeToRecord({
+          sourceContentType,
+          sourceContentTypeOrigin: 'upstream',
+          trusted: true,
+        }),
+        undefined,
+      );
+    }
+  });
+
+  it("records an item's own octet-stream tag", () => {
+    assert.deepStrictEqual(
+      itemContentTypeToRecord({
+        sourceContentType: 'application/octet-stream',
+        sourceContentTypeOrigin: 'item',
+        trusted: true,
+      }),
+      {
+        itemContentType: 'application/octet-stream',
+        itemContentTypeSource: 'item',
+      },
+    );
+  });
+
+  it('does not record a type of unknown origin, or an empty one', () => {
+    assert.equal(
+      itemContentTypeToRecord({
+        sourceContentType: 'text/html',
+        sourceContentTypeOrigin: undefined,
+        trusted: true,
+      }),
+      undefined,
+    );
+    assert.equal(
+      itemContentTypeToRecord({
+        sourceContentType: ' ',
+        sourceContentTypeOrigin: 'item',
+        trusted: true,
+      }),
+      undefined,
     );
   });
 });

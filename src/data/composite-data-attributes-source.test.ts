@@ -545,4 +545,144 @@ describe('CompositeDataAttributesSource', () => {
       );
     });
   });
+
+  describe('ranked content types', () => {
+    const MANIFEST = 'application/x.arweave-manifest+json';
+    const sourceWith = (attributes: Partial<ContiguousDataAttributes>) => ({
+      getDataAttributes: async () => attributes as any,
+    });
+
+    it("lets the item's own type replace a per-hash type", async () => {
+      // The per-hash value: another item with the same bytes is text/html.
+      const composite = new CompositeDataAttributesSource({
+        log,
+        source: sourceWith({
+          contentType: 'text/html',
+          contentTypeSource: 'hash',
+        }),
+      });
+
+      await composite.getDataAttributes('manifest');
+      await composite.setDataAttributes('manifest', {
+        contentType: MANIFEST,
+        contentTypeSource: 'item',
+      });
+
+      const attrs = await composite.getDataAttributes('manifest');
+      assert.equal(attrs?.contentType, MANIFEST);
+      assert.equal(attrs?.contentTypeSource, 'item');
+    });
+
+    it('does not let a lower-ranked type replace a higher one', async () => {
+      const composite = new CompositeDataAttributesSource({
+        log,
+        source: sourceWith({
+          contentType: MANIFEST,
+          contentTypeSource: 'item',
+        }),
+      });
+
+      await composite.getDataAttributes('manifest');
+      for (const contentTypeSource of [
+        'upstream',
+        'hash',
+        undefined,
+      ] as const) {
+        await composite.setDataAttributes('manifest', {
+          contentType: 'text/html',
+          contentTypeSource,
+        });
+      }
+
+      const attrs = await composite.getDataAttributes('manifest');
+      assert.equal(attrs?.contentType, MANIFEST);
+      assert.equal(attrs?.contentTypeSource, 'item');
+    });
+
+    it('keeps an indexed octet-stream type against a lower-ranked specific one', async () => {
+      // The item really is tagged application/octet-stream.
+      const composite = new CompositeDataAttributesSource({
+        log,
+        source: sourceWith({
+          contentType: 'application/octet-stream',
+          contentTypeSource: 'indexed',
+        }),
+      });
+
+      await composite.getDataAttributes('binary');
+      await composite.setDataAttributes('binary', { contentType: 'text/html' });
+
+      assert.equal(
+        (await composite.getDataAttributes('binary'))?.contentType,
+        'application/octet-stream',
+      );
+    });
+
+    it('drops an entry on invalidate so the next read sees the source', async () => {
+      const records = new Map<string, Partial<ContiguousDataAttributes>>([
+        ['manifest', { contentType: 'text/html', contentTypeSource: 'hash' }],
+      ]);
+      const composite = new CompositeDataAttributesSource({
+        log,
+        source: {
+          getDataAttributes: async (id: string) => records.get(id) as any,
+        },
+      });
+
+      await composite.getDataAttributes('manifest');
+      // The item is indexed: the database now has its tag.
+      records.set('manifest', {
+        contentType: MANIFEST,
+        contentTypeSource: 'indexed',
+      });
+      composite.invalidate('manifest');
+
+      assert.equal(
+        (await composite.getDataAttributes('manifest'))?.contentType,
+        MANIFEST,
+      );
+    });
+
+    it('does not cache a read that was in flight when the entry was invalidated', async () => {
+      let release: () => void = () => {};
+      let current: Partial<ContiguousDataAttributes> = {
+        contentType: 'text/html',
+        contentTypeSource: 'hash',
+      };
+      let calls = 0;
+      const composite = new CompositeDataAttributesSource({
+        log,
+        source: {
+          getDataAttributes: async () => {
+            calls++;
+            const snapshot = current;
+            if (calls === 1) {
+              // The first read stalls after taking its (stale) snapshot.
+              await new Promise<void>((resolve) => {
+                release = resolve;
+              });
+            }
+            return snapshot as any;
+          },
+        },
+      });
+
+      const stale = composite.getDataAttributes('manifest');
+      await new Promise((resolve) => setImmediate(resolve));
+      current = { contentType: MANIFEST, contentTypeSource: 'indexed' };
+      composite.invalidate('manifest');
+      // A read after the invalidation does not share the stale one.
+      const fresh = await composite.getDataAttributes('manifest');
+      release();
+
+      assert.equal((await stale)?.contentType, 'text/html');
+      assert.equal(fresh?.contentType, MANIFEST);
+      // And the stale read did not overwrite the cache when it finished.
+      assert.equal(
+        (await composite.getDataAttributes('manifest'))?.contentType,
+        MANIFEST,
+      );
+      assert.equal(calls, 2);
+    });
+  });
 });

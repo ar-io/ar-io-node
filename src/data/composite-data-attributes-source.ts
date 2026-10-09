@@ -12,7 +12,10 @@ import {
   ContiguousDataAttributesStore,
   DataAttributesSource,
 } from '../types.js';
-import { isOctetStreamPlaceholder } from '../lib/content-type.js';
+import {
+  contentTypeSourceOutranks,
+  isOctetStreamPlaceholder,
+} from '../lib/content-type.js';
 
 const DEFAULT_MAX_CACHE_SIZE = 10000;
 
@@ -32,6 +35,36 @@ const DEFAULT_MAX_CACHE_SIZE = 10000;
  */
 const DEFAULT_PARTIAL_SEED_TTL_MS = 30000;
 
+/**
+ * Whether `incoming`'s content type replaces `existing`'s in memory: a
+ * better-ranked type always does, and a specific type replaces the
+ * octet-stream placeholder unless it is lower-ranked.
+ */
+const incomingContentTypeWins = (
+  existing: Partial<ContiguousDataAttributes>,
+  incoming: Partial<ContiguousDataAttributes>,
+): boolean => {
+  if (incoming.contentType == null) {
+    return false;
+  }
+  if (
+    contentTypeSourceOutranks(
+      incoming.contentTypeSource,
+      existing.contentTypeSource,
+    )
+  ) {
+    return true;
+  }
+  return (
+    isOctetStreamPlaceholder(existing.contentType) &&
+    !isOctetStreamPlaceholder(incoming.contentType) &&
+    !contentTypeSourceOutranks(
+      existing.contentTypeSource,
+      incoming.contentTypeSource,
+    )
+  );
+};
+
 export class CompositeDataAttributesSource
   implements ContiguousDataAttributesStore
 {
@@ -43,6 +76,11 @@ export class CompositeDataAttributesSource
     string,
     Promise<ContiguousDataAttributes | undefined>
   >;
+  // When each recently invalidated ID was invalidated (a counter, not a
+  // clock). A source read that began before an invalidation must not cache
+  // what it read, or the stale value it was invalidating would come back.
+  private invalidationStamps: LRUCache<string, number>;
+  private invalidationCounter = 0;
 
   constructor({
     log,
@@ -81,6 +119,22 @@ export class CompositeDataAttributesSource
       ttlAutopurge: true,
     });
     this.pendingPromises = new Map();
+    this.invalidationStamps = new LRUCache<string, number>({ max: cacheSize });
+  }
+
+  /**
+   * Drops what is held for `id`, so the next read goes to the source.
+   *
+   * Source-backed entries never expire, so without this a record the database
+   * has since corrected (for example an item indexed after it was first
+   * served, whose indexed Content-Type now outranks the per-hash value) would
+   * keep being answered from memory until eviction or restart. Called once the
+   * index write has finished.
+   */
+  invalidate(id: string): void {
+    this.cache.delete(id);
+    this.pendingPromises.delete(id);
+    this.invalidationStamps.set(id, ++this.invalidationCounter);
   }
 
   /**
@@ -123,8 +177,11 @@ export class CompositeDataAttributesSource
       const result = await promise;
       return result;
     } finally {
-      // Always clean up the pending promise
-      this.pendingPromises.delete(id);
+      // Clean up our own pending promise only: an invalidation may have
+      // replaced it with a newer read, which must stay shareable.
+      if (this.pendingPromises.get(id) === promise) {
+        this.pendingPromises.delete(id);
+      }
     }
   }
 
@@ -132,11 +189,21 @@ export class CompositeDataAttributesSource
     id: string,
   ): Promise<ContiguousDataAttributes | undefined> {
     this.log.debug('Fetching data attributes from source', { id });
+    const invalidationStamp = this.invalidationStamps.get(id);
 
     try {
       const result = await this.source.getDataAttributes(id);
 
-      if (result !== undefined) {
+      if (
+        result !== undefined &&
+        this.invalidationStamps.get(id) !== invalidationStamp
+      ) {
+        // Invalidated while this read was in flight: what it read may be the
+        // stale value. Answer this caller, but leave the cache to the next read.
+        this.log.debug('Not caching data attributes read before invalidation', {
+          id,
+        });
+      } else if (result !== undefined) {
         this.log.debug('Caching data attributes result', { id });
         this.cache.set(id, result);
       } else {
@@ -167,8 +234,14 @@ export class CompositeDataAttributesSource
    * would correct the row while this cache — which has no TTL — kept serving
    * the placeholder until eviction or restart. Yielding to a specific type
    * mirrors the one-way transition `insertDataHash` allows, so memory and
-   * the persisted row heal together. A specific type is still never replaced
-   * by another specific type, or by the placeholder.
+   * the persisted row heal together.
+   *
+   * Otherwise a type is replaced only by a better-ranked one (see
+   * `ContentTypeSource`): the item's own tag replaces a per-hash value that
+   * may belong to another item with the same bytes. A specific type is never
+   * replaced by an equal- or lower-ranked one, or by the placeholder, and the
+   * placeholder does not yield to a lower-ranked type either, since an item
+   * whose indexed tag really is octet-stream must keep it.
    */
   async setDataAttributes(
     id: string,
@@ -184,13 +257,11 @@ export class CompositeDataAttributesSource
       const authoritative: Partial<ContiguousDataAttributes> = {};
       if (
         existingAttributes.contentType != null &&
-        !(
-          isOctetStreamPlaceholder(existingAttributes.contentType) &&
-          attributes.contentType != null &&
-          !isOctetStreamPlaceholder(attributes.contentType)
-        )
+        !incomingContentTypeWins(existingAttributes, attributes)
       ) {
+        // Kept with its rank, so a lower-ranked write cannot relabel it.
         authoritative.contentType = existingAttributes.contentType;
+        authoritative.contentTypeSource = existingAttributes.contentTypeSource;
       }
       if (existingAttributes.isManifest != null) {
         authoritative.isManifest = existingAttributes.isManifest;

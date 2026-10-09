@@ -1014,6 +1014,187 @@ describe('StandaloneSqliteDatabase', () => {
     });
   });
 
+  // Byte-identical items with different Content-Type tags share one
+  // `contiguous_data` row, so a per-hash type made each copy look like
+  // whichever was written first (a path manifest served as the text/html page
+  // that shared its bytes). The item's own type is recorded per ID.
+  describe('recorded item content type', () => {
+    const itemId = toB64Url(Buffer.alloc(32, 0x41));
+    const otherItemId = toB64Url(Buffer.alloc(32, 0x42));
+    const txId = toB64Url(Buffer.alloc(32, 0x43));
+    const dataRoot = Buffer.alloc(32, 0x52);
+    const MANIFEST = 'application/x.arweave-manifest+json';
+    // A fresh hash per test, as in 'recorded content encoding'.
+    let hashSeed = 0x90;
+    let hash = '';
+    beforeEach(() => {
+      hash = toB64Url(Buffer.alloc(32, hashSeed++));
+    });
+
+    const save = (
+      id: string,
+      {
+        contentType,
+        itemContentType,
+        itemContentTypeSource,
+      }: {
+        contentType?: string;
+        itemContentType?: string;
+        itemContentTypeSource?: 'item' | 'upstream';
+      },
+    ) =>
+      dbWorker.saveDataContentAttributes({
+        id,
+        hash,
+        dataSize: 3761,
+        contentType,
+        itemContentType,
+        itemContentTypeSource,
+      });
+
+    const typeOf = (id: string) => {
+      const attrs = dbWorker.getDataAttributes(id);
+      return [attrs?.contentType, attrs?.contentTypeSource];
+    };
+
+    it('keeps each byte-identical item on its own tag', () => {
+      save(itemId, {
+        contentType: 'text/html',
+        itemContentType: 'text/html',
+        itemContentTypeSource: 'item',
+      });
+      save(otherItemId, {
+        contentType: MANIFEST,
+        itemContentType: MANIFEST,
+        itemContentTypeSource: 'item',
+      });
+
+      assert.deepEqual(typeOf(itemId), ['text/html', 'item']);
+      assert.deepEqual(typeOf(otherItemId), [MANIFEST, 'item']);
+    });
+
+    it('falls back to the per-hash type for an item with none recorded', () => {
+      // Cached before per-item types existed: only the per-hash value.
+      save(itemId, { contentType: 'text/html' });
+      save(otherItemId, {
+        contentType: MANIFEST,
+        itemContentType: MANIFEST,
+        itemContentTypeSource: 'item',
+      });
+
+      assert.deepEqual(typeOf(itemId), ['text/html', 'hash']);
+      assert.deepEqual(typeOf(otherItemId), [MANIFEST, 'item']);
+    });
+
+    it('never replaces an item value', () => {
+      save(itemId, {
+        itemContentType: MANIFEST,
+        itemContentTypeSource: 'item',
+      });
+      save(itemId, {
+        itemContentType: 'text/html',
+        itemContentTypeSource: 'item',
+      });
+      save(itemId, {
+        itemContentType: 'text/html',
+        itemContentTypeSource: 'upstream',
+      });
+
+      assert.deepEqual(typeOf(itemId), [MANIFEST, 'item']);
+    });
+
+    it('fills an upstream value once and lets only an item value replace it', () => {
+      save(itemId, {
+        itemContentType: 'text/html',
+        itemContentTypeSource: 'upstream',
+      });
+      save(itemId, {
+        itemContentType: 'text/plain',
+        itemContentTypeSource: 'upstream',
+      });
+      assert.deepEqual(typeOf(itemId), ['text/html', 'upstream']);
+
+      save(itemId, {
+        itemContentType: MANIFEST,
+        itemContentTypeSource: 'item',
+      });
+      assert.deepEqual(typeOf(itemId), [MANIFEST, 'item']);
+    });
+
+    it('is recorded for an item whose row is already verified', () => {
+      dataDb
+        .prepare(
+          `INSERT INTO contiguous_data_ids
+            (id, contiguous_data_hash, verified, indexed_at)
+           VALUES (@id, @hash, 1, 0)`,
+        )
+        .run({ id: fromB64Url(itemId), hash: fromB64Url(hash) });
+
+      save(itemId, {
+        itemContentType: MANIFEST,
+        itemContentTypeSource: 'item',
+      });
+
+      assert.deepEqual(typeOf(itemId), [MANIFEST, 'item']);
+    });
+
+    it("prefers the item's indexed tag", () => {
+      coreDb
+        .prepare(
+          `INSERT OR REPLACE INTO stable_transactions
+            (id, height, block_transaction_index, format, last_tx,
+             owner_address, quantity, reward, tag_count, data_size,
+             data_root, content_type)
+           VALUES (@id, 1, 0, 2, @zero, @zero, '0', '0', 0, 3761,
+             @data_root, 'text/html')`,
+        )
+        .run({
+          id: fromB64Url(txId),
+          zero: Buffer.alloc(32),
+          data_root: dataRoot,
+        });
+      save(txId, { itemContentType: MANIFEST, itemContentTypeSource: 'item' });
+
+      assert.deepEqual(typeOf(txId), ['text/html', 'indexed']);
+    });
+
+    it('is never borrowed from another item with the same bytes', () => {
+      // Another item with identical bytes, with its own recorded type and a
+      // different per-hash value.
+      save(otherItemId, {
+        contentType: 'text/plain',
+        itemContentType: MANIFEST,
+        itemContentTypeSource: 'item',
+      });
+      // An L1 transaction found through the same data root, untagged.
+      coreDb
+        .prepare(
+          `INSERT OR REPLACE INTO stable_transactions
+            (id, height, block_transaction_index, format, last_tx,
+             owner_address, quantity, reward, tag_count, data_size,
+             data_root)
+           VALUES (@id, 1, 0, 2, @zero, @zero, '0', '0', 0, 3761,
+             @data_root)`,
+        )
+        .run({
+          id: fromB64Url(txId),
+          zero: Buffer.alloc(32),
+          data_root: dataRoot,
+        });
+      dataDb
+        .prepare(
+          `INSERT OR REPLACE INTO data_roots
+            (data_root, contiguous_data_hash, verified, indexed_at)
+           VALUES (@data_root, @hash, 0, 0)`,
+        )
+        .run({ data_root: dataRoot, hash: fromB64Url(hash) });
+
+      const attrs = dbWorker.getDataAttributes(txId);
+      assert.equal(attrs?.hash, hash, 'found through the shared data root');
+      assert.deepEqual(typeOf(txId), ['text/plain', 'hash']);
+    });
+  });
+
   describe('insertDataRoot — empty/NULL data_root guard', () => {
     const id = toB64Url(Buffer.alloc(32, 0x01));
     const hash = Buffer.alloc(32, 0x11);
@@ -2395,6 +2576,33 @@ describe('StandaloneSqliteDatabase', () => {
       assert.equal(
         (await db.getDataAttributes(ENC_ID))?.contentEncoding,
         'gzip',
+      );
+    });
+
+    it("lets an item's own content type replace an upstream one inside the dedupe window", async () => {
+      const TYPE_ID = 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee0';
+      await db.saveDataContentAttributes({
+        id: TYPE_ID,
+        hash: 'content-type-dedupe-hash',
+        dataSize: 94,
+        contentType: 'text/html',
+        itemContentType: 'text/html',
+        itemContentTypeSource: 'upstream',
+      });
+      // Same value, better rank: the write that settles it must not be
+      // dropped as a duplicate.
+      await db.saveDataContentAttributes({
+        id: TYPE_ID,
+        hash: 'content-type-dedupe-hash',
+        dataSize: 94,
+        contentType: 'text/html',
+        itemContentType: 'text/html',
+        itemContentTypeSource: 'item',
+      });
+
+      assert.equal(
+        (await db.getDataAttributes(TYPE_ID))?.contentTypeSource,
+        'item',
       );
     });
 

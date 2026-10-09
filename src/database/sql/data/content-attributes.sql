@@ -163,6 +163,29 @@ WHERE id = :id
   AND content_encoding IS NULL
   AND :content_encoding IS NOT NULL
 
+-- updateDataIdContentType
+-- The item's own content type, ranked by where it came from (see the
+-- migration that added these columns). An `item` value is final; an
+-- `upstream` value fills an empty slot and yields only to an `item` value. So
+-- a trusted gateway's answer cannot replace the item's signed tag, and two
+-- gateways that disagree cannot flap the row. Separate from insertDataId for
+-- the same reason as updateDataIdContentEncoding: verified rows must still
+-- get a value.
+UPDATE contiguous_data_ids
+SET
+  content_type = :content_type,
+  content_type_source = :content_type_source
+WHERE id = :id
+  AND :content_type IS NOT NULL
+  AND :content_type_source IN ('item', 'upstream')
+  AND (
+    content_type IS NULL
+    OR (
+      content_type_source = 'upstream'
+      AND :content_type_source = 'item'
+    )
+  )
+
 -- selectDataAttributes
 SELECT *
 FROM (
@@ -181,7 +204,9 @@ FROM (
     cdi.format_id,
     cdi.root_data_item_offset,
     cdi.root_data_offset,
-    cdi.content_encoding
+    cdi.content_encoding,
+    cdi.content_type,
+    cdi.content_type_source
   FROM contiguous_data cd
   JOIN contiguous_data_ids cdi ON cdi.contiguous_data_hash = cd.hash
   WHERE cdi.id = :id
@@ -207,7 +232,10 @@ FROM (
     cdi.root_data_offset,
     -- The row joined here can belong to another item with the same bytes; an
     -- encoding is a property of the item's own tags, so never borrow one.
-    NULL AS content_encoding
+    NULL AS content_encoding,
+    -- Likewise the content type: it comes from the item's own tags.
+    NULL AS content_type,
+    NULL AS content_type_source
   FROM data_roots dr
   JOIN contiguous_data cd ON dr.contiguous_data_hash = cd.hash
   JOIN contiguous_data_ids cdi ON cdi.contiguous_data_hash = cd.hash

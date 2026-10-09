@@ -301,6 +301,39 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Byte-identical uploads with different `Content-Type` tags were all
+  served as the first one a gateway saw.** For a data item the gateway had
+  not indexed, the content type came from
+  `contiguous_data.original_source_content_type`, which is keyed by the data
+  hash and so shared by every upload of the same bytes. A path manifest whose
+  body matched an earlier `text/html` upload was served as HTML and never
+  resolved (seen on turbo-gateway.com for three manifests sharing the bytes
+  of `7mPdjxByTDwNh2GAYT6ww_Gc-w7f-dvbfLqgjclJA6c`; an ArNS name pointing at
+  one showed the raw JSON). The mislabel also spread between gateways: one
+  that fetched the item from a trusted gateway stored that gateway's
+  `Content-Type` as its own per-hash value. The item's own type is now
+  recorded per ID (migration: `contiguous_data_ids.content_type` and
+  `content_type_source`, two nullable columns), ranked by where it came
+  from:
+  - **`item`**, final: the item's signed `Content-Type` tag, read from its
+    header by `RootParentDataSource`, or Turbo's per-item payload content
+    type (S3, DynamoDB, Redis). `RootParentDataSource` now serves the header's
+    type over a stored one; it used to read the header and keep the stored,
+    possibly borrowed, type.
+  - **`upstream`**: a trusted gateway's answer for that ID, written once and
+    replaced only by an `item` value. Untrusted peers' types and a gateway's
+    `application/octet-stream` placeholder are not recorded.
+
+  `getDataAttributes` prefers the indexed tag, then the per-item value, then
+  the per-hash value. A type a data source took from this gateway's own
+  attributes is never re-recorded as per-item evidence. The in-memory
+  attributes cache keeps the best-ranked type rather than the first, and
+  drops an item's entry when the item or transaction is indexed, so a fix
+  through `queue-bundle` or `queue-data-item` is served without a restart.
+  An item already cached before this release keeps its per-hash type until it
+  is indexed (for example with `POST /ar-io/admin/queue-bundle` for its
+  bundle) or fetched again.
+
 - **Building `lookup_tag` no longer crashes `index-export` intermittently.**
   It counted distinct transactions with `count(DISTINCT id)`, and DuckDB
   1.4.2's parallel hash aggregate can fail while combining a DISTINCT

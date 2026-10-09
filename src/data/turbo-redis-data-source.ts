@@ -272,6 +272,10 @@ export class TurboRedisDataSource implements ContiguousDataSource {
           size: region?.size ?? payloadLength,
           totalSize: payloadLength,
           sourceContentType: payloadContentType,
+          // Turbo's per-item record of the item's own Content-Type tag.
+          ...(payloadContentType !== ''
+            ? { sourceContentTypeOrigin: 'item' as const }
+            : {}),
           verified: false,
           trusted: true,
           cached: false,
@@ -467,6 +471,10 @@ export class TurboRedisDataSource implements ContiguousDataSource {
     return {
       stream,
       sourceContentType: payloadContentType,
+      // Turbo's per-item record of the item's own Content-Type tag.
+      ...(payloadContentType !== ''
+        ? { sourceContentTypeOrigin: 'item' as const }
+        : {}),
       size: region?.size ?? rawDataItemBuffer.byteLength - payloadStartOffset,
       totalSize: rawDataItemBuffer.byteLength - payloadStartOffset,
       cached: false,

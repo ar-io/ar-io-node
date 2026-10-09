@@ -8,7 +8,7 @@ import { default as fastq } from 'fastq';
 import type { queueAsPromised } from 'fastq';
 import * as winston from 'winston';
 
-import { ContiguousDataIndex } from '../types.js';
+import { ContiguousDataIndex, RecordedContentTypeSource } from '../types.js';
 
 const DEFAULT_WORKER_COUNT = 1;
 const DEFAULT_MAX_QUEUE_SIZE = 100;
@@ -20,6 +20,8 @@ export type DataContentAttributeProperties = {
   dataSize: number;
   contentType?: string;
   contentEncoding?: string;
+  itemContentType?: string;
+  itemContentTypeSource?: RecordedContentTypeSource;
   cachedAt?: number;
   verified?: boolean;
   verificationPriority?: number;

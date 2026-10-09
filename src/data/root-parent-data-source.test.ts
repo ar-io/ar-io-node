@@ -2163,6 +2163,7 @@ describe('RootParentDataSource', () => {
         itemSize: 600,
         size: 500,
         contentType: 'text/html',
+        contentTypeSource: 'item',
       });
     });
 
@@ -2242,6 +2243,7 @@ describe('RootParentDataSource', () => {
         itemSize: hint.size,
         size: item.rawData.length,
         contentType: 'text/plain',
+        contentTypeSource: 'item',
       });
       assert.strictEqual(
         (await readHintVerification('verified')) - verifiedBefore,
@@ -2980,6 +2982,7 @@ describe('RootParentDataSource', () => {
         itemSize: hint.size,
         size: item.rawData.length,
         contentType: 'text/plain',
+        contentTypeSource: 'item',
       });
       assert.strictEqual(
         (await readVerification('root_tx_index', 'verified')) - verifiedBefore,
@@ -3437,6 +3440,79 @@ describe('RootParentDataSource', () => {
         0,
       );
       assert.strictEqual((await readRebased('incomplete')) - before, 1);
+    });
+  });
+
+  // For an item this gateway has not indexed, the stored content type is the
+  // per-hash value, shared by every upload of the same bytes: a path manifest
+  // whose bytes match an earlier text/html upload was served as HTML. The
+  // item's own signed header, read to serve it, decides instead.
+  describe("item content type from the item's header", () => {
+    const ROOT = 'typed-item-root';
+    const ITEM = 'stored-typed-item';
+    const MANIFEST = 'application/x.arweave-manifest+json';
+    let source: RootParentDataSource;
+
+    beforeEach(() => {
+      source = new RootParentDataSource({
+        log,
+        dataSource,
+        dataAttributesStore,
+        dataItemRootTxIndex,
+        ans104OffsetSource,
+      });
+      (dataAttributesStore.setDataAttributes as any).mock.mockImplementation(
+        async () => {},
+      );
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
+        async (id: string) =>
+          id === ITEM
+            ? {
+                rootTransactionId: ROOT,
+                rootDataItemOffset: 1000,
+                rootDataOffset: 1100,
+                size: 50,
+                // The per-hash value: another item with these bytes.
+                contentType: 'text/html',
+                contentTypeSource: 'hash',
+              }
+            : undefined,
+      );
+      (dataSource.getData as any).mock.mockImplementation(async () => ({
+        stream: Readable.from([Buffer.alloc(50)]),
+        size: 50,
+        verified: false,
+        cached: false,
+        trusted: true,
+        sourceContentType: 'application/octet-stream',
+      }));
+    });
+
+    const headerWith = (contentType?: string) =>
+      (ans104OffsetSource.parseDataItemHeader as any).mock.mockImplementation(
+        async (rootTxId: string, itemOffset: number) =>
+          rootTxId === ROOT && itemOffset === 1000
+            ? { id: ITEM, headerSize: 100, payloadSize: 50, contentType }
+            : Promise.reject(new Error('no header here')),
+      );
+
+    it('serves the type from the header its stored location is confirmed by', async () => {
+      headerWith(MANIFEST);
+
+      const result = await source.getData({ id: ITEM });
+
+      assert.strictEqual(result.sourceContentType, MANIFEST);
+      assert.strictEqual(result.sourceContentTypeOrigin, 'item');
+    });
+
+    it('keeps the stored type, unranked, when the header has none', async () => {
+      headerWith(undefined);
+
+      const result = await source.getData({ id: ITEM });
+
+      assert.strictEqual(result.sourceContentType, 'text/html');
+      // Not offered for recording: it is this gateway's own per-hash value.
+      assert.strictEqual(result.sourceContentTypeOrigin, undefined);
     });
   });
 
@@ -4177,6 +4253,7 @@ describe('RootParentDataSource', () => {
         size: SIZE,
         // From the item's header, so later requests keep it.
         contentType: 'text/plain',
+        contentTypeSource: 'item',
       },
     ];
 
