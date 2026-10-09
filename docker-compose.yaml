@@ -669,7 +669,7 @@ services:
       - clickhouse
 
   observer:
-    image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG:-fe159f5a7ad1351723c48b5cb08dd2d224cc1dc2}
+    image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG:-8e7f4d53e0aa9074696e936a88f651eb227c87cd}
     restart: unless-stopped
     ports:
       - ${OBSERVER_PORT:-5050}:5050
@@ -784,8 +784,12 @@ services:
       # See ar-io-observer src/config.ts OBSERVER_MAX_GATEWAY_FAILURE_
       # THRESHOLD for context.
       - OBSERVER_MAX_GATEWAY_FAILURE_THRESHOLD=${OBSERVER_MAX_GATEWAY_FAILURE_THRESHOLD:-}
-      # Offset Observation Configuration
+      # Offset (chunk-proof) observation: a sampled share of gateways must
+      # serve /chunk/<offset> with a Merkle proof that validates against the
+      # chain. Set OFFSET_OBSERVATION_ENFORCEMENT_ENABLED=false to report
+      # failures without failing gateways. See docs/envs.md.
       - OFFSET_OBSERVATION_SAMPLE_RATE=${OFFSET_OBSERVATION_SAMPLE_RATE:-}
+      - OFFSET_SAMPLE_COUNT=${OFFSET_SAMPLE_COUNT:-}
       - OFFSET_OBSERVATION_ENABLED=${OFFSET_OBSERVATION_ENABLED:-}
       - OFFSET_OBSERVATION_ENFORCEMENT_ENABLED=${OFFSET_OBSERVATION_ENFORCEMENT_ENABLED:-}
     networks:
