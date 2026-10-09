@@ -285,26 +285,21 @@ describe('Data routes', () => {
         assert.deepEqual(res.body, body);
       });
 
-      describe('when the body cannot be read', () => {
-        // A stream that fails as soon as it is read, as a stalled or broken
-        // upstream does once its peek gives up.
-        const failing = () => {
+      describe('responses that do not send the body', () => {
+        const HASH = 'a'.repeat(43);
+        const mount = (stream: () => Readable, cached: boolean) => {
           dataAttributesSource = {
             getDataAttributes: () =>
-              Promise.resolve({ contentEncoding: 'gzip' } as any),
+              Promise.resolve({ contentEncoding: 'gzip', hash: HASH } as any),
           };
           dataSource = {
             getData: () =>
               Promise.resolve({
-                stream: new Readable({
-                  read() {
-                    this.destroy(new Error('upstream failed'));
-                  },
-                }),
+                stream: stream(),
                 size: gzipped.length,
                 verified: false,
                 trusted: true,
-                cached: false,
+                cached,
               }),
           };
           app.get(
@@ -318,17 +313,50 @@ describe('Data routes', () => {
             }),
           );
         };
+        // Fails as soon as it is read, as a broken cache file or upstream does.
+        const failing = () =>
+          new Readable({
+            read() {
+              this.destroy(new Error('read failed'));
+            },
+          });
 
-        it('still answers HEAD, with the declared coding', async () => {
-          failing();
+        it('checks cached bytes on HEAD', async () => {
+          mount(() => Readable.from([body]), true);
+
+          const res = await request(app).head('/not-a-real-id').expect(200);
+
+          assert.equal(res.headers['content-encoding'], undefined);
+        });
+
+        it('does not wait on an upstream for HEAD: declares the coding unchecked', async () => {
+          // Nothing reads an uncached stream for a response without a body.
+          mount(() => Readable.from([body]), false);
 
           const res = await request(app).head('/not-a-real-id').expect(200);
 
           assert.equal(res.headers['content-encoding'], 'gzip');
         });
 
-        it('fails a full GET, whose body it is', async () => {
-          failing();
+        it('falls back to the declared coding when a cached read fails on HEAD', async () => {
+          mount(failing, true);
+
+          const res = await request(app).head('/not-a-real-id').expect(200);
+
+          assert.equal(res.headers['content-encoding'], 'gzip');
+        });
+
+        it('answers a matching If-None-Match with 304 when the read fails', async () => {
+          mount(failing, true);
+
+          await request(app)
+            .get('/not-a-real-id')
+            .set('If-None-Match', `"${HASH}"`)
+            .expect(304);
+        });
+
+        it('fails a full GET when the read fails, since it sends the body', async () => {
+          mount(failing, true);
 
           const res = await request(app).get('/not-a-real-id');
 

@@ -255,8 +255,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   manifest uploaded this way is on mainnet. The data routes now peek at the
   body before sending headers and, for a coding with fixed leading bytes
   (`gzip`, `zstd`), drop the header when the body does not start with them.
-  This covers `GET`, `HEAD` and ranges, and the first response as well as
-  cache hits. A copy decoded by a gateway older than #964 and cached fails
+  A full `GET` always checks. `HEAD`, ranges and `304` answers, which do
+  not send the body, check only cached bytes, so they never wait on an
+  upstream; uncached, they declare the coding unchecked, and a failed read
+  of cached bytes falls back to it. A copy decoded by a gateway older than #964 and cached fails
   the same check: the header is wrong for it too, so it is dropped, but such
   a copy is not the item and should be purged, so each drop is logged as a
   warning with the item's `verified` flag and counted in the new metric

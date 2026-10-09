@@ -444,6 +444,20 @@ const awaitItemHeaders = async (
 };
 
 /**
+ * Whether the response to `req` sends `data.stream` itself as its body: a GET
+ * without a Range, unless it will be answered 304. HEAD, Range and 304
+ * responses do not read the stream.
+ */
+export const sendsDataStream = (
+  req: Request,
+  data: ContiguousData,
+  dataAttributes: ContiguousDataAttributes | undefined,
+): boolean =>
+  req.method !== REQUEST_METHOD_HEAD &&
+  req.headers.range === undefined &&
+  !wouldReturn304(req, dataAttributes?.hash, data.cached);
+
+/**
  * The `Content-Encoding` to declare for `data`, or `undefined` for none.
  *
  * The coding comes from the item's indexed or recorded encoding, else the
@@ -465,11 +479,13 @@ const awaitItemHeaders = async (
  * Peeks `data.stream`, which must start at the item's first byte and have no
  * reader yet; the peeked bytes are put back.
  *
- * A peek that fails destroys the stream. When the response sends that stream
- * (`sendsStream`) the error propagates, as reading the body would have failed
- * too. A HEAD or Range response does not send it, so a stalled or failed peek
- * there falls back to the declared coding rather than failing a request that
- * never needed the bytes; a client abort still propagates.
+ * A response that sends `data.stream` itself (see {@link sendsDataStream})
+ * always peeks, and a failed peek propagates, as reading the body would have
+ * failed too. A HEAD, Range or 304 response does not send it, so it peeks only
+ * when the bytes are cached locally, where the first chunk is a disk read and
+ * no upstream is waited on; an uncached one declares the coding unchecked. If
+ * that cached peek fails, it falls back to the declared coding rather than
+ * failing a response that never needed the bytes, unless the client aborted.
  */
 export const resolveServedContentEncoding = async ({
   data,
@@ -484,13 +500,17 @@ export const resolveServedContentEncoding = async ({
   id: string;
   log: Logger;
   signal?: AbortSignal;
-  /** Whether the response body is `data.stream` itself (a full GET). */
+  /** From {@link sendsDataStream}. */
   sendsStream: boolean;
 }): Promise<string | undefined> => {
   const declared = honouredContentEncoding(
     dataAttributes?.contentEncoding ?? data.sourceContentEncoding,
   );
-  if (declared === undefined || !hasContentEncodingMagic(declared)) {
+  if (
+    declared === undefined ||
+    !hasContentEncodingMagic(declared) ||
+    (!sendsStream && !data.cached)
+  ) {
     return declared;
   }
   let head: Buffer;
@@ -501,7 +521,7 @@ export const resolveServedContentEncoding = async ({
       signal,
     );
   } catch (error: any) {
-    if (sendsStream || error?.name === 'AbortError') {
+    if (sendsStream || signal?.aborted === true) {
       throw error;
     }
     log.debug('Could not check the body against its Content-Encoding', {
@@ -1365,9 +1385,7 @@ export const createRawDataHandler = ({
             id,
             log,
             signal: req.signal,
-            sendsStream:
-              req.headers.range === undefined &&
-              req.method !== REQUEST_METHOD_HEAD,
+            sendsStream: sendsDataStream(req, data, dataAttributes),
           });
 
           // Check if the request includes a Range header
@@ -1735,8 +1753,7 @@ const sendManifestResponse = async ({
         id: resolvedId,
         log,
         signal: req.signal,
-        sendsStream:
-          req.headers.range === undefined && req.method !== REQUEST_METHOD_HEAD,
+        sendsStream: sendsDataStream(req, data, dataAttributes),
       });
 
       // Check if the request includes a Range header
@@ -2199,9 +2216,7 @@ export const createDataHandler = ({
           id,
           log,
           signal: req.signal,
-          sendsStream:
-            req.headers.range === undefined &&
-            req.method !== REQUEST_METHOD_HEAD,
+          sendsStream: sendsDataStream(req, data, dataAttributes),
         });
 
         // Check if the request includes a Range header
