@@ -16,6 +16,7 @@ import {
   contentTypeSourceOutranks,
   isOctetStreamPlaceholder,
 } from '../lib/content-type.js';
+import { MANIFEST_CONTENT_TYPE } from '../lib/encoding.js';
 
 const DEFAULT_MAX_CACHE_SIZE = 10000;
 
@@ -263,7 +264,19 @@ export class CompositeDataAttributesSource
         authoritative.contentType = existingAttributes.contentType;
         authoritative.contentTypeSource = existingAttributes.contentTypeSource;
       }
-      if (existingAttributes.isManifest != null) {
+      // isManifest follows the type it was derived from (as the index derives
+      // it): kept while the type is, recomputed when a better-ranked type
+      // replaces it, or an HTML item would go to manifest resolution.
+      const mergedContentType =
+        authoritative.contentType ??
+        attributes.contentType ??
+        existingAttributes.contentType;
+      if (
+        mergedContentType != null &&
+        mergedContentType !== existingAttributes.contentType
+      ) {
+        authoritative.isManifest = mergedContentType === MANIFEST_CONTENT_TYPE;
+      } else if (existingAttributes.isManifest != null) {
         authoritative.isManifest = existingAttributes.isManifest;
       }
       this.cache.set(

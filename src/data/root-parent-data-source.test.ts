@@ -2143,13 +2143,19 @@ describe('RootParentDataSource', () => {
         cached: false,
       }));
 
-      await rootParentDataSource.getData({
+      const result = await rootParentDataSource.getData({
         id: dataItemId,
         requestAttributes: {
           rootTransactionIdHint: hintRootTxId,
           clientIps: [],
         },
       });
+
+      // The header's type is served, but not ranked as the item's own:
+      // nothing on this path checks the signature over the tags, and the
+      // bundle is the one the client named.
+      assert.strictEqual(result.sourceContentType, 'text/html');
+      assert.strictEqual(result.sourceContentTypeOrigin, undefined);
 
       // Verify setDataAttributes was called with correct values
       const setCalls = (dataAttributesStore.setDataAttributes as any).mock
@@ -2163,7 +2169,6 @@ describe('RootParentDataSource', () => {
         itemSize: 600,
         size: 500,
         contentType: 'text/html',
-        contentTypeSource: 'item',
       });
     });
 
@@ -2202,8 +2207,10 @@ describe('RootParentDataSource', () => {
         },
       });
 
-      // Content type from parsed header takes priority
+      // Content type from parsed header takes priority, ranked as the item's
+      // own: the payload is served through signature verification.
       assert.strictEqual(result.sourceContentType, 'text/plain');
+      assert.strictEqual(result.sourceContentTypeOrigin, 'item');
       assert.strictEqual(result.size, item.rawData.length);
 
       // Should have parsed the item header at the hint offset
@@ -2969,6 +2976,8 @@ describe('RootParentDataSource', () => {
 
       // The item's own content type, not the bundle envelope's.
       assert.strictEqual(result.sourceContentType, 'text/plain');
+      // Served through signature verification, so ranked as the item's own.
+      assert.strictEqual(result.sourceContentTypeOrigin, 'item');
 
       // No size is saved until the payload has verified.
       assert.deepStrictEqual(storedSizes(), []);
@@ -3496,13 +3505,16 @@ describe('RootParentDataSource', () => {
             : Promise.reject(new Error('no header here')),
       );
 
-    it('serves the type from the header its stored location is confirmed by', async () => {
+    it('serves the type from the header its stored location is confirmed by, unranked', async () => {
       headerWith(MANIFEST);
 
       const result = await source.getData({ id: ITEM });
 
       assert.strictEqual(result.sourceContentType, MANIFEST);
-      assert.strictEqual(result.sourceContentTypeOrigin, 'item');
+      // The location check matches the ID, the hash of the signature, but
+      // does not verify the signature over the tags, and this payload is not
+      // served verified: so the type is not recorded as the item's own.
+      assert.strictEqual(result.sourceContentTypeOrigin, undefined);
     });
 
     it('keeps the stored type, unranked, when the header has none', async () => {
