@@ -301,6 +301,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Building `lookup_tag` no longer crashes `index-export` intermittently.**
+  It counted distinct transactions with `count(DISTINCT id)`, and DuckDB
+  1.4.2's parallel hash aggregate can fail while combining a DISTINCT
+  aggregate's thread states: a segfault in the release build, about 3 runs in
+  8 on vilenarios.com's 1,900,000 band, which stopped that band and every band
+  above it. It now counts in two grouping steps. The rows are unchanged
+  (recomputed digests match published bands), so no band is rebuilt; the
+  `index-l1-verify` lookups check, which runs the same query, is fixed too.
+
 - **A response served through an ArNS name kept its old resolution after
   the name was re-pointed, for as long as the bytes stayed the same.** The
   entity tag was the content digest alone, so a cache revalidating its copy
