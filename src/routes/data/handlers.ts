@@ -464,6 +464,12 @@ const awaitItemHeaders = async (
  *
  * Peeks `data.stream`, which must start at the item's first byte and have no
  * reader yet; the peeked bytes are put back.
+ *
+ * A peek that fails destroys the stream. When the response sends that stream
+ * (`sendsStream`) the error propagates, as reading the body would have failed
+ * too. A HEAD or Range response does not send it, so a stalled or failed peek
+ * there falls back to the declared coding rather than failing a request that
+ * never needed the bytes; a client abort still propagates.
  */
 export const resolveServedContentEncoding = async ({
   data,
@@ -471,12 +477,15 @@ export const resolveServedContentEncoding = async ({
   id,
   log,
   signal,
+  sendsStream,
 }: {
   data: ContiguousData;
   dataAttributes: ContiguousDataAttributes | undefined;
   id: string;
   log: Logger;
   signal?: AbortSignal;
+  /** Whether the response body is `data.stream` itself (a full GET). */
+  sendsStream: boolean;
 }): Promise<string | undefined> => {
   const declared = honouredContentEncoding(
     dataAttributes?.contentEncoding ?? data.sourceContentEncoding,
@@ -484,11 +493,24 @@ export const resolveServedContentEncoding = async ({
   if (declared === undefined || !hasContentEncodingMagic(declared)) {
     return declared;
   }
-  const head = await peekFirstChunk(
-    data.stream,
-    config.STREAM_STALL_TIMEOUT_MS,
-    signal,
-  );
+  let head: Buffer;
+  try {
+    head = await peekFirstChunk(
+      data.stream,
+      config.STREAM_STALL_TIMEOUT_MS,
+      signal,
+    );
+  } catch (error: any) {
+    if (sendsStream || error?.name === 'AbortError') {
+      throw error;
+    }
+    log.debug('Could not check the body against its Content-Encoding', {
+      id,
+      encoding: declared,
+      message: error?.message,
+    });
+    return declared;
+  }
   if (!contradictsContentEncoding(head, declared)) {
     return declared;
   }
@@ -1343,6 +1365,9 @@ export const createRawDataHandler = ({
             id,
             log,
             signal: req.signal,
+            sendsStream:
+              req.headers.range === undefined &&
+              req.method !== REQUEST_METHOD_HEAD,
           });
 
           // Check if the request includes a Range header
@@ -1710,6 +1735,8 @@ const sendManifestResponse = async ({
         id: resolvedId,
         log,
         signal: req.signal,
+        sendsStream:
+          req.headers.range === undefined && req.method !== REQUEST_METHOD_HEAD,
       });
 
       // Check if the request includes a Range header
@@ -2172,6 +2199,9 @@ export const createDataHandler = ({
           id,
           log,
           signal: req.signal,
+          sendsStream:
+            req.headers.range === undefined &&
+            req.method !== REQUEST_METHOD_HEAD,
         });
 
         // Check if the request includes a Range header

@@ -285,6 +285,57 @@ describe('Data routes', () => {
         assert.deepEqual(res.body, body);
       });
 
+      describe('when the body cannot be read', () => {
+        // A stream that fails as soon as it is read, as a stalled or broken
+        // upstream does once its peek gives up.
+        const failing = () => {
+          dataAttributesSource = {
+            getDataAttributes: () =>
+              Promise.resolve({ contentEncoding: 'gzip' } as any),
+          };
+          dataSource = {
+            getData: () =>
+              Promise.resolve({
+                stream: new Readable({
+                  read() {
+                    this.destroy(new Error('upstream failed'));
+                  },
+                }),
+                size: gzipped.length,
+                verified: false,
+                trusted: true,
+                cached: false,
+              }),
+          };
+          app.get(
+            '/:id',
+            createDataHandler({
+              log,
+              dataAttributesSource,
+              dataSource,
+              dataBlockListValidator,
+              manifestPathResolver,
+            }),
+          );
+        };
+
+        it('still answers HEAD, with the declared coding', async () => {
+          failing();
+
+          const res = await request(app).head('/not-a-real-id').expect(200);
+
+          assert.equal(res.headers['content-encoding'], 'gzip');
+        });
+
+        it('fails a full GET, whose body it is', async () => {
+          failing();
+
+          const res = await request(app).get('/not-a-real-id');
+
+          assert.notEqual(res.status, 200);
+        });
+      });
+
       it('sends no Content-Encoding for unencoded bytes', async () => {
         serve(undefined);
 
