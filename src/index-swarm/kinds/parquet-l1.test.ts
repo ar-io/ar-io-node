@@ -15,22 +15,22 @@ import {
   checkParquetStructure,
   openFooterReader,
 } from '../../lib/parquet/check.js';
+import type { ColumnSpec } from '../../lib/parquet/check.js';
 import {
   BAND_FILE,
-  BAND_FILES,
-  PARQUET_L1_SCHEMA,
+  bandFiles,
+  PARQUET_L1_LOOKUPS,
   PARQUET_L1_TABLES,
-  TableSpec,
 } from '../../lib/parquet-l1/layout.js';
 import { createTestLogger } from '../../../test/test-logger.js';
 import { ParquetL1Kind } from './parquet-l1.js';
 
 const log = createTestLogger({ suite: 'ParquetL1Kind' });
 
-/** Writes `rows` rows of a table, every column null, in the layout's types. */
+/** Writes `rows` rows of a table or lookup, every column null, in the layout's types. */
 async function writeTable(
   file: string,
-  table: TableSpec,
+  table: { columns: ColumnSpec[] },
   rows: number,
   override: Record<string, string> = {},
 ): Promise<void> {
@@ -59,11 +59,12 @@ describe('ParquetL1Kind', () => {
     for (const table of PARQUET_L1_TABLES) {
       await writeTable(path.join(band, table.file), table, 3);
     }
+    // An l1-2 band: tables, no lookups. The l1-3 tests add them.
     await fs.writeFile(
       path.join(band, BAND_FILE),
       JSON.stringify({
         version: 1,
-        schema: PARQUET_L1_SCHEMA,
+        schema: 'l1-2',
         heightRange: [0, 99_999],
         tables: Object.fromEntries(
           PARQUET_L1_TABLES.map((t) => [
@@ -88,11 +89,11 @@ describe('ParquetL1Kind', () => {
     assert.equal(descriptor.records, 3);
     assert.deepEqual(
       descriptor.files.map((f) => f.name),
-      BAND_FILES,
+      bandFiles('l1-2'),
     );
     assert.ok(descriptor.files.every((f) => /^[0-9a-f]{64}$/.test(f.sha256)));
     assert.deepEqual(descriptor.metadata, {
-      schema: PARQUET_L1_SCHEMA,
+      schema: 'l1-2',
       supersedes: ['l1-h0-99999-old'],
     });
   });
@@ -114,7 +115,7 @@ describe('ParquetL1Kind', () => {
         },
         band,
       ),
-      /not the Parquet L1 files/,
+      /not Parquet L1 files/,
     );
     await fs.rm(path.join(band, 'tags.parquet'));
     await assert.rejects(
@@ -236,7 +237,7 @@ describe('ParquetL1Kind', () => {
       current: {},
     });
     assert.ok(installed[descriptor.id] !== undefined);
-    assert.deepEqual((await fs.readdir(target)).sort(), BAND_FILES);
+    assert.deepEqual((await fs.readdir(target)).sort(), bandFiles('l1-2'));
     installed = await kind.retire({
       bandId: descriptor.id,
       dir: target,
@@ -250,5 +251,111 @@ describe('ParquetL1Kind', () => {
     });
     assert.deepEqual(installed, {});
     await assert.rejects(fs.stat(target));
+  });
+
+  describe('an l1-3 band, with lookups', () => {
+    /** Adds the lookups with `rows` rows each, and an l1-3 band.json naming `declared` rows. */
+    const upgrade = async (rows = 4, declared = rows) => {
+      for (const spec of PARQUET_L1_LOOKUPS) {
+        await writeTable(path.join(band, spec.file), spec, rows);
+      }
+      const file = path.join(band, BAND_FILE);
+      const json = JSON.parse(await fs.readFile(file, 'utf8'));
+      await fs.writeFile(
+        file,
+        JSON.stringify({
+          ...json,
+          schema: 'l1-3',
+          lookups: Object.fromEntries(
+            PARQUET_L1_LOOKUPS.map((l) => [
+              l.name,
+              { rows: declared, rowDigest: 'd'.repeat(64) },
+            ]),
+          ),
+        }),
+      );
+    };
+
+    it('describes and validates its lookups with its tables', async () => {
+      await upgrade();
+      const descriptor = await kind.describe(band);
+      assert.deepEqual(
+        descriptor.files.map((f) => f.name),
+        bandFiles('l1-3'),
+      );
+      assert.equal((descriptor.metadata as any).schema, 'l1-3');
+      await kind.validate(descriptor, band);
+    });
+
+    it('refuses an l1-3 band published without a lookup', async () => {
+      await upgrade();
+      const descriptor = await kind.describe(band);
+      await assert.rejects(
+        kind.validate(
+          {
+            ...descriptor,
+            files: descriptor.files.filter(
+              (f) => f.name !== 'lookup_tag.parquet',
+            ),
+          },
+          band,
+        ),
+        /not the l1-3 files/,
+      );
+    });
+
+    it('refuses a lookup whose rows its band.json does not say', async () => {
+      await upgrade(4, 9);
+      await assert.rejects(
+        kind.validate(await kind.describe(band), band),
+        /lookup_\w+\.parquet: holds 4 rows, its band says 9/,
+      );
+    });
+
+    it('refuses a name no layout knows before reading anything', async () => {
+      const descriptor = await kind.describe(band);
+      await assert.rejects(
+        kind.validate(
+          {
+            ...descriptor,
+            files: [
+              ...descriptor.files,
+              { name: '../escape.parquet', size: 1, sha256: 'c'.repeat(64) },
+            ],
+          },
+          band,
+        ),
+        /not Parquet L1 files/,
+      );
+    });
+
+    it('leaves out a lookup file its l1-2 band.json does not name', async () => {
+      // As a derive interrupted between moving the lookups in and replacing
+      // band.json leaves it: the band is still the l1-2 band.
+      await writeTable(
+        path.join(band, PARQUET_L1_LOOKUPS[0].file),
+        PARQUET_L1_LOOKUPS[0],
+        4,
+      );
+      const descriptor = await kind.describe(band);
+      assert.deepEqual(
+        descriptor.files.map((f) => f.name),
+        bandFiles('l1-2'),
+      );
+      await kind.validate(descriptor, band);
+    });
+
+    it('installs with its lookups', async () => {
+      await upgrade();
+      const descriptor = await kind.describe(band);
+      const target = path.join(root, 'installed', 'parquet-l1', descriptor.id);
+      await kind.install({
+        band: descriptor,
+        sourceDir: band,
+        targetDir: target,
+        current: {},
+      });
+      assert.deepEqual((await fs.readdir(target)).sort(), bandFiles('l1-3'));
+    });
   });
 });

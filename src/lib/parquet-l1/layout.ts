@@ -23,13 +23,28 @@
  * Bands cover fixed height ranges ({@link l1RangeOf}), so every publisher
  * cuts the chain at the same heights.
  *
+ * From `l1-3` a band also carries lookup files ({@link PARQUET_L1_LOOKUPS}):
+ * Parquet derived from its tables and sorted by a key, so a reader finds one
+ * transaction, wallet or tag value without scanning the band. They are
+ * declared here beside the tables, described in `band.json` like them, and
+ * left out of the band's id, which covers only the tables' rows.
+ *
  * The exporter that writes bands and the kind that checks them both read
  * this module, so the two cannot drift.
  */
 import { FORK_2_0 } from './chain.js';
+import { prefix64Sql, sha256_64Sql } from '../parquet/keys.js';
+import { LookupDescription, LookupSpec, sqlPaths } from '../parquet/lookups.js';
 
 /** The layout version a band is written with, in its `band.json`. */
-export const PARQUET_L1_SCHEMA = 'l1-2';
+export const PARQUET_L1_SCHEMA = 'l1-3';
+
+/**
+ * The layout whose rules the tables are written by. `l1-3` added lookups and
+ * kept `l1-2`'s tables, so a band whose tables are current under `l1-2`
+ * reaches `l1-3` by deriving its lookups, without rebuilding.
+ */
+export const PARQUET_L1_TABLE_RULES = 'l1-2';
 
 /**
  * The versions a reader accepts, oldest first.
@@ -48,7 +63,7 @@ export const PARQUET_L1_SCHEMA = 'l1-2';
  * bands, which defeats comparing their digests. `l1-2` writes one canonical
  * value instead ({@link canonicalTxRoot}).
  */
-export const PARQUET_L1_SCHEMAS = ['l1-1', 'l1-2'] as const;
+export const PARQUET_L1_SCHEMAS = ['l1-1', 'l1-2', 'l1-3'] as const;
 export type ParquetL1Schema = (typeof PARQUET_L1_SCHEMAS)[number];
 
 /**
@@ -98,23 +113,33 @@ export function firstTagValue(tags: BandTag[], name: string): string | null {
 }
 
 /**
- * Whether a band holds the rows this build would write: written to the
- * current layout, or rebuilt under it and found identical (`confirmed`, ids
- * the exporter recorded). An older band can't be judged without rebuilding
- * it: `l1-2`'s rules touch format-1 `data_root` and `content_type` at any
- * height, not only below the fork.
+ * Whether a band's tables hold the rows this build would write: written
+ * under the current table rules ({@link PARQUET_L1_TABLE_RULES}, which `l1-3`
+ * shares), or rebuilt under them and found identical (`confirmed`, ids the
+ * exporter recorded). An older band can't be judged without rebuilding it:
+ * `l1-2`'s rules touch format-1 `data_root` and `content_type` at any height,
+ * not only below the fork.
  *
  * A rebuild that produces the same rows produces the same id (the id comes
  * from the rows), so the old files stay as they are and only the
  * confirmation is new. Without it the planner would rebuild that band on
  * every run.
  */
-export function isCurrentLayout(
+export function tablesCurrent(
   schema: ParquetL1Schema,
   id: string,
   confirmed: ReadonlySet<string>,
 ): boolean {
-  return schema === PARQUET_L1_SCHEMA || confirmed.has(id);
+  return schema === 'l1-2' || schema === 'l1-3' || confirmed.has(id);
+}
+
+/**
+ * Whether a band carries the lookups the current layout declares. A band
+ * whose tables are current but whose lookups are not is upgraded by deriving
+ * them ({@link tablesCurrent}), never rebuilt.
+ */
+export function lookupsCurrent(schema: ParquetL1Schema): boolean {
+  return schema === PARQUET_L1_SCHEMA;
 }
 
 /**
@@ -294,6 +319,78 @@ export const PARQUET_L1_TABLES: TableSpec[] = [
   },
 ];
 
+/**
+ * The lookups an `l1-3` band carries, derived from its own tables. Each file
+ * is sorted by its key in row groups of 16,384, so a reader finds a key by
+ * reading the footer and one or two row groups. Keys use the encodings in
+ * `src/lib/parquet/keys.ts`; a key is a pointer, confirmed against the bytes
+ * it came from.
+ */
+export const PARQUET_L1_LOOKUPS: LookupSpec[] = [
+  {
+    // A transaction id's prefix, to the height its row is at.
+    name: 'tx_id',
+    file: 'lookup_tx_id.parquet',
+    columns: [col('id8', 'UBIGINT'), col('height', 'UBIGINT')],
+    orderBy: ['id8', 'height'],
+    derive: (t) =>
+      `SELECT ${prefix64Sql('id')} AS id8, height
+       FROM read_parquet(${sqlPaths(t.transactions)})`,
+  },
+  {
+    // An address's prefix, to every transaction it signed (role 0) or
+    // received (role 1), with its height and size: a wallet's count, bytes
+    // stored and first and last heights come from here alone.
+    name: 'wallet',
+    file: 'lookup_wallet.parquet',
+    columns: [
+      col('addr8', 'UBIGINT'),
+      col('role', 'UTINYINT'),
+      col('height', 'UBIGINT'),
+      col('data_size', 'UBIGINT'),
+    ],
+    orderBy: ['addr8', 'height', 'role', 'data_size'],
+    derive: (t) =>
+      `SELECT ${prefix64Sql('owner_address')} AS addr8, 0::UTINYINT AS role, height, data_size
+       FROM read_parquet(${sqlPaths(t.transactions)})
+       WHERE owner_address IS NOT NULL
+       UNION ALL
+       SELECT ${prefix64Sql('target')} AS addr8, 1::UTINYINT AS role, height, data_size
+       FROM read_parquet(${sqlPaths(t.transactions)})
+       WHERE target IS NOT NULL AND octet_length(target) > 0`,
+  },
+  {
+    // Every (name, value) tag pair, keyed by hashes of both: how many
+    // transactions carry it, and the first and last height it appears at.
+    // An exact count for any tag, and where to read its rows; a value used
+    // once points at its block.
+    name: 'tag',
+    file: 'lookup_tag.parquet',
+    columns: [
+      col('name8', 'UBIGINT'),
+      col('val8', 'UBIGINT'),
+      col('name', 'BLOB'),
+      col('value', 'BLOB'),
+      col('txs', 'UBIGINT'),
+      col('first_height', 'UBIGINT'),
+      col('last_height', 'UBIGINT'),
+    ],
+    orderBy: ['name8', 'val8', 'name', 'value'],
+    derive: (t) =>
+      `SELECT ${sha256_64Sql('tag_name')} AS name8, ${sha256_64Sql('tag_value')} AS val8,
+              tag_name AS name, tag_value AS value,
+              count(DISTINCT id)::UBIGINT AS txs,
+              min(height) AS first_height, max(height) AS last_height
+       FROM read_parquet(${sqlPaths(t.tags)})
+       GROUP BY tag_name, tag_value`,
+  },
+];
+
+/** The lookups a layout declares: none before `l1-3`. */
+export function lookupsOf(schema: ParquetL1Schema): LookupSpec[] {
+  return schema === 'l1-3' ? PARQUET_L1_LOOKUPS : [];
+}
+
 /** What a band says about itself, in `band.json`. */
 export interface ParquetL1Band {
   version: 1;
@@ -303,6 +400,11 @@ export interface ParquetL1Band {
   heightRange: [number, number];
   /** Per table: rows, and a digest of the rows, independent of the Parquet bytes. */
   tables: Record<string, { rows: number; rowDigest: string }>;
+  /**
+   * Per lookup, from `l1-3`: rows, and a digest of the rows. Derived from the
+   * tables, so not part of the band's id ({@link bandTablesDigest}).
+   */
+  lookups?: Record<string, LookupDescription>;
   /** Ids of bands this one replaces (a rebuilt tip band). */
   supersedes?: string[];
   /** When the band was built. */
@@ -381,6 +483,46 @@ export function parseBandFile(text: string): ParquetL1Band {
     }
     parsedTables[name] = { rows: entry.rows, rowDigest: entry.rowDigest };
   }
+  // Exactly the lookups the layout declares: none before `l1-3`.
+  const expected = lookupsOf(schema);
+  let parsedLookups: ParquetL1Band['lookups'];
+  if (expected.length === 0) {
+    if (band.lookups !== undefined) {
+      throw new Error(`${BAND_FILE}: layout ${schema} has no lookups`);
+    }
+  } else {
+    const lookups = band.lookups;
+    if (
+      typeof lookups !== 'object' ||
+      lookups === null ||
+      Array.isArray(lookups)
+    ) {
+      throw new Error(`${BAND_FILE}: layout ${schema} needs lookups`);
+    }
+    const names = new Set(expected.map((spec) => spec.name));
+    for (const name of Object.keys(lookups)) {
+      if (!names.has(name)) {
+        throw new Error(`${BAND_FILE}: unknown lookup ${JSON.stringify(name)}`);
+      }
+    }
+    parsedLookups = {};
+    for (const { name } of expected) {
+      const entry = (lookups as Record<string, unknown>)[name] as
+        | Record<string, unknown>
+        | undefined;
+      if (
+        entry === undefined ||
+        !isHeight(entry.rows) ||
+        typeof entry.rowDigest !== 'string' ||
+        !/^[0-9a-f]{64}$/.test(entry.rowDigest)
+      ) {
+        throw new Error(
+          `${BAND_FILE}: lookup ${name} needs rows and a 64-hex rowDigest`,
+        );
+      }
+      parsedLookups[name] = { rows: entry.rows, rowDigest: entry.rowDigest };
+    }
+  }
   let supersedes: string[] | undefined;
   if (band.supersedes !== undefined) {
     if (
@@ -396,21 +538,31 @@ export function parseBandFile(text: string): ParquetL1Band {
     schema,
     heightRange: [range[0], range[1]],
     tables: parsedTables,
+    ...(parsedLookups !== undefined ? { lookups: parsedLookups } : {}),
     ...(supersedes !== undefined ? { supersedes } : {}),
     createdAt: band.createdAt,
   };
 }
 
-/** Every file a band holds: its description and one Parquet file per table. */
-export const BAND_FILES = [
-  BAND_FILE,
-  ...PARQUET_L1_TABLES.map((table) => table.file),
-].sort();
+/**
+ * Every file a band of a layout holds, sorted: its description, one Parquet
+ * file per table, and one per lookup the layout declares. Publisher,
+ * subscriber and verifier all take a band's files from here, by the layout
+ * its `band.json` names.
+ */
+export function bandFiles(schema: ParquetL1Schema): string[] {
+  return [
+    BAND_FILE,
+    ...PARQUET_L1_TABLES.map((table) => table.file),
+    ...lookupsOf(schema).map((spec) => spec.file),
+  ].sort();
+}
 
 /**
  * A digest of what a band holds: its heights, and every table's row count
  * and row digest. Independent of the Parquet bytes, so two publishers that
- * wrote the same rows agree on it.
+ * wrote the same rows agree on it. Lookups are left out: they are derived
+ * from the tables, so adding or changing them never changes a band's id.
  *
  * Both the band's id ({@link l1BandId}) and the importer's ledger key are
  * taken from this, so a band cannot be recorded as imported under one

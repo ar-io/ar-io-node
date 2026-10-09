@@ -443,6 +443,14 @@ set never has to fit in memory. A set of bands that overlaps, or leaves a
 hole, is refused rather than partly checked — a consumer holding a broken
 set has a different problem from one holding a faithful one.
 
+With `--bands-dir`, every band of layout `l1-3` also has its
+[lookup files](index-swarm.md#lookup-files-layout-l1-3) checked (the
+`lookups` check): each must hold exactly the rows its band's tables give,
+and the rows its `band.json` describes. A lookup is derived, so this proves
+it neither points anywhere its tables don't nor answers what they wouldn't.
+Bands of older layouts carry none and are counted in `lookupsSkipped`.
+`--skip-lookups` leaves the check out.
+
 Both views drive the **same** chain rules, in `chain.ts`, over different
 readers, and a differential test runs the two over one chain and requires
 identical verdicts and counts. A rule reimplemented twice is a rule that
@@ -476,12 +484,14 @@ trusted block hash pins the total size of every transaction beneath it.
 
 | Option | |
 |---|---|
-| `--core-db` | The gateway's `core.db`. Required |
+| `--core-db` | The gateway's `core.db`. Required, unless `--bands-dir` is given |
+| `--bands-dir` | A directory of bands to check instead, with no gateway and no database |
 | `--from` | Lowest height to check. Defaults to the lowest held |
 | `--to` | Highest height to check. Defaults to the fork, or the highest held if lower |
 | `--anchor-from` | Comma-separated nodes to ask for the anchor block hashes. Omitted, nothing outside the index vouches for it |
 | `--anchor-min` | How many sources must answer per anchor height (default 2) |
 | `--skip-tx-root` | Leave out the `tx_root` recomputation, the one check that reads every transaction |
+| `--skip-lookups` | With `--bands-dir`, leave out the check of each band's lookup files |
 
 An index reaching below the fork is checked up to the fork and no
 further: above it `tx_root` is the stronger proof, and reading on costs
@@ -593,6 +603,13 @@ scoping by weave offset lands exactly where the protocol changed.
   "seconds": 2.7
 }
 ```
+
+With `--bands-dir` the result names the directory (`bandsDir`) and the
+number of `bands` instead of a `core.db`, carries no anchor fields, and adds
+`txRootChecked` and `txRootSkipped`, and `lookupsChecked` and
+`lookupsSkipped` (bands whose lookups were checked, and bands of a layout
+without them). Its `checks` include `lookups`, whose failures name the
+band's first height and, in `found`, the band and the file.
 
 `ok` is every check passing. `anchored` says whether the top of the range
 commits its own weave size, and whether every block in it could be

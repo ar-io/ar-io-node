@@ -29,7 +29,8 @@
 import type { Database } from 'duckdb-async';
 
 import { ChainTransaction, checkTxRoot } from './chain.js';
-import { ParquetL1Band, readBandDirectory } from './layout.js';
+import { lookupsOf, ParquetL1Band, readBandDirectory } from './layout.js';
+import { verifyBandLookups } from './lookups.js';
 import { BlockWalker, CheckedBlock } from './verify-steps.js';
 import { addFailure, FORK_2_0_HEIGHT, VerifyCheck } from './verify.js';
 
@@ -47,6 +48,9 @@ export interface BandsVerifyResult {
   merkleSkipped: number;
   accountingChecked: number;
   accountingSkipped: number;
+  /** Bands whose lookups were checked, and bands of a layout without lookups. */
+  lookupsChecked: number;
+  lookupsSkipped: number;
   ok: boolean;
   seconds: number;
 }
@@ -115,12 +119,20 @@ export async function verifyBands(
     from,
     to,
     txRoot = true,
+    lookups = true,
     window = WINDOW,
-  }: { from?: number; to?: number; txRoot?: boolean; window?: number } = {},
+  }: {
+    from?: number;
+    to?: number;
+    txRoot?: boolean;
+    lookups?: boolean;
+    window?: number;
+  } = {},
 ): Promise<BandsVerifyResult> {
   const started = Date.now();
-  const found = await readBandDirectory(bandsDir);
-  const { ordered, span } = bandCoverage(found);
+  const foundBands = await readBandDirectory(bandsDir);
+  const byId = new Map(foundBands.map((b) => [b.id, b]));
+  const { ordered, span } = bandCoverage(foundBands);
   const low = Math.max(from ?? span[0], span[0]);
   const high = Math.min(to ?? span[1], span[1]);
   if (high <= low) {
@@ -216,6 +228,44 @@ export async function verifyBands(
       : `${rootsChecked} blocks' transaction sets reproduce the tx_root they carry; ${rootsSkipped} hold a format-1 transaction with data, which needs index-l1-audit`;
   if (txRoot) checks.push(roots);
 
+  // Each band's lookups against its own description and its own tables:
+  // whole bands, for every band the checked range reaches.
+  let lookupsChecked = 0;
+  let lookupsSkipped = 0;
+  if (lookups) {
+    const check: VerifyCheck = { name: 'lookups', ok: true, detail: '' };
+    for (const found of ordered) {
+      if (found.to < low || found.from > high) continue;
+      const band = byId.get(found.id);
+      if (band === undefined) continue;
+      if (lookupsOf(band.band.schema).length === 0) {
+        lookupsSkipped += 1;
+        continue;
+      }
+      lookupsChecked += 1;
+      for (const problem of await verifyBandLookups(
+        duck,
+        band.dir,
+        band.band,
+      )) {
+        addFailure(check, {
+          height: found.from,
+          found: `${found.id}: ${problem}`,
+          expected:
+            "lookups derived from the band's own tables, as its band.json describes them",
+        });
+      }
+    }
+    check.detail =
+      lookupsChecked === 0
+        ? 'no band in this range carries lookups'
+        : `${lookupsChecked} bands' lookups hold exactly the rows their tables give and their band.json describes` +
+          (lookupsSkipped > 0
+            ? `; ${lookupsSkipped} bands are of a layout without lookups`
+            : '');
+    checks.push(check);
+  }
+
   return {
     bandsDir,
     bands: ordered.map((b) => ({
@@ -231,6 +281,8 @@ export async function verifyBands(
     merkleSkipped: totals.merkleSkipped,
     accountingChecked: totals.accountingChecked,
     accountingSkipped: totals.accountingSkipped,
+    lookupsChecked,
+    lookupsSkipped,
     ok: checks.every((c) => c.ok),
     seconds: (Date.now() - started) / 1000,
   };

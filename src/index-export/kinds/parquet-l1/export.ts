@@ -31,6 +31,7 @@ import * as path from 'node:path';
 import { once } from 'node:events';
 import { setImmediate } from 'node:timers/promises';
 import Sqlite from 'better-sqlite3';
+import type { Database } from 'duckdb-async';
 
 import {
   ChainBlock,
@@ -39,7 +40,9 @@ import {
   checkBlockChain,
   checkTxRoot,
 } from '../../../lib/parquet-l1/chain.js';
-import { RowDigest } from '../../../lib/parquet-l1/digest.js';
+import { RowDigest } from '../../../lib/parquet/digest.js';
+import { LookupDescription } from '../../../lib/parquet/lookups.js';
+import { writeBandLookups } from '../../../lib/parquet-l1/lookups.js';
 import {
   BAND_FILE,
   BandTag,
@@ -535,7 +538,7 @@ export async function exportL1Band({
     }
 
     const scratchBytes = await directoryBytes(scratchDir);
-    await writeParquet(bandDir, staging, scratch);
+    const lookups = await writeParquet(bandDir, staging, scratch);
     await fs.rm(scratchDir, { recursive: true, force: true });
 
     const band: ParquetL1Band = {
@@ -548,6 +551,7 @@ export async function exportL1Band({
           { rows: file.digest.rows, rowDigest: file.digest.hex() },
         ]),
       ),
+      lookups,
       ...(supersedes.length > 0 ? { supersedes } : {}),
       createdAt: new Date().toISOString(),
     };
@@ -607,21 +611,41 @@ export function isTransientSqliteError(error: unknown): boolean {
  */
 export class L1IncompleteError extends Error {}
 
-async function writeParquet(
-  bandDir: string,
+/**
+ * A DuckDB for writing a band's Parquet: 1 GB and two threads, spilling a
+ * large sort into `staging` (the bands' volume, cleared with it), never the
+ * container's own layer, and bounded. Used for a new band's tables and
+ * lookups, and for deriving a published band's lookups.
+ */
+export async function withBandWriter<T>(
   staging: string,
-  scratch: Map<string, ScratchTable>,
-): Promise<void> {
+  run: (duck: Database) => Promise<T>,
+): Promise<T> {
   const { Database } = await import('duckdb-async');
   const duck = await Database.create(':memory:');
-  // Spill a large sort into the band's own staging (the bands' volume,
-  // cleared with it), never the container's own layer, and bounded.
   const spill = path.join(staging, 'spill');
   try {
     await fs.mkdir(spill, { recursive: true });
     await duck.exec(
       `SET memory_limit = '1GB'; SET threads = 2; SET preserve_insertion_order = false; SET temp_directory = '${spill.replace(/'/g, "''")}'; SET max_temp_directory_size = '${DUCKDB_SPILL_MAX_GB}GB'; SET autoinstall_known_extensions = false; SET autoload_known_extensions = false;`,
     );
+    return await run(duck);
+  } finally {
+    await duck.close();
+    await fs.rm(spill, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Writes a band's tables from its scratch files, then derives its lookups
+ * from those tables, and returns the lookups' descriptions.
+ */
+async function writeParquet(
+  bandDir: string,
+  staging: string,
+  scratch: Map<string, ScratchTable>,
+): Promise<Record<string, LookupDescription>> {
+  return withBandWriter(staging, async (duck) => {
     for (const file of scratch.values()) {
       const spec = file.spec;
       const columns = spec.columns
@@ -636,10 +660,8 @@ async function writeParquet(
         `COPY (SELECT ${select} FROM ${source} ORDER BY ${spec.orderBy.map((c) => `"${c}"`).join(', ')}) TO '${target}' (FORMAT PARQUET, COMPRESSION 'zstd')`,
       );
     }
-  } finally {
-    await duck.close();
-    await fs.rm(spill, { recursive: true, force: true });
-  }
+    return writeBandLookups(duck, bandDir, bandDir);
+  });
 }
 
 async function directoryBytes(dir: string): Promise<number> {

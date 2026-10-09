@@ -64,6 +64,7 @@ export interface IndexL1VerifyCLIOptions extends GlobalCLIOptions {
   coreDb?: string;
   bandsDir?: string;
   skipTxRoot?: boolean;
+  skipLookups?: boolean;
   from?: string;
   to?: string;
   anchorFrom?: string;

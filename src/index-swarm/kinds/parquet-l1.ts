@@ -25,11 +25,13 @@ import { BandDescriptor, BandFile } from '../../lib/index-publication.js';
 import { checkParquetFile, openFooterReader } from '../../lib/parquet/check.js';
 import {
   BAND_FILE,
-  BAND_FILES,
+  bandFiles,
   isL1BandRange,
   L1_SPAN,
   L1_SUB_SPAN,
+  lookupsOf,
   MAX_BAND_FILE_BYTES,
+  PARQUET_L1_SCHEMAS,
   PARQUET_L1_TABLES,
   parseBandFile,
   ParquetL1Band,
@@ -50,6 +52,9 @@ import {
 } from './types.js';
 
 export const PARQUET_L1_KIND = 'parquet-l1';
+
+/** Every file name a band of any layout this build reads may hold. */
+const KNOWN_FILES = new Set(PARQUET_L1_SCHEMAS.flatMap((s) => bandFiles(s)));
 
 async function readBandFile(dir: string): Promise<ParquetL1Band> {
   const file = path.join(dir, BAND_FILE);
@@ -84,8 +89,11 @@ export class ParquetL1Kind implements ArtifactKind {
   async describe(dir: string): Promise<BandDescriptor> {
     const band = await readBandFile(dir);
     const limit = pLimit(2);
+    // The files of the layout the band says it is: a lookup file beside an
+    // older band.json (a derive interrupted before its rename) is not yet
+    // part of the band, and is left out.
     const files: BandFile[] = await Promise.all(
-      BAND_FILES.map((name) =>
+      bandFiles(band.schema).map((name) =>
         limit(async () => {
           const filePath = path.join(dir, name);
           const stat = await fs.stat(filePath).catch(() => undefined);
@@ -115,15 +123,24 @@ export class ParquetL1Kind implements ArtifactKind {
   }
 
   async validate(band: BandDescriptor, dir: string): Promise<void> {
-    // Exactly the layout's files: names from a remote publisher become file
-    // names on disk.
+    // Names from a remote publisher become file names on disk: only names a
+    // layout knows, before anything is read.
     const names = band.files.map((file) => file.name).sort();
+    const unknown = names.filter((name) => !KNOWN_FILES.has(name));
+    if (unknown.length > 0 || !names.includes(BAND_FILE)) {
+      throw new Error(
+        `Band ${band.id} holds ${JSON.stringify(names)}, not Parquet L1 files`,
+      );
+    }
+    // Then exactly the files of the layout its band.json names.
+    const declared = await readBandFile(dir);
+    const expected = bandFiles(declared.schema);
     if (
-      names.length !== BAND_FILES.length ||
-      names.some((name, i) => name !== BAND_FILES[i])
+      names.length !== expected.length ||
+      names.some((name, i) => name !== expected[i])
     ) {
       throw new Error(
-        `Band ${band.id} holds ${JSON.stringify(names)}, not the Parquet L1 files ${JSON.stringify(BAND_FILES)}`,
+        `Band ${band.id} holds ${JSON.stringify(names)}, not the ${declared.schema} files ${JSON.stringify(expected)}`,
       );
     }
     for (const file of band.files) {
@@ -139,7 +156,7 @@ export class ParquetL1Kind implements ArtifactKind {
       }
     }
 
-    const described = await readBandFile(dir);
+    const described = declared;
     const [from, to] = described.heightRange;
     if (
       band.heightRange !== undefined &&
@@ -168,6 +185,14 @@ export class ParquetL1Kind implements ArtifactKind {
         await checkParquetFile(db, path.join(dir, table.file), {
           columns: table.columns,
           rows: described.tables[table.name].rows,
+        });
+      }
+      // Lookups get the same footer check: their columns as the layout
+      // declares them, and the rows their band says.
+      for (const spec of lookupsOf(described.schema)) {
+        await checkParquetFile(db, path.join(dir, spec.file), {
+          columns: spec.columns,
+          rows: described.lookups?.[spec.name]?.rows,
         });
       }
     } finally {

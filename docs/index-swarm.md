@@ -492,14 +492,105 @@ of them, independent of the Parquet bytes) and five Parquet files:
 `blocks`, `block_transactions`, `transactions`, `tags` (plaintext names and
 values) and `wallets`. The columns are a superset of the Parquet exporter's,
 less `indexed_at` (when a gateway indexed a row, which no two publishers
-share). `signature` is null unless the publisher keeps signatures.
+share). `signature` is null unless the publisher keeps signatures. From
+layout `l1-3` a band also carries three [lookup files](#lookup-files-layout-l1-3),
+derived from its tables, so one transaction, wallet or tag value can be found
+without scanning it.
 
 Published as `{"name":"parquet-l1","kind":"parquet-l1"}` in
 `INDEX_SWARM_PUBLISH`. A subscriber checks each file against the signed
 digests, then its footer and schema against the layout and the row counts in
-`band.json`, before installing it under `installed/parquet-l1/`. The gateway
-itself reads nothing there: an importer does, checking the rows against the
-chain as it goes. The sidecar loads DuckDB only to check these bands.
+`band.json`, before installing it under `installed/parquet-l1/`. The file
+set it expects is the one the layout named in `band.json` declares, and a
+gateway that doesn't know that layout refuses the band, naming it, and keeps
+the copy it has. The gateway itself reads nothing there: an importer does,
+checking the rows against the chain as it goes. The sidecar loads DuckDB only
+to check these bands.
+
+#### Lookup files (layout `l1-3`)
+
+Parquet has no index, so finding one transaction by id means scanning every
+band's `id` column: measured in a browser over all 24 bands of the chain,
+3.9 GB. A lookup file is a small Parquet file sorted by a key, in row groups
+of 16,384 rows. Parquet keeps each row group's min and max, and in a sorted
+file those ranges don't overlap, so a reader holding a key reads the footer
+and then the one or two row groups that can hold it.
+
+| File | One row per | Columns | Sorted by |
+|---|---|---|---|
+| `lookup_tx_id.parquet` | transaction | `id8`, `height` | `id8, height` |
+| `lookup_wallet.parquet` | transaction an address signed (`role` 0), and one it received (`role` 1, non-empty `target`) | `addr8`, `role`, `height`, `data_size` | `addr8, height, role, data_size` |
+| `lookup_tag.parquet` | distinct (name, value) tag pair, every one | `name8`, `val8`, `name`, `value`, `txs` (distinct transactions), `first_height`, `last_height` | `name8, val8, name, value` |
+
+The keys are unsigned 64-bit integers, because readers prune on integer
+statistics and not on binary ones (keyed by the raw tag bytes, a lookup read
+its whole file). Two encodings, which any client reproduces:
+
+- `prefix64(bytes)`: the first 8 bytes, big-endian, zero-padded on the right
+  when shorter. For ids and addresses, already uniform hashes. In DuckDB:
+  `('0x' || rpad(left(hex(x), 16), 16, '0'))::UBIGINT`.
+- `sha256_64(bytes)`: `prefix64` of the SHA-256. For tag names and values.
+  In DuckDB: `('0x' || left(sha256(x), 16))::UBIGINT`.
+
+| Encoding | Input | Output |
+|---|---|---|
+| `prefix64` | id `O048e9pT5nX1CPrMjGC1y1dWdtd3AChFX27hoRsVIdA` (its 32 bytes) | `0x3b4e3c7bda53e675` = 4273419599062754933 |
+| `prefix64` | the single byte `0xab` | `0xab00000000000000` |
+| `sha256_64` | `App-Name` (UTF-8) | `0xbf6cc2a967f23a82` = 13793613791578176130 |
+| `sha256_64` | `ArDrive-App` | `0xa2c30101e8045f65` = 11728218962302099301 |
+
+A key is a pointer, not an answer: two values may share one. So a read
+takes two steps, the lookup for the heights, then the table at those heights
+for the row, which a height filter confines to the row groups that hold
+them:
+
+```sql
+-- a transaction by id (:id is its 32 bytes)
+SELECT t.* FROM read_parquet('…/*/transactions.parquet') t
+WHERE t.height IN (
+    SELECT height FROM read_parquet('…/*/lookup_tx_id.parquet')
+    WHERE id8 = ('0x' || rpad(left(hex(:id), 16), 16, '0'))::UBIGINT)
+  AND t.id = :id;
+
+-- a wallet's transactions sent, bytes stored, first and last block: no table read
+SELECT count(*) AS sent, sum(data_size) AS bytes_stored,
+       min(height) AS first_height, max(height) AS last_height
+FROM read_parquet('…/*/lookup_wallet.parquet')
+WHERE addr8 = ('0x' || rpad(left(hex(:address), 16), 16, '0'))::UBIGINT AND role = 0;
+
+-- the most used App-Name values, exact
+SELECT CAST(value AS VARCHAR) AS app, sum(txs) AS txs
+FROM read_parquet('…/*/lookup_tag.parquet')
+WHERE name8 = ('0x' || left(sha256('App-Name'::BLOB), 16))::UBIGINT
+  AND name = 'App-Name'::BLOB
+GROUP BY app ORDER BY txs DESC LIMIT 15;
+```
+
+Measured on one 100,000-height band (1.9M to 2.0M) over HTTP, in the 256 KiB
+pieces a verifying client reads, with the same answers either way:
+
+| Lookup | Scanning the tables | With the lookup files |
+|---|---|---|
+| A transaction's height | 88.1 MB | 0.8 MB |
+| A wallet's transactions and bytes stored (4 transactions) | 8.1 MB | 0.8 MB |
+| The same for a bundler (1,267,740 transactions) | | 3.7 MB |
+| The most used App-Name values, by distinct transactions | 113 MB | 1.0 MB |
+
+The files cost storage in proportion to a band's transactions and distinct
+tag pairs: 59 MB on that 413 MB band (14%), and 254 MB on the busiest,
+1.1M to 1.2M (1.35 GB, 10.4 million transactions, 3.5 million tag pairs;
+19%). Deriving them for that band took 180 seconds and 2.2 GB of memory.
+
+`wallet.data_size` and `tag.txs` are answers rather than pointers, kept so a
+wallet's bytes stored and a tag's count need no table read. They carry the
+same trust as the tables: signed through each file's digest in the
+publication, and recomputable from the tables by anyone (`index-l1-verify
+--bands-dir` does).
+
+Lookups are derived, so they are not part of a band's id: the id is a
+digest of the tables' rows. `band.json` describes each lookup with its rows
+and a row digest, as it does tables, so two publishers can compare them
+without exchanging files.
 
 #### Querying bands in place, without importing
 
@@ -534,11 +625,12 @@ deliberate:
 - **Parquet is columnar.** The query above reads two columns and skips
   the rest of the file, which is why 12.8 GB answers in seconds.
 
-**Where it does not substitute for importing.** There are no indexes, so
-it is good at scans and aggregates over a height range and bad at point
-lookups: "give me transaction X" scans a file where SQLite seeks a
-B-tree. It serves no HTTP route, no GraphQL and no trust headers. It is a
-dataset, not a gateway.
+**Where it does not substitute for importing.** It is good at scans and
+aggregates over a height range. Point lookups go through the
+[lookup files](#lookup-files-layout-l1-3) of an `l1-3` band, two steps where
+SQLite seeks a B-tree once; a band of an older layout has none, and finding
+one transaction there scans every band's `id` column. It serves no HTTP
+route, no GraphQL and no trust headers. It is a dataset, not a gateway.
 
 #### Producing L1 bands
 
@@ -584,8 +676,9 @@ can't build them, and its runs say so (`incomplete`, not retried).
   and `tx_root` recomputation derives a format-1 transaction's root from its
   data, never from the stored column.
 
-  This is layout `l1-2` (`band.json`'s `schema`). A reader accepts `l1-1`
-  too, so a subscriber keeps importing from a publisher that hasn't
+  These are layout `l1-2`'s rules (`band.json`'s `schema`), and `l1-3`
+  keeps them, adding the lookup files. A reader accepts `l1-1`, `l1-2` and
+  `l1-3`, so a subscriber keeps importing from a publisher that hasn't
   upgraded. An import never erases a pre-fork `tx_root` or a format-1
   `data_root` the gateway already holds for the same block or transaction;
   it keeps them across the range it rewrites. An import interrupted part
@@ -601,6 +694,25 @@ can't build them, and its runs say so (`incomplete`, not retried).
   confirmed under `l1-2` (`layoutConfirmed` in `state.json`) so it isn't
   rebuilt again. Only ranges whose rows changed get new ids.
 
+- **Lookups.** Every band built is `l1-3`: the exporter writes the tables,
+  derives the lookup files from them under the same DuckDB limits, and
+  writes `band.json` last. A published band whose tables are current but
+  which has no lookups (an `l1-2` band, or an `l1-1` band confirmed identical
+  under `l1-2`) is not rebuilt: each run derives its lookups from its own
+  tables and adds them in place, keeping its id, before replacing its
+  `band.json` with one naming them. No file already in the band is touched,
+  and a reader that goes by `band.json` sees the old band or the new one.
+  This needs no `core.db` and no chain checks, so it runs whatever happened
+  to the builds and outside their time budget; it reports each band under
+  `l1Derived` and counts it as `index_export_runs_total{kind="derive"}`. A
+  subscriber already holding the band fetches only the new files.
+
+  **Upgrade order.** A sidecar that doesn't know `l1-3` can't read an `l1-3`
+  band: as a subscriber it refuses it (naming the layout) and keeps its copy,
+  and as a publisher it can't describe it, so the band goes unpublished.
+  Upgrade subscribers first, then a publisher's `index-swarm` with or before
+  its `index-export`. The gateway itself reads no `parquet-l1` band and needs
+  nothing.
 - **Checks before publishing.** Every block links to the one before it and
   is linked to by the one above, each `hash_list_merkle` follows from the
   previous block, each block's `tx_root` is recomputed from its transactions

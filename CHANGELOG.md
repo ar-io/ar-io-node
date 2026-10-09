@@ -8,6 +8,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **`parquet-l1` bands carry lookup files (layout `l1-3`)**, so one
+  transaction, wallet or tag value can be found without scanning a band:
+  `lookup_tx_id`, `lookup_wallet` and `lookup_tag`, each sorted by an
+  unsigned 64-bit key in row groups of 16,384, so a reader goes from the
+  footer to the one or two row groups that can hold its key. Measured on a
+  100,000-height band over HTTP, in 256 KiB pieces: a transaction's height
+  0.8 MB against 88 MB scanning `id`, a wallet's transactions and bytes
+  stored 0.8 MB against 8 MB, the most used App-Name values 1.0 MB against
+  113 MB. They add 14 to 19% to a band (59 MB on a 413 MB band, 254 MB on
+  the busiest, 1.35 GB).
+  - Declared in the layout beside the tables, described in `band.json` with
+    rows and row digests, and left out of a band's id, which stays a digest
+    of the tables' rows.
+  - New bands are written with them. A published band whose tables are
+    current is not rebuilt: `index-export` derives its lookups from its own
+    tables and adds them in place, under the same id, with no read of
+    `core.db` (reported as `l1Derived`,
+    `index_export_runs_total{kind="derive"}`).
+  - Subscribers check a band's files against the layout its `band.json`
+    names, and lookup footers and row counts as tables'. A gateway that
+    doesn't know `l1-3` refuses such a band explicitly and keeps its copy,
+    and a publisher's sidecar that doesn't can't publish one: upgrade
+    subscribers first, then a publisher's `index-swarm` with or before its
+    `index-export`.
+  - `index-l1-verify --bands-dir` checks each band's lookups against its
+    tables and `band.json` (the `lookups` check; `--skip-lookups` to leave
+    it out).
+  - The engine (`src/lib/parquet/lookups.ts`, `keys.ts`) knows no dataset,
+    and `RowDigest` moves beside it (`src/lib/parquet/digest.ts`), so another
+    Parquet dataset declares lookups without new code.
+  See `docs/index-swarm.md`, *Lookup files*.
+
 - `docs/index-swarm.md` documents querying a published dataset over HTTP: a
   `parquet-l1` band is Parquet and the byte routes serve ranges, so a client
   can read a dataset where it sits, with no band files to download, no import

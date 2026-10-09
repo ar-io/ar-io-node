@@ -19,7 +19,12 @@ import {
   type ParquetL1Band,
 } from '../../../lib/parquet-l1/layout.js';
 import { isTransientSqliteError, L1CheckError } from './export.js';
-import { L1PublishedBand, planL1, withReadRetry } from './kind.js';
+import {
+  L1PublishedBand,
+  planL1,
+  planL1Derive,
+  withReadRetry,
+} from './kind.js';
 
 const band = (
   id: string,
@@ -278,6 +283,35 @@ describe('planL1', () => {
       }
       assert.equal(next - 1, top, `covered up to ${top}`);
     }
+  });
+});
+
+describe('l1-2 bands under l1-3', () => {
+  const bands = [
+    band('l1-h0-99999-p-two', 0, 99_999, 'l1-2'),
+    band('l1-h100000-104999-p-b', 100_000, 104_999),
+    band('l1-h105000-106000-p-tip', 105_000, 106_000),
+  ];
+
+  it('never rebuilds a band whose tables are current, only for its lookups', () => {
+    assert.deepEqual(planL1(bands, 106_000), []);
+  });
+
+  it('plans lookups for bands with current tables and old lookups, and only those', () => {
+    const all = [
+      ...bands,
+      band('l1-h200000-299999-p-one', 200_000, 299_999, 'l1-1'),
+      band('l1-h300000-399999-p-one-ok', 300_000, 399_999, 'l1-1'),
+    ];
+    assert.deepEqual(
+      planL1Derive(all, new Set(['l1-h300000-399999-p-one-ok'])).map(
+        (b) => b.id,
+      ),
+      // l1-2 tables are current; an l1-1 band confirmed identical under
+      // l1-2's rules is too. An unconfirmed l1-1 band is rebuilt instead,
+      // and an l1-3 band has its lookups already.
+      ['l1-h0-99999-p-two', 'l1-h300000-399999-p-one-ok'],
+    );
   });
 });
 

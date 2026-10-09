@@ -21,7 +21,7 @@ import type { Database } from 'duckdb-async';
 import * as path from 'node:path';
 
 import type { ColumnSpec } from '../parquet/check.js';
-import { RowDigest } from './digest.js';
+import { RowDigest } from '../parquet/digest.js';
 import { ParquetL1Band, PARQUET_L1_TABLES, TableSpec } from './layout.js';
 
 /** Rows read per batch: enough to amortise the query, small enough to hold. */

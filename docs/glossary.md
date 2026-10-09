@@ -330,7 +330,18 @@ bands" in [index-swarm.md](index-swarm.md).
 Arweave base layer (blocks, transactions, tags and owners) for one height
 range, in Parquet, with a `band.json` of per-table row counts and row
 digests. Lets a new gateway import its L1 index instead of indexing the
-chain, and apps query it in place.
+chain, and apps query it in place. From layout `l1-3` it also carries
+[lookup files](#lookup-file).
+
+<a id="lookup-file"></a> **Lookup file** — A Parquet file in a band, derived
+from the band's tables and sorted by an unsigned 64-bit key in small row
+groups, so a reader finds one key by reading the footer and one or two row
+groups: `lookup_tx_id` (transaction id to height), `lookup_wallet` (address
+to its transactions' heights and sizes) and `lookup_tag` (every tag pair, with
+its count and first and last height). Keys are a value's first 8 bytes, or
+those of its SHA-256; a key is a pointer, confirmed against the table it
+points into. Not part of a band's id. See
+[lookup files](index-swarm.md#lookup-files-layout-l1-3).
 
 <a id="canonical-band-columns"></a> **Canonical band columns** — The values a
 [Parquet L1 band](#parquet-l1) writes, from layout `l1-2`, for columns a
@@ -349,7 +360,8 @@ recorded band by band in `parquet_l1_imports` so it resumes.
 [Parquet L1 bands](#parquet-l1) directly with DuckDB or Polars instead of
 importing them into a gateway's `core.db`. Possible because tags are
 plaintext in a band and Parquet is columnar. Good for scans and
-aggregates, no use for point lookups, and it serves no gateway route.
+aggregates, and for point lookups through a band's
+[lookup files](#lookup-file); it serves no gateway route.
 
 <a id="l1-audit"></a> **L1 audit** — Checking the `tx_root` of blocks an
 index cannot check alone, with `ar-io-node index-l1-audit`. `tx_root`

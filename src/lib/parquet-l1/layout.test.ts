@@ -9,26 +9,41 @@ import { describe, it } from 'node:test';
 
 import {
   BAND_FILE,
-  BAND_FILES,
+  bandFiles,
+  bandTablesDigest,
   canonicalDataRoot,
   canonicalTxRoot,
   firstTagValue,
-  isCurrentLayout,
+  lookupsCurrent,
+  lookupsOf,
+  PARQUET_L1_LOOKUPS,
   PARQUET_L1_SCHEMA,
   PARQUET_L1_SCHEMAS,
   PARQUET_L1_TABLES,
   parseBandFile,
+  tablesCurrent,
 } from './layout.js';
 import { FORK_2_0 } from './chain.js';
 
 const digest = 'a'.repeat(64);
-const valid = () => ({
+/** A valid description of a band at `schema`, with its layout's lookups. */
+const valid = (schema: string = PARQUET_L1_SCHEMA): any => ({
   version: 1,
-  schema: PARQUET_L1_SCHEMA,
+  schema,
   heightRange: [0, 99_999],
   tables: Object.fromEntries(
     PARQUET_L1_TABLES.map((t) => [t.name, { rows: 5, rowDigest: digest }]),
   ),
+  ...(schema === 'l1-3'
+    ? {
+        lookups: Object.fromEntries(
+          PARQUET_L1_LOOKUPS.map((l) => [
+            l.name,
+            { rows: 7, rowDigest: digest },
+          ]),
+        ),
+      }
+    : {}),
   createdAt: '2026-10-02T00:00:00.000Z',
 });
 
@@ -76,15 +91,45 @@ describe('parquet-l1 layout', () => {
     }
   });
 
-  it('names every file a band holds', () => {
-    assert.deepEqual(BAND_FILES, [
+  it('names every file a band of each layout holds', () => {
+    const tables = [
       BAND_FILE,
       'block_transactions.parquet',
       'blocks.parquet',
       'tags.parquet',
       'transactions.parquet',
       'wallets.parquet',
-    ]);
+    ];
+    assert.deepEqual(bandFiles('l1-1'), tables);
+    assert.deepEqual(bandFiles('l1-2'), tables);
+    assert.deepEqual(
+      bandFiles('l1-3'),
+      [
+        ...tables,
+        'lookup_tag.parquet',
+        'lookup_tx_id.parquet',
+        'lookup_wallet.parquet',
+      ].sort(),
+    );
+  });
+
+  it('declares lookups only from l1-3, each sorted by its key first', () => {
+    assert.deepEqual(lookupsOf('l1-1'), []);
+    assert.deepEqual(lookupsOf('l1-2'), []);
+    assert.deepEqual(
+      lookupsOf('l1-3').map((l) => l.name),
+      ['tx_id', 'wallet', 'tag'],
+    );
+    for (const spec of PARQUET_L1_LOOKUPS) {
+      const names = spec.columns.map((c) => c.name);
+      // Every ordering column is a column, and the key column comes first.
+      assert.ok(
+        spec.orderBy.every((c) => names.includes(c)),
+        spec.name,
+      );
+      assert.equal(spec.orderBy[0], names[0], spec.name);
+      assert.equal(spec.columns[0].type, 'UBIGINT', spec.name);
+    }
   });
 });
 
@@ -99,18 +144,32 @@ describe('parseBandFile', () => {
   });
 
   it('reads a band written to an older layout, keeping its version', () => {
-    const band = parseBandFile(JSON.stringify({ ...valid(), schema: 'l1-1' }));
+    const band = parseBandFile(JSON.stringify(valid('l1-1')));
     assert.equal(band.schema, 'l1-1');
     assert.notEqual(band.schema, PARQUET_L1_SCHEMA);
+    assert.equal(band.lookups, undefined);
   });
 
   it('accepts every layout this build can read', () => {
     for (const schema of PARQUET_L1_SCHEMAS) {
-      assert.equal(
-        parseBandFile(JSON.stringify({ ...valid(), schema })).schema,
-        schema,
-      );
+      assert.equal(parseBandFile(JSON.stringify(valid(schema))).schema, schema);
     }
+  });
+
+  it('reads an l1-3 band’s lookups', () => {
+    const band = parseBandFile(JSON.stringify(valid('l1-3')));
+    assert.deepEqual(Object.keys(band.lookups ?? {}).sort(), [
+      'tag',
+      'tx_id',
+      'wallet',
+    ]);
+    assert.equal(band.lookups?.tx_id.rows, 7);
+  });
+
+  it('keeps lookups out of the band’s id', () => {
+    const withLookups = parseBandFile(JSON.stringify(valid('l1-3')));
+    const without = parseBandFile(JSON.stringify(valid('l1-2')));
+    assert.deepEqual(bandTablesDigest(withLookups), bandTablesDigest(without));
   });
 
   it('refuses anything malformed, naming what', () => {
@@ -136,6 +195,21 @@ describe('parseBandFile', () => {
     refuse((b) => (b.tables.blocks.rows = -1), /table blocks needs/);
     refuse((b) => (b.supersedes = 'one'), /supersedes must be a list/);
     refuse((b) => (b.supersedes = ['']), /supersedes must be a list/);
+    // Lookups: exactly the layout's, and none before l1-3.
+    refuse((b) => delete b.lookups, /layout l1-3 needs lookups/);
+    refuse((b) => delete b.lookups.tag, /lookup tag needs/);
+    refuse(
+      (b) => (b.lookups.extra = { rows: 1, rowDigest: digest }),
+      /unknown lookup "extra"/,
+    );
+    refuse((b) => (b.lookups.wallet.rowDigest = 'xyz'), /lookup wallet needs/);
+    assert.throws(
+      () =>
+        parseBandFile(
+          JSON.stringify({ ...valid('l1-2'), lookups: valid('l1-3').lookups }),
+        ),
+      /layout l1-2 has no lookups/,
+    );
   });
 });
 
@@ -171,13 +245,20 @@ describe('canonicalTxRoot', () => {
   });
 });
 
-describe('isCurrentLayout', () => {
-  it('counts only the current layout, or a band confirmed identical under it', () => {
+describe('tablesCurrent and lookupsCurrent', () => {
+  it('counts l1-2 and l1-3 tables as current, or l1-1 confirmed identical', () => {
     const none = new Set<string>();
-    assert.equal(isCurrentLayout(PARQUET_L1_SCHEMA, 'x', none), true);
-    assert.equal(isCurrentLayout('l1-1', 'x', none), false);
-    assert.equal(isCurrentLayout('l1-1', 'x', new Set(['x'])), true);
-    assert.equal(isCurrentLayout('l1-1', 'x', new Set(['y'])), false);
+    assert.equal(tablesCurrent('l1-3', 'x', none), true);
+    assert.equal(tablesCurrent('l1-2', 'x', none), true);
+    assert.equal(tablesCurrent('l1-1', 'x', none), false);
+    assert.equal(tablesCurrent('l1-1', 'x', new Set(['x'])), true);
+    assert.equal(tablesCurrent('l1-1', 'x', new Set(['y'])), false);
+  });
+
+  it('counts lookups as current only at the current layout', () => {
+    assert.equal(lookupsCurrent(PARQUET_L1_SCHEMA), true);
+    assert.equal(lookupsCurrent('l1-2'), false);
+    assert.equal(lookupsCurrent('l1-1'), false);
   });
 });
 
