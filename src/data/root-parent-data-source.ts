@@ -861,24 +861,32 @@ export class RootParentDataSource implements ContiguousDataSource {
    * The one case where the fetched type does describe the item is when the item
    * *is* the root transaction, where the fetch is of the item itself.
    *
-   * The `Content-Type` tag from the item's signed header, when this request
-   * read it, comes first: it is the only value here that is certainly this
-   * item's. `knownContentType` (from stored attributes or a root index) may be
-   * the per-hash value borrowed from another item with the same bytes, or a
-   * peer's claim. `sourceContentTypeOrigin: 'item'` says the type came from
-   * the header, so it may be recorded per item; otherwise it is left unset so
-   * a type taken from this gateway's own attributes is never re-recorded.
+   * The `Content-Type` tag from the item's header, when this request read
+   * it, comes first: it is this item's, where `knownContentType` (from stored
+   * attributes or a root index) may be the per-hash value borrowed from
+   * another item with the same bytes, or a peer's claim.
+   *
+   * `sourceContentTypeOrigin: 'item'` lets the type be recorded per item, at a
+   * rank nothing but the index replaces, so it is set only when
+   * `headerVerified`: the payload is served through signature verification,
+   * which covers the tags. A header found by ID alone is not enough: the ID
+   * is the hash of the signature, so a copy of the item's signature with
+   * other tags (in a bundle a client's root hint names, say) has the same ID.
+   * An unverified header's type is still served for this request, unranked.
    */
   private resolveItemContentType({
     id,
     rootTxId,
     headerContentType,
+    headerVerified,
     knownContentType,
     rootContentType,
   }: {
     id: string;
     rootTxId: string;
     headerContentType?: string;
+    /** Whether this response's payload is checked against the signature. */
+    headerVerified: boolean;
     knownContentType?: string;
     rootContentType?: string;
   }): {
@@ -890,7 +898,7 @@ export class RootParentDataSource implements ContiguousDataSource {
     if (headerContentType !== undefined) {
       return {
         sourceContentType: headerContentType,
-        sourceContentTypeOrigin: 'item',
+        sourceContentTypeOrigin: headerVerified ? 'item' : undefined,
       };
     }
     return {
@@ -1488,6 +1496,7 @@ export class RootParentDataSource implements ContiguousDataSource {
                   id,
                   rootTxId: hintRootTxId,
                   headerContentType: itemContentTypeFromHeader,
+                  headerVerified: true,
                   knownContentType: originalContentType,
                   rootContentType: data.sourceContentType,
                 }),
@@ -1580,9 +1589,10 @@ export class RootParentDataSource implements ContiguousDataSource {
             itemSize: bundleParseResult.itemSize,
             size: bundleParseResult.dataSize,
           };
+          // Unranked: nothing here checks the header's signature over its tags
+          // (see resolveItemContentType), and the bundle came from the client.
           if (bundleParseResult.contentType !== undefined) {
             attributesToStore.contentType = bundleParseResult.contentType;
-            attributesToStore.contentTypeSource = 'item';
           }
           await this.tryCacheAttributes(id, attributesToStore, 'hint');
 
@@ -1599,6 +1609,7 @@ export class RootParentDataSource implements ContiguousDataSource {
               id,
               rootTxId: resolvedRootTxId,
               headerContentType: itemContentTypeFromHeader,
+              headerVerified: false,
               knownContentType: originalContentType,
               rootContentType: data.sourceContentType,
             }),
@@ -1789,6 +1800,7 @@ export class RootParentDataSource implements ContiguousDataSource {
             id,
             rootTxId,
             headerContentType: itemContentTypeFromHeader,
+            headerVerified: attributesVerification !== undefined,
             knownContentType: originalContentType,
             rootContentType: data.sourceContentType,
           });
@@ -2310,8 +2322,9 @@ export class RootParentDataSource implements ContiguousDataSource {
               originalContentType = bundleParseResult.contentType;
             }
             itemContentEncoding = bundleParseResult.contentEncoding;
-            // Signed: a local parse of the item's header, or a remote location
+            // From the item's header: a local parse, or a remote location
             // whose header was confirmed above (which replaced its type).
+            // Ranked only if the payload is served verified (indexVerification).
             itemContentTypeFromHeader = bundleParseResult.contentType;
 
             // Store discovered offsets for future use (avoid re-parsing).
@@ -2326,7 +2339,11 @@ export class RootParentDataSource implements ContiguousDataSource {
             };
             if (bundleParseResult.contentType !== undefined) {
               attributesToStore.contentType = bundleParseResult.contentType;
-              attributesToStore.contentTypeSource = 'item';
+              // Ranked only when stored after the payload verifies against
+              // the signature, which covers the tags.
+              if (indexVerification !== undefined) {
+                attributesToStore.contentTypeSource = 'item';
+              }
             }
             if (indexVerification === undefined) {
               await this.tryCacheAttributes(
@@ -2424,6 +2441,7 @@ export class RootParentDataSource implements ContiguousDataSource {
           id,
           rootTxId,
           headerContentType: itemContentTypeFromHeader,
+          headerVerified: indexVerification !== undefined,
           knownContentType: originalContentType,
           rootContentType: data.sourceContentType,
         });

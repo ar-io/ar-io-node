@@ -599,6 +599,71 @@ describe('CompositeDataAttributesSource', () => {
       assert.equal(attrs?.contentTypeSource, 'item');
     });
 
+    it("recomputes isManifest when the item's own type replaces a per-hash manifest type", async () => {
+      // The per-hash value says manifest; the item itself is HTML.
+      const composite = new CompositeDataAttributesSource({
+        log,
+        source: sourceWith({
+          contentType: MANIFEST,
+          contentTypeSource: 'hash',
+          isManifest: true,
+        }),
+      });
+
+      await composite.getDataAttributes('page');
+      await composite.setDataAttributes('page', {
+        contentType: 'text/html',
+        contentTypeSource: 'item',
+      });
+
+      const attrs = await composite.getDataAttributes('page');
+      assert.equal(attrs?.contentType, 'text/html');
+      assert.equal(attrs?.isManifest, false);
+    });
+
+    it("recomputes isManifest when the item's own manifest type replaces a per-hash one", async () => {
+      const composite = new CompositeDataAttributesSource({
+        log,
+        source: sourceWith({
+          contentType: 'text/html',
+          contentTypeSource: 'hash',
+          isManifest: false,
+        }),
+      });
+
+      await composite.getDataAttributes('manifest');
+      await composite.setDataAttributes('manifest', {
+        contentType: MANIFEST,
+        contentTypeSource: 'item',
+      });
+
+      const attrs = await composite.getDataAttributes('manifest');
+      assert.equal(attrs?.contentType, MANIFEST);
+      assert.equal(attrs?.isManifest, true);
+    });
+
+    it('keeps isManifest with the type when a lower-ranked write loses', async () => {
+      const composite = new CompositeDataAttributesSource({
+        log,
+        source: sourceWith({
+          contentType: MANIFEST,
+          contentTypeSource: 'item',
+          isManifest: true,
+        }),
+      });
+
+      await composite.getDataAttributes('manifest');
+      await composite.setDataAttributes('manifest', {
+        contentType: 'text/html',
+        contentTypeSource: 'hash',
+        isManifest: false,
+      });
+
+      const attrs = await composite.getDataAttributes('manifest');
+      assert.equal(attrs?.contentType, MANIFEST);
+      assert.equal(attrs?.isManifest, true);
+    });
+
     it('keeps an indexed octet-stream type against a lower-ranked specific one', async () => {
       // The item really is tagged application/octet-stream.
       const composite = new CompositeDataAttributesSource({
