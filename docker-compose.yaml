@@ -669,7 +669,7 @@ services:
       - clickhouse
 
   observer:
-    image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG:-6f4e60f5c583d9bde9ce0fa505edd297a3922496}
+    image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG:-8e7f4d53e0aa9074696e936a88f651eb227c87cd}
     restart: unless-stopped
     ports:
       - ${OBSERVER_PORT:-5050}:5050

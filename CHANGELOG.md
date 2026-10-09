@@ -202,11 +202,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `docs/envs.md` gives the real defaults (it said 0.10 and `false`)
   (ar-io/ar-io-observer#145).
 
-- **Default observer image bumped to `6f4e60f5`** — `OBSERVER_IMAGE_TAG` moves
+- **Default observer image bumped to `8e7f4d53`** — `OBSERVER_IMAGE_TAG` moves
   from `fe159f5a` to the `ar-io-observer` build carrying the offset checks
   above and the reference fix under Fixed. Operators who pin
   `OBSERVER_IMAGE_TAG` in `.env` must update it there too, since that
   shadows the compose default.
+
+- **Observer updated to `@ar.io/sdk` 4.5.1.** The observer's epoch crank
+  now finds delegations to compound once per epoch instead of on every
+  tick, which removes a pair of full-registry scans per tick from the
+  window after each distribution (ar-io/ar-io-observer#146).
 
 - **Index-swarm torrents are built with 256 KiB pieces, down from 4 MiB**, so
   a browser can verify a byte range of a band file against the signed
