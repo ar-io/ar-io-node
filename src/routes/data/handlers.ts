@@ -10,7 +10,7 @@ import { Readable } from 'node:stream';
 import rangeParser from 'range-parser';
 import { Logger } from 'winston';
 import { headerNames } from '../../constants.js';
-import { pipeStreamToResponse } from '../../lib/stream.js';
+import { peekFirstChunk, pipeStreamToResponse } from '../../lib/stream.js';
 import { sendBodyWithOptionalDigest } from './buffered-digest.js';
 import * as config from '../../config.js';
 import { release } from '../../version.js';
@@ -48,7 +48,9 @@ import {
   buildMultipartResponseParts,
   generateBoundary,
   calculateRangeResponseSize,
+  contradictsContentEncoding,
   handleIfNoneMatch,
+  hasContentEncodingMagic,
   honouredContentEncoding,
   parseNonNegativeInt,
   wouldReturn304,
@@ -441,6 +443,72 @@ const awaitItemHeaders = async (
   return itemHeaders;
 };
 
+/**
+ * The `Content-Encoding` to declare for `data`, or `undefined` for none.
+ *
+ * The coding comes from the item's indexed or recorded encoding, else the
+ * encoding its source reported for the bytes (its signed tags or an
+ * upstream). Upstream fetches do not decode, so bytes that arrive encoded are
+ * served encoded and must say so. Only codings clients can decode are named;
+ * any other value is served without the header.
+ *
+ * A `Content-Encoding` tag is the uploader's claim, not a property of the
+ * bytes: an item can be tagged `gzip` and carry plain bytes. Declaring the
+ * coding then makes every decoding client fail, and a gateway that checks the
+ * coding's magic (#991) rejects our copy. So for a coding with fixed leading
+ * bytes, peek at the body and drop the header when they rule it out.
+ *
+ * A copy that was decoded upstream and stored (the pre-#964 poison) fails the
+ * same check. The header is wrong for it too, but it is not the item's bytes,
+ * so this is logged as a warning and counted for the operator to purge.
+ *
+ * Peeks `data.stream`, which must start at the item's first byte and have no
+ * reader yet; the peeked bytes are put back.
+ */
+export const resolveServedContentEncoding = async ({
+  data,
+  dataAttributes,
+  id,
+  log,
+  signal,
+}: {
+  data: ContiguousData;
+  dataAttributes: ContiguousDataAttributes | undefined;
+  id: string;
+  log: Logger;
+  signal?: AbortSignal;
+}): Promise<string | undefined> => {
+  const declared = honouredContentEncoding(
+    dataAttributes?.contentEncoding ?? data.sourceContentEncoding,
+  );
+  if (declared === undefined || !hasContentEncodingMagic(declared)) {
+    return declared;
+  }
+  const head = await peekFirstChunk(
+    data.stream,
+    config.STREAM_STALL_TIMEOUT_MS,
+    signal,
+  );
+  if (!contradictsContentEncoding(head, declared)) {
+    return declared;
+  }
+  metrics.servedContentEncodingDroppedTotal.inc({
+    encoding: declared,
+    verified: String(data.verified),
+  });
+  log.warn(
+    'Body does not match its Content-Encoding; serving without the header',
+    {
+      id,
+      encoding: declared,
+      verified: data.verified,
+      trusted: data.trusted,
+      cached: data.cached,
+    },
+  );
+  return undefined;
+};
+
 const setDataHeaders = ({
   req,
   res,
@@ -448,6 +516,7 @@ const setDataHeaders = ({
   data,
   id,
   itemHeaders,
+  contentEncoding,
 }: {
   req: Request;
   res: Response;
@@ -455,6 +524,8 @@ const setDataHeaders = ({
   data: ContiguousData;
   id: string;
   itemHeaders?: ResolvedItemHeaders;
+  /** From {@link resolveServedContentEncoding}. */
+  contentEncoding: string | undefined;
 }) => {
   // TODO: cached header for zero length data (maybe...)
 
@@ -509,14 +580,6 @@ const setDataHeaders = ({
   // Use the content type from the L1 or data item index if available
   res.contentType(contentType);
 
-  // The item's indexed or recorded encoding, else the encoding its source
-  // reported for the bytes being served (its signed tags or an upstream).
-  // Upstream fetches do not decode, so bytes that arrive encoded are served
-  // encoded and must say so. Only codings clients can decode are named; any
-  // other value is served without the header, as before.
-  const contentEncoding = honouredContentEncoding(
-    dataAttributes?.contentEncoding ?? data.sourceContentEncoding,
-  );
   if (contentEncoding !== undefined) {
     res.header('Content-Encoding', contentEncoding);
   }
@@ -1273,6 +1336,15 @@ export const createRawDataHandler = ({
             dataItemMetaResolver,
           );
 
+          // Before any Range handling: the full stream starts at byte 0.
+          const contentEncoding = await resolveServedContentEncoding({
+            data,
+            dataAttributes,
+            id,
+            log,
+            signal: req.signal,
+          });
+
           // Check if the request includes a Range header
           const rangeHeader = req.headers.range;
           if (rangeHeader !== undefined) {
@@ -1281,7 +1353,15 @@ export const createRawDataHandler = ({
             // Range requests create new streams so the original is no longer
             // needed
             data.stream.destroy();
-            setDataHeaders({ req, res, dataAttributes, data, id, itemHeaders });
+            setDataHeaders({
+              req,
+              res,
+              dataAttributes,
+              data,
+              id,
+              itemHeaders,
+              contentEncoding,
+            });
 
             await handleRangeRequest({
               log,
@@ -1298,7 +1378,15 @@ export const createRawDataHandler = ({
             span.setAttribute('http.status_code', res.statusCode);
           } else {
             // Set headers and stream data
-            setDataHeaders({ req, res, dataAttributes, data, id, itemHeaders });
+            setDataHeaders({
+              req,
+              res,
+              dataAttributes,
+              data,
+              id,
+              itemHeaders,
+              contentEncoding,
+            });
             if (data.size > 0) {
               res.header('Content-Length', data.size.toString());
             }
@@ -1615,6 +1703,15 @@ const sendManifestResponse = async ({
 
     // Set headers and stream data
     try {
+      // Before any Range handling: the full stream starts at byte 0.
+      const contentEncoding = await resolveServedContentEncoding({
+        data,
+        dataAttributes,
+        id: resolvedId,
+        log,
+        signal: req.signal,
+      });
+
       // Check if the request includes a Range header
       const rangeHeader = req.headers.range;
       if (rangeHeader !== undefined) {
@@ -1629,6 +1726,7 @@ const sendManifestResponse = async ({
           data,
           id: resolvedId,
           itemHeaders,
+          contentEncoding,
         });
         await handleRangeRequest({
           log,
@@ -1651,6 +1749,7 @@ const sendManifestResponse = async ({
           data,
           id: resolvedId,
           itemHeaders,
+          contentEncoding,
         });
         if (data.size > 0) {
           res.header('Content-Length', data.size.toString());
@@ -2066,6 +2165,15 @@ export const createDataHandler = ({
           dataItemMetaResolver,
         );
 
+        // Before any Range handling: the full stream starts at byte 0.
+        const contentEncoding = await resolveServedContentEncoding({
+          data,
+          dataAttributes,
+          id,
+          log,
+          signal: req.signal,
+        });
+
         // Check if the request includes a Range header
         const rangeHeader = req.headers.range;
         if (rangeHeader !== undefined && data !== undefined) {
@@ -2082,6 +2190,7 @@ export const createDataHandler = ({
             data,
             id,
             itemHeaders,
+            contentEncoding,
           });
 
           await handleRangeRequest({
@@ -2106,6 +2215,7 @@ export const createDataHandler = ({
             data,
             id,
             itemHeaders,
+            contentEncoding,
           });
           if (data.size > 0) {
             res.header('Content-Length', data.size.toString());

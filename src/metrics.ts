@@ -1121,6 +1121,12 @@ export const upstreamDecodedBodyRejectedTotal = new promClient.Counter({
   labelNames: ['class', 'source', 'encoding', 'reason'] as const,
 });
 
+export const servedContentEncodingDroppedTotal = new promClient.Counter({
+  name: 'served_content_encoding_dropped_total',
+  help: 'Count of data responses served without the Content-Encoding their item names, because the body does not start with that coding\'s magic bytes: an item tagged with a coding it does not use, or (verified="false") possibly a copy decoded upstream that should be purged.',
+  labelNames: ['encoding', 'verified'] as const,
+});
+
 // Time from an outbound gateway request needing a socket (Agent.addRequest) to a
 // socket being assigned (the request's 'socket' event). This is the phase BEFORE
 // bytes hit the wire, so it surfaces keep-alive pool waits and socket-reuse

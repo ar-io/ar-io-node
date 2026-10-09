@@ -233,6 +233,58 @@ describe('Data routes', () => {
         }
       });
 
+      it('drops an indexed coding the bytes do not use', async () => {
+        // A Content-Encoding tag is the uploader's claim: an item can be
+        // tagged gzip and carry plain bytes.
+        dataAttributesSource = {
+          getDataAttributes: () =>
+            Promise.resolve({ contentEncoding: 'gzip' } as any),
+        };
+        serve(undefined);
+
+        const res = await get();
+
+        assert.equal(res.headers['content-encoding'], undefined);
+        assert.equal(res.headers['content-length'], String(body.length));
+        assert.deepEqual(res.body, body);
+      });
+
+      it('keeps gzip when the first chunk is shorter than its magic', async () => {
+        dataAttributesSource = {
+          getDataAttributes: () =>
+            Promise.resolve({ contentEncoding: 'gzip' } as any),
+        };
+        dataSource = {
+          getData: () =>
+            Promise.resolve({
+              stream: Readable.from([
+                gzipped.subarray(0, 1),
+                gzipped.subarray(1),
+              ]),
+              size: gzipped.length,
+              verified: false,
+              trusted: true,
+              cached: false,
+            }),
+        };
+        app.get(
+          '/:id',
+          createDataHandler({
+            log,
+            dataAttributesSource,
+            dataSource,
+            dataBlockListValidator,
+            manifestPathResolver,
+          }),
+        );
+
+        const res = await get();
+
+        assert.equal(res.headers['content-encoding'], 'gzip');
+        // Decoded by the client, so every byte survived the peek.
+        assert.deepEqual(res.body, body);
+      });
+
       it('sends no Content-Encoding for unencoded bytes', async () => {
         serve(undefined);
 
