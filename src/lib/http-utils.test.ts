@@ -26,6 +26,7 @@ import {
   parseContentRange,
   parseNonNegativeInt,
   undeclaredTaggedEncoding,
+  dataEtag,
   wouldReturn304,
 } from './http-utils.js';
 
@@ -681,6 +682,53 @@ describe('http-utils', () => {
 
       // Should be: 100 + 100 + 1000 = 1200 bytes data + multipart overhead
       assert.equal(size > 1200, true);
+    });
+  });
+
+  describe('dataEtag', () => {
+    const DIGEST = 'EH9VS4MRVSI5tcxNbyq5p2o9Yuq1iJQ8r-kkzKHOwj8';
+    const OLD_ID = 's8-yxqdYQRqMaVQ-TTlnMt0mu7gWQsFKua3dujzs0mY';
+    const NEW_ID = 'd1FJ-x_35islazgNjqw54eKERvE78j8X2FntbALlkaM';
+    const resWith = (resolvedId?: string): any => ({
+      getHeader: (name: string) =>
+        name.toLowerCase() === 'x-arns-resolved-id' ? resolvedId : undefined,
+    });
+
+    it('is the plain digest for a response not routed through a name', () => {
+      assert.equal(dataEtag(resWith(undefined), DIGEST), DIGEST);
+    });
+
+    it('is the plain digest when the resolved id header is empty', () => {
+      assert.equal(dataEtag(resWith(''), DIGEST), DIGEST);
+    });
+
+    it('includes the resolved id for an ArNS-routed response', () => {
+      assert.equal(dataEtag(resWith(NEW_ID), DIGEST), `${DIGEST}.${NEW_ID}`);
+    });
+
+    it('changes when a name is re-pointed at identical bytes', () => {
+      // duck-db-wasm on 2026-10-09: same file at /, new manifest.
+      assert.notEqual(
+        dataEtag(resWith(OLD_ID), DIGEST),
+        dataEtag(resWith(NEW_ID), DIGEST),
+      );
+    });
+
+    it('makes a revalidation with the old tag a full response, not a 304', () => {
+      const req: any = {
+        get: mock.fn(() => `"${dataEtag(resWith(OLD_ID), DIGEST)}"`),
+        method: 'GET',
+      };
+      assert.equal(
+        wouldReturn304(req, dataEtag(resWith(NEW_ID), DIGEST), true),
+        false,
+      );
+    });
+
+    it('still returns 304 when bytes and resolution are both unchanged', () => {
+      const tag = dataEtag(resWith(NEW_ID), DIGEST);
+      const req: any = { get: mock.fn(() => `"${tag}"`), method: 'GET' };
+      assert.equal(wouldReturn304(req, tag, true), true);
     });
   });
 

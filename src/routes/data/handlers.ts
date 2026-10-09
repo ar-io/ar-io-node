@@ -54,6 +54,7 @@ import {
   hasContentEncodingMagic,
   honouredContentEncoding,
   parseNonNegativeInt,
+  dataEtag,
   wouldReturn304,
 } from '../../lib/http-utils.js';
 
@@ -115,7 +116,14 @@ export async function handleDataRateLimitingAndPayment({
 
   // Treat cache revalidation that will result in 304 as zero-cost
   // (data.cached is set to true) OR this is a HEAD request (etag for match check available)
-  const willReturn304 = wouldReturn304(req, dataAttributes?.hash, data.cached);
+  // The same tag setDataHeaders will send, so a predicted 304 is a real one.
+  const willReturn304 = wouldReturn304(
+    req,
+    dataAttributes?.hash !== undefined
+      ? dataEtag(res, dataAttributes.hash)
+      : undefined,
+    data.cached,
+  );
 
   const contentSize =
     req.method === REQUEST_METHOD_HEAD || willReturn304
@@ -221,7 +229,7 @@ const setDigestStableVerifiedHeaders = ({
           headerNames.contentDigest,
           formatContentDigest(dataAttributes.hash),
         );
-        res.setHeader('ETag', `"${dataAttributes.hash}"`);
+        res.setHeader('ETag', `"${dataEtag(res, dataAttributes.hash)}"`);
       }
     }
   }
