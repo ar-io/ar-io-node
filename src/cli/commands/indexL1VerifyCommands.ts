@@ -59,6 +59,7 @@ async function verifyBandsCLI(
         ? { to: whole(options.to, '--to') as number }
         : {}),
       txRoot: options.skipTxRoot !== true,
+      lookups: options.skipLookups !== true,
     });
     log.info('Checked bands', { ok: out.ok, blocks: out.blocks });
     const answer = {
@@ -72,6 +73,8 @@ async function verifyBandsCLI(
       merkleSkipped: out.merkleSkipped,
       accountingChecked: out.accountingChecked,
       accountingSkipped: out.accountingSkipped,
+      lookupsChecked: out.lookupsChecked,
+      lookupsSkipped: out.lookupsSkipped,
       ok: out.ok,
       checks: out.checks.map((c: VerifyCheck) => ({
         name: c.name,

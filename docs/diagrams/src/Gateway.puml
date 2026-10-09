@@ -25,13 +25,14 @@ System_Boundary(ar-io, "AR.IO Gateway"){
     ContainerDb(clickhouse, "ClickHouse", "Optional: stable GraphQL history")
     Component(sidecar, "Index Swarm Sidecar", "Optional: publishes and subscribes to signed indexes")
     Component(engine, "Torrent Engine", "Optional: moves index bands peer to peer")
+    Component(exporter, "Index Export", "Optional: builds root-TX and Parquet L1 bands, and adds lookup files to published L1 bands")
 
     ContainerDb(chunks, "Chunk data")
     ContainerDb(headers, "Header Data")
     ContainerDb(contiguous, "Contiguous Data")
     ContainerDb(reports, "Observer Reports")
     ContainerDb(index, "Chain and Bundle Index", "SQLite: core, data, bundles, moderation, chunks")
-    ContainerDb(indexes, "Shared Indexes", "data/indexes: published and installed CDB64 bands")
+    ContainerDb(indexes, "Shared Indexes", "data/indexes: published and installed CDB64 and Parquet bands")
 }
 
 ' Relationships
@@ -50,6 +51,8 @@ Rel(core, clickhouse, "Stable history: Parquet export, loaded by clickhouse-auto
 Rel(core, indexes, "Serves published indexes and loads installed ones", "read only")
 
 Rel(sidecar, indexes, "Writes its signed publication; verifies others' signatures and band digests, installs their bands")
+Rel(exporter, index, "Reads core.db to build L1 bands", "read only")
+Rel(exporter, indexes, "Writes bands into published/; derives lookup files in place")
 Rel(sidecar, core, "Reads the gateway registry", "/ar-io/peers")
 Rel(sidecar, peers, "Fetches other gateways' signed indexes", "HTTPS")
 Rel(sidecar, engine, "Drives over its Web API")
@@ -61,6 +64,7 @@ Rel(observer, network, "Checks other gateways' ArNS resolution and data, and sub
 ' Layout hints: keep the index-sharing pieces together on the left
 Lay_Right(sidecar, observer)
 Lay_Down(sidecar, engine)
+Lay_Down(engine, exporter)
 Lay_Left(indexes, chunks)
 
 ' Legend

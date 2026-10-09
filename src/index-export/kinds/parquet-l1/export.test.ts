@@ -13,10 +13,12 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import Sqlite from 'better-sqlite3';
 
 import {
+  PARQUET_L1_LOOKUPS,
   PARQUET_L1_SCHEMA,
   PARQUET_L1_TABLES,
 } from '../../../lib/parquet-l1/layout.js';
 import { readTable } from '../../../lib/parquet-l1/read.js';
+import { verifyBandLookups } from '../../../lib/parquet-l1/lookups.js';
 import { ParquetL1Kind } from '../../../index-swarm/kinds/parquet-l1.js';
 import { buildCoreDb } from '../../../../test/parquet-l1-core-db.js';
 import { createTestLogger } from '../../../../test/test-logger.js';
@@ -109,6 +111,54 @@ describe('exportL1Band', () => {
       [],
       'nothing else left in the work directory',
     );
+  });
+
+  it('writes l1-3: lookups derived from the band’s tables, described in band.json', async () => {
+    const result = await exportL1Band({
+      coreDbPath: coreDb,
+      workDir,
+      from: FIRST,
+      to: FIRST + 29,
+      supersedes: [],
+      windowHeights: 7,
+    });
+    assert.equal(result.band.schema, 'l1-3');
+    const lookups = result.band.lookups ?? {};
+    assert.deepEqual(Object.keys(lookups).sort(), ['tag', 'tx_id', 'wallet']);
+    // One tx_id row per transaction; a wallet row per signer and per
+    // non-empty recipient; a tag row per distinct (name, value).
+    assert.equal(lookups.tx_id.rows, result.band.tables.transactions.rows);
+    for (const spec of PARQUET_L1_LOOKUPS) {
+      await fsp.stat(path.join(result.dir, spec.file));
+    }
+    const { Database } = await import('duckdb-async');
+    const duck = await Database.create(':memory:');
+    try {
+      const count = async (sql: string) =>
+        Number(((await duck.all(sql)) as Array<{ n: bigint }>)[0].n);
+      const tx = `read_parquet('${path.join(result.dir, 'transactions.parquet')}')`;
+      const tags = `read_parquet('${path.join(result.dir, 'tags.parquet')}')`;
+      assert.equal(
+        lookups.wallet.rows,
+        await count(
+          `SELECT (SELECT count(*) FROM ${tx} WHERE owner_address IS NOT NULL)
+                + (SELECT count(*) FROM ${tx} WHERE octet_length(target) > 0) AS n`,
+        ),
+      );
+      assert.equal(
+        lookups.tag.rows,
+        await count(
+          `SELECT count(*) AS n FROM (SELECT DISTINCT tag_name, tag_value FROM ${tags})`,
+        ),
+      );
+      // The verifier's check, run on what the exporter wrote.
+      assert.deepEqual(
+        await verifyBandLookups(duck, result.dir, result.band),
+        [],
+      );
+    } finally {
+      await duck.close();
+    }
   });
 
   it('refuses a band whose rows break the chain, naming the height, and leaves nothing', async () => {

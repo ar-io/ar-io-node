@@ -117,6 +117,43 @@ describe('verifyBands', () => {
     assert.ok(out.txRootChecked > 0, 'tx_root was recomputed from the bands');
   });
 
+  it('checks every band’s lookups against its tables and its band.json', async () => {
+    const out = await verifyBands(duck, bandsDir, { window: 7 });
+    assert.equal(out.lookupsChecked, 2);
+    assert.equal(out.lookupsSkipped, 0);
+    const check = out.checks.find((c) => c.name === 'lookups');
+    assert.equal(check?.ok, true, check?.detail);
+
+    const skipped = await verifyBands(duck, bandsDir, {
+      window: 7,
+      lookups: false,
+    });
+    assert.equal(
+      skipped.checks.some((c) => c.name === 'lookups'),
+      false,
+    );
+  });
+
+  it('names a band whose lookup points somewhere its tables do not', async () => {
+    const [second] = (await fsp.readdir(bandsDir)).sort().slice(1);
+    const file = path.join(bandsDir, second, 'lookup_tx_id.parquet');
+    // Every pointer moved one block up: a lookup that lies about its table.
+    await duck.exec(
+      `COPY (SELECT id8, height + 1 AS height FROM read_parquet('${file}') ORDER BY id8, height)
+       TO '${file}.forged' (FORMAT PARQUET)`,
+    );
+    await fsp.rename(`${file}.forged`, file);
+    const out = await verifyBands(duck, bandsDir, { window: 7 });
+    assert.equal(out.ok, false);
+    const check = out.checks.find((c) => c.name === 'lookups');
+    assert.equal(check?.ok, false);
+    assert.equal(check?.failures?.[0].height, FIRST + SPAN);
+    assert.match(
+      check?.failures?.[0].found ?? '',
+      new RegExp(`^${second}: lookup_tx_id\\.parquet`),
+    );
+  });
+
   it('agrees with the core.db verifier on the same chain', async () => {
     // The two drive the same chain.ts rules over different readers. A
     // rule reimplemented twice is a rule that drifts, so this requires

@@ -118,6 +118,11 @@ export const optionMap = {
     description:
       'Leave out the tx_root recomputation, the one check that reads every transaction. Everything else is seconds; this is minutes over a whole chain',
   },
+  skipLookups: {
+    alias: '--skip-lookups',
+    description:
+      "With --bands-dir, leave out the check of each band's lookup files against its tables and its band.json",
+  },
   dataFrom: {
     alias: '--data-from <url>',
     description:
@@ -221,6 +226,7 @@ export const indexL1VerifyOptions: CommanderOption[] = [
   optionMap.coreDbReadOnly,
   optionMap.verifyBandsDir,
   optionMap.skipTxRoot,
+  optionMap.skipLookups,
   optionMap.fromHeight,
   optionMap.toHeight,
   optionMap.anchorFrom,

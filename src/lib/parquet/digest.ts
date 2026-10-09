@@ -6,8 +6,8 @@
  */
 
 /**
- * The row digest of a `parquet-l1` table: SHA-256 over its rows in the
- * table's order, each value encoded by its column's type in the layout, so it
+ * The row digest of a band's Parquet table or lookup: SHA-256 over its rows
+ * in the declared order, each value encoded by its column's declared type, so it
  * doesn't depend on the Parquet bytes (which differ between DuckDB versions)
  * or on how a reader returns a value (a number, a bigint or a decimal
  * string). Two publishers holding the same rows have the same digests, and
@@ -19,7 +19,7 @@
  */
 import crypto from 'node:crypto';
 
-import type { ColumnSpec } from './layout.js';
+import type { ColumnSpec } from './check.js';
 
 type Encoder = (value: unknown) => Buffer;
 

@@ -31,7 +31,7 @@ const metric = <T extends string>(
 export const runs = metric(
   'counter',
   'index_export_runs_total',
-  'Band builds by outcome: published, unchanged, skipped, couldnt_check (retried) or rejected (needs an operator), with the reason.',
+  'Band builds by outcome: published, unchanged, skipped, couldnt_check (retried) or rejected (needs an operator), with the reason. kind=derive counts lookups added to a published parquet-l1 band.',
   ['index', 'kind', 'result', 'reason'],
 ) as promClient.Counter<'index' | 'kind' | 'result' | 'reason'>;
 

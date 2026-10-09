@@ -8,7 +8,7 @@ import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
 
 import { RowDigest } from './digest.js';
-import type { ColumnSpec } from './layout.js';
+import type { ColumnSpec } from './check.js';
 
 const columns: ColumnSpec[] = [
   { name: 'id', type: 'BLOB' },

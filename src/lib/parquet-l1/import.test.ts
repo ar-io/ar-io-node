@@ -16,7 +16,7 @@ import type { Database } from 'duckdb-async';
 import { exportL1Band } from '../../index-export/kinds/parquet-l1/export.js';
 import { buildCoreDb } from '../../../test/parquet-l1-core-db.js';
 import { FORK_2_0 } from './chain.js';
-import { RowDigest } from './digest.js';
+import { RowDigest } from '../parquet/digest.js';
 import { PARQUET_L1_TABLES } from './layout.js';
 import { readTable } from './read.js';
 import { createTestLogger } from '../../../test/test-logger.js';

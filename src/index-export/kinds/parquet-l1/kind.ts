@@ -21,6 +21,11 @@
  *
  * Bands are built in order, from height 0, because an importer imports a
  * contiguous run.
+ *
+ * A published band whose tables are current but whose lookups are not (an
+ * `l1-2` band once `l1-3` is the layout) is never rebuilt: its lookups are
+ * derived from its own tables and added in place ({@link planL1Derive},
+ * {@link runL1Derive}), keeping its id.
  */
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
@@ -36,16 +41,21 @@ import {
   L1_SUB_SPAN,
   l1RangeOf,
   l1SubRangeOf,
-  isCurrentLayout,
+  lookupsCurrent,
+  lookupsOf,
+  PARQUET_L1_SCHEMA,
   ParquetL1Band,
   readBandDirectory,
+  tablesCurrent,
 } from '../../../lib/parquet-l1/layout.js';
+import { writeBandLookups } from '../../../lib/parquet-l1/lookups.js';
 import * as metrics from '../../metrics.js';
 import {
   exportL1Band,
   isTransientSqliteError,
   L1CheckError,
   L1IncompleteError,
+  withBandWriter,
 } from './export.js';
 
 export const L1_INDEX = 'parquet-l1';
@@ -141,13 +151,14 @@ export function planL1(
   bands: L1PublishedBand[],
   top: number,
   superseded: string[] = [],
-  /** Older-layout bands already rebuilt and found identical; see {@link isCurrentLayout}. */
+  /** Older-layout bands already rebuilt and found identical; see {@link tablesCurrent}. */
   confirmed: ReadonlySet<string> = new Set(),
 ): L1Step[] {
   if (top < 0) return [];
   const steps: L1Step[] = [];
+  // Current tables are enough: missing lookups are derived, not rebuilt.
   const current = (b: L1PublishedBand) =>
-    isCurrentLayout(b.band.schema, b.id, confirmed);
+    tablesCurrent(b.band.schema, b.id, confirmed);
   const covers = (from: number, to: number) => [
     ...new Set([
       ...superseded.filter((id) => {
@@ -396,5 +407,146 @@ export async function runL1Step(
     reason: outcome.reason,
   });
   log.info('L1 band step finished', { ...outcome });
+  return outcome;
+}
+
+/** What deriving one published band's lookups came to. */
+export interface L1DeriveOutcome {
+  index: typeof L1_INDEX;
+  id: string;
+  heightRange: [number, number];
+  /** `published`: the lookups and the new `band.json` are in place. */
+  result: 'published' | 'couldnt_check' | 'dry_run';
+  reason: string;
+  details?: string[];
+  /** Rows per lookup. */
+  rows?: Record<string, number>;
+  seconds: number;
+}
+
+/**
+ * The published bands to upgrade by deriving their lookups: tables current
+ * (see {@link tablesCurrent}), lookups not. Never a rebuild, and no read of
+ * `core.db`.
+ */
+export function planL1Derive(
+  bands: L1PublishedBand[],
+  confirmed: ReadonlySet<string> = new Set(),
+): L1PublishedBand[] {
+  return bands.filter(
+    (b) =>
+      tablesCurrent(b.band.schema, b.id, confirmed) &&
+      !lookupsCurrent(b.band.schema),
+  );
+}
+
+/**
+ * Derives a published band's lookups from its own tables and adds them, in
+ * place, under the band's id.
+ *
+ * The lookups are written in `workDir` (on the band's filesystem), moved
+ * into the band, and only then is the band's `band.json` replaced, by a
+ * rename: a reader that goes by `band.json` (publisher, subscriber,
+ * importer) sees the old band or the new one, never lookups its description
+ * doesn't name. No file already in the band is touched. A crash part-way
+ * leaves lookup files the old description doesn't name, which readers
+ * ignore and the next run writes again.
+ */
+export async function runL1Derive(
+  band: L1PublishedBand,
+  {
+    workDir,
+    dryRun,
+    log,
+    stillHeld,
+  }: {
+    workDir: string;
+    dryRun: boolean;
+    log: Logger;
+    /** Asked just before the band is changed, as for a build. */
+    stillHeld?: () => Promise<boolean>;
+  },
+): Promise<L1DeriveOutcome> {
+  const started = Date.now();
+  const base = {
+    index: L1_INDEX,
+    id: band.id,
+    heightRange: [band.from, band.to] as [number, number],
+  } as const;
+  let outcome: L1DeriveOutcome;
+  await fs.mkdir(workDir, { recursive: true });
+  const staging = await fs.mkdtemp(path.join(workDir, 'derive-'));
+  try {
+    const lookups = await withBandWriter(staging, (duck) =>
+      writeBandLookups(duck, band.dir, staging),
+    );
+    const rows = Object.fromEntries(
+      Object.entries(lookups).map(([name, l]) => [name, l.rows]),
+    );
+    if (dryRun) {
+      outcome = {
+        ...base,
+        result: 'dry_run',
+        reason: 'dry_run',
+        rows,
+        seconds: 0,
+      };
+    } else if (stillHeld !== undefined && !(await stillHeld())) {
+      outcome = {
+        ...base,
+        result: 'couldnt_check',
+        reason: 'lock_lost',
+        details: ['another run took the lock while this one stalled'],
+        rows,
+        seconds: 0,
+      };
+    } else {
+      for (const spec of lookupsOf(PARQUET_L1_SCHEMA)) {
+        await fs.rename(
+          path.join(staging, spec.file),
+          path.join(band.dir, spec.file),
+        );
+      }
+      const next: ParquetL1Band = {
+        version: 1,
+        schema: PARQUET_L1_SCHEMA,
+        heightRange: band.band.heightRange,
+        tables: band.band.tables,
+        lookups,
+        ...(band.band.supersedes !== undefined
+          ? { supersedes: band.band.supersedes }
+          : {}),
+        createdAt: band.band.createdAt,
+      };
+      const temporary = path.join(band.dir, `.${BAND_FILE}.tmp`);
+      await fs.writeFile(temporary, JSON.stringify(next, null, 2));
+      await fs.rename(temporary, path.join(band.dir, BAND_FILE));
+      outcome = {
+        ...base,
+        result: 'published',
+        reason: 'lookups',
+        rows,
+        seconds: 0,
+      };
+    }
+  } catch (error) {
+    outcome = {
+      ...base,
+      result: 'couldnt_check',
+      reason: 'derive',
+      details: [error instanceof Error ? error.message : String(error)],
+      seconds: 0,
+    };
+  } finally {
+    await fs.rm(staging, { recursive: true, force: true });
+  }
+  outcome.seconds = (Date.now() - started) / 1000;
+  metrics.runs.inc({
+    index: L1_INDEX,
+    kind: 'derive',
+    result: outcome.result,
+    reason: outcome.reason,
+  });
+  log.info('L1 band lookups derived', { ...outcome });
   return outcome;
 }

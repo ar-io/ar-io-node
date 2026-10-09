@@ -39,14 +39,17 @@ import {
   planFold,
   PlanInput,
 } from './kinds/root-tx/planner.js';
-import { l1RangeOf, PARQUET_L1_SCHEMA } from '../lib/parquet-l1/layout.js';
+import { l1RangeOf, PARQUET_L1_TABLE_RULES } from '../lib/parquet-l1/layout.js';
 import {
   deriveL1Bands,
   L1_INDEX,
+  L1DeriveOutcome,
   L1Outcome,
   L1PublishedBand,
   L1Step,
   planL1,
+  planL1Derive,
+  runL1Derive,
   runL1Step,
 } from './kinds/parquet-l1/kind.js';
 import { CsvOverlaySource } from './kinds/root-tx/sources/csv.js';
@@ -113,6 +116,8 @@ export interface RunReport {
   l1Steps: L1Outcome[];
   /** `parquet-l1` bands planned but left for the next run (the time budget). */
   l1Deferred?: Array<[number, number]>;
+  /** Published `parquet-l1` bands whose lookups were derived and added in place. */
+  l1Derived?: L1DeriveOutcome[];
   gateUrl: string;
   /** Disk the run's builds needed together (each step's scratch and band). */
   peakBytes: number;
@@ -171,7 +176,11 @@ export function runResult(report: RunReport): string {
     'unchanged',
     'skipped',
   ];
-  const all = [...report.steps, ...(report.l1Steps ?? [])];
+  const all = [
+    ...report.steps,
+    ...(report.l1Steps ?? []),
+    ...(report.l1Derived ?? []),
+  ];
   for (const result of order) {
     if (all.some((step) => step.result === result)) return result;
   }
@@ -716,7 +725,7 @@ export class ExportService {
       const bands = await deriveL1Bands(config.l1PublishDir, config.publisher);
       const confirmed = new Set(
         Object.entries(state.layoutConfirmed ?? {})
-          .filter(([, schema]) => schema === PARQUET_L1_SCHEMA)
+          .filter(([, rules]) => rules === PARQUET_L1_TABLE_RULES)
           .map(([id]) => id),
       );
       const steps = planL1(
@@ -799,6 +808,54 @@ export class ExportService {
       });
       log.error('L1 export stopped', { error: message });
     }
+    await this.deriveL1Lookups(report, workDir, dryRun);
+  }
+
+  /**
+   * Adds lookups to every published band whose tables are current but whose
+   * lookups are not: derived from the band's own tables, in seconds, with no
+   * read of `core.db`, so it runs whatever happened to the builds and outside
+   * their time budget. Bands this run confirmed identical count as current.
+   */
+  private async deriveL1Lookups(
+    report: RunReport,
+    workDir: string,
+    dryRun: boolean,
+  ): Promise<void> {
+    const { config, log } = this.deps;
+    try {
+      const state = indexState(await loadState(this.stateFile), L1_INDEX);
+      const confirmed = new Set([
+        ...Object.entries(state.layoutConfirmed ?? {})
+          .filter(([, rules]) => rules === PARQUET_L1_TABLE_RULES)
+          .map(([id]) => id),
+        ...report.l1Steps
+          .filter((s) => s.result === 'unchanged' && s.reason === 'same_id')
+          .flatMap((s) => (s.id !== undefined ? [s.id] : [])),
+      ]);
+      const bands = await deriveL1Bands(config.l1PublishDir, config.publisher);
+      const due = planL1Derive(bands, confirmed);
+      if (due.length === 0) return;
+      await assertSameFilesystem(workDir, config.l1PublishDir);
+      report.l1Derived = [];
+      for (const band of due) {
+        report.l1Derived.push(
+          await runL1Derive(band, {
+            workDir,
+            dryRun,
+            log,
+            ...(this.lock !== undefined
+              ? { stillHeld: async () => this.lock?.held() ?? false }
+              : {}),
+          }),
+        );
+      }
+      recordL1Bands(await deriveL1Bands(config.l1PublishDir, config.publisher));
+    } catch (error) {
+      log.error('L1 lookups not derived', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   /**
@@ -857,7 +914,7 @@ export class ExportService {
       ) {
         state.layoutConfirmed = {
           ...state.layoutConfirmed,
-          [step.id]: PARQUET_L1_SCHEMA,
+          [step.id]: PARQUET_L1_TABLE_RULES,
         };
       }
       if (step.result === 'rejected' && step.reason !== 'held') {
@@ -1109,7 +1166,7 @@ export class ExportService {
         reasons: [report.failed.reason, report.failed.message],
       };
     }
-    const result = runResult({ ...report, l1Steps: [] });
+    const result = runResult({ ...report, l1Steps: [], l1Derived: [] });
     if (result === 'couldnt_check') {
       const attempts = (state.retry?.attempts ?? 0) + 1;
       const delay = Math.min(

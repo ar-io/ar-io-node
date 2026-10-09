@@ -10,14 +10,18 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import Sqlite from 'better-sqlite3';
+import { Database } from 'duckdb-async';
 
 import { bandPublisherTag } from '../lib/index-band/build.js';
 import {
   BAND_FILE,
+  bandFiles,
   L1_SPAN,
+  PARQUET_L1_LOOKUPS,
   PARQUET_L1_SCHEMA,
   PARQUET_L1_TABLES,
 } from '../lib/parquet-l1/layout.js';
+import { verifyBandLookups } from '../lib/parquet-l1/lookups.js';
 import { buildCoreDb } from '../../test/parquet-l1-core-db.js';
 import { createTestLogger } from '../../test/test-logger.js';
 import type { ExportConfig } from './config.js';
@@ -95,6 +99,13 @@ describe('ExportService parquet-l1', () => {
               { rows: 0, rowDigest: '0'.repeat(64) },
             ]),
           ),
+          // Current, lookups included, so there is nothing to derive.
+          lookups: Object.fromEntries(
+            PARQUET_L1_LOOKUPS.map((l) => [
+              l.name,
+              { rows: 0, rowDigest: '0'.repeat(64) },
+            ]),
+          ),
           createdAt: '2026-10-01T00:00:00Z',
         }),
       );
@@ -138,6 +149,98 @@ describe('ExportService parquet-l1', () => {
     // The one it replaces, and the one before that, for a subscriber that
     // missed the second.
     assert.deepEqual(tip?.band.supersedes, [first, second]);
+  });
+
+  describe('adding lookups to published bands', () => {
+    /** Rewrites a published band as `schema` without lookups, as an older exporter left it. */
+    async function downgrade(id: string, schema: 'l1-1' | 'l1-2') {
+      const bandDir = path.join(config().l1PublishDir, id);
+      for (const spec of PARQUET_L1_LOOKUPS) {
+        await fs.rm(path.join(bandDir, spec.file));
+      }
+      const file = path.join(bandDir, BAND_FILE);
+      const { lookups: _dropped, ...json } = JSON.parse(
+        await fs.readFile(file, 'utf8'),
+      );
+      await fs.writeFile(file, JSON.stringify({ ...json, schema }, null, 2));
+      return bandDir;
+    }
+    /** Each table file's inode, size and mtime: what an in-place change must not touch. */
+    const tableStats = async (bandDir: string) =>
+      Promise.all(
+        PARQUET_L1_TABLES.map(async (t) => {
+          const st = await fs.stat(path.join(bandDir, t.file));
+          return [t.file, st.ino, st.size, st.mtimeMs];
+        }),
+      );
+    const derived = (report: { l1Derived?: any[] }) =>
+      (report.l1Derived ?? []).map((d) => [d.id, d.result, d.reason]);
+
+    it('derives an l1-2 band’s lookups in place: same id, tables untouched', async () => {
+      await publishedBelow();
+      let report = await service().runOnce({ toHeight: FIRST + 9 });
+      const id = report.l1Steps[0].id as string;
+      const bandDir = await downgrade(id, 'l1-2');
+      const before = await tableStats(bandDir);
+
+      report = await service().runOnce({ toHeight: FIRST + 9 });
+      assert.deepEqual(report.l1Steps, [], 'nothing rebuilt');
+      assert.deepEqual(derived(report), [[id, 'published', 'lookups']]);
+      assert.equal(report.l1Derived?.[0].rows?.tx_id, 10 + 3);
+
+      const tip = (await live()).at(-1);
+      assert.equal(tip?.id, id, 'the same id');
+      assert.equal(tip?.band.schema, 'l1-3');
+      assert.deepEqual(await tableStats(bandDir), before, 'tables untouched');
+      assert.deepEqual(
+        (await fs.readdir(bandDir)).sort(),
+        bandFiles('l1-3'),
+        'nothing else left in the band',
+      );
+      const duck = await Database.create(':memory:');
+      try {
+        assert.deepEqual(await verifyBandLookups(duck, bandDir, tip!.band), []);
+      } finally {
+        await duck.close();
+      }
+
+      // Current now: nothing more to derive.
+      report = await service().runOnce({ toHeight: FIRST + 9 });
+      assert.deepEqual(derived(report), []);
+    });
+
+    it('derives on a dry run but changes nothing', async () => {
+      await publishedBelow();
+      const report1 = await service().runOnce({ toHeight: FIRST + 9 });
+      const id = report1.l1Steps[0].id as string;
+      const bandDir = await downgrade(id, 'l1-2');
+      const json = await fs.readFile(path.join(bandDir, BAND_FILE), 'utf8');
+      const report = await service().runOnce({
+        toHeight: FIRST + 9,
+        dryRun: true,
+      });
+      assert.deepEqual(derived(report), [[id, 'dry_run', 'dry_run']]);
+      assert.equal(
+        await fs.readFile(path.join(bandDir, BAND_FILE), 'utf8'),
+        json,
+      );
+      assert.deepEqual((await fs.readdir(bandDir)).sort(), bandFiles('l1-2'));
+    });
+
+    it('confirms an l1-1 band rebuilt identical and derives it in the same run', async () => {
+      // What the one-time l1-2 rebuild leaves: an l1-1 band whose rows the
+      // current rules reproduce, so the rebuild keeps it under the same id.
+      await publishedBelow();
+      const report1 = await service().runOnce({ toHeight: FIRST + 9 });
+      const id = report1.l1Steps[0].id as string;
+      await downgrade(id, 'l1-1');
+      const report = await service().runOnce({ toHeight: FIRST + 9 });
+      assert.deepEqual(steps(report), [
+        ['d', [FIRST, FIRST + 9], 'unchanged', 'same_id'],
+      ]);
+      assert.deepEqual(derived(report), [[id, 'published', 'lookups']]);
+      assert.equal((await live()).at(-1)?.band.schema, 'l1-3');
+    });
   });
 
   it('keeps each index’s outcome to itself: root-TX state is untouched', async () => {
