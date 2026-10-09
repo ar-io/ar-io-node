@@ -23,7 +23,10 @@ import {
 } from '../lib/parquet-l1/layout.js';
 import { verifyBandLookups } from '../lib/parquet-l1/lookups.js';
 import { buildCoreDb } from '../../test/parquet-l1-core-db.js';
-import { createTestLogger } from '../../test/test-logger.js';
+import {
+  createRecordingTestLogger,
+  createTestLogger,
+} from '../../test/test-logger.js';
 import type { ExportConfig } from './config.js';
 import { deriveL1Bands, runL1Step } from './kinds/parquet-l1/kind.js';
 import { ExportService, L1_RUN_BUDGET_MS, RETRY_FIRST_MS } from './service.js';
@@ -57,10 +60,13 @@ describe('ExportService parquet-l1', () => {
     publishDir: path.join(dir, 'published', 'root-tx-index'),
     workDir: path.join(dir, 'export'),
   });
-  const service = () =>
+  const service = (
+    overrides: Partial<ExportConfig> = {},
+    logger: typeof log = log,
+  ) =>
     new ExportService({
-      config: config(),
-      log,
+      config: { ...config(), ...overrides },
+      log: logger,
       now: () => clock(),
       openSources: async () => {
         throw new Error('root-TX sources opened with only parquet-l1 enabled');
@@ -209,6 +215,30 @@ describe('ExportService parquet-l1', () => {
       assert.deepEqual(derived(report), []);
     });
 
+    it('derives before it builds, so lookups never wait behind a build', async () => {
+      await publishedBelow();
+      let report = await service().runOnce({ toHeight: FIRST + 9 });
+      const id = report.l1Steps[0].id as string;
+      await downgrade(id, 'l1-2');
+
+      // The top has moved, so this run also rebuilds the tip band.
+      const { logger, entries } = createRecordingTestLogger({
+        suite: 'index-export service parquet-l1',
+      });
+      report = await service({}, logger).runOnce();
+      assert.deepEqual(derived(report), [[id, 'published', 'lookups']]);
+      assert.deepEqual(steps(report), [
+        ['d', [FIRST, TOP], 'published', 'new'],
+      ]);
+      const at = (message: string) =>
+        entries.findIndex((e) => e.message === message);
+      assert.ok(at('L1 band lookups derived') >= 0);
+      assert.ok(
+        at('L1 band lookups derived') < at('L1 band step finished'),
+        'derived first',
+      );
+    });
+
     it('derives on a dry run but changes nothing', async () => {
       await publishedBelow();
       const report1 = await service().runOnce({ toHeight: FIRST + 9 });
@@ -325,6 +355,64 @@ describe('ExportService parquet-l1', () => {
     const { retry } = await stateOf('parquet-l1');
     assert.equal(retry?.attempts, 0);
     assert.match(retry?.reason ?? '', /3 bands left by the time budget/);
+  });
+
+  it('takes its time budget from the config', async () => {
+    await publishedBelow([FIRST - 2 * L1_SPAN, FIRST - L1_SPAN]);
+    let calls = 0;
+    clock = () => now + calls++ * L1_RUN_BUDGET_MS;
+    // The same clock defers every band under the default budget (above);
+    // a far larger one lets the run start them. core.db lacks the first
+    // range, which is how this run ends.
+    const report = await service({
+      l1RunBudgetMs: 1000 * L1_RUN_BUDGET_MS,
+    }).runOnce();
+    assert.equal(report.l1Deferred, undefined);
+    assert.deepEqual(steps(report), [
+      [
+        'h',
+        [FIRST - 2 * L1_SPAN, FIRST - L1_SPAN - 1],
+        'couldnt_check',
+        'incomplete',
+      ],
+    ]);
+  });
+
+  it('leaves the derive out of the time budget', async () => {
+    // A tip band with only its lookups missing, and a history range to build.
+    await publishedBelow();
+    const first = await service().runOnce({ toHeight: FIRST + 9 });
+    const tip = path.join(config().l1PublishDir, first.l1Steps[0].id as string);
+    const bandPath = path.join(tip, BAND_FILE);
+    const { lookups: _dropped, ...json } = JSON.parse(
+      await fs.readFile(bandPath, 'utf8'),
+    );
+    for (const spec of PARQUET_L1_LOOKUPS) {
+      await fs.rm(path.join(tip, spec.file));
+    }
+    await fs.writeFile(bandPath, JSON.stringify({ ...json, schema: 'l1-2' }));
+    const tag = bandPublisherTag(PUBLISHER);
+    await fs.rm(
+      path.join(
+        config().l1PublishDir,
+        `l1-h${FIRST - L1_SPAN}-${FIRST - 1}-${tag}-000000000000`,
+      ),
+      { recursive: true },
+    );
+
+    // The derive takes a whole budget.
+    const slowDerive = Object.create(log) as typeof log;
+    slowDerive.info = ((message: string, ...rest: unknown[]) => {
+      if (message === 'L1 band lookups derived') now += L1_RUN_BUDGET_MS;
+      return (log.info as any)(message, ...rest);
+    }) as typeof log.info;
+    const report = await service({}, slowDerive).runOnce();
+    assert.equal(report.l1Derived?.[0]?.result, 'published');
+    assert.equal(report.l1Deferred, undefined, 'the build was not deferred');
+    // core.db lacks that range, which is how this run ends.
+    assert.deepEqual(steps(report), [
+      ['h', [FIRST - L1_SPAN, FIRST - 1], 'couldnt_check', 'incomplete'],
+    ]);
   });
 
   it('publishes nothing once another run has taken the lock', async () => {

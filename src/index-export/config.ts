@@ -45,6 +45,12 @@ export interface ExportConfig {
   recentMaxBlocks: number;
   /** Lowest height to build; required to bootstrap. */
   startHeight?: number;
+  /**
+   * How long a run may keep starting L1 history bands. Defaults to
+   * {@link L1_RUN_BUDGET_MS} in the service: 4 hours, to keep a daily run
+   * off-peak. Raise it for an operator's one-time rebuild or bootstrap.
+   */
+  l1RunBudgetMs?: number;
   /** Gateway the header check reads roots from. Required. */
   headerCheckUrl: string;
   headerCheckTimeoutMs: number;
@@ -144,6 +150,13 @@ export function parseExportConfig(env: Env, dataDir = DATA_DIR): ExportConfig {
     CLICKHOUSE_PASSWORD: env.CLICKHOUSE_PASSWORD,
   };
   const startHeight = integer(env, 'INDEX_EXPORT_START_HEIGHT', { min: 0 });
+  const l1RunBudgetMinutes = integer(
+    env,
+    'INDEX_EXPORT_L1_RUN_BUDGET_MINUTES',
+    {
+      min: 1,
+    },
+  );
   return {
     kinds: [...new Set(kinds)] as ExportKind[],
     coreDbPath: value(env, 'INDEX_EXPORT_CORE_DB') ?? 'data/sqlite/core.db',
@@ -159,6 +172,9 @@ export function parseExportConfig(env: Env, dataDir = DATA_DIR): ExportConfig {
       fallback: 100_000,
     }) as number,
     ...(startHeight !== undefined ? { startHeight } : {}),
+    ...(l1RunBudgetMinutes !== undefined
+      ? { l1RunBudgetMs: l1RunBudgetMinutes * 60_000 }
+      : {}),
     headerCheckUrl,
     headerCheckTimeoutMs: integer(env, 'INDEX_EXPORT_HEADER_CHECK_TIMEOUT_MS', {
       min: 1000,

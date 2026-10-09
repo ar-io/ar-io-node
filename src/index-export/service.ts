@@ -77,8 +77,9 @@ export const RETRY_MAX_MS = 2 * 3600_000;
 /** How long the loop waits after a run that was locked out or threw. */
 export const BLOCKED_WAIT_MS = LOCK_STALE_MS;
 /**
- * How long a run may keep starting L1 history bands: a whole-chain bootstrap
- * (about 5 to 7 hours) spreads over runs.
+ * How long a run may keep starting L1 history bands, unless
+ * `INDEX_EXPORT_L1_RUN_BUDGET_MINUTES` says otherwise: a whole-chain
+ * bootstrap (about 5 to 7 hours) spreads over runs.
  */
 export const L1_RUN_BUDGET_MS = 4 * 3600_000;
 /** Dry-run staging this old belongs to a dry run that was killed. */
@@ -684,9 +685,11 @@ export class ExportService {
   }
 
   /**
-   * The `parquet-l1` part of a run: every whole height range up to the
-   * stable top that isn't published, in order, then the tip band. A history
-   * band isn't started once {@link L1_RUN_BUDGET_MS} has passed, so a
+   * The `parquet-l1` part of a run: lookups for the bands that only lack
+   * them, then every whole height range up to the stable top that isn't
+   * published, in order, then the tip band, then lookups again for any band
+   * this run confirmed. A history band isn't started once the run's budget
+   * ({@link L1_RUN_BUDGET_MS} by default) has passed, so a
    * bootstrap of the whole chain spreads over runs; the rest is reported as
    * deferred. A failed band stops the run's L1 part: bands are imported as a
    * contiguous run, so later ones wait.
@@ -697,7 +700,6 @@ export class ExportService {
     dryRun: boolean,
   ): Promise<void> {
     const { config, log } = this.deps;
-    const started = this.now();
     const workDir = dryRun
       ? path.join(config.workDir, 'dry-run')
       : config.workDir;
@@ -709,6 +711,11 @@ export class ExportService {
     try {
       await fs.mkdir(workDir, { recursive: true });
       await fs.mkdir(publishDir, { recursive: true });
+      // First, since it takes seconds to minutes and reads no core.db: a
+      // band waiting only for its lookups shouldn't wait hours for builds.
+      await this.deriveL1Lookups(report, workDir, dryRun);
+      // The budget is the builds': it starts after the derive.
+      const started = this.now();
       const heights = coreHeights(config.coreDbPath);
       if (heights.lowest > 0) {
         throw new RunFailure(
@@ -757,7 +764,10 @@ export class ExportService {
           });
           break;
         }
-        if (step.role === 'h' && this.now() - started >= L1_RUN_BUDGET_MS) {
+        if (
+          step.role === 'h' &&
+          this.now() - started >= (config.l1RunBudgetMs ?? L1_RUN_BUDGET_MS)
+        ) {
           report.l1Deferred = steps.slice(i).map((s) => s.heightRange);
           log.info('L1 bands left for the next run', {
             count: report.l1Deferred.length,
@@ -815,7 +825,9 @@ export class ExportService {
    * Adds lookups to every published band whose tables are current but whose
    * lookups are not: derived from the band's own tables, in seconds, with no
    * read of `core.db`, so it runs whatever happened to the builds and outside
-   * their time budget. Bands this run confirmed identical count as current.
+   * their time budget. Called before the builds and again after them, for
+   * bands this run confirmed identical, which count as current; outcomes
+   * accumulate in the report.
    */
   private async deriveL1Lookups(
     report: RunReport,
@@ -834,10 +846,16 @@ export class ExportService {
           .flatMap((s) => (s.id !== undefined ? [s.id] : [])),
       ]);
       const bands = await deriveL1Bands(config.l1PublishDir, config.publisher);
-      const due = planL1Derive(bands, confirmed);
+      // Each band once a run: the call after the builds skips what the one
+      // before them handled, whatever its result, so a dry run (which
+      // changes nothing) or a failure isn't tried twice.
+      const handled = new Set((report.l1Derived ?? []).map((d) => d.id));
+      const due = planL1Derive(bands, confirmed).filter(
+        (b) => !handled.has(b.id),
+      );
       if (due.length === 0) return;
       await assertSameFilesystem(workDir, config.l1PublishDir);
-      report.l1Derived = [];
+      report.l1Derived ??= [];
       for (const band of due) {
         report.l1Derived.push(
           await runL1Derive(band, {

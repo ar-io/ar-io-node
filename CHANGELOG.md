@@ -212,6 +212,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **`index-export` derives `parquet-l1` lookups before it builds**, not
+  after: a band that only lacks its lookups gets them in seconds to minutes
+  at the start of a run, rather than after up to 4 hours of builds. The
+  derive runs again after the builds for a band they confirmed; each band is
+  tried once a run.
+- **`INDEX_EXPORT_L1_RUN_BUDGET_MINUTES`** (default 240) sets how long a run
+  may keep starting `parquet-l1` history bands, for a one-time rebuild or a
+  bootstrap that would otherwise spread over several runs.
+
 - **Offset (chunk-proof) checks are back in the observer, and fail gateways
   by default.** A share of gateways (`OFFSET_OBSERVATION_SAMPLE_RATE`, default
   0.20), chosen identically by every observer each epoch, must serve
@@ -300,6 +309,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   above it. It now counts in two grouping steps. The rows are unchanged
   (recomputed digests match published bands), so no band is rebuilt; the
   `index-l1-verify` lookups check, which runs the same query, is fixed too.
+
+- **A response served through an ArNS name kept its old resolution after
+  the name was re-pointed, for as long as the bytes stayed the same.** The
+  entity tag was the content digest alone, so a cache revalidating its copy
+  after the name moved to a manifest whose file at that path had the same
+  bytes got a `304` and kept the old response's headers: the old
+  `X-ArNS-Resolved-Id`, root offsets and signature (seen on
+  turbo-gateway.com, a week-old resolution behind a 900 s TTL). On a response
+  routed through an ArNS name the `ETag` is now
+  `"<digest>.<X-ArNS-Resolved-Id>"`, so a `304` means the same bytes and the
+  same resolution; the 304 and payment predictions use the same tag. `/raw`,
+  `/{id}` and the index routes keep the plain digest. Treat the `ETag` as
+  opaque and read the digest from `X-AR-IO-Digest`.
 
 - **The observer no longer uses a gateway as its own reference.** The
   observed gateway was never excluded from reference lookups, so observing

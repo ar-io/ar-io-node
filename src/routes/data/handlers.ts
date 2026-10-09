@@ -54,6 +54,7 @@ import {
   hasContentEncodingMagic,
   honouredContentEncoding,
   parseNonNegativeInt,
+  dataEtag,
   wouldReturn304,
 } from '../../lib/http-utils.js';
 
@@ -115,7 +116,14 @@ export async function handleDataRateLimitingAndPayment({
 
   // Treat cache revalidation that will result in 304 as zero-cost
   // (data.cached is set to true) OR this is a HEAD request (etag for match check available)
-  const willReturn304 = wouldReturn304(req, dataAttributes?.hash, data.cached);
+  // The same tag setDataHeaders will send, so a predicted 304 is a real one.
+  const willReturn304 = wouldReturn304(
+    req,
+    dataAttributes?.hash !== undefined
+      ? dataEtag(res, dataAttributes.hash)
+      : undefined,
+    data.cached,
+  );
 
   const contentSize =
     req.method === REQUEST_METHOD_HEAD || willReturn304
@@ -221,7 +229,7 @@ const setDigestStableVerifiedHeaders = ({
           headerNames.contentDigest,
           formatContentDigest(dataAttributes.hash),
         );
-        res.setHeader('ETag', `"${dataAttributes.hash}"`);
+        res.setHeader('ETag', `"${dataEtag(res, dataAttributes.hash)}"`);
       }
     }
   }
@@ -447,16 +455,25 @@ const awaitItemHeaders = async (
 /**
  * Whether the response to `req` sends `data.stream` itself as its body: a GET
  * without a Range, unless it will be answered 304. HEAD, Range and 304
- * responses do not read the stream.
+ * responses do not read the stream. The 304 check uses the same tag
+ * setDataHeaders sends (see {@link dataEtag}), so it must run after the ArNS
+ * middleware has set X-ArNS-Resolved-Id.
  */
 export const sendsDataStream = (
   req: Request,
+  res: Response,
   data: ContiguousData,
   dataAttributes: ContiguousDataAttributes | undefined,
 ): boolean =>
   req.method !== REQUEST_METHOD_HEAD &&
   req.headers.range === undefined &&
-  !wouldReturn304(req, dataAttributes?.hash, data.cached);
+  !wouldReturn304(
+    req,
+    dataAttributes?.hash !== undefined
+      ? dataEtag(res, dataAttributes.hash)
+      : undefined,
+    data.cached,
+  );
 
 /**
  * The `Content-Encoding` to declare for `data`, or `undefined` for none.
@@ -1393,7 +1410,7 @@ export const createRawDataHandler = ({
             id,
             log,
             signal: req.signal,
-            sendsStream: sendsDataStream(req, data, dataAttributes),
+            sendsStream: sendsDataStream(req, res, data, dataAttributes),
           });
 
           // Check if the request includes a Range header
@@ -1761,7 +1778,7 @@ const sendManifestResponse = async ({
         id: resolvedId,
         log,
         signal: req.signal,
-        sendsStream: sendsDataStream(req, data, dataAttributes),
+        sendsStream: sendsDataStream(req, res, data, dataAttributes),
       });
 
       // Check if the request includes a Range header
@@ -2224,7 +2241,7 @@ export const createDataHandler = ({
           id,
           log,
           signal: req.signal,
-          sendsStream: sendsDataStream(req, data, dataAttributes),
+          sendsStream: sendsDataStream(req, res, data, dataAttributes),
         });
 
         // Check if the request includes a Range header
