@@ -212,6 +212,39 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Offset (chunk-proof) checks are back in the observer, and fail gateways
+  by default.** A share of gateways (`OFFSET_OBSERVATION_SAMPLE_RATE`, default
+  0.20), chosen identically by every observer each epoch, must serve
+  `/chunk/<offset>` with a Merkle proof that validates against the chain. A
+  sampled gateway fails only if all `OFFSET_SAMPLE_COUNT` (default 4)
+  offsets fail; timeouts, error statuses and bad proofs all count. With
+  `OFFSET_OBSERVATION_ENFORCEMENT_ENABLED=true` (the default) that fails the
+  observation, and the epoch result is still a 2-of-3 majority. A check the
+  observer could not judge itself (its own chain lookups failed) is
+  reported as `inconclusive` and never fails a gateway. This is not
+  new behaviour. Enforcement was on by default from Release 54 to Release
+  63, but the continuous observer that became the only service mode in
+  Release 64 never ran the check, so the `OFFSET_*` settings have done
+  nothing since. Reports again carry `offsetAssessments`, now with a
+  `failureCategory` per failed sample (`timeout`, `network`, `http_status`,
+  `invalid_chunk`, `bad_proof`, `unverifiable`). To record failures without
+  failing gateways, set `OFFSET_OBSERVATION_ENFORCEMENT_ENABLED=false`; to
+  turn the check off, set `OFFSET_OBSERVATION_ENABLED=false`.
+  `OFFSET_SAMPLE_COUNT` is now passed through to the observer, and
+  `docs/envs.md` gives the real defaults (it said 0.10 and `false`)
+  (ar-io/ar-io-observer#145).
+
+- **Default observer image bumped to `8e7f4d53`** — `OBSERVER_IMAGE_TAG` moves
+  from `fe159f5a` to the `ar-io-observer` build carrying the offset checks
+  above and the reference fix under Fixed. Operators who pin
+  `OBSERVER_IMAGE_TAG` in `.env` must update it there too, since that
+  shadows the compose default.
+
+- **Observer updated to `@ar.io/sdk` 4.5.1.** The observer's epoch crank
+  now finds delegations to compound once per epoch instead of on every
+  tick, which removes a pair of full-registry scans per tick from the
+  window after each distribution (ar-io/ar-io-observer#146).
+
 - **Index-swarm torrents are built with 256 KiB pieces, down from 4 MiB**, so
   a browser can verify a byte range of a band file against the signed
   `infohashV2` without the whole file: it rebuilds the file's BEP 52
@@ -267,6 +300,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   above it. It now counts in two grouping steps. The rows are unchanged
   (recomputed digests match published bands), so no band is rebuilt; the
   `index-l1-verify` lookups check, which runs the same query, is fixed too.
+
+- **The observer no longer uses a gateway as its own reference.** The
+  observed gateway was never excluded from reference lookups, so observing
+  `turbo-gateway.com` or `ar-io.net` (the default reference hosts) compared
+  each with itself and its ArNS check could not fail. The reference now
+  comes from another reference host or from network consensus that
+  excludes the gateway. Other gateways' references are unchanged
+  (ar-io/ar-io-observer#144).
 
 - The nginx guidance for `/ar-io/indexes` in `docs/index-swarm.md` named the
   wrong remedy and understated the cost. It said to set `proxy_buffering off`,
