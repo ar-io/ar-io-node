@@ -187,6 +187,20 @@ export function hasContentEncodingMagic(
 }
 
 /**
+ * How many leading bytes {@link contradictsContentEncoding} needs to judge a
+ * body declaring `contentEncoding`: the length of the coding's magic, or 0
+ * for a coding without one.
+ */
+export function contentEncodingMagicLength(
+  contentEncoding: string | string[] | undefined,
+): number {
+  const normalized = parseContentEncoding(contentEncoding);
+  return normalized !== undefined
+    ? (CONTENT_ENCODING_MAGIC.get(normalized)?.length ?? 0)
+    : 0;
+}
+
+/**
  * True when a body's first bytes rule out the coding its `Content-Encoding`
  * declares: a `gzip` body that does not start `1f 8b`, or a `zstd` body that
  * does not start `28 b5 2f fd`.

@@ -10,7 +10,7 @@ import { Readable } from 'node:stream';
 import rangeParser from 'range-parser';
 import { Logger } from 'winston';
 import { headerNames } from '../../constants.js';
-import { peekFirstChunk, pipeStreamToResponse } from '../../lib/stream.js';
+import { peekLeadingBytes, pipeStreamToResponse } from '../../lib/stream.js';
 import { sendBodyWithOptionalDigest } from './buffered-digest.js';
 import * as config from '../../config.js';
 import { release } from '../../version.js';
@@ -48,6 +48,7 @@ import {
   buildMultipartResponseParts,
   generateBoundary,
   calculateRangeResponseSize,
+  contentEncodingMagicLength,
   contradictsContentEncoding,
   handleIfNoneMatch,
   hasContentEncodingMagic,
@@ -477,7 +478,9 @@ export const sendsDataStream = (
  * so this is logged as a warning and counted for the operator to purge.
  *
  * Peeks `data.stream`, which must start at the item's first byte and have no
- * reader yet; the peeked bytes are put back.
+ * reader yet, reading as many chunks as the coding's magic needs; the bytes
+ * are put back, and `data.stream` may be replaced (see
+ * {@link peekLeadingBytes}).
  *
  * A response that sends `data.stream` itself (see {@link sendsDataStream})
  * always peeks, and a failed peek propagates, as reading the body would have
@@ -515,11 +518,16 @@ export const resolveServedContentEncoding = async ({
   }
   let head: Buffer;
   try {
-    head = await peekFirstChunk(
+    const peeked = await peekLeadingBytes(
       data.stream,
+      contentEncodingMagicLength(declared),
       config.STREAM_STALL_TIMEOUT_MS,
       signal,
     );
+    head = peeked.head;
+    // The same stream with its bytes put back, or, if the body was shorter
+    // than the magic, a fresh one carrying it.
+    data.stream = peeked.stream;
   } catch (error: any) {
     if (sendsStream || signal?.aborted === true) {
       throw error;

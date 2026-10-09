@@ -266,6 +266,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `X-Arweave-Tag-Content-Encoding` header still names the tag, so a peer
   running #991 still refuses our copy as possibly decoded upstream and tries
   its next source, since from the bytes alone the two cases look the same.
+  The check, here and in #991's upstream checks, now reads as many chunks as
+  the coding's magic needs: it compared the first chunk alone, so a body
+  whose first byte arrived by itself, `1f` for gzip, passed as gzip whatever
+  followed, which let a decoded body through upstream.
 
 - **A gateway older than #964 could poison the cache with a decoded copy
   of a gzip-compressed item.** Such gateways serve an item tagged

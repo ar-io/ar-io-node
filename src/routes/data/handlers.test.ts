@@ -285,6 +285,42 @@ describe('Data routes', () => {
         assert.deepEqual(res.body, body);
       });
 
+      it('reads past a first chunk shorter than the magic', async () => {
+        // Plain bytes whose first byte happens to be gzip's first magic byte,
+        // arriving one byte at a time: the first chunk alone cannot rule gzip
+        // out.
+        const plain = Buffer.from([0x1f, ...Buffer.from(' plain text')]);
+        dataAttributesSource = {
+          getDataAttributes: () =>
+            Promise.resolve({ contentEncoding: 'gzip' } as any),
+        };
+        dataSource = {
+          getData: () =>
+            Promise.resolve({
+              stream: Readable.from([plain.subarray(0, 1), plain.subarray(1)]),
+              size: plain.length,
+              verified: false,
+              trusted: true,
+              cached: false,
+            }),
+        };
+        app.get(
+          '/:id',
+          createDataHandler({
+            log,
+            dataAttributesSource,
+            dataSource,
+            dataBlockListValidator,
+            manifestPathResolver,
+          }),
+        );
+
+        const res = await get();
+
+        assert.equal(res.headers['content-encoding'], undefined);
+        assert.deepEqual(res.body, plain);
+      });
+
       describe('responses that do not send the body', () => {
         const HASH = 'a'.repeat(43);
         const mount = (stream: () => Readable, cached: boolean) => {

@@ -9,6 +9,7 @@ import { default as axios } from 'axios';
 import http from 'node:http';
 import https from 'node:https';
 import winston from 'winston';
+import { Readable } from 'node:stream';
 
 import * as config from '../config.js';
 import { TrustedGatewayConfig } from '../config.js';
@@ -16,6 +17,7 @@ import {
   buildRangeHeader,
   normalizeAbortError,
   contentEncodingOf,
+  contentEncodingMagicLength,
   contradictsContentEncoding,
   hasContentEncodingMagic,
   parseContentEncoding,
@@ -36,7 +38,7 @@ import {
 import {
   ByteRangeTransform,
   attachStallTimeout,
-  peekFirstChunk,
+  peekLeadingBytes,
 } from '../lib/stream.js';
 import * as metrics from '../metrics.js';
 import { startChildSpan } from '../tracing.js';
@@ -678,7 +680,7 @@ export class GatewaysDataSource implements ContiguousDataSource {
                   signal.removeEventListener('abort', onClientAbort);
                 }
 
-                const stream = response.data;
+                let stream: Readable = response.data;
                 const contentLength = parseContentLength(response.headers);
 
                 if (contentLength === undefined || contentLength === 0) {
@@ -733,11 +735,14 @@ export class GatewaysDataSource implements ContiguousDataSource {
                   bodyStartsAtItemStart &&
                   hasContentEncodingMagic(declaredEncoding)
                 ) {
-                  const head = await peekFirstChunk(
+                  const peeked = await peekLeadingBytes(
                     stream,
+                    contentEncodingMagicLength(declaredEncoding),
                     this.requestTimeoutMs,
                     signal,
                   );
+                  stream = peeked.stream;
+                  const head = peeked.head;
                   if (contradictsContentEncoding(head, declaredEncoding)) {
                     stream.destroy();
                     const encoding = parseContentEncoding(declaredEncoding);
