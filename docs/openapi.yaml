@@ -1586,6 +1586,12 @@ paths:
                 description: RFC 9530 compliant digest header with SHA-256
                 example: 'sha-256=:4ROTs2lTPAKbr8Y41WrjHu+2q+7S+m+yTuO7fAUzZI4=:'
             ETag:
+              description: |-
+                The content digest (base64url SHA-256), quoted. On a response
+                served through an ArNS name it is `<digest>.<X-ArNS-Resolved-Id>`,
+                so it changes when the name is re-pointed even if the bytes do
+                not, and a 304 means the same bytes and the same resolution.
+                Treat it as opaque; read the digest from X-AR-IO-Digest.
               schema:
                 type: string
                 example: '4ROTs2lTPAKbr8Y41WrjHu-2q-7S-m-yTuO7fAUzZI4'
@@ -1732,6 +1738,12 @@ paths:
                 description: RFC 9530 compliant digest header with SHA-256
                 example: 'sha-256=:4ROTs2lTPAKbr8Y41WrjHu+2q+7S+m+yTuO7fAUzZI4=:'
             ETag:
+              description: |-
+                The content digest (base64url SHA-256), quoted. On a response
+                served through an ArNS name it is `<digest>.<X-ArNS-Resolved-Id>`,
+                so it changes when the name is re-pointed even if the bytes do
+                not, and a 304 means the same bytes and the same resolution.
+                Treat it as opaque; read the digest from X-AR-IO-Digest.
               schema:
                 type: string
                 example: '4ROTs2lTPAKbr8Y41WrjHu-2q-7S-m-yTuO7fAUzZI4'
@@ -1862,6 +1874,12 @@ paths:
                 description: RFC 9530 compliant digest header with SHA-256
                 example: 'sha-256=:4ROTs2lTPAKbr8Y41WrjHu+2q+7S+m+yTuO7fAUzZI4=:'
             ETag:
+              description: |-
+                The content digest (base64url SHA-256), quoted. On a response
+                served through an ArNS name it is `<digest>.<X-ArNS-Resolved-Id>`,
+                so it changes when the name is re-pointed even if the bytes do
+                not, and a 304 means the same bytes and the same resolution.
+                Treat it as opaque; read the digest from X-AR-IO-Digest.
               schema:
                 type: string
                 example: '4ROTs2lTPAKbr8Y41WrjHu-2q-7S-m-yTuO7fAUzZI4'

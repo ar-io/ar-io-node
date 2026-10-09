@@ -391,6 +391,43 @@ describe('Data routes', () => {
             .expect(304);
         });
 
+        describe('when routed through an ArNS name', () => {
+          const RESOLVED_ID = 'd1FJ-x_35islazgNjqw54eKERvE78j8X2FntbALlkaM';
+          // As the ArNS middleware does before the data handler runs.
+          const routeThroughName = () =>
+            app.use((_req, res, next) => {
+              res.setHeader(headerNames.arnsResolvedId, RESOLVED_ID);
+              next();
+            });
+
+          it('answers its composite tag with 304 when the read fails', async () => {
+            // The stream prediction must use the tag the response sends, or
+            // it expects a body here and the failed read fails the 304.
+            routeThroughName();
+            mount(failing, true);
+
+            await request(app)
+              .get('/not-a-real-id')
+              .set('If-None-Match', `"${HASH}.${RESOLVED_ID}"`)
+              .expect(304);
+          });
+
+          it('answers the plain digest with a full response and the composite tag', async () => {
+            // A cache holding a copy from before the name was re-pointed (or
+            // before this tag format) gets fresh headers, not a 304.
+            routeThroughName();
+            mount(() => Readable.from([gzipped]), true);
+
+            const res = await request(app)
+              .get('/not-a-real-id')
+              .set('If-None-Match', `"${HASH}"`)
+              .expect(200);
+
+            assert.equal(res.headers['etag'], `"${HASH}.${RESOLVED_ID}"`);
+            assert.equal(res.headers['x-arns-resolved-id'], RESOLVED_ID);
+          });
+        });
+
         it('fails a full GET when the read fails, since it sends the body', async () => {
           mount(failing, true);
 

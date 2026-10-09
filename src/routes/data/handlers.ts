@@ -455,16 +455,25 @@ const awaitItemHeaders = async (
 /**
  * Whether the response to `req` sends `data.stream` itself as its body: a GET
  * without a Range, unless it will be answered 304. HEAD, Range and 304
- * responses do not read the stream.
+ * responses do not read the stream. The 304 check uses the same tag
+ * setDataHeaders sends (see {@link dataEtag}), so it must run after the ArNS
+ * middleware has set X-ArNS-Resolved-Id.
  */
 export const sendsDataStream = (
   req: Request,
+  res: Response,
   data: ContiguousData,
   dataAttributes: ContiguousDataAttributes | undefined,
 ): boolean =>
   req.method !== REQUEST_METHOD_HEAD &&
   req.headers.range === undefined &&
-  !wouldReturn304(req, dataAttributes?.hash, data.cached);
+  !wouldReturn304(
+    req,
+    dataAttributes?.hash !== undefined
+      ? dataEtag(res, dataAttributes.hash)
+      : undefined,
+    data.cached,
+  );
 
 /**
  * The `Content-Encoding` to declare for `data`, or `undefined` for none.
@@ -1401,7 +1410,7 @@ export const createRawDataHandler = ({
             id,
             log,
             signal: req.signal,
-            sendsStream: sendsDataStream(req, data, dataAttributes),
+            sendsStream: sendsDataStream(req, res, data, dataAttributes),
           });
 
           // Check if the request includes a Range header
@@ -1769,7 +1778,7 @@ const sendManifestResponse = async ({
         id: resolvedId,
         log,
         signal: req.signal,
-        sendsStream: sendsDataStream(req, data, dataAttributes),
+        sendsStream: sendsDataStream(req, res, data, dataAttributes),
       });
 
       // Check if the request includes a Range header
@@ -2232,7 +2241,7 @@ export const createDataHandler = ({
           id,
           log,
           signal: req.signal,
-          sendsStream: sendsDataStream(req, data, dataAttributes),
+          sendsStream: sendsDataStream(req, res, data, dataAttributes),
         });
 
         // Check if the request includes a Range header
