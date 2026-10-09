@@ -317,7 +317,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   from:
   - **`item`**, final: the item's signed `Content-Type` tag, read from its
     header by `RootParentDataSource`, or Turbo's per-item payload content
-    type (S3, DynamoDB, Redis). `RootParentDataSource` now serves the header's
+    type (S3, DynamoDB, Redis) when its record has one; the
+    `application/octet-stream` served in place of a missing one is never
+    recorded. `RootParentDataSource` now serves the header's
     type over a stored one; it used to read the header and keep the stored,
     possibly borrowed, type.
   - **`upstream`**: a trusted gateway's answer for that ID, written once and
