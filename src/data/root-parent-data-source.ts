@@ -764,6 +764,7 @@ export class RootParentDataSource implements ContiguousDataSource {
     // requests served from the stored location keep it.
     if (rebased.contentType !== undefined) {
       attributesToStore.contentType = rebased.contentType;
+      attributesToStore.contentTypeSource = 'item';
     }
     return {
       signedFields,
@@ -859,22 +860,44 @@ export class RootParentDataSource implements ContiguousDataSource {
    * route handler apply its default rather than asserting the envelope's type.
    * The one case where the fetched type does describe the item is when the item
    * *is* the root transaction, where the fetch is of the item itself.
+   *
+   * The `Content-Type` tag from the item's signed header, when this request
+   * read it, comes first: it is the only value here that is certainly this
+   * item's. `knownContentType` (from stored attributes or a root index) may be
+   * the per-hash value borrowed from another item with the same bytes, or a
+   * peer's claim. `sourceContentTypeOrigin: 'item'` says the type came from
+   * the header, so it may be recorded per item; otherwise it is left unset so
+   * a type taken from this gateway's own attributes is never re-recorded.
    */
   private resolveItemContentType({
     id,
     rootTxId,
-    itemContentType,
+    headerContentType,
+    knownContentType,
     rootContentType,
   }: {
     id: string;
     rootTxId: string;
-    itemContentType?: string;
+    headerContentType?: string;
+    knownContentType?: string;
     rootContentType?: string;
-  }): string | undefined {
-    if (itemContentType !== undefined) {
-      return itemContentType;
+  }): {
+    sourceContentType: string | undefined;
+    sourceContentTypeOrigin: 'item' | undefined;
+  } {
+    // Both keys are always set: callers spread this over the root fetch's
+    // result, whose own values must not leak through.
+    if (headerContentType !== undefined) {
+      return {
+        sourceContentType: headerContentType,
+        sourceContentTypeOrigin: 'item',
+      };
     }
-    return rootTxId === id ? rootContentType : undefined;
+    return {
+      sourceContentType:
+        knownContentType ?? (rootTxId === id ? rootContentType : undefined),
+      sourceContentTypeOrigin: undefined,
+    };
   }
 
   /**
@@ -1318,6 +1341,11 @@ export class RootParentDataSource implements ContiguousDataSource {
       // request reads it. It labels the response in preference to anything the
       // root fetch reported (see resolveItemContentEncoding).
       let itemContentEncoding: string | undefined;
+      // The item's Content-Type tag from its own signed header, when this
+      // request reads it. Preferred over `originalContentType`, which for an
+      // item this gateway has not indexed is the per-hash value and may belong
+      // to another item with the same bytes (see resolveItemContentType).
+      let itemContentTypeFromHeader: string | undefined;
       try {
         originalAttributes =
           await this.dataAttributesStore.getDataAttributes(id);
@@ -1407,6 +1435,7 @@ export class RootParentDataSource implements ContiguousDataSource {
                 contentType: hintContentType,
               } = hintedItem;
               itemContentEncoding = hintedItem.contentEncoding;
+              itemContentTypeFromHeader = hintContentType;
 
               span.setAttributes({
                 'traversal.method': 'direct_offset_hint',
@@ -1433,6 +1462,7 @@ export class RootParentDataSource implements ContiguousDataSource {
               };
               if (hintContentType !== undefined) {
                 attributesToStore.contentType = hintContentType;
+                attributesToStore.contentTypeSource = 'item';
               }
 
               return {
@@ -1454,10 +1484,11 @@ export class RootParentDataSource implements ContiguousDataSource {
                   attributesToStore,
                   source: DIRECT_OFFSET_HINT,
                 }),
-                sourceContentType: this.resolveItemContentType({
+                ...this.resolveItemContentType({
                   id,
                   rootTxId: hintRootTxId,
-                  itemContentType: hintContentType ?? originalContentType,
+                  headerContentType: itemContentTypeFromHeader,
+                  knownContentType: originalContentType,
                   rootContentType: data.sourceContentType,
                 }),
               };
@@ -1529,9 +1560,8 @@ export class RootParentDataSource implements ContiguousDataSource {
             'final.region.size': finalRegion.size,
           });
 
-          const hintContentType =
-            bundleParseResult.contentType ?? originalContentType;
           itemContentEncoding = bundleParseResult.contentEncoding;
+          itemContentTypeFromHeader = bundleParseResult.contentType;
 
           const data = await this.dataSource.getData({
             id: resolvedRootTxId,
@@ -1552,6 +1582,7 @@ export class RootParentDataSource implements ContiguousDataSource {
           };
           if (bundleParseResult.contentType !== undefined) {
             attributesToStore.contentType = bundleParseResult.contentType;
+            attributesToStore.contentTypeSource = 'item';
           }
           await this.tryCacheAttributes(id, attributesToStore, 'hint');
 
@@ -1564,10 +1595,11 @@ export class RootParentDataSource implements ContiguousDataSource {
               rootContentEncoding: data.sourceContentEncoding,
               rootContentEncodingFromTags: data.sourceContentEncodingFromTags,
             }),
-            sourceContentType: this.resolveItemContentType({
+            ...this.resolveItemContentType({
               id,
               rootTxId: resolvedRootTxId,
-              itemContentType: hintContentType,
+              headerContentType: itemContentTypeFromHeader,
+              knownContentType: originalContentType,
               rootContentType: data.sourceContentType,
             }),
           };
@@ -1617,6 +1649,7 @@ export class RootParentDataSource implements ContiguousDataSource {
             },
             onConfirmed: (header) => {
               itemContentEncoding = header.contentEncoding;
+              itemContentTypeFromHeader = header.contentType;
             },
           }))
         ) {
@@ -1648,6 +1681,7 @@ export class RootParentDataSource implements ContiguousDataSource {
             span.addEvent('Rejected attributes location rebased');
             originalContentType ??= rebased.contentType;
             itemContentEncoding = rebased.contentEncoding;
+            itemContentTypeFromHeader = rebased.contentType;
             attributesVerification = this.planRebasedVerification(
               id,
               rebased,
@@ -1751,10 +1785,11 @@ export class RootParentDataSource implements ContiguousDataSource {
             },
           );
 
-          const sourceContentType = this.resolveItemContentType({
+          const itemContentType = this.resolveItemContentType({
             id,
             rootTxId,
-            itemContentType: originalContentType,
+            headerContentType: itemContentTypeFromHeader,
+            knownContentType: originalContentType,
             rootContentType: data.sourceContentType,
           });
           const itemEncoding = this.resolveItemContentEncoding({
@@ -1776,11 +1811,11 @@ export class RootParentDataSource implements ContiguousDataSource {
                 attributesToStore: attributesVerification.attributesToStore,
                 source: attributesVerification.source,
               }),
-              sourceContentType,
+              ...itemContentType,
               ...itemEncoding,
             };
           }
-          return { ...data, sourceContentType, ...itemEncoding };
+          return { ...data, ...itemContentType, ...itemEncoding };
         } finally {
           fetchSpan.end();
         }
@@ -1880,6 +1915,7 @@ export class RootParentDataSource implements ContiguousDataSource {
             },
             onConfirmed: (header) => {
               itemContentEncoding = header.contentEncoding;
+              itemContentTypeFromHeader = header.contentType;
             },
           });
           if (
@@ -1909,6 +1945,7 @@ export class RootParentDataSource implements ContiguousDataSource {
                 rootResult.contentType ??= rebased.contentType;
               }
               itemContentEncoding = rebased.contentEncoding;
+              itemContentTypeFromHeader = rebased.contentType;
               indexLocationConfirmed = true;
               indexRebased = true;
               rebasedIndexVerification = this.planRebasedVerification(
@@ -2214,6 +2251,9 @@ export class RootParentDataSource implements ContiguousDataSource {
               );
               bundleParseResult = fallback.result;
               let fallbackEncoding: string | undefined;
+              // Likewise its content type: a remote lookup's is a claim (a
+              // peer's index or response header), the header's is signed.
+              let fallbackContentType: string | undefined;
               // The full lookup may return the location rejected above, or
               // offsets (or a path) for another copy of the item under a
               // different root, while they are read from this root
@@ -2232,6 +2272,7 @@ export class RootParentDataSource implements ContiguousDataSource {
                   // whichever lookup supplied the location.
                   onConfirmed: (header) => {
                     fallbackEncoding = header.contentEncoding;
+                    fallbackContentType = header.contentType;
                   },
                 }))
               ) {
@@ -2239,6 +2280,7 @@ export class RootParentDataSource implements ContiguousDataSource {
               } else if (bundleParseResult !== null) {
                 bundleParseResult = {
                   ...bundleParseResult,
+                  contentType: fallbackContentType,
                   contentEncoding: fallbackEncoding,
                 };
               }
@@ -2268,6 +2310,9 @@ export class RootParentDataSource implements ContiguousDataSource {
               originalContentType = bundleParseResult.contentType;
             }
             itemContentEncoding = bundleParseResult.contentEncoding;
+            // Signed: a local parse of the item's header, or a remote location
+            // whose header was confirmed above (which replaced its type).
+            itemContentTypeFromHeader = bundleParseResult.contentType;
 
             // Store discovered offsets for future use (avoid re-parsing).
             // Offsets from the root TX index are stored only once the payload
@@ -2281,6 +2326,7 @@ export class RootParentDataSource implements ContiguousDataSource {
             };
             if (bundleParseResult.contentType !== undefined) {
               attributesToStore.contentType = bundleParseResult.contentType;
+              attributesToStore.contentTypeSource = 'item';
             }
             if (indexVerification === undefined) {
               await this.tryCacheAttributes(
@@ -2374,10 +2420,11 @@ export class RootParentDataSource implements ContiguousDataSource {
         });
 
         // Preserve the original data item's content type if available
-        const sourceContentType = this.resolveItemContentType({
+        const itemContentType = this.resolveItemContentType({
           id,
           rootTxId,
-          itemContentType: originalContentType,
+          headerContentType: itemContentTypeFromHeader,
+          knownContentType: originalContentType,
           rootContentType: data.sourceContentType,
         });
         const itemEncoding = this.resolveItemContentEncoding({
@@ -2401,11 +2448,11 @@ export class RootParentDataSource implements ContiguousDataSource {
               attributesToStore: indexVerification.attributesToStore ?? {},
               source: indexVerification.source ?? ROOT_TX_INDEX,
             }),
-            sourceContentType,
+            ...itemContentType,
           };
         }
 
-        return { ...data, sourceContentType, ...itemEncoding };
+        return { ...data, ...itemContentType, ...itemEncoding };
       } finally {
         fetchSpan.end();
       }

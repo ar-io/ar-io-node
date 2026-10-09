@@ -366,11 +366,12 @@ export const db = new StandaloneSqliteDatabase({
 // client. See ArweaveCompositeClient.binarySearchBlocks.
 arweaveClient.blockByOffsetIndex = db;
 
+const compositeDataAttributesStore = new CompositeDataAttributesSource({
+  log,
+  source: db,
+});
 export const dataAttributesStore: ContiguousDataAttributesStore =
-  new CompositeDataAttributesSource({
-    log,
-    source: db,
-  });
+  compositeDataAttributesStore;
 
 // Create shared cache for root TX lookups
 // LRUCache v11 requires values to be objects, not primitives with undefined
@@ -573,6 +574,21 @@ export const envoyEndpointHealthWorker =
         edsDirectory: config.ENVOY_EDS_DIRECTORY,
       })
     : undefined;
+
+// An item indexed after it was first served may now have a better answer in
+// the database than the in-memory attributes hold (its indexed Content-Type
+// outranks the per-hash fallback, for one). Both events fire after the index
+// write has finished, so the next read sees it.
+eventEmitter.on(events.ANS104_DATA_ITEM_INDEXED, (item: { id?: string }) => {
+  if (typeof item?.id === 'string') {
+    compositeDataAttributesStore.invalidate(item.id);
+  }
+});
+eventEmitter.on(events.TX_INDEXED, (tx: { id?: string }) => {
+  if (typeof tx?.id === 'string') {
+    compositeDataAttributesStore.invalidate(tx.id);
+  }
+});
 
 eventEmitter.on(events.BLOCK_TX_INDEXED, (tx) => {
   eventEmitter.emit(events.TX_INDEXED, tx);

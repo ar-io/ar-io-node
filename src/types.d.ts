@@ -1021,6 +1021,20 @@ export interface ContiguousData {
    * data; an upstream's is recorded only when the upstream is trusted.
    */
   sourceContentEncodingFromTags?: boolean;
+  /**
+   * Where `sourceContentType` came from, when the source knows; decides how
+   * it is recorded per item (see {@link ContentTypeSource}):
+   * - `item`: the item's own `Content-Type` tag, read from its signed header
+   *   during this fetch or from the uploader's per-item record of it (Turbo's
+   *   payload content type).
+   * - `upstream`: a gateway's response for this ID. That may itself be the
+   *   gateway's per-hash label, so it is recorded only from a trusted gateway
+   *   and only until an `item` value arrives.
+   * Unset for anything else, notably a type a source took from this
+   * gateway's own stored attributes, which must never be re-recorded as if
+   * it were new evidence.
+   */
+  sourceContentTypeOrigin?: 'item' | 'upstream';
   cached: boolean;
   requestAttributes?: RequestAttributes;
   /**
@@ -1048,6 +1062,21 @@ interface ContiguousMetadata {
  *
  * See docs/glossary.md for detailed definitions of offsets and ANS-104 concepts.
  */
+/**
+ * Where an item's content type came from, most trusted first:
+ * - `indexed`: the item's `Content-Type` tag in this gateway's index.
+ * - `item`: recorded per item from its signed tag (header read) or the
+ *   uploader's per-item record of it. Final once recorded.
+ * - `upstream`: recorded per item from a trusted gateway's answer for this ID.
+ *   Replaced by an `item` value.
+ * - `hash`: `contiguous_data.original_source_content_type`, shared by every
+ *   item with the same bytes; the last fallback.
+ */
+export type ContentTypeSource = 'indexed' | 'item' | 'upstream' | 'hash';
+
+/** The ranks of {@link ContentTypeSource} that are recorded per item. */
+export type RecordedContentTypeSource = 'item' | 'upstream';
+
 export interface ContiguousDataAttributes {
   // Content identification and verification
 
@@ -1084,6 +1113,12 @@ export interface ContiguousDataAttributes {
 
   /** MIME type of the content (e.g., "application/json", "image/png"). */
   contentType?: string;
+
+  /**
+   * Where {@link contentType} came from. Lets a cache keep the best-ranked
+   * value it has seen rather than the first.
+   */
+  contentTypeSource?: ContentTypeSource;
 
   // Root transaction reference
 
@@ -1292,6 +1327,13 @@ export interface ContiguousDataIndex {
      * from the item's signed tags or a trusted upstream.
      */
     contentEncoding?: string;
+    /**
+     * The item's own content type, recorded per ID (unlike `contentType`,
+     * which is recorded per data hash). Ranked by `itemContentTypeSource`:
+     * an `item` value is final, an `upstream` value yields to an `item` one.
+     */
+    itemContentType?: string;
+    itemContentTypeSource?: RecordedContentTypeSource;
     cachedAt?: number;
     verified?: boolean;
     verificationPriority?: number;

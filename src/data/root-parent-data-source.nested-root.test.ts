@@ -268,6 +268,7 @@ describe('RootParentDataSource: nested item stored under its enclosing bundle', 
             itemSize: item.getRaw().length,
             size: PAYLOAD.length,
             contentType: 'text/html',
+            contentTypeSource: 'item',
           },
         ],
       ]);

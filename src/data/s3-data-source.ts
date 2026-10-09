@@ -282,6 +282,10 @@ export class S3DataSource implements ContiguousDataSource {
           verified: false,
           trusted: true,
           sourceContentType: payloadContentType,
+          // Turbo records the item's own Content-Type tag as payload metadata.
+          ...(payloadContentType !== undefined
+            ? { sourceContentTypeOrigin: 'item' as const }
+            : {}),
           cached: false,
           requestAttributes: requestAttributesHeaders?.attributes,
         };
@@ -407,6 +411,11 @@ export class S3DataSource implements ContiguousDataSource {
         verified: false,
         trusted: true, // we only cache trusted data
         sourceContentType,
+        // Only Turbo's payload metadata is the item's own Content-Type tag;
+        // the object's ContentType fallback is not.
+        ...(payloadContentType !== undefined
+          ? { sourceContentTypeOrigin: 'item' as const }
+          : {}),
         // From the item's signed tags: directly, or through Turbo's metadata,
         // which it derives from them.
         ...(sourceContentEncoding !== undefined

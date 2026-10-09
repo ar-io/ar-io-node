@@ -35,6 +35,7 @@ import {
   utf8ToB64Url,
 } from '../lib/encoding.js';
 import { MANIFEST_CONTENT_TYPE } from '../lib/encoding.js';
+import { resolveContentType } from '../lib/content-type.js';
 import { currentUnixTimestamp } from '../lib/time.js';
 import log from '../log.js';
 import * as metrics from '../metrics.js';
@@ -62,6 +63,7 @@ import {
   ChunkPlacement,
   ChunkPlacementRef,
   TxGeometry,
+  RecordedContentTypeSource,
 } from '../types.js';
 import * as config from '../config.js';
 import { DetailedError } from '../lib/error.js';
@@ -1703,8 +1705,16 @@ export class StandaloneSqliteDatabaseWorker {
       return undefined;
     }
 
-    const contentType =
-      txOrItemRow?.content_type ?? dataRow?.original_source_content_type;
+    // The item's own indexed tag first, then the type recorded for this item,
+    // then the per-hash value. The per-hash value is shared by every item with
+    // the same bytes, so it is only a fallback: two uploads of one file with
+    // different Content-Type tags must each keep their own.
+    const { contentType, contentTypeSource } = resolveContentType({
+      indexed: txOrItemRow?.content_type,
+      item: dataRow?.content_type,
+      itemSource: dataRow?.content_type_source,
+      hash: dataRow?.original_source_content_type,
+    });
     const hash = dataRow?.hash;
     const dataRoot = txOrItemRow?.data_root;
 
@@ -1754,6 +1764,7 @@ export class StandaloneSqliteDatabaseWorker {
       contentEncoding:
         txOrItemRow?.content_encoding ?? dataRow?.content_encoding ?? undefined,
       contentType,
+      contentTypeSource,
       parentId,
       rootTransactionId,
       rootParentOffset,
@@ -1982,6 +1993,8 @@ export class StandaloneSqliteDatabaseWorker {
     dataSize,
     contentType,
     contentEncoding,
+    itemContentType,
+    itemContentTypeSource,
     cachedAt,
     verified,
     verificationPriority,
@@ -2002,6 +2015,8 @@ export class StandaloneSqliteDatabaseWorker {
     dataSize: number;
     contentType?: string;
     contentEncoding?: string;
+    itemContentType?: string;
+    itemContentTypeSource?: RecordedContentTypeSource;
     cachedAt?: number;
     verified?: boolean;
     verificationPriority?: number;
@@ -2053,6 +2068,14 @@ export class StandaloneSqliteDatabaseWorker {
       this.stmts.data.updateDataIdContentEncoding.run({
         id: fromB64Url(id),
         content_encoding: contentEncoding,
+      });
+    }
+
+    if (itemContentType !== undefined && itemContentTypeSource !== undefined) {
+      this.stmts.data.updateDataIdContentType.run({
+        id: fromB64Url(id),
+        content_type: itemContentType,
+        content_type_source: itemContentTypeSource,
       });
     }
 
@@ -4549,6 +4572,8 @@ export class StandaloneSqliteDatabase
     dataSize,
     contentType,
     contentEncoding,
+    itemContentType,
+    itemContentTypeSource,
     verified,
     verificationPriority,
     rootTransactionId,
@@ -4568,6 +4593,8 @@ export class StandaloneSqliteDatabase
     dataSize: number;
     contentType?: string;
     contentEncoding?: string;
+    itemContentType?: string;
+    itemContentTypeSource?: RecordedContentTypeSource;
     verified?: boolean;
     verificationPriority?: number;
     rootTransactionId?: string;
@@ -4607,6 +4634,10 @@ export class StandaloneSqliteDatabase
       // Likewise: a write that first learns the item's encoding must not be
       // dropped as a duplicate of one that did not know it.
       contentEncoding ?? '',
+      // And its own content type, with the rank: an `item` value that
+      // replaces an `upstream` one is the write this cache must not drop.
+      itemContentType ?? '',
+      itemContentTypeSource ?? '',
     ].join('|');
 
     if (this.saveDataContentAttributesCache.get(dedupeKey)) {
@@ -4627,6 +4658,8 @@ export class StandaloneSqliteDatabase
         dataSize,
         contentType,
         contentEncoding,
+        itemContentType,
+        itemContentTypeSource,
         verified,
         verificationPriority,
         rootTransactionId,

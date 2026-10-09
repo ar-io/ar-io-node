@@ -18,6 +18,7 @@ import {
 import { verificationPriorities } from '../constants.js';
 import * as events from '../events.js';
 import { generateRequestAttributes } from '../lib/request-attributes.js';
+import { isOctetStreamPlaceholder } from '../lib/content-type.js';
 import { parseContentEncoding } from '../lib/http-utils.js';
 import { Semaphore } from '../lib/semaphore.js';
 import { currentUnixTimestamp } from '../lib/time.js';
@@ -33,11 +34,54 @@ import {
   ContiguousDataSource,
   ContiguousDataStore,
   ContiguousMetadata,
+  RecordedContentTypeSource,
   RequestAttributes,
 } from '../types.js';
 import { DataContentAttributeImporter } from '../workers/data-content-attribute-importer.js';
 
 const MAX_MRU_ARNS_NAMES_LENGTH = 10;
+
+/**
+ * The content type to record for this item, per ID, from a fetch of its data,
+ * and how far to trust it (see `ContentTypeSource` in types.d.ts).
+ *
+ * - The item's own tag (`sourceContentTypeOrigin: 'item'`) is always recorded.
+ * - A gateway's answer for this ID is recorded at the lower `upstream` rank,
+ *   and only from a trusted gateway: an untrusted peer could otherwise fix a
+ *   type on an item for good. The octet-stream placeholder is never recorded
+ *   at that rank, because a gateway that does not know the type answers with
+ *   it, and it would outrank a correct per-hash value.
+ * - A type with no stated origin is not recorded. That includes a type a
+ *   source took from this gateway's own stored attributes, which may be the
+ *   per-hash value of another item with the same bytes.
+ */
+export function itemContentTypeToRecord(
+  data: Pick<
+    ContiguousData,
+    'sourceContentType' | 'sourceContentTypeOrigin' | 'trusted'
+  >,
+):
+  | {
+      itemContentType: string;
+      itemContentTypeSource: RecordedContentTypeSource;
+    }
+  | undefined {
+  const contentType = data.sourceContentType;
+  if (contentType === undefined || contentType.trim() === '') {
+    return undefined;
+  }
+  if (data.sourceContentTypeOrigin === 'item') {
+    return { itemContentType: contentType, itemContentTypeSource: 'item' };
+  }
+  if (
+    data.sourceContentTypeOrigin === 'upstream' &&
+    data.trusted &&
+    !isOctetStreamPlaceholder(contentType)
+  ) {
+    return { itemContentType: contentType, itemContentTypeSource: 'upstream' };
+  }
+  return undefined;
+}
 
 /**
  * How a leader's foreground fetch ended, as seen by callers waiting on it.
@@ -1382,6 +1426,12 @@ export class ReadThroughDataCache implements ContiguousDataSource {
         contentEncodingToRecord = data.sourceContentEncoding;
       }
 
+      // The item's own content type to record with the cached data, per ID.
+      const itemContentType =
+        cacheEligible && foregroundSkipReason === undefined
+          ? itemContentTypeToRecord(data)
+          : undefined;
+
       if (cacheEligible && foregroundSkipReason === undefined) {
         span.addEvent('Starting caching process');
         const cachingStart = Date.now();
@@ -1609,6 +1659,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
                           dataSize: data.size,
                           contentType: data.sourceContentType,
                           contentEncoding: contentEncodingToRecord,
+                          ...itemContentType,
                           cachedAt: currentUnixTimestamp(),
                           verified: data.verified,
                           verificationPriority,
@@ -1628,6 +1679,14 @@ export class ReadThroughDataCache implements ContiguousDataSource {
                         hash,
                         size: data.size,
                         contentType: data.sourceContentType,
+                        // Ranked, so it replaces a per-hash value already in
+                        // memory for this ID (see setDataAttributes).
+                        ...(itemContentType !== undefined
+                          ? {
+                              contentTypeSource:
+                                itemContentType.itemContentTypeSource,
+                            }
+                          : {}),
                         // In memory too, so the next request (a cache hit)
                         // is labelled without waiting for the index write.
                         ...(contentEncodingToRecord !== undefined
@@ -1688,6 +1747,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
                           dataSize: data.size,
                           contentType: data.sourceContentType,
                           contentEncoding: contentEncodingToRecord,
+                          ...itemContentType,
                           cachedAt: currentUnixTimestamp(),
                           verified: false,
                           verificationPriority,
@@ -1703,6 +1763,14 @@ export class ReadThroughDataCache implements ContiguousDataSource {
                         hash,
                         size: data.size,
                         contentType: data.sourceContentType,
+                        // Ranked, so it replaces a per-hash value already in
+                        // memory for this ID (see setDataAttributes).
+                        ...(itemContentType !== undefined
+                          ? {
+                              contentTypeSource:
+                                itemContentType.itemContentTypeSource,
+                            }
+                          : {}),
                         // In memory too, so the next request (a cache hit)
                         // is labelled without waiting for the index write.
                         ...(contentEncodingToRecord !== undefined

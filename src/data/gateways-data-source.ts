@@ -887,6 +887,12 @@ export class GatewaysDataSource implements ContiguousDataSource {
                   sourceContentType: response.headers['content-type'] as
                     | string
                     | undefined,
+                  // The gateway's answer for this ID: ranked below the item's
+                  // own tag when recorded, since it may be the gateway's
+                  // per-hash label for another item with the same bytes.
+                  ...(response.headers['content-type'] !== undefined
+                    ? { sourceContentTypeOrigin: 'upstream' as const }
+                    : {}),
                   // Only present when the bytes are encoded, so unencoded results keep
                   // their shape.
                   ...contentEncodingOf(
