@@ -28,8 +28,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     `index_export_runs_total{kind="derive"}`).
   - Subscribers check a band's files against the layout its `band.json`
     names, and lookup footers and row counts as tables'. A gateway that
-    doesn't know `l1-3` refuses such a band explicitly and keeps its copy, so
-    upgrade subscribers before publishers.
+    doesn't know `l1-3` refuses such a band explicitly and keeps its copy,
+    and a publisher's sidecar that doesn't can't publish one: upgrade
+    subscribers first, then a publisher's `index-swarm` with or before its
+    `index-export`.
   - `index-l1-verify --bands-dir` checks each band's lookups against its
     tables and `band.json` (the `lookups` check; `--skip-lookups` to leave
     it out).

@@ -706,6 +706,13 @@ can't build them, and its runs say so (`incomplete`, not retried).
   to the builds and outside their time budget; it reports each band under
   `l1Derived` and counts it as `index_export_runs_total{kind="derive"}`. A
   subscriber already holding the band fetches only the new files.
+
+  **Upgrade order.** A sidecar that doesn't know `l1-3` can't read an `l1-3`
+  band: as a subscriber it refuses it (naming the layout) and keeps its copy,
+  and as a publisher it can't describe it, so the band goes unpublished.
+  Upgrade subscribers first, then a publisher's `index-swarm` with or before
+  its `index-export`. The gateway itself reads no `parquet-l1` band and needs
+  nothing.
 - **Checks before publishing.** Every block links to the one before it and
   is linked to by the one above, each `hash_list_merkle` follows from the
   previous block, each block's `tx_root` is recomputed from its transactions
