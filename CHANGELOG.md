@@ -212,6 +212,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **`index-export` derives `parquet-l1` lookups before it builds**, not
+  after: a band that only lacks its lookups gets them in seconds to minutes
+  at the start of a run, rather than after up to 4 hours of builds. The
+  derive runs again after the builds for a band they confirmed; each band is
+  tried once a run.
+- **`INDEX_EXPORT_L1_RUN_BUDGET_MINUTES`** (default 240) sets how long a run
+  may keep starting `parquet-l1` history bands, for a one-time rebuild or a
+  bootstrap that would otherwise spread over several runs.
+
 - **Index-swarm torrents are built with 256 KiB pieces, down from 4 MiB**, so
   a browser can verify a byte range of a band file against the signed
   `infohashV2` without the whole file: it rebuilds the file's BEP 52

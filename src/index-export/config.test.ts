@@ -20,6 +20,7 @@ describe('parseExportConfig', () => {
     assert.equal(config.runAtMinute, 240);
     assert.equal(config.recentMaxBlocks, 100_000);
     assert.equal(config.startHeight, undefined);
+    assert.equal(config.l1RunBudgetMs, undefined, 'the service default');
     assert.equal(config.headerCheckTimeoutMs, 30_000);
     assert.equal(config.metricsPort, 9102);
     assert.equal(config.publishDir, 'data/indexes/published/root-tx-index');
@@ -43,12 +44,14 @@ describe('parseExportConfig', () => {
       INDEX_EXPORT_RUN_AT_UTC: '23:30',
       INDEX_EXPORT_RECENT_MAX_BLOCKS: '50000',
       INDEX_EXPORT_START_HEIGHT: '1950000',
+      INDEX_EXPORT_L1_RUN_BUDGET_MINUTES: '720',
       INDEX_EXPORT_HEADER_CHECK_TIMEOUT_MS: '60000',
       INDEX_EXPORT_METRICS_PORT: '9200',
     });
     assert.equal(config.runAtMinute, 23 * 60 + 30);
     assert.equal(config.recentMaxBlocks, 50_000);
     assert.equal(config.startHeight, 1_950_000);
+    assert.equal(config.l1RunBudgetMs, 12 * 3600_000);
     assert.equal(config.headerCheckTimeoutMs, 60_000);
     assert.equal(config.metricsPort, 9200);
     assert.deepEqual(
@@ -87,6 +90,7 @@ describe('parseExportConfig', () => {
       ['INDEX_EXPORT_START_HEIGHT', '-5', /whole number/],
       ['INDEX_EXPORT_RECENT_MAX_BLOCKS', '10', /at least 1000/],
       ['INDEX_EXPORT_METRICS_PORT', 'abc', /whole number/],
+      ['INDEX_EXPORT_L1_RUN_BUDGET_MINUTES', '0', /at least 1/],
       ['INDEX_EXPORT_RUN_AT_UTC', '4am', /HH:MM/],
     ] as const) {
       assert.throws(
