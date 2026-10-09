@@ -700,7 +700,6 @@ export class ExportService {
     dryRun: boolean,
   ): Promise<void> {
     const { config, log } = this.deps;
-    const started = this.now();
     const workDir = dryRun
       ? path.join(config.workDir, 'dry-run')
       : config.workDir;
@@ -715,6 +714,8 @@ export class ExportService {
       // First, since it takes seconds to minutes and reads no core.db: a
       // band waiting only for its lookups shouldn't wait hours for builds.
       await this.deriveL1Lookups(report, workDir, dryRun);
+      // The budget is the builds': it starts after the derive.
+      const started = this.now();
       const heights = coreHeights(config.coreDbPath);
       if (heights.lowest > 0) {
         throw new RunFailure(

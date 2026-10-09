@@ -378,6 +378,43 @@ describe('ExportService parquet-l1', () => {
     ]);
   });
 
+  it('leaves the derive out of the time budget', async () => {
+    // A tip band with only its lookups missing, and a history range to build.
+    await publishedBelow();
+    const first = await service().runOnce({ toHeight: FIRST + 9 });
+    const tip = path.join(config().l1PublishDir, first.l1Steps[0].id as string);
+    const bandPath = path.join(tip, BAND_FILE);
+    const { lookups: _dropped, ...json } = JSON.parse(
+      await fs.readFile(bandPath, 'utf8'),
+    );
+    for (const spec of PARQUET_L1_LOOKUPS) {
+      await fs.rm(path.join(tip, spec.file));
+    }
+    await fs.writeFile(bandPath, JSON.stringify({ ...json, schema: 'l1-2' }));
+    const tag = bandPublisherTag(PUBLISHER);
+    await fs.rm(
+      path.join(
+        config().l1PublishDir,
+        `l1-h${FIRST - L1_SPAN}-${FIRST - 1}-${tag}-000000000000`,
+      ),
+      { recursive: true },
+    );
+
+    // The derive takes a whole budget.
+    const slowDerive = Object.create(log) as typeof log;
+    slowDerive.info = ((message: string, ...rest: unknown[]) => {
+      if (message === 'L1 band lookups derived') now += L1_RUN_BUDGET_MS;
+      return (log.info as any)(message, ...rest);
+    }) as typeof log.info;
+    const report = await service({}, slowDerive).runOnce();
+    assert.equal(report.l1Derived?.[0]?.result, 'published');
+    assert.equal(report.l1Deferred, undefined, 'the build was not deferred');
+    // core.db lacks that range, which is how this run ends.
+    assert.deepEqual(steps(report), [
+      ['h', [FIRST - L1_SPAN, FIRST - 1], 'couldnt_check', 'incomplete'],
+    ]);
+  });
+
   it('publishes nothing once another run has taken the lock', async () => {
     const below = await publishedBelow();
     await fs.mkdir(config().workDir, { recursive: true });
