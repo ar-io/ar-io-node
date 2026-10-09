@@ -702,8 +702,9 @@ can't build them, and its runs say so (`incomplete`, not retried).
   tables and adds them in place, keeping its id, before replacing its
   `band.json` with one naming them. No file already in the band is touched,
   and a reader that goes by `band.json` sees the old band or the new one.
-  This needs no `core.db` and no chain checks, so it runs whatever happened
-  to the builds and outside their time budget; it reports each band under
+  This needs no `core.db` and no chain checks, so it runs first, before any
+  build, and again after them for a band the builds confirmed, outside their
+  time budget and whatever happened to them; it reports each band under
   `l1Derived` and counts it as `index_export_runs_total{kind="derive"}`. A
   subscriber already holding the band fetches only the new files.
 
@@ -753,8 +754,10 @@ can't build them, and its runs say so (`incomplete`, not retried).
   vilenarios.com (2026-10-03, 2.01M heights): 23 bands and 12.8 GB in about
   9 hours. A band costs from 40 seconds in the sparse early chain to about
   45 minutes and 1.35 GB through the busiest stretch, settling lower again
-  nearer the tip. A run starts no new whole band after 4 hours; the rest
-  are listed as `l1Deferred`, and the next run starts 15 minutes later.
+  nearer the tip. A run starts no new whole band after 4 hours
+  (`INDEX_EXPORT_L1_RUN_BUDGET_MINUTES`); the rest are listed as
+  `l1Deferred`, and the next run starts 15 minutes later. For a one-time
+  rebuild or a bootstrap, raise it so one run does the lot.
 - **Disk.** Before each band, room for the band and its scratch: eight
   times the largest band published, at least 10 GiB, beyond the same
   margin as root-TX bands. Scratch is about six times the band; DuckDB's
