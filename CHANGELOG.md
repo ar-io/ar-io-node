@@ -336,6 +336,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `index_subscription_bytes_total` help string no longer says "only http
   today".
 
+- **Gateways far from the preferred chunk nodes served only about a third of
+  old chunks.** A chunk GET tried nodes that advertise the chunk's range
+  (`/sync_buckets`) first, then preferred nodes in list order, each capped
+  at 500 ms. The advertised ranges are unreliable: the `tip` nodes serve far
+  more than they claim (for 39 of 64 node and chunk pairs sampled, the node
+  held the chunk without claiming its range), and with the default list a
+  US gateway spent its attempts on range claimants and on `data` nodes in
+  Germany that miss the 500 ms limit from there. `/chunk/<offset>` then
+  answered 404, which the observer's offset checks count against the
+  gateway. Preferred nodes now go first, ordered by a cost each gateway
+  learns per node: an average of time-to-success where any miss counts as
+  the full timeout. Each gateway settles on the preferred nodes that serve
+  it well from where it runs, with no regional configuration. Simulated on
+  40 random chunks surveyed from a US gateway with the default list, on
+  offsets the cost was not learned from: 30% served before, 90% after (95%
+  with `PREFERRED_CHUNK_GET_NODE_URLS` set to the US `tip` nodes). Live on
+  gatewaypie.com (US) with every chunk setting at its default: 86% of 100
+  random chunks served while it learned after a restart, then 96% of the
+  next 100, against 98% from turbo-gateway.com; vilenarios.com on the old
+  order and defaults had failed all 12 offsets the observer sampled. Expect
+  a warm-up of roughly 100 chunk requests after each restart. New
+  `peer_type="preferred"` label on `request_chunk_total`.
+  `PREFERRED_CHUNK_GET_NODE_URLS` and `PREFERRED_CHUNK_POST_NODE_URLS` are
+  now documented, and the documented default for
+  `WEIGHTED_PEERS_TEMPERATURE_DELTA` is corrected to 2.
+
 - **`tools/index-swarm-status` warned on every subscriber that installs
   `parquet-l1` bands** that the gateway had not loaded them ("5 of 29
   installed bands loaded"). It compared all installed bands with the

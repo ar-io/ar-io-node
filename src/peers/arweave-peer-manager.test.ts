@@ -837,4 +837,62 @@ describe('ArweavePeerManager', () => {
       assert.ok(typeof peer.bucketsLastUpdated === 'number');
     });
   });
+
+  describe('preferred chunk GET ordering by learned cost', () => {
+    const A = 'http://a.example.com';
+    const B = 'http://b.example.com';
+    const C = 'http://c.example.com';
+    let manager: ArweavePeerManager;
+
+    beforeEach(() => {
+      manager = new ArweavePeerManager({
+        ...TEST_CONFIG,
+        preferredChunkGetUrls: [A, B, C],
+      });
+    });
+
+    afterEach(() => {
+      manager.destroy();
+    });
+
+    it('puts peers that serve fast first and peers that miss last', () => {
+      for (let i = 0; i < 5; i++) {
+        manager.recordChunkGetCost(A, 80); // serves quickly
+        manager.recordChunkGetCost(C, 500); // misses (timeout or 404)
+      }
+
+      // B is unmeasured, so it sits between them.
+      assert.deepEqual(manager.getPreferredChunkGetPeersByCost(), [A, B, C]);
+    });
+
+    it('lets a run of misses push a once-fast peer behind an unmeasured one', () => {
+      manager.recordChunkGetCost(A, 50);
+      for (let i = 0; i < 10; i++) {
+        manager.recordChunkGetCost(A, 500);
+      }
+      manager.recordChunkGetCost(C, 100);
+
+      const order = manager.getPreferredChunkGetPeersByCost();
+      assert.equal(order[0], C);
+      assert.equal(order[2], A);
+    });
+
+    it('returns every preferred peer, and only those', () => {
+      manager.recordChunkGetCost('http://not-preferred.example.com', 1);
+
+      assert.deepEqual([...manager.getPreferredChunkGetPeersByCost()].sort(), [
+        A,
+        B,
+        C,
+      ]);
+    });
+
+    it('spreads ties at random rather than always in list order', () => {
+      const firsts = new Set<string>();
+      for (let i = 0; i < 200; i++) {
+        firsts.add(manager.getPreferredChunkGetPeersByCost()[0]);
+      }
+      assert.equal(firsts.size, 3);
+    });
+  });
 });
