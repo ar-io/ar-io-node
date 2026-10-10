@@ -5,7 +5,7 @@ This directory contains development and documentation tools for the AR.IO Node p
 ## Tools
 
 ### `index-swarm-setup` and `index-swarm-status`
-Set up index sharing (the `index-swarm` sidecar, optionally over BitTorrent) and check it works. `index-swarm-setup` edits `.env` idempotently (backing it up first) and, with `--restart`, recreates only what the changes need, by service name, using the running gateway's own compose files. `index-swarm-status` runs inside the sidecar and reports each check as ok/WARN/FAIL with the fix; it exits 1 on a failure. Both need only Docker: they run in the core image. See [Quick start](../docs/index-swarm.md#quick-start) and [setup and status scripts](../docs/index-swarm.md#setup-and-status-scripts).
+Set up Index Sharing (the `index-swarm` sidecar, optionally over BitTorrent) and check it works. `index-swarm-setup` edits `.env` idempotently (backing it up first) and, with `--restart`, recreates only what the changes need, by service name, using the running gateway's own compose files. `index-swarm-status` runs inside the sidecar and reports each check as ok/WARN/FAIL with the fix; it exits 1 on a failure. Both need only Docker: they run in the core image. See [Quick start](../docs/index-swarm.md#quick-start) and [setup and status scripts](../docs/index-swarm.md#setup-and-status-scripts).
 
 **Usage:**
 ```bash
@@ -25,6 +25,7 @@ The gateway's command-line tool, in the style of the `ar.io` CLI from `@ar.io/sd
   --gateway-url http://core:4000 --input - < records.csv
 ./tools/ar-io-node index-band-verify --band-dir data/indexes/published/root-tx-index/<band> --gateway-url http://core:4000
 ./tools/ar-io-node index-l1-verify --bands-dir data/indexes/installed/parquet-l1
+./tools/ar-io-node index-l1-import --bands-dir data/indexes/installed/parquet-l1 --core-db data/sqlite/core.db   # with the gateway stopped
 ./tools/ar-io-node get-gateway --address <wallet>
 ```
 
@@ -57,7 +58,7 @@ Fetches a data item from the gateway using client-supplied root TX ID and nestin
 - `--help` - Show help message
 
 ### `generate-architecture-pdf`
-Analyzes the repository structure and generates a comprehensive architecture review document in both markdown and PDF formats. The analysis covers:
+Analyzes the repository structure and generates an architecture review document in both markdown and PDF formats. The analysis covers:
 - Directory structure and file organization
 - Type system analysis
 - Database schemas and SQL statements
@@ -80,7 +81,7 @@ SKIP_COVERAGE=true ./tools/generate-architecture-pdf
 ```
 
 **Output:**
-- `architecture-review.md` - Comprehensive markdown analysis
+- `architecture-review.md` - Markdown analysis
 - `architecture-review.pdf` - E-reader optimized PDF (Kindle format)
 
 ### `test-chunk-retrieval`

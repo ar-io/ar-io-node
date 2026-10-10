@@ -31,9 +31,10 @@ info:
     - **Arweave node API**: node-compatible routes (`/info`, `/tx/{txId}`,
       `/chunk/{offset}`, blocks, wallets, pricing), so existing Arweave
       clients work unchanged.
-    - **Index sharing**: a gateway can publish the indexes that locate data
-      items inside their bundles, signed with its registered observer key,
-      at `/ar-io/indexes`; other gateways and clients verify and use them.
+    - **Index Sharing**: a gateway can publish index bands at
+      `/ar-io/indexes`, signed with its registered observer key: root-TX
+      bands, which locate data items inside their bundles, and L1 bands of
+      the base layer. Other gateways and clients verify and use them.
     - **The gateway itself**: `/ar-io/info` (release, capabilities),
       `/ar-io/peers`, health checks and metrics.
 
@@ -139,12 +140,12 @@ tags:
     description: |
       Query and manage rate limit bucket balances. Supports both public balance queries and top-ups via x402 payments or admin authentication.
 
-      **⚠️ EXPERIMENTAL FEATURES**: The rate limiter and x402 payment protocol are experimental features subject to change. API endpoints, parameters, behavior, and configuration options (environment variables) may evolve in future releases as these systems continue to be developed. See [docs/x402-and-rate-limiting.md](https://github.com/ar-io/ar-io-node/blob/develop/docs/x402-and-rate-limiting.md) for comprehensive documentation.
+      **⚠️ EXPERIMENTAL FEATURES**: The rate limiter and x402 payment protocol are experimental features subject to change. API endpoints, parameters, behavior, and configuration options (environment variables) may evolve in future releases as these systems continue to be developed. See [docs/x402-and-rate-limiting.md](https://github.com/ar-io/ar-io-node/blob/develop/docs/x402-and-rate-limiting.md) for details.
   - name: Indexes
     description: |
-      Verifiable Index Sharing: the signed publication of the root
-      transaction indexes this gateway offers to other gateways and
-      clients, and their files by name or by SHA-256. See
+      Index Sharing: the signed publication of the root-TX and L1 bands
+      this gateway offers to other gateways and clients, their files by
+      name, by SHA-256 and as a WebSeed, and their torrents. See
       [Index Sharing](https://docs.ar.io/learn/gateways/index-sharing).
 components:
   securitySchemes:
@@ -1176,7 +1177,7 @@ paths:
       tags: [Indexes]
       summary: Get the index publication this gateway offers
       description: |
-        Returns the signed document listing the index artifacts this gateway's
+        Returns the signed document listing the bands this gateway's
         index-swarm sidecar publishes: each index, its bands, and every file in
         each band with its size and SHA-256. The document carries a detached
         Ed25519 signature by the gateway's registered observer key, so it
@@ -1190,9 +1191,10 @@ paths:
         that has run out of tokens can still learn what it could fetch. HEAD
         is supported.
 
-        Every error response on the three /ar-io/indexes routes carries
-        `Cache-Control: no-store`, so a cache in front of the gateway never
-        keeps it. Only 200, 206 and 304 carry a cacheable value.
+        Every error response on the five /ar-io/indexes routes (document,
+        file by name, blob, torrent and WebSeed) carries
+        `Cache-Control: no-store`. Only 200, 206 and 304 carry a cacheable
+        value. See docs/index-swarm.md, "Running behind nginx".
       responses:
         '200':
           description: The publication document.
@@ -1220,19 +1222,15 @@ paths:
       summary: Get a published index file by name
       description: |
         Serves one file of a published band. Rate limited and priced as data
-        egress. Supports a single byte range, which resuming downloaders
-        use. The name is only a lookup key: the bytes are read from the
-        publisher's hard link for the listed digest, so a band rebuilt in
-        place is never served under the old digest. 503 with Retry-After
-        while that link is missing or disagrees with the publication during
-        a band update. Sent with
-        `Cache-Control: public, no-cache`, because a name is reused when a
-        band is rebuilt; fetch by digest from the blob route for anything a
-        cache should keep. When the gateway meters these routes (a rate
-        limiter or x402 is configured) success responses carry
-        `private, no-cache` instead, so a shared cache cannot replay paid
-        bytes to a client that has not paid. Error responses carry
-        `Cache-Control: no-store`.
+        egress. Supports a single byte range; several ranges get the whole
+        file. The bytes are read from the publisher's hard link for the
+        listed digest. 503 with Retry-After while that link is missing or
+        disagrees with the publication during a band update. Success
+        responses carry `Cache-Control: public, no-cache`, or
+        `private, no-cache` when the gateway meters these routes (a rate
+        limiter or x402 is configured). Error responses carry
+        `Cache-Control: no-store`. Only a publisher serves this route; a
+        subscriber answers 404.
       parameters:
         - { name: name, in: path, required: true, schema: { type: string } }
         - { name: band, in: path, required: true, schema: { type: string } }
@@ -1282,13 +1280,11 @@ paths:
       description: |
         The same bytes as the named route, addressed by SHA-256, so a client
         that knows a digest can fetch it from any gateway publishing it.
-        Immutable by construction. Rate limited, priced and signed like the
-        named route, with the same headers, except that success responses
-        carry `Cache-Control: public, max-age=31536000, immutable`, or
+        Rate limited, priced and signed like the named route, with the same
+        headers, except that success responses carry
+        `Cache-Control: public, max-age=31536000, immutable`, or
         `private, max-age=31536000, immutable` when the gateway meters the
-        byte routes, so a shared cache cannot replay paid bytes. Error
-        responses carry `Cache-Control: no-store`, so a cache never keeps a
-        402 or 429 for a year under this URL.
+        byte routes. Error responses carry `Cache-Control: no-store`.
       parameters:
         - { name: sha256, in: path, required: true, schema: { type: string, pattern: '^[0-9a-f]{64}$' } }
       responses:
@@ -1324,15 +1320,12 @@ paths:
       summary: Get a published index file as a BitTorrent WebSeed
       description: |
         BEP 19 WebSeed for bands offered as torrents: clients fetch
-        `<url><torrent name>/<file>`. The torrent name is the first 16 hex
-        characters of SHA-256 over one line per file,
-        `<name>\0<size>\0<sha256 hex>\n`, in bytewise name order (see
-        docs/index-publication.md), so the address cannot change meaning. Metered,
-        range-capable and cached like the blob route: `public` or, when the
-        gateway meters the byte routes, `private, max-age=31536000,
-        immutable`; errors carry `Cache-Control: no-store`. Subscribers turn
-        it on only when peers are not delivering, since it is the
-        publisher's metered tier.
+        `<url><torrent name>/<file>`, where the torrent name is derived from
+        the band's file names, sizes and digests (see
+        docs/index-publication.md). Metered, range-capable and cached like
+        the blob route: `public` or, when the gateway meters the byte
+        routes, `private, max-age=31536000, immutable`; errors carry
+        `Cache-Control: no-store`.
       parameters:
         - { name: torrentName, in: path, required: true, schema: { type: string, pattern: '^[0-9a-f]{16}$' } }
         - { name: file, in: path, required: true, schema: { type: string } }
@@ -1372,14 +1365,11 @@ paths:
       summary: Get a published band's torrent, by its v1 infohash
       description: |
         The `.torrent` for a band the publication offers as a torrent, at the
-        `torrentUrl` the band's signed entry names. Addressed by the v1
-        infohash, so a band rebuilt under the same id gets a new address. Not
-        metered. A client must check it against the infohashes in the signed
-        publication before using it, and should hand an engine only the info
-        dictionary and trackers it trusts: nothing outside the info
+        `torrentUrl` the band's signed entry names, addressed by the v1
+        infohash. Not metered. A client must check it against the infohashes
+        in the signed publication before using it: nothing outside the info
         dictionary is covered by the signature. `Cache-Control: public,
-        max-age=86400` (only the tracker list, outside the infohash, can
-        change under one address); errors carry `no-store`.
+        max-age=86400`; errors carry `no-store`.
       parameters:
         - name: infohash
           in: path
