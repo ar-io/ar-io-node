@@ -5,16 +5,14 @@ on: [push, workflow_dispatch]
 jobs:
   test:
     strategy:
-      # A macOS failure must not cancel the in-flight ubuntu job. Only ubuntu
-      # builds the core image and runs E2E, and because macOS skips both it
-      # reaches the later steps far sooner — so with the default fail-fast it
-      # takes ubuntu down mid-build and E2E never runs at all. Observed exactly
-      # that: macOS failed on typecheck while ubuntu was still building the
-      # image, and the E2E step reported "skipped" on a run dispatched
-      # specifically to exercise it.
+      # Linux only on every push. macOS runs in `test-macos` below, on
+      # develop and main only: as a leg of this matrix it cost 10x the
+      # minutes on every branch push, ran twice as long, failed on its own
+      # flaky tests (FSEvents timing, S3DataStore) on unrelated PRs, and held
+      # up `images`, which needs this job.
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest]
     runs-on: ${{ matrix.os }}
     # Backstop only. A hung poll used to run out the 360-minute default and
     # burn a runner; the E2E waits now time out on their own well before this.
@@ -42,10 +40,6 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: 'yarn'
-
-      # macOS specific setup
-      - run: brew install python-setuptools
-        if: matrix.os == 'macos-latest'
 
       # Build and test TypeScript
       - run: yarn --immutable --immutable-cache
@@ -119,6 +113,35 @@ jobs:
         if: failure() && github.event_name != 'pull_request' && matrix.os == 'ubuntu-latest'
         env:
           SLACK_TITLE: Build failed!
+          SLACK_COLOR: danger
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+        uses: rtCamp/action-slack-notify@v2
+
+  # macOS coverage at merge time, off the critical path. Gateways run in
+  # Linux containers, so this only guards against breaking local development
+  # on macOS: it runs after merges to develop and main, nothing depends on it
+  # (in particular not `images`), and a failure reports to Slack instead of
+  # blocking anything.
+  test-macos:
+    if: github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main'
+    runs-on: macos-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: 'yarn'
+      - run: brew install python-setuptools
+      - run: yarn --immutable --immutable-cache
+      - run: yarn build
+      - run: yarn test:ci
+      - name: Send Slack failure notification
+        if: failure()
+        env:
+          SLACK_TITLE: macOS build failed (non-blocking)
           SLACK_COLOR: danger
           SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
         uses: rtCamp/action-slack-notify@v2
