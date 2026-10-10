@@ -109,6 +109,16 @@ batch_has_data_items() {
     [ "$found" = "1" ]
 }
 
+# Prints how many stable data items in [start, end] have indexed_at below
+# (or at/above, with "newer") the given threshold, or nothing on any error.
+count_stable_items_in_range() {
+    local start=$1 end=$2 threshold=$3 cmp="<"
+    [ "${4:-}" = newer ] && cmp=">="
+    [ -f "$bundles_db_path" ] || return 0
+    sqlite3 "$bundles_db_path" \
+        "SELECT count(*) FROM stable_data_items WHERE height >= $start AND height <= $end AND indexed_at $cmp $threshold;" 2>/dev/null
+}
+
 # Block until the gateway's parquet-export singleton is no longer 'running',
 # so a new POST doesn't immediately 409. This guards against: (a) the
 # prior batch's script bailing out early while the server-side worker
@@ -541,30 +551,54 @@ while true; do
             else
                 log_timing "Prune stable data items" "$prune_start_time" "$prune_end_time"
 
-                # Post-prune verification: re-fetch debug and compare
-                # minStableDataItem against this batch's end_height and the
-                # pre-prune value. Purely observational.
-                verify_debug_info="$(curl -s --fail --show-error -H "Authorization: Bearer $ADMIN_API_KEY" "http://${ar_io_host}:${ar_io_port}/ar-io/admin/debug")"
-                verify_status=$?
-                if [ $verify_status -ne 0 ] || [ -z "$verify_debug_info" ]; then
-                    echo "Warning: Post-prune debug fetch failed; cannot verify prune for $current_height-$end_height."
-                    prune_stage="unverified"
-                else
-                    post_prune_min_stable="$(echo "$verify_debug_info" | jq -r '.db.heights.minStableDataItem' 2>/dev/null)"
-                    if [ -z "$post_prune_min_stable" ] || [ "$post_prune_min_stable" = "null" ]; then
-                        echo "Warning: Post-prune debug missing minStableDataItem; cannot verify."
-                        prune_stage="unverified"
-                        post_prune_min_stable=""
-                    elif [ "$pre_prune_min_stable" -gt "$end_height" ]; then
-                        prune_stage="already_drained"
-                    elif [ "$post_prune_min_stable" -gt "$end_height" ]; then
+                # Post-prune verification. Purely observational.
+                #
+                # Preferred: count what is left in this batch's own range.
+                # Items at or above the threshold are expected to stay (they
+                # were indexed after the export snapshot) and go next cycle.
+                # The global minStableDataItem comparison below cannot tell a
+                # working prune from a no-op when an older straggler sits
+                # below this batch, so it reported every such batch as noop.
+                range_left=""
+                range_newer=""
+                if [ "$skip_empty_batches" = true ]; then
+                    range_left="$(count_stable_items_in_range "$current_height" "$end_height" "$batch_max_indexed_at")"
+                    range_newer="$(count_stable_items_in_range "$current_height" "$end_height" "$batch_max_indexed_at" newer)"
+                fi
+                if [[ "$range_left" =~ ^[0-9]+$ ]] && [[ "$range_newer" =~ ^[0-9]+$ ]]; then
+                    if [ "$range_left" -eq 0 ]; then
                         prune_stage="ok"
-                    elif [ "$post_prune_min_stable" -gt "$pre_prune_min_stable" ]; then
-                        echo "Warning: Prune partial for $current_height-$end_height: minStableDataItem advanced $pre_prune_min_stable -> $post_prune_min_stable but still <= $end_height."
-                        prune_stage="partial"
+                        if [ "$range_newer" -gt 0 ]; then
+                            echo "Prune ok for $current_height-$end_height; $range_newer item(s) indexed after the export snapshot stay for the next cycle."
+                        fi
                     else
-                        echo "Warning: Prune appears to be a no-op for $current_height-$end_height: minStableDataItem unchanged at $post_prune_min_stable."
+                        echo "Warning: Prune left $range_left item(s) older than the threshold in $current_height-$end_height."
                         prune_stage="noop"
+                    fi
+                    post_prune_min_stable=""
+                else
+                    verify_debug_info="$(curl -s --fail --show-error -H "Authorization: Bearer $ADMIN_API_KEY" "http://${ar_io_host}:${ar_io_port}/ar-io/admin/debug")"
+                    verify_status=$?
+                    if [ $verify_status -ne 0 ] || [ -z "$verify_debug_info" ]; then
+                        echo "Warning: Post-prune debug fetch failed; cannot verify prune for $current_height-$end_height."
+                        prune_stage="unverified"
+                    else
+                        post_prune_min_stable="$(echo "$verify_debug_info" | jq -r '.db.heights.minStableDataItem' 2>/dev/null)"
+                        if [ -z "$post_prune_min_stable" ] || [ "$post_prune_min_stable" = "null" ]; then
+                            echo "Warning: Post-prune debug missing minStableDataItem; cannot verify."
+                            prune_stage="unverified"
+                            post_prune_min_stable=""
+                        elif [ "$pre_prune_min_stable" -gt "$end_height" ]; then
+                            prune_stage="already_drained"
+                        elif [ "$post_prune_min_stable" -gt "$end_height" ]; then
+                            prune_stage="ok"
+                        elif [ "$post_prune_min_stable" -gt "$pre_prune_min_stable" ]; then
+                            echo "Warning: Prune partial for $current_height-$end_height: minStableDataItem advanced $pre_prune_min_stable -> $post_prune_min_stable but still <= $end_height."
+                            prune_stage="partial"
+                        else
+                            echo "Warning: Prune appears to be a no-op for $current_height-$end_height: minStableDataItem unchanged at $post_prune_min_stable."
+                            prune_stage="noop"
+                        fi
                     fi
                 fi
             fi
