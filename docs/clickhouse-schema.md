@@ -407,10 +407,19 @@ The inner `LIMIT` is set to `(pageSize + 1) * CLICKHOUSE_GQL_DEDUPE_HEADROOM`
 (default 4). The multiplier exists because `LIMIT 1 BY` runs *after* the
 inner limit: if the inner window has more duplicates than expected, the
 deduped result can come up short of `pageSize + 1` rows even when more
-unique matches exist further on. 4× leaves comfortable headroom under
-normal merge behavior (typically 1–2 versions per PK); operators can
-raise `CLICKHOUSE_GQL_DEDUPE_HEADROOM` if they see short pages during
-heavy ingest. See `src/config.ts:1434` for the full rationale.
+unique matches exist further on. 4× covers normal merge behavior
+(typically 1–2 versions per PK).
+
+Re-imports of a height range can stack more versions than that before
+merges fold them (6 per PK has been seen in production). The outer query
+also returns `gql_inner_rows`, a `count() OVER ()` of the inner window
+taken before `LIMIT 1 BY`. A page with fewer than `pageSize + 1` rows
+whose inner window was full is short only because of duplicates, so it
+is re-run with 4× the headroom, up to `CLICKHOUSE_GQL_DEDUPE_HEADROOM_MAX`
+(default 64). If it is still full at the cap, or the larger read trips
+`max_rows_to_read`, the page is returned short with `hasNextPage: true`
+so cursor paging continues. `clickhouse_gql_dedupe_headroom_total{leg,outcome}`
+counts both cases.
 
 ### Per-query `SETTINGS`
 

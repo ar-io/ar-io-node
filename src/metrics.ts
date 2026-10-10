@@ -853,6 +853,28 @@ export const clickhouseMaxImportedHeight = new promClient.Gauge({
  * id_bloom scatter scales with id count. The paired per-query warn log carries
  * the full query shape for post-hoc audits.
  */
+/**
+ * Pages whose ClickHouse inner window filled with duplicate
+ * ReplacingMergeTree versions, leaving fewer unique rows than the page needs.
+ *
+ * Labels:
+ * - `leg`: `stable`, `unstable` or `window` (owner-window fallback)
+ * - `outcome`:
+ *   - `retried`: re-ran with a larger dedupe headroom
+ *   - `exhausted`: still full at CLICKHOUSE_GQL_DEDUPE_HEADROOM_MAX; the
+ *     page was returned short with `hasNextPage: true`
+ *   - `too_many_rows`: the larger window tripped `max_rows_to_read`; the
+ *     short page was returned with `hasNextPage: true`
+ *
+ * A steady non-zero rate means the table carries many unmerged versions
+ * per PK (check `count()` against `uniqExact(id)` per partition).
+ */
+export const clickhouseGqlDedupeHeadroomTotal = new promClient.Counter({
+  name: 'clickhouse_gql_dedupe_headroom_total',
+  help: 'Count of GQL ClickHouse pages left short by duplicate versions, by leg and outcome.',
+  labelNames: ['leg', 'outcome'] as const,
+});
+
 export const clickhouseGqlTooManyRowsTotal = new promClient.Counter({
   name: 'clickhouse_gql_too_many_rows_total',
   help: 'Count of GQL stable queries that tripped ClickHouse max_rows_to_read (Code 158).',

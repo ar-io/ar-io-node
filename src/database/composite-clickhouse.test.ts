@@ -480,6 +480,95 @@ describe('CompositeClickHouseDatabase', () => {
     });
   });
 
+  describe('dedupe headroom', () => {
+    // Emulates the ClickHouse envelope over a table holding `copies` unmerged
+    // versions of each row: the inner LIMIT takes raw rows (duplicates
+    // adjacent, as they sort by the full PK), `LIMIT 1 BY` folds them, the
+    // outer LIMIT trims to `pageSize + 1`, and every row carries
+    // `gql_inner_rows`, the raw inner count.
+    function duplicatedTableComposite(
+      uniqueRows: Record<string, unknown>[],
+      copies: number,
+    ): { composite: CompositeClickHouseDatabase; innerLimits: number[] } {
+      const composite = buildComposite({ sqlite, chRowsByLeg: {} });
+      const innerLimits: number[] = [];
+      const raw = uniqueRows.flatMap((row) =>
+        Array.from({ length: copies }, () => row),
+      );
+      (composite as any).clickhouseClient = {
+        async query({ query: sql }: { query: string }) {
+          const innerLimit = Number(/ LIMIT (\d+)\)/.exec(sql)![1]);
+          const outerLimit = Number(/ LIMIT (\d+) SETTINGS/.exec(sql)![1]);
+          innerLimits.push(innerLimit);
+          const window = raw.slice(0, innerLimit);
+          const folded = [...new Set(window)].slice(0, outerLimit);
+          return {
+            json: async () => ({
+              data: folded.map((row) => ({
+                ...row,
+                gql_inner_rows: String(window.length),
+              })),
+            }),
+          };
+        },
+      };
+      return { composite, innerLimits };
+    }
+
+    const rows = (n: number) =>
+      Array.from({ length: n }, (_, i) =>
+        chRow({ id: id(`dup${i}`), height: i + 1 }),
+      );
+
+    it('grows the headroom when duplicates leave the page short', async () => {
+      // 6 versions per PK against the default headroom of 4: the first
+      // inner window (12 rows) folds to 2 unique rows for a pageSize of 2.
+      const { composite, innerLimits } = duplicatedTableComposite(rows(10), 6);
+
+      const result = await composite.getGqlTransactions({
+        pageSize: 2,
+        sortOrder: 'HEIGHT_ASC',
+      });
+
+      assert.deepEqual(innerLimits, [12, 48]);
+      assert.equal(result.edges.length, 2);
+      assert.equal(result.pageInfo.hasNextPage, true);
+    });
+
+    it('keeps hasNextPage true when the cap is still saturated', async () => {
+      // Far more versions than the 64x cap can see past: the page stays
+      // short, but the client must be told to keep paging.
+      const { composite, innerLimits } = duplicatedTableComposite(
+        rows(10),
+        1000,
+      );
+
+      const result = await composite.getGqlTransactions({
+        pageSize: 2,
+        sortOrder: 'HEIGHT_ASC',
+      });
+
+      assert.deepEqual(innerLimits, [12, 48, 192]);
+      assert.equal(result.edges.length, 1);
+      assert.equal(result.pageInfo.hasNextPage, true);
+    });
+
+    it('does not retry a genuinely short last page', async () => {
+      // 2 unique rows with 6 versions each: the 12-row window holds all of
+      // them, so the short page is real and hasNextPage stays false.
+      const { composite, innerLimits } = duplicatedTableComposite(rows(2), 6);
+
+      const result = await composite.getGqlTransactions({
+        pageSize: 5,
+        sortOrder: 'HEIGHT_ASC',
+      });
+
+      assert.deepEqual(innerLimits, [24]);
+      assert.equal(result.edges.length, 2);
+      assert.equal(result.pageInfo.hasNextPage, false);
+    });
+  });
+
   describe('SQLite fallback behavior', () => {
     it('returns CH-only with PARTIAL_RESULT warning when SQLite breaker rejects', async () => {
       sqlite = makeSqliteStub({ reject: new Error('sqlite down') });
