@@ -397,6 +397,16 @@ export function planSetup(
           reason:
             'this node’s closed tracker, announced to through the gateway’s HTTPS, written into its torrents',
         });
+        // Without a public host the tracker lists this node's engine under
+        // the gateway's name, which is right only when that name reaches
+        // this node on the peer port.
+        if (host === undefined) {
+          const enginePort =
+            options.enginePort ?? env.get('INDEX_SWARM_ENGINE_PORT') ?? '6881';
+          plan.notes.push(
+            `The tracker lists this node's engine at ${new URL(origin).hostname}:${enginePort}. If that name does not reach this node on that port (a CDN, or a load balancer that does not forward it), pass --public-host <this node's public IP>.`,
+          );
+        }
       } else if (host !== undefined) {
         const port =
           env.get('INDEX_SWARM_TRACKER_PORT') ?? TRACKER_PORT_DEFAULT;

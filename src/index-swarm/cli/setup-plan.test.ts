@@ -230,6 +230,21 @@ describe('planSetup', () => {
     assert.equal(valueOf(p, 'INDEX_SWARM_ENGINE_PUBLIC_HOST'), '203.0.113.7');
     assert.doesNotMatch(p.notes.join('\n'), /tracker port/);
     assert.doesNotMatch(p.notes.join('\n'), /INDEXES_PUBLIC_URL/);
+    assert.doesNotMatch(p.notes.join('\n'), /lists this node's engine/);
+  });
+
+  it('says where the engine will be listed when only the gateway’s name is known', () => {
+    const base =
+      'INDEX_SWARM_OBSERVER_KEYPAIR_FILE=/k.json\nAR_IO_WALLET=W\nARNS_ROOT_HOST=gateway.example';
+    const p = plan(base, { publish: true, torrent: true });
+    assert.equal(
+      valueOf(p, 'INDEX_SWARM_TRACKERS'),
+      'https://gateway.example/ar-io/indexes/announce',
+    );
+    assert.match(
+      p.notes.join('\n'),
+      /lists this node's engine at gateway\.example:6881.*--public-host/,
+    );
   });
 
   it('takes --public-url over ARNS_ROOT_HOST', () => {
