@@ -11,6 +11,7 @@ import { parseArgs } from 'node:util';
 
 import { EnvFile } from './env-file.js';
 import { planSetup, SetupOptions } from './setup-plan.js';
+import { parsePublicOrigin } from '../../lib/public-origin.js';
 
 /**
  * The `.env` half of `tools/index-swarm-setup`. It runs inside the core image,
@@ -35,8 +36,12 @@ publisher or turn on torrents; it only changes what is missing.
                          if this gateway holds the root data).
   --torrent              Move bands over BitTorrent too (generates the
                          engine password).
+  --public-url <url>     This gateway's public origin (https://gateway.example).
+                         When publishing torrents, peers announce to its
+                         tracker through it, so no tracker port needs
+                         opening. Default: https://<ARNS_ROOT_HOST>.
   --public-host <addr>   This node's public IP, where peers reach its engine
-                         (and, when publishing, its tracker).
+                         (and, without a public URL, its tracker).
   --engine-port <n>      The engine's peer port (default 6881).
   --max-disk-gib <n>     Disk for installed bands (default 50 GiB).
   --no-gateway           Leave CDB64_ROOT_TX_INDEX_SOURCES and
@@ -50,6 +55,15 @@ publisher or turn on torrents; it only changes what is missing.
 function fail(message: string): never {
   process.stderr.write(`index-swarm-setup: ${message}\n`);
   process.exit(1);
+}
+
+/** A gateway's public origin, or exit naming the flag. */
+function publicOrigin(value: string): string {
+  try {
+    return parsePublicOrigin(value);
+  } catch (error: any) {
+    fail(`--public-url: ${error.message}`);
+  }
 }
 
 function positive(value: string | undefined, flag: string): number | undefined {
@@ -68,6 +82,7 @@ async function main(): Promise<void> {
         publish: { type: 'boolean' },
         torrent: { type: 'boolean' },
         'public-host': { type: 'string' },
+        'public-url': { type: 'string' },
         'engine-port': { type: 'string' },
         'max-disk-gib': { type: 'string' },
         'start-height': { type: 'string' },
@@ -103,6 +118,9 @@ async function main(): Promise<void> {
     gateway: values['no-gateway'] !== true,
     ...(values['public-host'] !== undefined
       ? { publicHost: values['public-host'] as string }
+      : {}),
+    ...(values['public-url'] !== undefined
+      ? { publicUrl: publicOrigin(values['public-url'] as string) }
       : {}),
     ...(enginePort !== undefined ? { enginePort } : {}),
     ...(values['max-disk-gib'] !== undefined

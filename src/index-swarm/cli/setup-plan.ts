@@ -31,6 +31,8 @@ export const SUBSCRIBER_LOOKUP_ORDER = 'db,cdb,gateways,graphql';
  */
 export const DEFAULT_MAX_DISK_GIB = 50;
 const TRACKER_PORT_DEFAULT = '6969';
+/** Where the gateway's Envoy forwards announces to the sidecar's tracker. */
+export const GATEWAY_ANNOUNCE_PATH = '/ar-io/indexes/announce';
 const ENGINE_USER = 'swarm';
 
 export interface SetupOptions {
@@ -40,6 +42,13 @@ export interface SetupOptions {
   torrent: boolean;
   /** This node's public address, for peers and the tracker. */
   publicHost?: string;
+  /**
+   * The gateway's public origin (`https://gateway.example`). When publishing
+   * torrents, its tracker is announced to through it, at
+   * `<origin>/ar-io/indexes/announce`, so no tracker port needs opening.
+   * Defaults to `https://<ARNS_ROOT_HOST>` when that is set.
+   */
+  publicUrl?: string;
   enginePort?: number;
   maxDiskGiB?: number;
   /** Also point the gateway at the installed bands (default true). */
@@ -93,6 +102,19 @@ const normalizeSource = (source: string) =>
 /** A host as it goes in a URL: an IPv6 literal in brackets. */
 export function urlHost(host: string): string {
   return host.includes(':') && !host.startsWith('[') ? `[${host}]` : host;
+}
+
+/**
+ * The gateway's public origin: the one given, else `https://` and the first
+ * `ARNS_ROOT_HOST`, else undefined. Without a trailing slash.
+ */
+export function gatewayOrigin(
+  env: EnvReader,
+  publicUrl: string | undefined,
+): string | undefined {
+  if (publicUrl !== undefined) return publicUrl.replace(/\/+$/, '');
+  const root = splitList(env.get('ARNS_ROOT_HOST') ?? '')[0];
+  return root !== undefined ? `https://${root}` : undefined;
 }
 
 /** `ROOT_TX_LOOKUP_ORDER` with `cdb` right after `db` (or first). */
@@ -307,6 +329,16 @@ export function planSetup(
     plan.notes.push(
       'index-export builds bands into data/indexes/published/root-tx-index/ once a day; dry-run it first: docker compose --profile index-export run --rm index-export --once --dry-run (see "Producing bands" in docs/index-swarm.md).',
     );
+    // The gateway's feeds need absolute URLs, from INDEXES_PUBLIC_URL or
+    // ARNS_ROOT_HOST. A core setting, so noted rather than written.
+    if (
+      env.get('INDEXES_PUBLIC_URL') === undefined &&
+      env.get('ARNS_ROOT_HOST') === undefined
+    ) {
+      plan.notes.push(
+        `The gateway serves an RSS feed of each published index at /ar-io/indexes/feed/<index>.xml only with INDEXES_PUBLIC_URL (or ARNS_ROOT_HOST) set; set INDEXES_PUBLIC_URL=${options.publicUrl ?? 'https://<this gateway>'} and recreate the gateway to offer them.`,
+      );
+    }
   }
 
   // The torrent engine. Like --max-disk-gib, its address and port apply
@@ -352,9 +384,20 @@ export function planSetup(
     }
 
     if (options.publish && env.get('INDEX_SWARM_TRACKERS') === undefined) {
+      // Through the gateway's own HTTPS where its address is known, so no
+      // tracker port needs opening; else the tracker's port at the public
+      // host, as before.
+      const origin = gatewayOrigin(env, options.publicUrl);
       const host =
         options.publicHost ?? env.get('INDEX_SWARM_ENGINE_PUBLIC_HOST');
-      if (host !== undefined) {
+      if (origin !== undefined) {
+        set({
+          key: 'INDEX_SWARM_TRACKERS',
+          value: `${origin}${GATEWAY_ANNOUNCE_PATH}`,
+          reason:
+            'this node’s closed tracker, announced to through the gateway’s HTTPS, written into its torrents',
+        });
+      } else if (host !== undefined) {
         const port =
           env.get('INDEX_SWARM_TRACKER_PORT') ?? TRACKER_PORT_DEFAULT;
         set({
@@ -364,7 +407,7 @@ export function planSetup(
         });
       } else {
         plan.warnings.push(
-          'Publishing torrents without a tracker: pass --public-host <this node’s public IP> so peers can find this node’s tracker. Without one they find each other only through DHT and the WebSeed.',
+          'Publishing torrents without a tracker: pass --public-url <this gateway’s https URL> (or --public-host <this node’s public IP>) so peers can find this node’s tracker. Without one they find each other only through DHT and the WebSeed.',
         );
       }
     }
@@ -388,10 +431,25 @@ export function planSetup(
     plan.notes.push(
       `Open port ${port} (TCP and UDP) to the internet for peers. Docker-published ports bypass the host's INPUT firewall; to restrict them, filter where Docker forwards (the DOCKER-USER chain with Docker's default iptables backend; see "Running the engine" in docs/index-swarm.md).`,
     );
-    if (options.publish || env.get('INDEX_SWARM_PUBLISH') !== undefined) {
-      plan.notes.push(
-        `Open the tracker port ${env.get('INDEX_SWARM_TRACKER_PORT') ?? TRACKER_PORT_DEFAULT} (TCP) too.`,
-      );
+    // The tracker's own port matters only when torrents announce to it
+    // directly; through the gateway's HTTPS there is nothing to open.
+    const trackers =
+      plan.changes.find((c) => c.key === 'INDEX_SWARM_TRACKERS')?.value ??
+      env.get('INDEX_SWARM_TRACKERS');
+    const trackerPort =
+      env.get('INDEX_SWARM_TRACKER_PORT') ?? TRACKER_PORT_DEFAULT;
+    if (
+      (options.publish || env.get('INDEX_SWARM_PUBLISH') !== undefined) &&
+      trackers !== undefined &&
+      splitList(trackers).some((url) => {
+        try {
+          return new URL(url).port === trackerPort;
+        } catch {
+          return false;
+        }
+      })
+    ) {
+      plan.notes.push(`Open the tracker port ${trackerPort} (TCP) too.`);
     }
   }
 
