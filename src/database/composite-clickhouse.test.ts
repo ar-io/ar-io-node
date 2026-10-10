@@ -605,6 +605,52 @@ describe('CompositeClickHouseDatabase', () => {
       assert.equal(result.pageInfo.hasNextPage, true);
     });
 
+    it('returns a prefix when a follow-up query trips max_rows_to_read', async () => {
+      // The first 44-row window folds to 8 of the 11 rows needed; the
+      // continuation trips the row cap. The page keeps what it has rather
+      // than failing.
+      const { composite, queries } = duplicatedTableComposite({
+        uniqueRows: rows(20),
+        copies: 6,
+      });
+      const stub = (composite as any).clickhouseClient;
+      const first = stub.query.bind(stub);
+      stub.query = async (args: { query: string }) => {
+        if (queries.length >= 1) {
+          queries.push(args.query);
+          throw new Error('Code: 158. DB::Exception: TOO_MANY_ROWS');
+        }
+        return first(args);
+      };
+
+      const result = await composite.getGqlTransactions({
+        pageSize: 10,
+        sortOrder: 'HEIGHT_ASC',
+      });
+
+      assert.equal(queries.length, 2);
+      assert.deepEqual(
+        result.edges.map((e) => e.node.height),
+        [1, 2, 3, 4, 5, 6, 7, 8],
+      );
+      assert.equal(result.pageInfo.hasNextPage, true);
+    });
+
+    it('surfaces a first-query max_rows_to_read error as before', async () => {
+      const { composite } = duplicatedTableComposite({
+        uniqueRows: rows(20),
+        copies: 6,
+      });
+      (composite as any).clickhouseClient.query = async () => {
+        throw new Error('Code: 158. DB::Exception: TOO_MANY_ROWS');
+      };
+
+      await assert.rejects(
+        composite.getGqlTransactions({ pageSize: 10, sortOrder: 'HEIGHT_ASC' }),
+        /TOO_MANY_ROWS/,
+      );
+    });
+
     it('grows the headroom for id lookups, which have no cursor order', async () => {
       const { composite, queries } = duplicatedTableComposite({
         uniqueRows: rows(3),
