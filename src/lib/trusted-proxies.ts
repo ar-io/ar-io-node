@@ -12,6 +12,24 @@
  */
 import * as net from 'node:net';
 
+/**
+ * Where a proxy in front of a gateway normally sits: loopback, the private
+ * ranges (Docker networks among them), carrier-grade NAT and link-local, for
+ * IPv4 and IPv6. The default for core's `TRUSTED_PROXIES`, and what the
+ * index-swarm tracker believes on its listener behind the gateway's Envoy.
+ */
+export const PRIVATE_NETWORK_RANGES: readonly string[] = [
+  '127.0.0.0/8',
+  '10.0.0.0/8',
+  '172.16.0.0/12',
+  '192.168.0.0/16',
+  '100.64.0.0/10',
+  '169.254.0.0/16',
+  '::1/128',
+  'fc00::/7',
+  'fe80::/10',
+];
+
 /** `::ffff:1.2.3.4` as `1.2.3.4`; anything else unchanged. */
 function unmapIpv4(ip: string): string {
   const match = ip.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i);

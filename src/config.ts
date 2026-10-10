@@ -11,6 +11,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { createFilter } from './filters.js';
 import { assertMonotoneFilter } from './database/gql-l1-routing.js';
 import * as env from './lib/env.js';
+import { PRIVATE_NETWORK_RANGES } from './lib/trusted-proxies.js';
 import { resolveFacilitatorKeyId } from './payments/facilitator-utils.js';
 import { initHttpSig } from './lib/httpsig.js';
 import type { HttpSigSignerContext } from './lib/httpsig.js';
@@ -3566,7 +3567,7 @@ export const RATE_LIMITER_IP_REFILL_PER_SEC = +env.varOrDefault(
  */
 const TRUSTED_PROXIES_VALUE = env.varOrDefault(
   'TRUSTED_PROXIES',
-  '127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10,169.254.0.0/16,::1/128,fc00::/7,fe80::/10',
+  PRIVATE_NETWORK_RANGES.join(','),
 );
 export const TRUSTED_PROXIES =
   TRUSTED_PROXIES_VALUE.trim() === 'none'
