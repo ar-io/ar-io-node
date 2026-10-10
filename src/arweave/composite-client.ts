@@ -104,6 +104,9 @@ const DEFAULT_CHUNK_POST_RESPONSE_TIMEOUT_MS = 5000;
 const DEFAULT_PEER_TX_TIMEOUT_MS = 5000;
 const PEER_CHUNK_REQUEST_TIMEOUT_MS = 500;
 
+/** Which list a chunk GET peer was drawn from, for ordering and metrics. */
+type ChunkPeerType = 'preferred' | 'bucket' | 'general';
+
 /**
  * Race a shared promise against an AbortSignal so a single caller can bail
  * out without canceling the underlying work for other concurrent waiters.
@@ -1206,7 +1209,7 @@ export class ArweaveCompositeClient
     method: string,
     sourceType: 'trusted' | 'preferred' | 'peer',
     category: ArweavePeerCategory,
-    peerType?: 'bucket' | 'general',
+    peerType?: ChunkPeerType,
   ): void {
     if (method === 'peerGetChunk') {
       metrics.requestChunkTotal.inc({
@@ -1228,7 +1231,7 @@ export class ArweaveCompositeClient
     method: string,
     sourceType: 'trusted' | 'preferred' | 'peer',
     category: ArweavePeerCategory,
-    peerType?: 'bucket' | 'general',
+    peerType?: ChunkPeerType,
   ): void {
     if (method === 'peerGetChunk') {
       metrics.requestChunkTotal.inc({
@@ -1273,7 +1276,7 @@ export class ArweaveCompositeClient
 
     try {
       // Try bucket-specific peers first, then general peers as fallback
-      const bucketPeers = this.peerManager.selectBucketPeersForOffset(
+      const selectedBucketPeers = this.peerManager.selectBucketPeersForOffset(
         absoluteOffset,
         Math.max(peerSelectionCount, retryCount), // Get more bucket peers upfront
       );
@@ -1285,13 +1288,23 @@ export class ArweaveCompositeClient
       );
 
       // Filter out bucket peers from general peers to avoid duplicates
+      // Preferred peers lead, cheapest learned cost first (see
+      // ArweavePeerManager.getPreferredChunkGetPeersByCost). Bucket claims
+      // are unreliable for them (tip nodes serve far more than they
+      // advertise), so they are not left to the bucket order, and they are
+      // dropped from the other lists so none is tried twice.
+      const preferredPeers = this.peerManager.getPreferredChunkGetPeersByCost();
+      const preferredPeerSet = new Set(preferredPeers);
+      const bucketPeers = selectedBucketPeers.filter(
+        (peer) => !preferredPeerSet.has(peer),
+      );
       const bucketPeerSet = new Set(bucketPeers);
       const generalPeers = allGeneralPeers.filter(
-        (peer) => !bucketPeerSet.has(peer),
+        (peer) => !bucketPeerSet.has(peer) && !preferredPeerSet.has(peer),
       );
 
-      // Combine: bucket peers first, then general peers
-      const orderedPeers = [...bucketPeers, ...generalPeers];
+      // Combine: preferred peers, then bucket peers, then general peers
+      const orderedPeers = [...preferredPeers, ...bucketPeers, ...generalPeers];
 
       this.log.debug('Peer selection for chunk request', {
         absoluteOffset,
@@ -1313,6 +1326,7 @@ export class ArweaveCompositeClient
 
       span.setAttributes({
         'chunk.available_peers': orderedPeers.length,
+        'chunk.preferred_peers': preferredPeers.length,
         'chunk.bucket_peers': bucketPeers.length,
         'chunk.general_peers': generalPeers.length,
       });
@@ -1321,9 +1335,15 @@ export class ArweaveCompositeClient
       const maxAttempts = Math.min(orderedPeers.length, retryCount);
       for (let peerIndex = 0; peerIndex < maxAttempts; peerIndex++) {
         // Check if we're transitioning from bucket peers to general peers
-        const isBucketPeer = peerIndex < bucketPeers.length;
+        const peerType: ChunkPeerType =
+          peerIndex < preferredPeers.length
+            ? 'preferred'
+            : peerIndex < preferredPeers.length + bucketPeers.length
+              ? 'bucket'
+              : 'general';
         const isTransition =
-          peerIndex === bucketPeers.length && bucketPeers.length > 0;
+          peerIndex === preferredPeers.length + bucketPeers.length &&
+          bucketPeers.length > 0;
 
         if (isTransition) {
           span.addEvent('Transitioning to general peers', {
@@ -1346,7 +1366,7 @@ export class ArweaveCompositeClient
           peer_index: peerIndex + 1,
           total_peers: orderedPeers.length,
           max_attempts: maxAttempts,
-          peer_type: isBucketPeer ? 'bucket' : 'general',
+          peer_type: peerType,
         });
 
         const randomPeer = orderedPeers[peerIndex];
@@ -1356,7 +1376,7 @@ export class ArweaveCompositeClient
           peer_host: peerHost,
           peer_index: peerIndex + 1,
           total_peers: orderedPeers.length,
-          peer_type: isBucketPeer ? 'bucket' : 'general',
+          peer_type: peerType,
         });
 
         const requestUrl = `${randomPeer}/chunk/${absoluteOffset}`;
@@ -1369,7 +1389,7 @@ export class ArweaveCompositeClient
           timeout: PEER_CHUNK_REQUEST_TIMEOUT_MS,
           peerIndex: peerIndex + 1,
           totalPeers: orderedPeers.length,
-          peerType: isBucketPeer ? 'bucket' : 'general',
+          peerType: peerType,
         });
 
         const startTime = Date.now();
@@ -1470,6 +1490,10 @@ export class ArweaveCompositeClient
             chunk_size: chunk.chunk.length,
           });
 
+          this.peerManager.recordChunkGetCost(
+            randomPeer,
+            Math.min(responseTime, PEER_CHUNK_REQUEST_TIMEOUT_MS),
+          );
           this.handlePeerSuccess(
             randomPeer,
             'peerGetChunk',
@@ -1477,7 +1501,7 @@ export class ArweaveCompositeClient
               ? 'preferred'
               : 'peer',
             'getChunk',
-            isBucketPeer ? 'bucket' : 'general',
+            peerType,
           );
 
           return chunk;
@@ -1510,6 +1534,12 @@ export class ArweaveCompositeClient
             http_status: error.response?.status,
           });
 
+          // Any miss costs the full timeout: from the caller's side a peer
+          // that does not hold the chunk is as costly as one that is slow.
+          this.peerManager.recordChunkGetCost(
+            randomPeer,
+            PEER_CHUNK_REQUEST_TIMEOUT_MS,
+          );
           this.handlePeerFailure(
             randomPeer,
             'peerGetChunk',
@@ -1517,7 +1547,7 @@ export class ArweaveCompositeClient
               ? 'preferred'
               : 'peer',
             'getChunk',
-            isBucketPeer ? 'bucket' : 'general',
+            peerType,
           );
 
           // Continue to next peer (no early exit needed in for loop)
@@ -1675,7 +1705,7 @@ export class ArweaveCompositeClient
       const peerSelectionCount = 10;
       const retryCount = 5;
 
-      const bucketPeers = this.peerManager.selectBucketPeersForOffset(
+      const selectedBucketPeers = this.peerManager.selectBucketPeersForOffset(
         absoluteOffset,
         Math.max(peerSelectionCount, retryCount),
       );
@@ -1685,12 +1715,22 @@ export class ArweaveCompositeClient
         Math.max(peerSelectionCount, retryCount),
       );
 
+      // Preferred peers lead, cheapest learned cost first (see
+      // ArweavePeerManager.getPreferredChunkGetPeersByCost). Bucket claims
+      // are unreliable for them (tip nodes serve far more than they
+      // advertise), so they are not left to the bucket order, and they are
+      // dropped from the other lists so none is tried twice.
+      const preferredPeers = this.peerManager.getPreferredChunkGetPeersByCost();
+      const preferredPeerSet = new Set(preferredPeers);
+      const bucketPeers = selectedBucketPeers.filter(
+        (peer) => !preferredPeerSet.has(peer),
+      );
       const bucketPeerSet = new Set(bucketPeers);
       const generalPeers = allGeneralPeers.filter(
-        (peer) => !bucketPeerSet.has(peer),
+        (peer) => !bucketPeerSet.has(peer) && !preferredPeerSet.has(peer),
       );
 
-      const orderedPeers = [...bucketPeers, ...generalPeers];
+      const orderedPeers = [...preferredPeers, ...bucketPeers, ...generalPeers];
 
       if (orderedPeers.length === 0) {
         throw new Error('No peers available for chunk retrieval');
@@ -1698,6 +1738,7 @@ export class ArweaveCompositeClient
 
       span.setAttributes({
         'chunk.available_peers': orderedPeers.length,
+        'chunk.preferred_peers': preferredPeers.length,
         'chunk.bucket_peers': bucketPeers.length,
         'chunk.general_peers': generalPeers.length,
       });
@@ -1705,14 +1746,19 @@ export class ArweaveCompositeClient
       const maxAttempts = Math.min(orderedPeers.length, retryCount);
 
       for (let peerIndex = 0; peerIndex < maxAttempts; peerIndex++) {
-        const isBucketPeer = peerIndex < bucketPeers.length;
+        const peerType: ChunkPeerType =
+          peerIndex < preferredPeers.length
+            ? 'preferred'
+            : peerIndex < preferredPeers.length + bucketPeers.length
+              ? 'bucket'
+              : 'general';
         const peer = orderedPeers[peerIndex];
         const peerHost = new URL(peer).hostname;
 
         span.addEvent('Trying peer', {
           peer_host: peerHost,
           peer_index: peerIndex + 1,
-          peer_type: isBucketPeer ? 'bucket' : 'general',
+          peer_type: peerType,
         });
 
         const startTime = Date.now();
@@ -1747,6 +1793,10 @@ export class ArweaveCompositeClient
           });
 
           // Report success
+          this.peerManager.recordChunkGetCost(
+            peer,
+            Math.min(responseTime, PEER_CHUNK_REQUEST_TIMEOUT_MS),
+          );
           this.handlePeerSuccess(
             peer,
             'peerGetChunk',
@@ -1754,7 +1804,7 @@ export class ArweaveCompositeClient
               ? 'preferred'
               : 'peer',
             'getChunk',
-            isBucketPeer ? 'bucket' : 'general',
+            peerType,
           );
 
           // Return unvalidated chunk (NO validation performed)
@@ -1774,7 +1824,11 @@ export class ArweaveCompositeClient
             response_time_ms: responseTime,
           });
 
-          // Report failure
+          // Report failure (a miss of any kind costs the full timeout)
+          this.peerManager.recordChunkGetCost(
+            peer,
+            PEER_CHUNK_REQUEST_TIMEOUT_MS,
+          );
           this.handlePeerFailure(
             peer,
             'peerGetChunk',
@@ -1782,7 +1836,7 @@ export class ArweaveCompositeClient
               ? 'preferred'
               : 'peer',
             'getChunk',
-            isBucketPeer ? 'bucket' : 'general',
+            peerType,
           );
           // Continue to next peer
         }

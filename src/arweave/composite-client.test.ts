@@ -467,6 +467,83 @@ describe('ArweaveCompositeClient', () => {
   // when it will store the chunk long-term and 303 ("temporary") when it accepted
   // and persisted the chunk into its disk pool but is not the long-term home for
   // that offset. Both are successful propagations; everything else is a failure.
+  describe('peerGetChunk peer order', () => {
+    // Real local servers stand in for peers; each records the order it was
+    // asked in and answers 404, so every attempt is made.
+    const servers: http.Server[] = [];
+    const startPeer = async (name: string, asked: string[]) => {
+      const server = http.createServer((_req, res) => {
+        asked.push(name);
+        res.statusCode = 404;
+        res.end();
+      });
+      await new Promise<void>((resolve) =>
+        server.listen(0, '127.0.0.1', resolve),
+      );
+      servers.push(server);
+      return `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    };
+
+    afterEach(async () => {
+      await Promise.all(
+        servers
+          .splice(0)
+          .map((server) => new Promise((resolve) => server.close(resolve))),
+      );
+    });
+
+    it('tries preferred peers first, cheapest learned cost first, then bucket, then general peers, none twice', async () => {
+      const asked: string[] = [];
+      const fast = await startPeer('preferred-fast', asked);
+      const slow = await startPeer('preferred-slow', asked);
+      const bucket = await startPeer('bucket', asked);
+      const general = await startPeer('general', asked);
+
+      const recordChunkGetCost = mock.fn();
+      mockPeerManager.getPreferredChunkGetPeersByCost = mock.fn(() => [
+        fast,
+        slow,
+      ]);
+      // The slow preferred peer also claims the bucket, and the fast one is
+      // also a general peer: neither may be asked twice.
+      mockPeerManager.selectBucketPeersForOffset = mock.fn(() => [
+        slow,
+        bucket,
+      ]);
+      mockPeerManager.selectPeers = mock.fn(() => [fast, general]);
+      mockPeerManager.isPreferredChunkGetPeer = mock.fn(
+        (url: string) => url === fast || url === slow,
+      );
+      mockPeerManager.recordChunkGetCost = recordChunkGetCost;
+
+      const client = createTestClient();
+
+      await assert.rejects(
+        client.peerGetChunk({
+          txSize: 262144,
+          absoluteOffset: 1_000_000,
+          dataRoot: toB64Url(Buffer.alloc(32)),
+          relativeOffset: 0,
+          retryCount: 10,
+          peerSelectionCount: 10,
+        }),
+        /Failed to fetch chunk from 4 peers/,
+      );
+
+      assert.deepEqual(asked, [
+        'preferred-fast',
+        'preferred-slow',
+        'bucket',
+        'general',
+      ]);
+      // Every miss costs the full per-peer timeout.
+      assert.deepEqual(
+        recordChunkGetCost.mock.calls.map((call: any) => call.arguments[1]),
+        [500, 500, 500, 500],
+      );
+    });
+  });
+
   describe('postChunkToPeer status handling', () => {
     let server: http.Server;
     let baseUrl: string;
