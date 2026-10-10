@@ -413,13 +413,17 @@ unique matches exist further on. 4× covers normal merge behavior
 Re-imports of a height range can stack more versions than that before
 merges fold them (6 per PK has been seen in production). The outer query
 also returns `gql_inner_rows`, a `count() OVER ()` of the inner window
-taken before `LIMIT 1 BY`. A page with fewer than `pageSize + 1` rows
-whose inner window was full is short only because of duplicates, so it
-is re-run with 4× the headroom, up to `CLICKHOUSE_GQL_DEDUPE_HEADROOM_MAX`
-(default 64). If it is still full at the cap, or the larger read trips
-`max_rows_to_read`, the page is returned short with `hasNextPage: true`
-so cursor paging continues. `clickhouse_gql_dedupe_headroom_total{leg,outcome}`
-counts both cases.
+taken before `LIMIT 1 BY` (window functions run first; verified on
+ClickHouse 26.3). A page with fewer than `pageSize + 1` rows whose inner
+window was full is short only because of duplicates, so the query
+continues from the last unique row's cursor at the same size. The SQL
+order is the cursor's tuple, so this is correct at any duplication level.
+Id lookups have no order to continue from and retry with 4× the headroom
+instead. After 4 rounds, or if a follow-up query trips `max_rows_to_read`,
+the leg returns what it has as a prefix: the page reports `hasNextPage:
+true`, and merged rows from other legs that sort after that leg's last row
+are dropped so paging cannot skip past unseen rows.
+`clickhouse_gql_dedupe_headroom_total{leg,outcome}` counts each case.
 
 ### Per-query `SETTINGS`
 

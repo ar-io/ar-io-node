@@ -843,28 +843,19 @@ export const clickhouseMaxImportedHeight = new promClient.Gauge({
 });
 
 /**
- * Count of GQL stable-leg queries that tripped ClickHouse `max_rows_to_read`
- * (Code 158 TOO_MANY_ROWS). `filter` is a low-cardinality descriptor of which
- * filter families the query used (e.g. `owners+tags`, `ids`, `none`),
- * `recovery` is `windowed` when the owner-projection height-windowing fallback
- * re-ran it or `none` when the 158 surfaced to the caller, and `id_count` is a
- * coarse bucket of the id-list size (`0`,`1`,`2`,`3-5`,`6-20`,`21+`) — the
- * dominant 158 source is multi-id `transactions(ids:[...])` lookups whose
- * id_bloom scatter scales with id count. The paired per-query warn log carries
- * the full query shape for post-hoc audits.
- */
-/**
  * Pages whose ClickHouse inner window filled with duplicate
  * ReplacingMergeTree versions, leaving fewer unique rows than the page needs.
  *
  * Labels:
  * - `leg`: `stable`, `unstable` or `window` (owner-window fallback)
  * - `outcome`:
- *   - `retried`: re-ran with a larger dedupe headroom
- *   - `exhausted`: still full at CLICKHOUSE_GQL_DEDUPE_HEADROOM_MAX; the
- *     page was returned short with `hasNextPage: true`
- *   - `too_many_rows`: the larger window tripped `max_rows_to_read`; the
- *     short page was returned with `hasNextPage: true`
+ *   - `continued`: ran a follow-up query from the last unique row's cursor
+ *   - `grown`: re-ran an id lookup (no order to continue from) with 4x the
+ *     dedupe headroom
+ *   - `exhausted`: still short after the last round; the page was returned
+ *     as a prefix with `hasNextPage: true`
+ *   - `too_many_rows`: a follow-up query tripped `max_rows_to_read`; the
+ *     page was returned as a prefix with `hasNextPage: true`
  *
  * A steady non-zero rate means the table carries many unmerged versions
  * per PK (check `count()` against `uniqExact(id)` per partition).
@@ -875,6 +866,17 @@ export const clickhouseGqlDedupeHeadroomTotal = new promClient.Counter({
   labelNames: ['leg', 'outcome'] as const,
 });
 
+/**
+ * Count of GQL stable-leg queries that tripped ClickHouse `max_rows_to_read`
+ * (Code 158 TOO_MANY_ROWS). `filter` is a low-cardinality descriptor of which
+ * filter families the query used (e.g. `owners+tags`, `ids`, `none`),
+ * `recovery` is `windowed` when the owner-projection height-windowing fallback
+ * re-ran it or `none` when the 158 surfaced to the caller, and `id_count` is a
+ * coarse bucket of the id-list size (`0`,`1`,`2`,`3-5`,`6-20`,`21+`) — the
+ * dominant 158 source is multi-id `transactions(ids:[...])` lookups whose
+ * id_bloom scatter scales with id count. The paired per-query warn log carries
+ * the full query shape for post-hoc audits.
+ */
 export const clickhouseGqlTooManyRowsTotal = new promClient.Counter({
   name: 'clickhouse_gql_too_many_rows_total',
   help: 'Count of GQL stable queries that tripped ClickHouse max_rows_to_read (Code 158).',

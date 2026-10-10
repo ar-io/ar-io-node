@@ -2302,26 +2302,15 @@ export const CLICKHOUSE_GQL_MAX_ROWS_TO_READ = env.positiveIntOrDefault(
 // it). The outer `LIMIT 1 BY` then dedupes unmerged
 // ReplacingMergeTree versions.
 //
-// This is the starting multiplier. When a region of the table has more
-// unmerged versions per PK than it covers, the deduped inner window
-// yields fewer than `pageSize + 1` unique rows even though more
-// matches exist. The query detects that (the inner window came back
-// full) and retries with 4x the headroom, up to
-// CLICKHOUSE_GQL_DEDUPE_HEADROOM_MAX.
+// When a region of the table has more unmerged versions per PK than this
+// covers, the deduped inner window yields fewer than `pageSize + 1` unique
+// rows even though more matches exist. The query detects that (the inner
+// window came back full) and continues from the last unique row's cursor;
+// id lookups, which have no order to continue from, retry with 4x the
+// headroom instead (see queryChTransactionRows).
 export const CLICKHOUSE_GQL_DEDUPE_HEADROOM = env.positiveIntOrDefault(
   'CLICKHOUSE_GQL_DEDUPE_HEADROOM',
   4,
-);
-
-// Upper bound for the adaptive dedupe headroom above. If the inner window
-// is still full of duplicates at this multiplier, the page is returned short
-// with `hasNextPage: true`, so cursor paging continues instead of stopping.
-// Re-imports of a height range (e.g. the ClickHouse auto-import replaying
-// buckets) can stack more versions per PK than background merges have
-// folded yet; 6 per PK was observed in production.
-export const CLICKHOUSE_GQL_DEDUPE_HEADROOM_MAX = env.positiveIntOrDefault(
-  'CLICKHOUSE_GQL_DEDUPE_HEADROOM_MAX',
-  64,
 );
 
 // Gate for routing owner-filtered GraphQL `transactions` queries through

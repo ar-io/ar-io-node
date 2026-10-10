@@ -279,6 +279,12 @@ interface StablePkPrefix {
   predicateSql: string;
 }
 
+// Rounds `queryChTransactionRows` runs before returning a page that is still
+// short of duplicates. A continuation round yields at least one new unique
+// row, and a growth round (id lookups) multiplies the headroom by 4, so 4
+// rounds reach 64x. Past that the table needs an OPTIMIZE, not more reads.
+const CH_GQL_DEDUPE_MAX_ROUNDS = 4;
+
 type ChTransactionsSqlParams = {
   innerSql: string;
   pageSize: number;
@@ -841,75 +847,107 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
     );
   }
 
-  // Runs a GQL transactions query and grows the dedupe headroom when the
-  // result is short only because the inner window filled with unmerged
+  // Runs a GQL transactions query and fills the page when it comes back
+  // short only because the inner window filled with unmerged
   // ReplacingMergeTree versions. The inner LIMIT is applied before
   // `LIMIT 1 BY`, so a region whose duplicate factor exceeds the headroom
   // yields fewer than `pageSize + 1` unique rows even though more matches
   // exist. Without this, callers get a short page with `hasNextPage: false`
   // and every later page is silently skipped.
   //
-  // `saturated` stays true when the cap is reached (or a larger window trips
-  // `max_rows_to_read`) while the window is still full; callers must then
-  // report `hasNextPage: true`, since the rows past the window are unseen.
-  private async queryChTransactionRows(
-    params: ChTransactionsSqlParams & { leg: 'stable' | 'unstable' | 'window' },
-  ): Promise<{
+  // A full inner window (`gql_inner_rows` == inner LIMIT) with a short result
+  // means more rows may follow. The query then continues from the last unique
+  // row's cursor at the same size; the SQL order is the cursor's
+  // (height, block_transaction_index, is_data_item, id) tuple, behind at most
+  // one fixed owner/recipient. That is correct at any duplication level and
+  // costs about one extra query per extra window. Id lookups have no order to
+  // continue from, so they grow the headroom instead (4x per step, to 64x);
+  // their result is bounded by the id list.
+  //
+  // `saturated` is true when the rows past the last one returned are still
+  // unseen: the round limit was reached, or a follow-up query tripped
+  // `max_rows_to_read`. Callers must then treat the rows as a prefix: report
+  // `hasNextPage: true` and drop merged rows from other legs that sort after
+  // this leg's last row.
+  private async queryChTransactionRows({
+    leg,
+    buildInnerSql,
+    cursor,
+    ...sqlParams
+  }: Omit<ChTransactionsSqlParams, 'innerSql'> & {
+    leg: 'stable' | 'unstable' | 'window';
+    buildInnerSql: (cursor: string | undefined) => string;
+    cursor?: string;
+  }): Promise<{
     rows: GqlTransactionsResult['edges'][0]['node'][];
     saturated: boolean;
   }> {
-    const { leg, ...sqlParams } = params;
-    const maxHeadroom = Math.max(
-      config.CLICKHOUSE_GQL_DEDUPE_HEADROOM,
-      config.CLICKHOUSE_GQL_DEDUPE_HEADROOM_MAX,
-    );
+    const target = sqlParams.pageSize + 1;
+    const continuable = sqlParams.ids.length === 0;
+    const rows: GqlTransactionsResult['edges'][0]['node'][] = [];
     let headroom = config.CLICKHOUSE_GQL_DEDUPE_HEADROOM;
-    let data: any[] | undefined;
+    let roundCursor = cursor;
     let saturated = false;
-    for (;;) {
-      const sql = this.buildChTransactionsSql({ ...sqlParams, headroom });
+    for (let round = 0; ; round++) {
+      const sql = this.buildChTransactionsSql({
+        ...sqlParams,
+        innerSql: buildInnerSql(roundCursor),
+        headroom,
+      });
       this.log.debug('Querying ClickHouse transactions...', { leg, sql });
+      let data: any[];
       try {
         const row = await this.clickhouseClient.query({ query: sql });
         data = (await row.json()).data as any[];
       } catch (err) {
-        // A retry reads a bigger window; if that trips the row cap, keep the
-        // short page from the previous attempt rather than failing the query.
-        if (data !== undefined && isClickHouseTooManyRowsError(err)) {
+        // A follow-up query reads further; if it trips the row cap, keep what
+        // the earlier rounds returned rather than failing the whole query.
+        if (round > 0 && isClickHouseTooManyRowsError(err)) {
           metrics.clickhouseGqlDedupeHeadroomTotal.inc({
             leg,
             outcome: 'too_many_rows',
           });
+          saturated = true;
           break;
         }
         throw err;
       }
       const innerRows = data.length > 0 ? Number(data[0].gql_inner_rows) : 0;
-      saturated =
-        data.length <= sqlParams.pageSize &&
-        innerRows >= (sqlParams.pageSize + 1) * headroom;
+      const windowFull = data.length < target && innerRows >= target * headroom;
+      const mapped = data.map((tx: any) => this.mapTransactionRow(tx));
+      if (continuable) {
+        rows.push(...mapped);
+      } else {
+        rows.splice(0, rows.length, ...mapped);
+      }
+      saturated = windowFull && rows.length < target;
       if (!saturated) break;
-      if (headroom >= maxHeadroom) {
+      if (round + 1 >= CH_GQL_DEDUPE_MAX_ROUNDS) {
         metrics.clickhouseGqlDedupeHeadroomTotal.inc({
           leg,
           outcome: 'exhausted',
         });
         break;
       }
-      metrics.clickhouseGqlDedupeHeadroomTotal.inc({ leg, outcome: 'retried' });
-      headroom = Math.min(headroom * 4, maxHeadroom);
+      if (continuable) {
+        metrics.clickhouseGqlDedupeHeadroomTotal.inc({
+          leg,
+          outcome: 'continued',
+        });
+        roundCursor = encodeTransactionGqlCursor(rows[rows.length - 1]);
+      } else {
+        metrics.clickhouseGqlDedupeHeadroomTotal.inc({ leg, outcome: 'grown' });
+        headroom *= 4;
+      }
     }
     if (saturated) {
       this.log.warn(
-        'ClickHouse GQL page still short after growing dedupe headroom; ' +
-          'reporting hasNextPage=true',
-        { leg, headroom, pageSize: sqlParams.pageSize, rows: data.length },
+        'ClickHouse GQL page still short of duplicates after the last round; ' +
+          'returning a prefix with hasNextPage=true',
+        { leg, pageSize: sqlParams.pageSize, rows: rows.length },
       );
     }
-    return {
-      rows: data.map((tx: any) => this.mapTransactionRow(tx)),
-      saturated,
-    };
+    return { rows: rows.slice(0, target), saturated };
   }
 
   // Runs one window of the owner-window fallback: the standard stable-leg
@@ -947,24 +985,28 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
     rows: GqlTransactionsResult['edges'][0]['node'][];
     saturated: boolean;
   }> {
-    const query = this.getGqlTransactionsBaseSql();
-    this.addGqlTransactionFilters({
-      query,
-      cursor,
-      sortOrder,
-      ids,
-      recipients,
-      owners,
-      minHeight: windowMinHeight,
-      maxHeight: windowMaxHeight,
-      bundledIn,
-      tags,
-      encoded,
-      pkPrefix,
-    });
+    const buildInnerSql = (roundCursor: string | undefined) => {
+      const query = this.getGqlTransactionsBaseSql();
+      this.addGqlTransactionFilters({
+        query,
+        cursor: roundCursor,
+        sortOrder,
+        ids,
+        recipients,
+        owners,
+        minHeight: windowMinHeight,
+        maxHeight: windowMaxHeight,
+        bundledIn,
+        tags,
+        encoded,
+        pkPrefix,
+      });
+      return query.toString();
+    };
     return this.queryChTransactionRows({
       leg: 'window',
-      innerSql: query.toString(),
+      buildInnerSql,
+      cursor,
       pageSize,
       sortOrder,
       recipients,
@@ -1435,9 +1477,11 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
       }
     }
 
-    // Set by a ClickHouse leg whose page is still short only because
-    // duplicate versions filled its window (see queryChTransactionRows).
-    let chSaturated = false;
+    // Set by a ClickHouse leg that returned only a prefix of its matches
+    // because duplicate versions filled its window (see
+    // queryChTransactionRows).
+    let stableSaturated = false;
+    let unstableSaturated = false;
 
     // STABLE LEG — `transactions`. Always queried; this is CH's primary
     // role and any failure here surfaces to the caller (fail-fast). When the
@@ -1451,25 +1495,29 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
       });
       if (noMatches) return [];
 
-      const stableQuery = this.getGqlTransactionsBaseSql();
-      this.addGqlTransactionFilters({
-        query: stableQuery,
-        cursor,
-        sortOrder,
-        ids,
-        recipients,
-        owners,
-        minHeight,
-        maxHeight,
-        bundledIn,
-        tags,
-        encoded: encodedFilters,
-        pkPrefix,
-      });
+      const buildStableSql = (roundCursor: string | undefined) => {
+        const stableQuery = this.getGqlTransactionsBaseSql();
+        this.addGqlTransactionFilters({
+          query: stableQuery,
+          cursor: roundCursor,
+          sortOrder,
+          ids,
+          recipients,
+          owners,
+          minHeight,
+          maxHeight,
+          bundledIn,
+          tags,
+          encoded: encodedFilters,
+          pkPrefix,
+        });
+        return stableQuery.toString();
+      };
       try {
         const { rows, saturated } = await this.queryChTransactionRows({
           leg: 'stable',
-          innerSql: stableQuery.toString(),
+          buildInnerSql: buildStableSql,
+          cursor,
           pageSize,
           sortOrder,
           recipients,
@@ -1477,7 +1525,7 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
           ids,
           tags,
         });
-        chSaturated ||= saturated;
+        stableSaturated = saturated;
         return rows;
       } catch (err) {
         // Every stable-leg Code 158 (TOO_MANY_ROWS) is recorded here — at the
@@ -1559,23 +1607,27 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
       GqlTransactionsResult['edges'][0]['node'][]
     > = this.queryUnstableHead
       ? (async () => {
-          const unstableQuery = this.getGqlUnstableTransactionsBaseSql();
-          this.addGqlTransactionFilters({
-            query: unstableQuery,
-            cursor,
-            sortOrder,
-            ids,
-            recipients,
-            owners,
-            minHeight,
-            maxHeight,
-            bundledIn,
-            tags,
-            encoded: encodedFilters,
-          });
+          const buildUnstableSql = (roundCursor: string | undefined) => {
+            const unstableQuery = this.getGqlUnstableTransactionsBaseSql();
+            this.addGqlTransactionFilters({
+              query: unstableQuery,
+              cursor: roundCursor,
+              sortOrder,
+              ids,
+              recipients,
+              owners,
+              minHeight,
+              maxHeight,
+              bundledIn,
+              tags,
+              encoded: encodedFilters,
+            });
+            return unstableQuery.toString();
+          };
           const { rows, saturated } = await this.queryChTransactionRows({
             leg: 'unstable',
-            innerSql: unstableQuery.toString(),
+            buildInnerSql: buildUnstableSql,
+            cursor,
             pageSize,
             sortOrder,
             recipients,
@@ -1583,7 +1635,7 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
             ids,
             tags,
           });
-          chSaturated ||= saturated;
+          unstableSaturated = saturated;
           return rows;
         })()
       : Promise.resolve([]);
@@ -1717,12 +1769,11 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
     }
 
     // Sort the combined results by height, blockTransactionIndex, isDataItem, and id
-    edges.sort((a, b) => {
-      const sortOrderModifier = sortOrder === 'HEIGHT_DESC' ? -1 : 1;
-
-      const txA = a.node;
-      const txB = b.node;
-
+    const sortOrderModifier = sortOrder === 'HEIGHT_DESC' ? -1 : 1;
+    const compareTxs = (
+      txA: GqlTransactionsResult['edges'][0]['node'],
+      txB: GqlTransactionsResult['edges'][0]['node'],
+    ): number => {
       const heightA = txA.height ?? Number.MAX_SAFE_INTEGER;
       const heightB = txB.height ?? Number.MAX_SAFE_INTEGER;
       if (heightA !== heightB) {
@@ -1744,7 +1795,25 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
       const bufA = fromB64Url(txA.id);
       const bufB = fromB64Url(txB.id);
       return bufA.compare(bufB) * sortOrderModifier;
-    });
+    };
+    edges.sort((a, b) => compareTxs(a.node, b.node));
+
+    // A saturated ClickHouse leg returned only a prefix of its matches: rows
+    // past its last one are unseen. Another leg's rows that sort after that
+    // point would otherwise fill the page, and the page's last cursor would
+    // skip the unseen rows for good. Cut the page at the earliest such
+    // boundary so it stays a correct (if short) prefix.
+    for (const [saturated, legTxs] of [
+      [stableSaturated, stableTxs],
+      [unstableSaturated, unstableTxs],
+    ] as const) {
+      if (!saturated || legTxs.length === 0) continue;
+      const legLast = legTxs.reduce((last, tx) =>
+        compareTxs(tx, last) > 0 ? tx : last,
+      );
+      const cut = edges.findIndex((edge) => compareTxs(edge.node, legLast) > 0);
+      if (cut !== -1) edges.splice(cut);
+    }
 
     // `hasNextPage` must reflect whether any leg has rows BEYOND this page,
     // derived from each leg's RAW result before the cross-leg id-dedup above.
@@ -1761,7 +1830,8 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
       edges.length > pageSize ||
       stableTxs.length > pageSize ||
       unstableTxs.length > pageSize ||
-      chSaturated ||
+      stableSaturated ||
+      unstableSaturated ||
       sqliteHasNextPage;
 
     return {
