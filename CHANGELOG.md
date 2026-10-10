@@ -594,6 +594,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `_rebased`, and their payload verification under
   `data_item_signature_verification_total{source="rebased_location"}`.
 
+### Documentation
+
+- **Index Sharing docs are split by reader, and CDB64 has one operator
+  page.** `docs/index-swarm.md` covers running the `index-swarm` sidecar, and the new
+  `docs/index-export.md` covers building root-TX and L1 bands.
+  `docs/index-publication.md` now holds the L1 band format, lookup files and
+  querying over HTTP. `docs/cdb64-guide.md` is merged into `docs/cdb64.md`,
+  with the shipped defaults corrected (`ROOT_TX_LOOKUP_ORDER`,
+  `CDB64_ROOT_TX_INDEX_SOURCES`, `CDB64_REMOTE_RETRIEVAL_ORDER`). Every
+  default in `docs/envs.md` was checked against the code and
+  `docker-compose.yaml` and corrected where it differed. The PlantUML
+  diagrams are rendered to SVG under `docs/diagrams/`, and five stale drafts
+  are removed.
+
 ## [Release 84] - 2026-09-29
 
 This is a **recommended release** focused on **index sharing between gateways,

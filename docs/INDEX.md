@@ -18,11 +18,19 @@ Fast, offline lookups for data item to root transaction mappings.
 
 | Document | Description |
 |----------|-------------|
-| [CDB64 Overview](cdb64.md) | Introduction, architecture, and quick start |
-| [CDB64 Operator Guide](cdb64-guide.md) | Configuration, deployment, and troubleshooting |
+| [CDB64 Root-TX Index](cdb64.md) | How the gateway uses CDB64 indexes: lookup order, configuration, sources, watching, troubleshooting |
 | [CDB64 Tools Reference](cdb64-tools.md) | CLI tools for creating indexes |
 | [CDB64 Format Specification](cdb64-format.md) | Technical file format details |
-| [Index Publication Protocol](index-publication.md) | Discovering, verifying and reading the index artifacts a gateway publishes, with a reference client |
+
+### Index Sharing
+
+Gateways publish signed index bands and subscribe to each other's.
+
+| Document | Description |
+|----------|-------------|
+| [Index Sharing: the `index-swarm` sidecar](index-swarm.md) | Publishing and subscribing over HTTP and BitTorrent: setup and status scripts, lookup order, running behind nginx, the torrent engine, metrics |
+| [Index export](index-export.md) | Building root-TX and L1 bands with the `index-export` service: checks, running it, L1 layouts and lookup files, adoption, alerting |
+| [Index Sharing: the publication protocol](index-publication.md) | Discovering, verifying and reading bands without the sidecar: the signed document, byte routes, L1 bands, lookup files, querying over HTTP, a reference client |
 
 ### Rate Limiting & Payments
 
@@ -61,8 +69,7 @@ Fast, offline lookups for data item to root transaction mappings.
 | Document | Description |
 |----------|-------------|
 | [Deployment Topologies](deployment-topologies.md) | Proxy edge, shared ClickHouse, partitioning, and app-split topologies |
-| [Index Swarm Sidecar](index-swarm.md) | Publishing index artifacts to other gateways and subscribing to theirs, as an optional sidecar, over HTTP and optionally BitTorrent: the setup and status scripts, quick-start checklists, lookup order, running behind nginx, the torrent engine |
-| [The `ar-io-node` CLI](cli.md) | The gateway's command-line tool: building and checking index bands (`index-band-build`, `index-band-verify`), bootstrapping an L1 index from published bands and checking it against the chain (`index-l1-import`, `index-l1-verify`, `index-l1-audit`), and every `ar.io` CLI command, run in the core image through `tools/ar-io-node` |
+| [The `ar-io-node` CLI](cli.md) | The gateway's command-line tool: building, checking and exporting index bands (`index-band-build`, `index-band-verify`, `index-band-export`), bootstrapping an L1 index from published bands and checking it against the chain (`index-l1-import`, `index-l1-verify`, `index-l1-audit`), and every `ar.io` CLI command, run in the core image through `tools/ar-io-node` |
 
 ## Reference
 
@@ -89,6 +96,7 @@ Technical details about Arweave data structures.
 | [003 - ArNS Undername Limits](madr/003-arns-undername-limits.md) | Undername resolution limits |
 | [004 - Optimistic L1 Transaction Indexing](madr/004-optimistic-l1-tx-indexing.md) | Index a signed L1 tx before it mines + the never-serve-as-permanent guard |
 | [005 - Chunk Data Cache Indexed Eviction](madr/005-chunk-data-cache-indexed-eviction.md) | Per-dataRoot SQLite eviction index for the chunk cache, with a derived ingest-confirmation age floor |
+| [006 - qBittorrent as the Torrent Engine](madr/006-qbittorrent-torrent-engine.md) | Why Index Sharing drives qBittorrent rather than Transmission or rqbit |
 
 ## Testing
 
@@ -114,4 +122,12 @@ SQLite schema documentation is in the [sqlite/](sqlite/) directory.
 
 ## Diagrams
 
-Architecture and flow diagrams are in the [diagrams/](diagrams/) directory.
+Architecture diagrams, rendered from the PlantUML sources in
+[diagrams/src/](diagrams/src/):
+
+| Diagram | Shows |
+|---------|-------|
+| [Gateway](diagrams/Gateway.svg) | The gateway's services and stores, including Index Sharing |
+| [Chain API](diagrams/Chain_API.svg) | Chain requests through Envoy to Arweave |
+| [Data API](diagrams/Data_API.svg) | Data retrieval and caching |
+| [GraphQL API](diagrams/GraphQL_API.svg) | GraphQL query routing |

@@ -23,16 +23,16 @@ System_Boundary(ar-io, "AR.IO Gateway"){
     Component(observer, "Observer Service")
     ContainerDb(redis, "Redis", "Chain and ArNS cache")
     ContainerDb(clickhouse, "ClickHouse", "Optional: stable GraphQL history")
-    Component(sidecar, "Index Swarm Sidecar", "Optional: publishes and subscribes to signed indexes")
+    Component(sidecar, "index-swarm Sidecar", "Optional: publishes and subscribes to signed index bands")
     Component(engine, "Torrent Engine", "Optional: moves index bands peer to peer")
-    Component(exporter, "Index Export", "Optional: builds root-TX and Parquet L1 bands, and adds lookup files to published L1 bands")
+    Component(exporter, "index-export", "Optional: builds root-TX and L1 bands")
 
     ContainerDb(chunks, "Chunk data")
     ContainerDb(headers, "Header Data")
     ContainerDb(contiguous, "Contiguous Data")
     ContainerDb(reports, "Observer Reports")
     ContainerDb(index, "Chain and Bundle Index", "SQLite: core, data, bundles, moderation, chunks")
-    ContainerDb(indexes, "Shared Indexes", "data/indexes: published and installed CDB64 and Parquet bands")
+    ContainerDb(indexes, "Shared Indexes", "data/indexes: published and installed root-TX and L1 bands")
 }
 
 ' Relationships
@@ -51,7 +51,8 @@ Rel(core, clickhouse, "Stable history: Parquet export, loaded by clickhouse-auto
 Rel(core, indexes, "Serves published indexes and loads installed ones", "read only")
 
 Rel(sidecar, indexes, "Writes its signed publication; verifies others' signatures and band digests, installs their bands")
-Rel(exporter, index, "Reads core.db to build L1 bands", "read only")
+Rel(exporter, index, "Reads core.db for L1 bands, and bundles.db for root-TX bands without ClickHouse", "read only")
+Rel(exporter, clickhouse, "Reads data items for root-TX bands", "read only")
 Rel(exporter, indexes, "Writes bands into published/; derives lookup files in place")
 Rel(sidecar, core, "Reads the gateway registry", "/ar-io/peers")
 Rel(sidecar, peers, "Fetches other gateways' signed indexes", "HTTPS")

@@ -35,6 +35,18 @@ Pick the narrowest layer that can fail on the change.
 | `yarn lint:check` / `yarn lint:fix` | ESLint. |
 | `yarn duplicate:check` / `yarn deps:ci` | jscpd and madge circular-dep gate. |
 
+**DuckDB and SQLite suites on an old-glibc host.** The native DuckDB and SQLite modules need a newer glibc than some hosts have. Run those suites (index-swarm, index-export, parquet-l1, anything that opens a database) inside the core image, with your `node_modules` mounted read-only:
+
+```bash
+TAG=aee1c67a9ee639837def301f059c7f4feeee8c60          # any recent core image tag
+FILES="src/index-export/service.test.ts src/lib/parquet-l1/layout.test.ts"
+docker run --rm -v "$PWD:/app" -v "$PWD/node_modules:/app/node_modules:ro" -w /app \
+  --entrypoint /nodejs/bin/node "ghcr.io/ar-io/ar-io-core:${TAG}" \
+  --import ./register.js --test --test-concurrency 1 --test-timeout=300000 ${FILES}
+```
+
+Three files fail there only because of the image, not the code: `src/lib/scan-bundle-offsets-cli.test.ts` (the image has no shell), `src/routes/graphql/resolvers.test.ts` (hangs) and `src/store/fs-chunk-data-store.test.ts` (the container runs as root, so permission checks pass). Run them on the host instead.
+
 **Tag filtering** (unit + e2e): wrap test bodies with `isTestFiltered(tags)` from `test/utils.ts` and set `TEST_ONLY_TAGS=slow,integration` or `TEST_SKIP_TAGS=flaky`. CI runs e2e with `TEST_SKIP_TAGS=flaky`.
 
 **Single e2e file**: `yarn test:file test/end-to-end/indexing.test.ts` works — `test:file` just forwards args to `node --test`.

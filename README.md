@@ -103,7 +103,7 @@ To get started, supply the required environment variables in an environment vari
 - `BUNDLER_ARWEAVE_WALLET`: a stringified JWK wallet used for uploading bundles to Arweave.
 - `ALLOW_LISTED_ADDRESSES`: a comma-separated list of allowed uploader wallet addresses (normalized). See [Managing Bundler Access](#managing-bundler-access) for more permissioning options.
 
-See the `.env.bundler.example` file for other important configuration options, including settings for serving bundler-uploaded data items instantly from your gateway.
+See the `.env.bundler.example` file for other important configuration options, including settings for serving bundler-uploaded data items from your gateway as soon as they are uploaded.
 
 Once environment variables are set, run docker compose with the bundler-specific compose file.
 
@@ -185,23 +185,25 @@ For detailed information about filter types, operators, and advanced examples, s
 
 ### Root Transaction Index (CDB64)
 
-The gateway ships with a pre-built CDB64 index that provides O(1) lookups to
-resolve data item IDs to their containing L1 Arweave transactions. It is enabled
-by default and covers ~964 million non-AO, non-Redstone data items up to block
-height 1,820,000.
+The gateway ships with three pre-built CDB64 indexes that resolve data item
+IDs to their containing L1 Arweave transactions, up to block height
+1,820,000. They cover non-AO, non-Redstone data items with a content type
+(about 964 million) and without one (about 1.24 billion), and AO data items
+(about 1.63 billion). They are enabled by default, read from Arweave on demand, and
+asked last in the default `ROOT_TX_LOOKUP_ORDER`.
 
-To disable it, remove `cdb` from `ROOT_TX_LOOKUP_ORDER`. To use custom index
-sources, set `CDB64_ROOT_TX_INDEX_SOURCES`. See [docs/envs.md](docs/envs.md)
-for all CDB64 configuration options and [docs/cdb64-guide.md](docs/cdb64-guide.md)
-for operational guidance.
+To disable them, remove `cdb` from `ROOT_TX_LOOKUP_ORDER`. To use other index
+sources, set `CDB64_ROOT_TX_INDEX_SOURCES`. See
+[docs/cdb64.md](docs/cdb64.md) for configuration and operation.
 
-Gateways can also share fresher indexes with each other: the optional
-`index-swarm` sidecar publishes this gateway's bands, signed with its observer
-key, and subscribes to other gateways' bands, which the gateway loads without a
-restart. Bands move over the publisher's metered HTTP routes, and, with the
-optional torrent engine (compose profile `index-swarm-torrent`), peer to peer
-as well, every subscriber seeding what it installs. See
-[docs/index-swarm.md](docs/index-swarm.md) to run it and
+Gateways can also share fresher indexes with each other through Index
+Sharing: the optional `index-swarm` sidecar publishes this gateway's bands,
+signed with its observer key, and subscribes to other gateways' bands, which
+the gateway loads without a restart. Bands move over the publisher's metered
+HTTP routes, and, with the optional torrent engine (compose profile
+`index-swarm-torrent`), peer to peer as well, every subscriber seeding what
+it installs. See [docs/index-swarm.md](docs/index-swarm.md) to run it,
+[docs/index-export.md](docs/index-export.md) to build bands, and
 [docs/index-publication.md](docs/index-publication.md) for the protocol.
 
 ### Webhook Emission
@@ -298,7 +300,7 @@ particular ID is blocked.
 
 ### Monitoring and Observability
 
-The ar-io-node leverages [Prometheus] to collect metrics from the system and
+The ar-io-node uses [Prometheus] to collect metrics from the system and
 recommends [Grafana] to visualize them. To access a templated Grafana dashboard
 for the ar.io gateway, you can run:
 
@@ -427,6 +429,10 @@ filters, the filter structure and logic apply to log filtering as well.
 ## Principles and Practices
 
 ### Architecture
+
+Diagrams of the gateway, its chain, data and GraphQL paths are in
+[docs/diagrams/](docs/diagrams/), with their PlantUML sources under
+`docs/diagrams/src/`.
 
 - Code to interfaces.
 - Separate IO from application logic.
