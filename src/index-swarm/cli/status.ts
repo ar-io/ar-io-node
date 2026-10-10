@@ -206,10 +206,16 @@ export function subscriberChecks(
     });
     return checks;
   }
+  // The gateway loads only root-TX bands (CDB64). Other kinds, such as
+  // parquet-l1 bands a subscriber installs, are never read this way, so
+  // counting them here would warn on every subscriber that holds them.
+  const loadable = sum(sidecar, 'index_swarm_installed_bands', {
+    index: 'root-tx-index',
+  });
   checks.push({
-    level: readers.value >= installed ? 'ok' : 'warn',
-    text: `The gateway has ${readers.value} of ${installed} installed bands loaded`,
-    ...(readers.value < installed
+    level: readers.value >= loadable ? 'ok' : 'warn',
+    text: `The gateway has ${readers.value} of ${loadable} installed root-TX bands loaded`,
+    ...(readers.value < loadable
       ? {
           fix: 'A band just installed loads within 30 s. If it stays behind, check CDB64_ROOT_TX_INDEX_WATCH is not false.',
         }

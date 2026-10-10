@@ -301,6 +301,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **`tools/index-swarm-status` warned on every subscriber that installs
+  `parquet-l1` bands** that the gateway had not loaded them ("5 of 29
+  installed bands loaded"). It compared all installed bands with the
+  gateway's CDB64 readers, but the gateway loads only root-TX bands, so L1
+  bands always counted as missing. It now compares the root-TX bands alone
+  and still warns when one of those is not loaded.
+
 - **Byte-identical uploads with different `Content-Type` tags were all
   served as the first one a gateway saw.** For a data item the gateway had
   not indexed, the content type came from
