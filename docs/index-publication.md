@@ -17,6 +17,7 @@ client, stdlib plus one Ed25519 library, is at the end of the page.
 - [The publication document](#the-publication-document)
 - [Verifying a publication](#verifying-a-publication)
 - [Fetching band files](#fetching-band-files)
+- [Following an index in a BitTorrent client](#following-an-index-in-a-bittorrent-client)
 - [Metering](#metering)
 - [Looking up one ID](#looking-up-one-id)
 - [L1 bands](#l1-bands)
@@ -215,6 +216,7 @@ digest is the same whichever you use, so check it every time.
 | `GET /ar-io/indexes/blob/<sha256>` | A file by content |
 | `GET /ar-io/indexes/webseed/<torrent name>/<file>` | A file as a BEP 19 WebSeed, for bands offered as torrents |
 | `GET /ar-io/indexes/torrents/<v1 infohash>.torrent` | A band as a torrent, at its `torrentUrl` |
+| `GET /ar-io/indexes/feed/<index>.xml` | An RSS feed of an index's torrents (see [below](#following-an-index-in-a-bittorrent-client)) |
 
 The three routes that serve file bytes (by name, blob and WebSeed) are the
 **byte routes**. Only a publisher serves them: they resolve against the
@@ -266,6 +268,61 @@ $ curl -s -H 'Range: bytes=4096-' -o 00.cdb.part \
 $ curl -s -o 00.cdb https://gateway.example/ar-io/indexes/blob/80c34b0b…
 $ sha256sum 00.cdb
 ```
+
+## Following an index in a BitTorrent client
+
+A publisher that offers torrents also serves an RSS 2.0 feed of each index,
+at `/ar-io/indexes/feed/<index>.xml`. It has one item per band offered as a
+torrent, newest heights first. An item's enclosure is the band's `.torrent`
+and its link is the magnet. Subscribe to the feed in a BitTorrent client with
+an auto-download rule, and the client takes every band now and each new band
+as it is published. The bytes come over BitTorrent, from the publisher and
+anyone else seeding.
+
+In qBittorrent:
+
+1. **Options → RSS:** turn on fetching RSS feeds and the RSS torrent auto
+   downloader.
+2. **RSS tab → New subscription:**
+   `https://gateway.example/ar-io/indexes/feed/parquet-l1.xml`.
+3. **RSS Downloader:** add a rule with nothing in "Must contain", apply it to
+   the feed, and choose a save path.
+
+A band appears once the publisher has built its `.torrent`. Bands offered
+only over HTTP are not in the feed. The `.torrent` files carry no WebSeed,
+so a client downloads from peers only. The feed is not metered and asks to be
+polled at most every 30 minutes (`<ttl>`).
+
+| Element | Value |
+|---|---|
+| `guid` | `urn:btih:<v1 infohash>`. A band rebuilt under the same id has a new infohash, so it is a new item, and an unchanged band is never fetched twice |
+| `title` | The band id and its heights, such as `l1-h1900000-1999999 (heights 1900000 to 1999999)` |
+| `enclosure` | The `.torrent`, `type="application/x-bittorrent"` |
+| `link` | The magnet link |
+| `pubDate` | When the publication was issued (the publication does not record when each band first appeared) |
+| `ario:band`, `ario:infohashV2`, `ario:heightFrom`, `ario:heightTo` | The band's id, v2 infohash and heights; `heightTo` is absent for a band open at the tip |
+
+The channel carries `ario:publisher`, `ario:sequence`, `ario:index`,
+`ario:kind` and `ario:publication`, the SHA-256 of the publication document
+the feed was built from. The `ario` prefix is bound to
+`urn:ar-io:index-feed:1`.
+
+**What to trust.** The feed is a view of the publication, not a second
+authority. A torrent pins its bytes to its infohash, but only the signed
+publication says that an infohash is this publisher's band. A client that
+trusts the gateway it subscribes to can stop here. To check:
+
+1. Fetch `/ar-io/indexes` and [verify it](#verifying-a-publication).
+2. Check that its SHA-256 (also its `ETag`) equals the feed's
+   `ario:publication`, and the `X-AR-IO-Index-Feed` response header. If the
+   publication has moved on, fetch both again.
+3. Check that each item's v1 infohash is a `torrent.infohashV1` the
+   publication lists for that band.
+
+With `HTTPSIG_ENABLED`, the feed response is signed with HTTPSIG, covering
+`X-AR-IO-Index-Feed` and `Content-Digest`. That binds the feed's bytes to
+the publication it names, as served by that gateway. The index-swarm sidecar
+reads the publication directly and does not use the feed.
 
 ## Metering
 
