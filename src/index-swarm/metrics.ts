@@ -119,7 +119,7 @@ export const subscriptionTotal = new promClient.Counter({
 
 export const subscriptionBytes = new promClient.Counter({
   name: 'index_subscription_bytes_total',
-  help: 'Bytes fetched from publishers, by transport (only http today). Excludes files skipped because they were already on disk.',
+  help: 'Bytes fetched from publishers, by transport (http or torrent). Excludes files skipped because they were already on disk.',
   labelNames: ['transport'] as const,
   registers: [registry],
 });
