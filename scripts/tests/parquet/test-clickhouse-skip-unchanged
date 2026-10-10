@@ -92,6 +92,9 @@ migrate_staging_to_final "$TEST_PARTITION_NAME" >/dev/null
 expect "content reverting to an older version is inserted" "$(versions)" 3
 expect "reverted content wins under FINAL" "$(newest_offset)" 0
 
+leftover=$(ch_query "SELECT count() FROM system.tables WHERE database = currentDatabase() AND name LIKE 'staging_final_transactions%'" | tr -d '[:space:]')
+expect "no per-run staging table is left behind" "$leftover" 0
+
 export CLICKHOUSE_IMPORT_SKIP_UNCHANGED=false
 sleep 1
 migrate_staging_to_final "$TEST_PARTITION_NAME" >/dev/null

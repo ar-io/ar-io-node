@@ -305,6 +305,9 @@ while true; do
             batch_result="debug_failed"
             cycle_batches=$((cycle_batches + 1))
             cycle_debug_failed=$((cycle_debug_failed + 1))
+            # Nothing was imported, so later batches must not mark this
+            # bucket as imported.
+            cycle_contiguous=false
             echo "METRIC batch_result range=${current_height}-${end_height} export=skipped import=skipped prune=skipped post_prune_min_stable= result=debug_failed duration_s=$(( $(date +%s) - batch_start_time ))"
             current_height=$((end_height + 1))
             continue
@@ -318,6 +321,9 @@ while true; do
             batch_result="debug_failed"
             cycle_batches=$((cycle_batches + 1))
             cycle_debug_failed=$((cycle_debug_failed + 1))
+            # Nothing was imported, so later batches must not mark this
+            # bucket as imported.
+            cycle_contiguous=false
             echo "METRIC batch_result range=${current_height}-${end_height} export=skipped import=skipped prune=skipped post_prune_min_stable= result=debug_failed duration_s=$(( $(date +%s) - batch_start_time ))"
             current_height=$((end_height + 1))
             continue

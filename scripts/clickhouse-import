@@ -472,7 +472,8 @@ migrate_staging_to_final() {
   # ReplacingMergeTree version that only a merge folds. Merges rarely reach
   # large partitions, so unchanged re-imports used to pile up as duplicate
   # rows. With CLICKHOUSE_IMPORT_SKIP_UNCHANGED (default true) the rows are
-  # built in staging_final_transactions first, and only rows whose content
+  # built in a per-run staging_final_transactions_* table first, and only
+  # rows whose content
   # differs from the newest stored version of their key are inserted.
   # "Newest inserted_at wins" still holds for real changes, e.g. an L1
   # offset backfilled in SQLite after the first export. Content is every
@@ -481,13 +482,18 @@ migrate_staging_to_final() {
   local ch=(clickhouse client --host "$CLICKHOUSE_HOST" --port "$CLICKHOUSE_PORT"
     --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD")
   local target_table=transactions
+  local final_staging=""
   if [ "${CLICKHOUSE_IMPORT_SKIP_UNCHANGED:-true}" = true ]; then
-    target_table=staging_final_transactions
-    # Rebuilt each time so it always matches the transactions schema.
-    "${ch[@]}" --query "CREATE OR REPLACE TABLE staging_final_transactions
+    # One table per run, so this step adds no shared state between
+    # concurrent imports. (The staging_blocks/_transactions/_tags tables are
+    # shared and truncated by every import, so concurrent imports were never
+    # safe; run one at a time.) Built from the transactions schema each time.
+    final_staging="staging_final_transactions_$(date +%s)_$$_${RANDOM}"
+    target_table=$final_staging
+    "${ch[@]}" --query "CREATE TABLE ${final_staging}
       ENGINE = MergeTree ORDER BY (height, block_transaction_index, is_data_item, id)
       EMPTY AS SELECT * FROM transactions" || {
-      echo "    Warning: Failed to create staging_final_transactions" >&2
+      echo "    Warning: Failed to create ${final_staging}" >&2
       return 1
     }
   fi
@@ -706,10 +712,11 @@ FROM
     txs.root_parent_offset
 );" || {
     echo "    Warning: Failed to migrate data to $target_table table" >&2
+    [ -n "$final_staging" ] && "${ch[@]}" --query "DROP TABLE IF EXISTS ${final_staging}" || true
     return 1
   }
 
-  if [ "$target_table" = staging_final_transactions ]; then
+  if [ -n "$final_staging" ]; then
     # One 128-bit key per row (primary key + content hash) keeps the set
     # small; aggregation in primary-key order streams the per-key newest
     # version. Measured on a 19.9M-row 10k-height bucket: ~10 s, ~2.2 GiB;
@@ -717,7 +724,7 @@ FROM
     local content_hash="cityHash64(* EXCEPT (inserted_at, expires_at))"
     echo "    Inserting new or changed rows into transactions table..."
     "${ch[@]}" --query "INSERT INTO transactions
-SELECT * FROM staging_final_transactions
+SELECT * FROM ${final_staging}
 WHERE sipHash128(height, block_transaction_index, is_data_item, id, ${content_hash}) NOT IN (
   SELECT sipHash128(height, block_transaction_index, is_data_item, id,
     argMax(${content_hash}, inserted_at))
@@ -727,9 +734,10 @@ WHERE sipHash128(height, block_transaction_index, is_data_item, id, ${content_ha
 )
 SETTINGS optimize_aggregation_in_order = 1" || {
       echo "    Warning: Failed to migrate data to transactions table" >&2
+      "${ch[@]}" --query "DROP TABLE IF EXISTS ${final_staging}" || true
       return 1
     }
-    "${ch[@]}" --query "TRUNCATE TABLE staging_final_transactions" || true
+    "${ch[@]}" --query "DROP TABLE IF EXISTS ${final_staging}" || true
   fi
   
   local migrate_end=$(date +%s%N)
