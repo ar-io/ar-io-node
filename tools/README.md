@@ -16,7 +16,7 @@ Set up index sharing (the `index-swarm` sidecar, optionally over BitTorrent) and
 ```
 
 ### `ar-io-node`
-The gateway's command-line tool, in the style of the `ar.io` CLI from `@ar.io/sdk`: JSON on stdout, errors on stderr, exit 1 on failure. Its own commands build and check index bands (`index-band-build`, `index-band-verify`); any other command runs as the `ar.io` CLI with the same arguments. It runs in the core image (`CORE_IMAGE_TAG`), so it needs only Docker, and mounts only what a command needs. See [docs/cli.md](../docs/cli.md).
+The gateway's command-line tool, in the style of the `ar.io` CLI from `@ar.io/sdk`: JSON on stdout, errors on stderr, exit 1 on failure. Its own commands build, export and check index bands (`index-band-*`) and import, verify and audit an L1 index (`index-l1-*`); any other command runs as the `ar.io` CLI with the same arguments. It runs in the core image (`CORE_IMAGE_TAG`), so it needs only Docker, and mounts only what a command needs. See [docs/cli.md](../docs/cli.md).
 
 **Usage:**
 ```bash
@@ -24,6 +24,7 @@ The gateway's command-line tool, in the style of the `ar.io` CLI from `@ar.io/sd
 ./tools/ar-io-node index-band-build --publisher <wallet> --kind d --height-range 2010500,tip \
   --gateway-url http://core:4000 --input - < records.csv
 ./tools/ar-io-node index-band-verify --band-dir data/indexes/published/root-tx-index/<band> --gateway-url http://core:4000
+./tools/ar-io-node index-l1-verify --bands-dir data/indexes/installed/parquet-l1
 ./tools/ar-io-node get-gateway --address <wallet>
 ```
 

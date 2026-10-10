@@ -17,14 +17,20 @@
 #     --gateway-url http://core:4000
 #   ./tools/ar-io-node index-band-export --from 2010000 --to 2011000 \
 #     --output data/indexes/export/records.csv
+#   ./tools/ar-io-node index-l1-verify --bands-dir data/indexes/installed/parquet-l1
+#   ./tools/ar-io-node index-l1-import --bands-dir data/indexes/installed/parquet-l1 \
+#     --core-db data/sqlite/core.db
 #   ./tools/ar-io-node get-gateway --address <wallet>
 #
 # Mounts only what a command needs: data/indexes for index-band-* commands
 # (built under data/indexes/export, beside the publish directory, so the final
 # rename stays on one filesystem), plus for index-band-export the SQLite
-# directory read-only and the ClickHouse settings; for any other command only
-# the file a --wallet-file names, read-only. Band commands never take a key. It runs as
-# your user, so data/indexes/published/<index> must be writable by you.
+# directory read-only and the ClickHouse settings; for index-l1-* commands
+# data/indexes read-only and the SQLite directory, read-write for
+# index-l1-import (stop the gateway first) and read-only otherwise; for any
+# other command only the file a --wallet-file names, read-only. Band commands
+# never take a key. It runs as your user, so data/indexes/published/<index>,
+# and for index-l1-import the SQLite directory, must be writable by you.
 # Prefer --wallet-file to --private-key: an inline key shows in `ps` and
 # `docker inspect`.
 
@@ -82,6 +88,56 @@ for arg in "$@"; do
 done
 
 ARGS=("$@")
+
+# Host directories mounted into the container, and where: a path given on the
+# command line inside one of them, absolute or relative to where this was run,
+# is rewritten to the path the container sees. Anything else is passed as given.
+MOUNT_HOSTS=()
+MOUNT_TARGETS=()
+to_container() {
+  local value="$1" host i
+  if [[ "${value}" == "-" ]]; then
+    echo "${value}"
+    return
+  fi
+  host="$(cd "${CALLER_DIR}" && realpath -m -- "${value}")"
+  for i in "${!MOUNT_HOSTS[@]}"; do
+    if [[ "${host}" == "${MOUNT_HOSTS[$i]}" ]]; then
+      echo "${MOUNT_TARGETS[$i]}"
+      return
+    elif [[ "${host}" == "${MOUNT_HOSTS[$i]}/"* ]]; then
+      echo "${MOUNT_TARGETS[$i]}/${host#"${MOUNT_HOSTS[$i]}/"}"
+      return
+    fi
+  done
+  echo "${value}"
+}
+# Rewrite the values of the named path options in ARGS.
+rewrite_paths() {
+  local i next opt
+  for i in "${!ARGS[@]}"; do
+    for opt in "$@"; do
+      if [[ "${ARGS[$i]}" == "${opt}" ]]; then
+        next=$((i + 1))
+        if [[ -n "${ARGS[$next]:-}" ]]; then
+          ARGS[$next]="$(to_container "${ARGS[$next]}")"
+        fi
+      elif [[ "${ARGS[$i]}" == "${opt}="* ]]; then
+        ARGS[$i]="${opt}=$(to_container "${ARGS[$i]#*=}")"
+      fi
+    done
+  done
+}
+# Join the gateway's network, so URLs such as http://core:4000 work.
+join_gateway_network() {
+  local network
+  network="$(setting DOCKER_NETWORK_NAME)"
+  network="${network:-ar-io-network}"
+  if docker network inspect "${network}" >/dev/null 2>&1; then
+    DOCKER_ARGS+=(--network "${network}")
+  fi
+}
+
 case "${COMMAND}" in
   index-band-*)
     DATA_PATH="$(setting INDEX_SWARM_DATA_PATH)"
@@ -90,38 +146,11 @@ case "${COMMAND}" in
     # The CLI refuses to write anywhere this mount doesn't cover.
     DOCKER_ARGS+=(-v "${DATA_PATH}:/app/data/indexes"
       -e AR_IO_NODE_CLI_DATA_DIR=/app/data/indexes)
-    # A path you give inside that directory, absolute or relative to where
-    # you ran this, is rewritten to the path the container sees, so
-    # --input "$INDEX_SWARM_DATA_PATH/records.csv" and --band-dir from a
-    # build's "dir" both work. Anything else is passed as given.
-    to_container() {
-      local value="$1" host
-      if [[ "${value}" == "-" ]]; then
-        echo "${value}"
-        return
-      fi
-      host="$(cd "${CALLER_DIR}" && realpath -m -- "${value}")"
-      if [[ "${host}" == "${DATA_PATH}" ]]; then
-        echo "data/indexes"
-      elif [[ "${host}" == "${DATA_PATH}/"* ]]; then
-        echo "data/indexes/${host#"${DATA_PATH}/"}"
-      else
-        echo "${value}"
-      fi
-    }
-    for i in "${!ARGS[@]}"; do
-      case "${ARGS[$i]}" in
-        --input|--band-dir|--publish-dir|--work-dir|--output)
-          next=$((i + 1))
-          if [[ -n "${ARGS[$next]:-}" ]]; then
-            ARGS[$next]="$(to_container "${ARGS[$next]}")"
-          fi
-          ;;
-        --input=*|--band-dir=*|--publish-dir=*|--work-dir=*|--output=*)
-          ARGS[$i]="${ARGS[$i]%%=*}=$(to_container "${ARGS[$i]#*=}")"
-          ;;
-      esac
-    done
+    # So --input "$INDEX_SWARM_DATA_PATH/records.csv" and --band-dir from a
+    # build's "dir" both work.
+    MOUNT_HOSTS+=("${DATA_PATH}")
+    MOUNT_TARGETS+=("data/indexes")
+    rewrite_paths --input --band-dir --publish-dir --work-dir --output
     if [[ "${COMMAND}" == "index-band-export" ]]; then
       # The gateway's own index: its ClickHouse settings, passed by name so
       # the password stays off the command line (out of `ps`; `docker
@@ -145,12 +174,32 @@ case "${COMMAND}" in
         DOCKER_ARGS+=(-v "$(realpath -e "${SECRETS_DIR}"):/run/secrets/index-export:ro")
       fi
     fi
-    # Join the gateway's network, so --gateway-url http://core:4000 works.
-    NETWORK="$(setting DOCKER_NETWORK_NAME)"
-    NETWORK="${NETWORK:-ar-io-network}"
-    if docker network inspect "${NETWORK}" >/dev/null 2>&1; then
-      DOCKER_ARGS+=(--network "${NETWORK}")
+    join_gateway_network
+    ;;
+  index-l1-*)
+    # Bands are only read. The gateway's SQLite is written by index-l1-import
+    # (with the gateway stopped) and only read by the other commands.
+    DATA_PATH="$(setting INDEX_SWARM_DATA_PATH)"
+    DATA_PATH="$(realpath -m "${DATA_PATH:-./data/indexes}")"
+    if [[ -d "${DATA_PATH}" ]]; then
+      DOCKER_ARGS+=(-v "${DATA_PATH}:/app/data/indexes:ro")
+      MOUNT_HOSTS+=("${DATA_PATH}")
+      MOUNT_TARGETS+=("data/indexes")
     fi
+    SQLITE_PATH="$(setting SQLITE_DATA_PATH)"
+    SQLITE_PATH="$(realpath -m "${SQLITE_PATH:-./data/sqlite}")"
+    if [[ -d "${SQLITE_PATH}" ]]; then
+      if [[ "${COMMAND}" == "index-l1-import" ]]; then
+        DOCKER_ARGS+=(-v "${SQLITE_PATH}:/app/data/sqlite")
+      else
+        DOCKER_ARGS+=(-v "${SQLITE_PATH}:/app/data/sqlite:ro")
+      fi
+      MOUNT_HOSTS+=("${SQLITE_PATH}")
+      MOUNT_TARGETS+=("data/sqlite")
+    fi
+    rewrite_paths --bands-dir --core-db
+    # --data-from and --anchor-from may name http://core:4000.
+    join_gateway_network
     ;;
   *)
     # The ar.io CLI reads a wallet file: mount just that file, read-only, and

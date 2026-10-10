@@ -311,6 +311,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **`index-l1-import`, `index-l1-verify` and `index-l1-audit` now run
+  through `tools/ar-io-node`.** The wrapper mounted data only for
+  `index-band-*`, and `docs/cli.md` showed these commands as
+  `docker compose run … core ar-io-node …`, which starts the gateway instead
+  (the core image's entrypoint ignores arguments, and the image has no
+  `ar-io-node` binary). The wrapper now mounts `data/indexes` read-only and
+  the SQLite directory (read-write for `index-l1-import`, read-only
+  otherwise), rewrites `--bands-dir` and `--core-db` to their container
+  paths, and joins the gateway's network. `docs/cli.md` uses it throughout,
+  and drops a `--bands-dir` option `index-l1-audit` never had. The
+  `index_subscription_bytes_total` help string no longer says "only http
+  today".
+
 - **`tools/index-swarm-status` warned on every subscriber that installs
   `parquet-l1` bands** that the gateway had not loaded them ("5 of 29
   installed bands loaded"). It compared all installed bands with the

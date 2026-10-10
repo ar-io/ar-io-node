@@ -33,10 +33,12 @@ The wrapper mounts only what a command needs:
 | --- | --- |
 | `index-band-*` | `INDEX_SWARM_DATA_PATH` (default `./data/indexes`) at `data/indexes`, and the gateway's Docker network (`DOCKER_NETWORK_NAME`, default `ar-io-network`), so `--gateway-url http://core:4000` reaches the gateway |
 | `index-band-export` | Also `SQLITE_DATA_PATH` (default `./data/sqlite`) read-only at `data/sqlite`; `CLICKHOUSE_URL`, `CLICKHOUSE_USER` and `CLICKHOUSE_PASSWORD`, passed by name, so not on the command line (`docker inspect` of the running container shows them); and `INDEX_EXPORT_SECRETS_DIR`, if set, read-only at `/run/secrets/index-export` for peers' password files |
+| `index-l1-*` | `INDEX_SWARM_DATA_PATH` read-only at `data/indexes`; `SQLITE_DATA_PATH` at `data/sqlite`, read-write for `index-l1-import` and read-only for `index-l1-verify` and `index-l1-audit`; and the gateway's Docker network, so `--data-from` or `--anchor-from` can name `http://core:4000` |
 | any `ar.io` command | Nothing, except the file a `--wallet-file` (`-w`) names, read-only. A relative path is taken from where you ran the wrapper |
 
 It runs as your user, so what it writes is yours, and
-`data/indexes/published/<index>` must be writable by you. Ctrl-C stops a
+`data/indexes/published/<index>` (and, for `index-l1-import`, the SQLite
+directory) must be writable by you. Ctrl-C stops a
 command; a build interrupted that way leaves its scratch copy in
 `data/indexes/export/.band-build-*`, which the next build removes once nothing
 has been written in it for a day (or delete it yourself).
@@ -45,17 +47,18 @@ Band commands never take a key. For `ar.io` commands that sign, prefer
 `--wallet-file` to `--private-key`: an inline key is visible in `ps` and
 `docker inspect`.
 
-Settings (`CORE_IMAGE_TAG`, `INDEX_SWARM_DATA_PATH`, `DOCKER_NETWORK_NAME`)
+Settings (`CORE_IMAGE_TAG`, `INDEX_SWARM_DATA_PATH`, `SQLITE_DATA_PATH`, `DOCKER_NETWORK_NAME`)
 come from your shell if set there, else from `.env`, as for compose. Set
 `AR_IO_NODE_CLI_IMAGE` to run another image. From a checkout, run
 `node --import ./register.js src/cli/cli.ts <command>`.
 
 ### Paths
 
-Inside the container, the data directory is `data/indexes`. The wrapper
-rewrites any `--input`, `--band-dir`, `--publish-dir`, `--work-dir` or `--output` that
-points inside `INDEX_SWARM_DATA_PATH` (absolute, or relative to where you ran
-it) to its `data/indexes/...` form, so all of these work:
+Inside the container, the data directory is `data/indexes` and the SQLite
+directory `data/sqlite`. The wrapper rewrites any `--input`, `--band-dir`,
+`--publish-dir`, `--work-dir`, `--output`, `--bands-dir` or `--core-db` that
+points inside a mounted directory (absolute, or relative to where you ran it)
+to its form in the container, so all of these work:
 
 ```bash
 ./tools/ar-io-node index-band-verify --band-dir "$INDEX_SWARM_DATA_PATH/published/root-tx-index/<band>" ...
@@ -260,16 +263,14 @@ is refused too.
 
 ```bash
 docker compose -f docker-compose.yaml -f docker-compose.override.yaml stop core
-docker compose -f docker-compose.yaml -f docker-compose.override.yaml \
-  run --rm --no-deps -T core ar-io-node index-l1-import \
+./tools/ar-io-node index-l1-import \
   --bands-dir data/indexes/installed/parquet-l1 \
   --core-db data/sqlite/core.db
+docker compose -f docker-compose.yaml -f docker-compose.override.yaml up -d --no-deps core
 ```
 
-`--no-deps` matters: without it `run` starts the services `core` depends on,
-and `stop core` alone does not keep them from bringing it back. Name every
-compose file you normally use — passing `-f` at all turns off loading
-`docker-compose.override.yaml` automatically.
+Name every compose file you normally use: passing `-f` at all turns off
+loading `docker-compose.override.yaml` automatically.
 
 Bands are imported in height order, lowest first. The run stops at the
 first band that fails, because bands must land as a contiguous run — the
@@ -284,7 +285,7 @@ and keep the hole underneath for ever. `--from` and `--to` fill that in:
 
 ```bash
 # core.db holds 1,000,000 upward; fill in everything below it
-ar-io-node index-l1-import --bands-dir ... --core-db ... --from 0 --to 999999
+./tools/ar-io-node index-l1-import --bands-dir ... --core-db ... --from 0 --to 999999
 ```
 
 This is safe because a band clears and rewrites only its own height
@@ -434,7 +435,7 @@ before importing a byte, or without ever importing.
 
 ```bash
 # the consumer's view: no gateway involved
-ar-io-node index-l1-verify --bands-dir data/indexes/installed/parquet-l1
+./tools/ar-io-node index-l1-verify --bands-dir data/indexes/installed/parquet-l1
 ```
 
 Measured on the published bands (2026-10-06): 500,000 blocks over 24
@@ -457,9 +458,7 @@ identical verdicts and counts. A rule reimplemented twice is a rule that
 drifts.
 
 ```bash
-docker compose -f docker-compose.yaml -f docker-compose.override.yaml \
-  run --rm --no-deps -T core ar-io-node index-l1-verify \
-  --core-db data/sqlite/core.db
+./tools/ar-io-node index-l1-verify --core-db data/sqlite/core.db
 ```
 
 **Why this is worth running.** Above the 2.0 fork (height 422,250) a
@@ -525,7 +524,7 @@ fabricated the whole thing self-consistently would satisfy just as well.
 part of this command that asks anyone else:
 
 ```bash
-ar-io-node index-l1-verify --core-db data/sqlite/core.db \
+./tools/ar-io-node index-l1-verify --core-db data/sqlite/core.db \
   --anchor-from http://15.235.234.171:1984,http://208.69.78.61:1984,http://148.113.226.53:1984
 ```
 
@@ -645,14 +644,13 @@ This closes the gap by fetching that data, deriving each `data_root`, and
 recomputing `tx_root`.
 
 ```bash
-ar-io-node index-l1-audit --core-db data/sqlite/core.db \
+./tools/ar-io-node index-l1-audit --core-db data/sqlite/core.db \
   --data-from https://arweave.net --sample 200
 ```
 
 | Option | |
 |---|---|
 | `--core-db` | The gateway's `core.db`. Opened read-only |
-| `--bands-dir` | A directory of bands to check instead, with no gateway and no database |
 | `--data-from` | An Arweave node or gateway to fetch transaction data from. Required |
 | `--sample` | How many blocks to audit (default 100) |
 | `--from`, `--to` | Bound the height range |
