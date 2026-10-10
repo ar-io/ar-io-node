@@ -1149,9 +1149,13 @@ export const CHUNK_GET_BASE64_SIZE_BYTES = +env.varOrDefault(
 // Maximum raw chunk size (256 KiB) - used for raw binary chunk endpoint rate limiting
 export const MAX_CHUNK_SIZE = 256 * 1024;
 
-// The maximum number of peers to attempt when fetching a chunk via GET
+// The maximum number of peers to attempt when fetching a chunk via GET.
+// Each attempt is capped at PEER_CHUNK_REQUEST_TIMEOUT_MS (500 ms). On the older
+// half of the weave a chunk is often held by only one of the preferred tip
+// nodes, so 5 weighted-random attempts regularly ran out before reaching it; 8
+// covers all the preferred tips plus fallbacks. A miss costs at most 4 s.
 export const ARWEAVE_PEER_CHUNK_GET_MAX_PEER_ATTEMPT_COUNT =
-  env.positiveIntOrDefault('ARWEAVE_PEER_CHUNK_GET_MAX_PEER_ATTEMPT_COUNT', 5);
+  env.positiveIntOrDefault('ARWEAVE_PEER_CHUNK_GET_MAX_PEER_ATTEMPT_COUNT', 8);
 
 // How many candidate peers to select from each pool for chunk GET requests
 export const ARWEAVE_PEER_CHUNK_GET_PEER_SELECTION_COUNT =
