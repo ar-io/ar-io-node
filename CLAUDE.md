@@ -18,7 +18,8 @@ caching, ANS-104 bundle unbundling, and multi-source data retrieval.
 | E2E (needs Docker) | `yarn test:e2e` |
 | Lint | `yarn lint:check` / `yarn lint:fix` |
 | Typecheck (incl. tests) | `yarn typecheck` |
-| Build | `yarn build` |
+| Build | `yarn build` (also bundles the GraphiQL page into `dist/graphiql/`) |
+| GraphiQL page only | `yarn build:graphiql` (restart to pick it up) |
 | Circular deps / dupes | `yarn deps:ci` / `yarn duplicate:check` |
 
 `build-core.yml` runs on every push (any branch) and runs `build`,

@@ -308,6 +308,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   (`layoutConfirmed`) so it isn't rebuilt again. See the "L1 bands" section
   of [docs/index-swarm.md](docs/index-swarm.md).
 
+- **`GET /graphql` in a browser now serves GraphiQL, bundled with its
+  Explorer plugin and served by the gateway itself, instead of the Apollo
+  Sandbox.** The Sandbox that Release 84 introduced loaded from Apollo's CDN,
+  showed an Apollo-account login, and by default reported each visitor's
+  usage to Apollo from their browser, undoing from the browser side the
+  gateway's guarantee that it never sends query data to Apollo. The new page
+  loads nothing from third parties, reports nothing to anyone and has no
+  vendor login, and it is sent with a Content-Security-Policy that allows only
+  this gateway as a source. The Explorer builds a query from checkboxes over
+  the schema, much as the Sandbox did. The bundle is built by
+  `yarn build` (or `yarn build:graphiql` on its own) into `dist/graphiql/` and
+  served under `/graphql/graphiql/`; the first visit downloads about 7 MB,
+  cached from then on. API clients are unaffected.
 - `GET /ar-io/offsets/:id` answers are now signed (HTTPSIG), with a
   `Content-Digest` binding the body and an `X-AR-IO-Root-Transaction-Id`
   header, so an answer is the gateway's attributable claim. An answer from a
@@ -513,6 +526,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   ".env already has everything" (while telling the operator to open the new
   port) and left `INDEX_SWARM_ENGINE_PORT` unchanged. Both now apply on their
   own, like `--max-disk-gib`, and `--restart` recreates the engine.
+
+- **The Apollo Sandbox served at `GET /graphql` since Release 84 sent
+  telemetry to Apollo from visitors' browsers.** The Sandbox embed turns its
+  own telemetry on by default, which undid, from the browser side, the
+  gateway's guarantee that it never reports query data to Apollo. The embed
+  now runs with telemetry off. The page otherwise looks and works the same;
+  API clients are unaffected.
+
 - `index_swarm_tracker_peers` counted peers of a swarm that had gone quiet,
   and bands no longer offered, until the next announce ran expiry. It now
   counts only bands still offered and peers seen within the announce TTL.
