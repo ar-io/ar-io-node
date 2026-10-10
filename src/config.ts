@@ -119,7 +119,10 @@ export const TRUSTED_NODE_URL = env.varOrDefault(
   'https://arweave.net',
 );
 
-// Default preferred chunk GET nodes (data-1 through data-17 and tip-1 through tip-5.arweave.xyz)
+// Default preferred chunk GET nodes (data-1 through data-17 and tip-1 through
+// tip-4.arweave.xyz). tip-5 is left out: on 2026-10-10 its port 1984 was closed
+// from two separate networks, it served none of 60 random offsets, and tip-1's
+// own peer list no longer carried it, so it only spent chunk attempts.
 const DEFAULT_PREFERRED_CHUNK_GET_NODE_URLS = [
   'http://data-1.arweave.xyz:1984',
   'http://data-2.arweave.xyz:1984',
@@ -142,7 +145,6 @@ const DEFAULT_PREFERRED_CHUNK_GET_NODE_URLS = [
   'http://tip-2.arweave.xyz:1984',
   'http://tip-3.arweave.xyz:1984',
   'http://tip-4.arweave.xyz:1984',
-  'http://tip-5.arweave.xyz:1984',
 ];
 
 // Preferred URLs for chunk GET requests (comma-separated URLs)
@@ -1012,13 +1014,14 @@ export const GATEWAY_PEERS_REQUEST_WINDOW_COUNT = +env.varOrDefault(
 export const ARWEAVE_NODE_IGNORE_URLS: string[] =
   env.varOrUndefined('ARWEAVE_NODE_IGNORE_URLS')?.split(',') ?? [];
 
-// Default preferred chunk POST nodes (tip-1 through tip-5.arweave.xyz)
+// Default preferred chunk POST nodes (tip-1 through tip-4.arweave.xyz; tip-5 is
+// unreachable, see DEFAULT_PREFERRED_CHUNK_GET_NODE_URLS). Four still meet
+// CHUNK_POST_MIN_PREFERRED_SUCCESS_COUNT (2) and CHUNK_POST_MIN_SUCCESS_COUNT (3).
 const DEFAULT_PREFERRED_CHUNK_POST_NODE_URLS = [
   'http://tip-1.arweave.xyz:1984',
   'http://tip-2.arweave.xyz:1984',
   'http://tip-3.arweave.xyz:1984',
   'http://tip-4.arweave.xyz:1984',
-  'http://tip-5.arweave.xyz:1984',
 ];
 
 // Preferred chunk POST URLs (prioritized over discovered peers)

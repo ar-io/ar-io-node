@@ -212,6 +212,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **`tip-5.arweave.xyz` is no longer a default preferred chunk node**, for
+  GET or POST. Its port 1984 was closed from two separate networks on
+  2026-10-10, it served none of 60 random offsets, and `tip-1`'s own peer
+  list no longer carries it. As a default it only spent chunk GET attempts
+  and broadcast slots. The four remaining `tip` nodes still meet
+  `CHUNK_POST_MIN_PREFERRED_SUCCESS_COUNT` (2) and
+  `CHUNK_POST_MIN_SUCCESS_COUNT` (3). Operators who set
+  `PREFERRED_CHUNK_GET_NODE_URLS` or `PREFERRED_CHUNK_POST_NODE_URLS`
+  should drop it from their own lists too.
+
 - **`index-export` derives `parquet-l1` lookups before it builds**, not
   after: a band that only lacks its lookups gets them in seconds to minutes
   at the start of a run, rather than after up to 4 hours of builds. The
