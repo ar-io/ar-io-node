@@ -12,6 +12,7 @@ import { createFilter } from './filters.js';
 import { assertMonotoneFilter } from './database/gql-l1-routing.js';
 import * as env from './lib/env.js';
 import { PRIVATE_NETWORK_RANGES } from './lib/trusted-proxies.js';
+import { parsePublicOrigin } from './lib/public-origin.js';
 import { resolveFacilitatorKeyId } from './payments/facilitator-utils.js';
 import { initHttpSig } from './lib/httpsig.js';
 import type { HttpSigSignerContext } from './lib/httpsig.js';
@@ -3523,6 +3524,32 @@ export const INDEXES_PUBLISHED_DIR = env.varOrDefault(
 export const INDEXES_ADVERTISE_FROM_URL = env.varOrUndefined(
   'INDEXES_ADVERTISE_FROM_URL',
 );
+
+/**
+ * This gateway's public origin (`https://gateway.example`): the base of the
+ * absolute URLs in its index feeds (`/ar-io/indexes/feed/<index>.xml`).
+ * From configuration, never from a request's Host header, which whoever
+ * sends the request controls. Defaults to `https://<ARNS_ROOT_HOST>`; with
+ * neither, the feeds answer 404.
+ */
+export const INDEXES_PUBLIC_URL = (() => {
+  const value = env.varOrUndefined('INDEXES_PUBLIC_URL');
+  if (value !== undefined && value.trim() !== '') {
+    try {
+      return parsePublicOrigin(value);
+    } catch (error: any) {
+      throw new Error(`INDEXES_PUBLIC_URL: ${error.message}`);
+    }
+  }
+  if (ARNS_ROOT_HOST === undefined) return undefined;
+  // A default must not stop a gateway that started before: an
+  // ARNS_ROOT_HOST that makes no origin just means no feeds.
+  try {
+    return parsePublicOrigin(`https://${ARNS_ROOT_HOST}`);
+  } catch {
+    return undefined;
+  }
+})();
 
 export const ENABLE_RATE_LIMITER =
   env.varOrDefault('ENABLE_RATE_LIMITER', 'false') === 'true';

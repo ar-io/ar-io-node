@@ -5,6 +5,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import { PublishedIndexes } from './routes/published-indexes.js';
+import { IndexBandFeedSource } from './feeds/index-bands.js';
 import { UpstreamPublishedIndexes } from './routes/upstream-published-indexes.js';
 import { default as Arweave } from 'arweave';
 import EventEmitter from 'node:events';
@@ -958,6 +959,17 @@ export const publishedIndexes = new PublishedIndexes({
   // stat can wait behind a saturated libuv thread pool (a cache sweep on a
   // slow disk), and requests must not.
   revalidateMs: 5_000,
+});
+
+/**
+ * The RSS feeds of what this gateway publishes, one per index, built from
+ * the same view as the routes. No feeds without a public origin.
+ */
+export const indexFeedSource = new IndexBandFeedSource({
+  log,
+  published: publishedIndexes,
+  publishedDir: config.INDEXES_PUBLISHED_DIR,
+  baseUrl: config.INDEXES_PUBLIC_URL,
 });
 
 /**
