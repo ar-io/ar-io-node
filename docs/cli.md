@@ -1,7 +1,7 @@
 # The `ar-io-node` CLI
 
 `ar-io-node` is the gateway's command-line tool. Its first commands build and
-check [index bands](index-swarm.md#producing-bands); every other command is a
+check [index bands](index-export.md); every other command is a
 command of the `ar.io` CLI from `@ar.io/sdk`, run with the same arguments.
 
 It follows the `ar.io` CLI's conventions, so the two behave alike:
@@ -96,15 +96,14 @@ data_item_id,root_tx_id,path,root_data_item_offset,root_data_offset,data_item_si
 
 - Only the first two columns are required. `path` must be empty: bands don't
   carry nested bundle paths yet.
-- When one ID appears more than once, the highest `height` wins; at equal
-  heights a record with offsets beats one without, and any remaining tie is
-  broken the same way whatever the input order, so a rebuild gives the same
-  band id.
+- When one ID appears more than once, the highest `height` wins, and at equal
+  heights a record with offsets beats one without. Any remaining tie is broken
+  the same way whatever the input order, so a rebuild gives the same band id.
 - A malformed row (an ID that isn't 43 base64url characters, a number that
   isn't a non-negative integer) fails the build with its line number.
-- A well-formed record the band can't use is **dropped and counted**: offsets
-  that don't frame a header (the header span must be 1 byte to 1 MiB), only
-  one of the two offsets, or a value too large to address. A few per thousand
+- A well-formed record the band can't use is **dropped and counted**. That
+  covers offsets that don't frame a header (the header span must be 1 byte to
+  1 MiB), only one of the two offsets, and a value too large to address. A few per thousand
   is normal for real data (37 of 4,000 in the test below); the build logs a
   warning with the count.
 
@@ -115,7 +114,7 @@ data_item_id,root_tx_id,path,root_data_item_offset,root_data_offset,data_item_si
 | `--publisher <wallet>` | The publishing gateway's registered wallet. It names the band (so ids are unique to a publisher) and is not otherwise checked. Required |
 | `--kind <kind>` | `d` (delta), `r` (recent), `h` (history), or another name of up to 8 lowercase letters and digits. Required |
 | `--height-range <from,to>` | The heights the band covers, e.g. `2010500,tip`; `tip` for a band that follows the tip. It is declared in the band's metadata (subscribers use it to order installs); records are not filtered by it. Required |
-| `--supersedes <ids>` | Comma-separated ids of bands this one replaces. Not checked against what exists: the sidecar stops offering the named bands and deletes them after `INDEX_SWARM_SUPERSEDE_GRACE_SECONDS`, and warns once about an id it doesn't hold (see [band metadata](index-swarm.md#band-metadata)) |
+| `--supersedes <ids>` | Comma-separated ids of bands this one replaces. Not checked against what exists: the sidecar stops offering the named bands and deletes them after `INDEX_SWARM_SUPERSEDE_GRACE_SECONDS`, and warns once about an id it doesn't hold (see [band metadata](index-export.md#band-metadata)) |
 | `--metadata <json>` | A JSON object of extra band metadata |
 | `--publish-dir <path>` | Where the band is published, one directory per band (default `data/indexes/published/root-tx-index`) |
 | `--work-dir <path>` | Scratch space for the build (default `data/indexes/export`) |
@@ -126,10 +125,10 @@ data_item_id,root_tx_id,path,root_data_item_offset,root_data_offset,data_item_si
 | `--dry-run` | Build and check, but publish nothing |
 
 **The header check** samples entries with offsets and range-reads each one's
-root transaction. A band fails if any header is wrong (its signature hash
-isn't the ID, or it doesn't end where the payload starts, or the offsets run
-past the end of the root), if fewer than 80% of the sample could be read and
-passed, or if the band has fewer than 1,000 entries. A failed band is not
+root transaction. A band fails if any header is wrong: its signature hash
+isn't the ID, it doesn't end where the payload starts, or the offsets run
+past the end of the root. It also fails if fewer than 80% of the sample
+could be read and passed, or if the band has fewer than 1,000 entries. A failed band is not
 published, and the command exits 1 with the result on stderr. A band can pass
 with a few entries the gateway couldn't serve: they are listed in `errors`
 and count against the 80%, but aren't evidence the band is wrong.
@@ -206,9 +205,9 @@ What it exports, from either index:
   plus the item's own, when `root_parent_offset` matches the parent's
   payload. A nested item whose `root_parent_offset` is 0 or unknown may hold
   relative offsets (unbundled before #907 was fixed) or absolute ones
-  (resolved on demand), so it is tested against its parent's payload:
-  starting before it and fitting it as relative means relative, and it is
-  repaired (`repaired`); fitting it as absolute but running past it as
+  (resolved on demand). It is tested against its parent's payload. Starting
+  before the payload and fitting it as relative means relative, and the item
+  is repaired (`repaired`). Fitting it as absolute but running past it as
   relative means absolute, and it is kept. Items nested deeper are placed
   only along an unbroken chain of `root_parent_offset`s. Anything unproven
   gives the item's root without offsets, counted in `unrepaired` by reason
@@ -216,10 +215,10 @@ What it exports, from either index:
 - **Left out and counted** in `dropped`: L1 transactions, items without a
   root or whose root is the item itself, and items of size 0.
 
-ClickHouse queries are read-only and bounded (2 threads, 4 GB with a GROUP BY
-spilling to disk past 2 GB, 600 s, low priority, cancelled if the client goes
-away), a thousand blocks at a time; a window that still runs out of memory is
-retried in halves. Each item's parent comes from the same query. SQLite is
+ClickHouse queries are read-only and bounded: 2 threads, 4 GB with a GROUP
+BY spilling to disk past 2 GB, 600 s, low priority, and cancelled if the
+client goes away. They read a thousand blocks at a time, and a window that
+still runs out of memory is retried in halves. Each item's parent comes from the same query. SQLite is
 read along its height index, 5,000 rows per statement, with parents by
 primary key.
 
@@ -252,8 +251,8 @@ records then passed the header check against turbo-gateway.com, 150 of 150):
 
 Fills this gateway's `core.db` from installed `parquet-l1` bands, so it
 starts from a published index instead of walking the chain block by block.
-See "L1 bands" in [index-swarm.md](index-swarm.md) for what a band is and
-how one arrives.
+See [L1 bands](index-publication.md#l1-bands) for what a band is, and
+[subscribing](index-swarm.md#subscribing) for how one arrives.
 
 **The gateway must be stopped.** The command refuses a `core.db` another
 writer holds rather than racing it, and refuses one that still holds
@@ -294,11 +293,11 @@ backfill need not redo the part you already have. The run's own
 contiguity is still enforced: a gap *inside* it is refused.
 
 **Mind the hole.** A backfill done in stages leaves heights uncovered
-between runs, and the block importer rewinds across a gap. The command
-works out what will still be missing — from every run of heights
-`core.db` actually holds, not its lowest and highest, so a gap left
-*between* two earlier backfills is seen — warns, and carries it in the
-result as `holes`. It does not refuse — staged backfill would be impossible if
+between runs, and the block importer rewinds across a gap. The command works
+out what will still be missing, from every run of heights `core.db` actually
+holds rather than its lowest and highest, so a gap left *between* two
+earlier backfills is seen. It warns, and carries the gaps in the result as
+`holes`. It does not refuse — staged backfill would be impossible if
 it did — so **check `holes` is empty before starting the gateway**.
 
 Two things `--from` does not do. It will not redo a band the ledger
@@ -321,7 +320,7 @@ recorded in `parquet_l1_imports` as it lands, and a band already held is
 skipped.
 
 **Interruption is safe.** A band is written to the ledger before its first
-row and completed after its last, and importing it clears its height range
+row and completed after its last. Importing a band clears its height range
 first, so a band a crash left part way is imported again over whatever it
 managed to write. Progress is read from that ledger, not from
 `stable_blocks`: a band writes all of its blocks long before its
@@ -329,9 +328,9 @@ transactions, so how far `stable_blocks` reaches says nothing about how
 much of a band landed. Every write is idempotent, so a band imported twice
 leaves `core.db` exactly as importing it once does.
 
-**Before it starts** the command estimates the space the run needs — about
+**Before it starts** the command estimates the space the run needs: about
 300 bytes per row, plus 4 GiB held back for the write-ahead log and for the
-gateway afterwards — and refuses rather than running out of disk inside a
+gateway afterwards. It refuses rather than running out of disk inside a
 write transaction. If it refuses, free space or import in stages with
 `--max-bands`.
 
@@ -340,38 +339,21 @@ naming the table it is on and the rows it has written of the rows the band
 holds. The largest bands take over half an hour, so this is how you tell a
 slow import from a stuck one.
 
-**Give it a page cache.** `--cache-mib` is the single biggest lever on a
-long import. A bootstrap spends its time maintaining indexes, and SQLite's
-own default cache is 2 MB: once the indexes outgrow it every insert
-becomes random I/O and the rate falls as the database fills. Measured
-full-chain on vilenarios.com with the default, the rate decayed from
-31,730 rows/s at 8 GB to 7,758 at 27 GB; raising the cache to 8 GiB held
-10,739 rows/s at 69 GB, on a database two and a half times larger. Set it
-to whatever the box can spare.
+**Give it a page cache.** `--cache-mib` is the biggest lever on a long
+import. A bootstrap spends its time maintaining indexes, and SQLite's own
+default cache is 2 MB: once the indexes outgrow it, every insert becomes
+random I/O and the rate falls as the database fills. With an 8 GiB cache a
+full bootstrap keeps about four times the rate it falls to with the
+default. Set it to whatever the host can spare.
 
-**What to expect.** Measured on vilenarios.com against real bands. A
-single band into an empty database is fast: the sparse first 100,000
-heights take about 10 seconds, and the busiest 100,000 (46,606,658 rows)
-about half an hour, leaving a 12.1 GB `core.db` — roughly 260 bytes a
-row.
-
-**A full bootstrap is much slower than those numbers suggest**, and the
-difference is not small. The same 42.9M-row band imports at 26,653 rows/s
-into an empty database and 11,238 rows/s when the database has already
-reached 50 GB: index maintenance, not CPU or the band. Budget for the
-whole chain accordingly rather than multiplying the single-band figure.
-Allow about 2 GB of WAL beside the database while a band is landing, and
-the band's own size on disk.
-
-**The whole chain, measured end to end** on 2026-10-06: 23 bands,
-468,563,825 rows to height 2,014,815, leaving a **118.80 GB `core.db`**
-in about **14.6 hours** of wall clock on 12 cores (the first 8 bands ran
-on SQLite's default cache before `--cache-mib` existed; the remaining 15
-took 11.9 hours with 8 GiB). A gateway that indexed the same chain itself
-holds 120.7 GB, so the result is the size it should be. The tip band is
-rebuilt as the chain grows, so expect the row count and the top height to
-have moved. `--max-bands` splits that across several runs; the ledger makes each
-one pick up where the last stopped.
+**What to expect.** A single band into an empty database is fast: the
+sparse first 100,000 heights take about 10 seconds, and the busiest about
+half an hour. A full bootstrap is slower than that suggests, because the
+rate falls as the database grows. The whole chain takes about 15 hours on
+12 cores and leaves a `core.db` of about 120 GB, the same size as a gateway
+that indexed the chain itself. Allow about 2 GB of WAL beside the database
+while a band lands. `--max-bands` splits the import across several runs;
+the ledger makes each one pick up where the last stopped.
 
 No `ANALYZE` or `VACUUM` is wanted afterwards. The rows are written in
 primary-key order into tables the migrations already analysed, and a
@@ -438,14 +420,13 @@ before importing a byte, or without ever importing.
 ./tools/ar-io-node index-l1-verify --bands-dir data/indexes/installed/parquet-l1
 ```
 
-Measured on the published bands (2026-10-06): 500,000 blocks over 24
-bands in 32 seconds, reading the Parquet in height windows so a 12.8 GB
-set never has to fit in memory. A set of bands that overlaps, or leaves a
+It reads the Parquet in height windows, so the whole chain (24 bands)
+never has to fit in memory; 500,000 blocks take about half a minute. A set of bands that overlaps, or leaves a
 hole, is refused rather than partly checked — a consumer holding a broken
 set has a different problem from one holding a faithful one.
 
 With `--bands-dir`, every band of layout `l1-3` also has its
-[lookup files](index-swarm.md#lookup-files-layout-l1-3) checked (the
+[lookup files](index-publication.md#lookup-files) checked (the
 `lookups` check): each must hold exactly the rows its band's tables give,
 and the rows its `band.json` describes. A lookup is derived, so this proves
 it neither points anywhere its tables don't nor answers what they wouldn't.
@@ -464,10 +445,9 @@ drifts.
 **Why this is worth running.** Above the 2.0 fork (height 422,250) a
 block's `tx_root` recomputes from its transactions, so each block's
 transaction set proves itself. Below the fork `tx_root` is empty, and a
-pre-2.0 block's identity hash cannot be recomputed from an index at all:
-it commits to the full wallet list at that height, to the recall block's
-whole binary, and to every transaction's bytes including its data and
-signature. Modern Arweave nodes do not attempt it either — they take
+pre-2.0 block's identity hash cannot be recomputed from an index at all. It
+commits to the full wallet list at that height, to the recall block's whole
+binary, and to every transaction's bytes, data and signature included. Modern Arweave nodes do not attempt it either — they take
 everything below the fork from a hardcoded block index.
 
 What is left is an accounting identity, and it is exact. A pre-2.0 block
@@ -498,12 +478,10 @@ tens of millions of rows for nothing. An index starting above the fork is
 read whole. Measured: 422,251 blocks in **2.7 seconds**.
 
 **`tx_root`.** Above the 2.0 fork the command recomputes each block's
-`tx_root` from its transactions, proving their data roots, sizes and
-positions. It does **not** prove their ids: Arweave drops the id before
-building the tree, so an id reaches `tx_root` only through the sort
-order. A block holding a format-1 transaction with data is counted out,
-because that leaf is the root of data an index does not store — those
-are [`index-l1-audit`](#index-l1-audit)'s job.
+[`tx_root`](glossary.md#tx-root) from its transactions. A block holding a
+format-1 transaction with data is counted out, because that leaf is the
+root of data an index does not store; those are
+[`index-l1-audit`](#index-l1-audit)'s job.
 
 This is the only check that reads every transaction rather than a sum
 over them, and it dominates the cost: on the whole chain it is about 40
@@ -531,9 +509,9 @@ part of this command that asks anyone else:
 Prefer raw Arweave nodes (port 1984) over gateways: they are a different
 implementation from this one, so their agreement is worth more. Any
 gateway's `/peers` lists them. Each anchor height needs `--anchor-min`
-sources to answer (default 2) and every source that answers must agree —
-**one source is a single point of trust, which is what the anchor exists
-to remove**, so a single reachable source fails the check. Sources that
+sources to answer (default 2), and every source that answers must agree.
+**One source is a single point of trust, which is what the anchor exists to
+remove**, so a single reachable source fails the check. Sources that
 cannot be reached are reported but do not count as disagreement, and
 repeats of the same URL — including ones differing only by a trailing
 slash — count once. The command works offline without it, and says so
@@ -559,19 +537,13 @@ Above the weave offset where Arweave began padding each transaction to a
 chunk boundary (`STRICT_DATA_SPLIT_THRESHOLD`, 30,607,159,107,830) the
 identity stops holding. Those blocks are counted as skipped rather than
 reported as wrong, and a range with any skipped block is not reported as
-anchored — so **a whole-chain run shows `anchored: false` by design**,
-and it is the default range that carries the anchored accounting.
+anchored. So **a whole-chain run shows `anchored: false` by design**, and it
+is the default range that carries the anchored accounting.
 
-Measured over the whole chain on 2026-10-06 (2,014,816 blocks, a 118.80 GB
-`core.db`, anchored against a raw Arweave node and two public peers):
-every height present and linked, 2,014,814 `hash_list_merkle` comparisons
-with one skip (the 2.0 seed), the accounting identity holding on 812,969
-blocks with 1,201,846 past the threshold, and **1,383,754 blocks'
-transaction sets reproducing the `tx_root` they carry** with 208,812
-counted out for `index-l1-audit`. 44 minutes, of which 3.5 is everything
-but `tx_root`. The boundary falls at height 812,969,
-which is fork 2.5 — the fork that introduced the strict data split, so
-scoping by weave offset lands exactly where the protocol changed.
+On the whole chain the accounting identity holds up to height 812,969,
+fork 2.5, where the strict data split begins; `tx_root` covers the blocks
+above it, except those left for `index-l1-audit`. A whole-chain run takes
+about 45 minutes, nearly all of it `tx_root`.
 
 ### `index-l1-verify` result
 
@@ -604,8 +576,8 @@ scoping by weave offset lands exactly where the protocol changed.
 ```
 
 With `--bands-dir` the result names the directory (`bandsDir`) and the
-number of `bands` instead of a `core.db`, carries no anchor fields, and adds
-`txRootChecked` and `txRootSkipped`, and `lookupsChecked` and
+number of `bands` instead of a `core.db`, and carries no anchor fields. It
+adds `txRootChecked` and `txRootSkipped`, and `lookupsChecked` and
 `lookupsSkipped` (bands whose lookups were checked, and bands of a layout
 without them). Its `checks` include `lookups`, whose failures name the
 band's first height and, in `found`, the band and the file.
@@ -624,21 +596,14 @@ read a broken index as a good one.
 
 Checks the blocks [`index-l1-verify`](#index-l1-verify) has to skip.
 
-Above the 2.0 fork a block's `tx_root` recomputes from its transactions,
-proving each one's **data root, size and position** in the block. It does
-not prove their **ids**: Arweave drops the id before building the tree, so
-an id reaches `tx_root` only through the sort order. Ids are bound by the
-block's own identity hash, which no index can recompute — so this checks
-each v1 id against the signature it must be the SHA-256 of, which makes it
-a real transaction's id without proving that transaction was in this
-block.
-
-One case escapes `tx_root` entirely: a format-1 transaction's leaf is the
-root of **its data**, and an index does not store that — `data_root` is a
-format-2 field. So any post-fork block holding a v1 transaction with data
-cannot be checked from the index alone.
-On the live chain that is **208,812 blocks of 1,592,566**, 13% of
-everything above the fork.
+[`tx_root`](glossary.md#tx-root) does not prove transaction ids, and a
+format-1 transaction's leaf is the root of **its data**, which an index
+does not store. So a post-fork block holding a v1 transaction with data
+cannot be checked from the index alone: about 13% of the blocks above the
+fork. Ids are bound by the block's own identity hash, which no index can
+recompute, so this command checks each v1 id against the signature it must
+be the SHA-256 of. That makes it a real transaction's id, without proving
+the transaction was in this block.
 
 This closes the gap by fetching that data, deriving each `data_root`, and
 recomputing `tx_root`.
@@ -680,12 +645,9 @@ the `data` field of `/tx/{id}` and not the data route. `/raw/{id}` and
 `data_size` and a disagreement is reported as `unavailable`, so a bad
 source is never recorded as a bad index.
 
-**Measured** on the full chain (2026-10-06, data from turbo-gateway.com):
-**1000 blocks sampled of 208,812, all 1000 matched**, 0 mismatched, 0
-unavailable, 546 MB fetched in 25 minutes. With no mismatch in 1000
-samples the 95% upper bound on the error rate is **0.3%**. An earlier
-150-block pass bounded it at 2.0%, so the cost of a tighter bound is
-roughly linear in the sample.
+A sample of 1,000 blocks fetches about 550 MB and takes about 25 minutes.
+With no mismatch it bounds the error rate at 0.3% (95% upper bound); the
+cost of a tighter bound is roughly linear in the sample.
 
 ### `index-l1-audit` result
 
@@ -823,12 +785,12 @@ fi
 ### Choosing `--gateway-url`
 
 The check range-reads up to 150 root transactions. A gateway that has to
-fetch them from the network itself can time out on many of them, and the
-band is then refused for being under 80% checked, not for being wrong (the
-reason says how many couldn't be read, and why). Use a gateway that already
+fetch them from the network itself can time out on many of them. The band is
+then refused for being under 80% checked, not for being wrong; the reason
+says how many couldn't be read, and why. Use a gateway that already
 holds the roots, typically the one whose index produced the records, or
-`https://turbo-gateway.com`; or raise `--read-timeout`. Measured on
-2026-10-01 with 4,000 recent records on a gateway without those roots cached:
+`https://turbo-gateway.com`; or raise `--read-timeout`. With 4,000 recent
+records on a gateway without those roots cached:
 
 | `--gateway-url` | `--read-timeout` | Result | Time |
 | --- | --- | --- | --- |

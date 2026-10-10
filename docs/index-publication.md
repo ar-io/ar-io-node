@@ -1,10 +1,11 @@
-# Index Publication Protocol
+# Index Sharing: the publication protocol
 
-How to find, verify and use the index artifacts an AR.IO gateway publishes.
-This page is the contract for **consumers**: another gateway, an indexer, a
-wallet or an agent that wants a publisher's indexes without trusting whatever
-server, cache or peer handed them over. Operators running the sidecar that
-publishes and subscribes should read [index-swarm.md](index-swarm.md) instead.
+How to find, verify and use the bands a gateway publishes through Index
+Sharing. This page is the contract for **consumers**: another gateway, an
+indexer, a wallet or an agent that wants a publisher's indexes without
+trusting whatever server, cache or peer handed them over. Operators running
+the `index-swarm` sidecar should read [index-swarm.md](index-swarm.md);
+[index-export.md](index-export.md) covers how bands are built.
 
 Everything here can be done with `curl` and a short script. A complete Python
 client, stdlib plus one Ed25519 library, is at the end of the page.
@@ -18,6 +19,9 @@ client, stdlib plus one Ed25519 library, is at the end of the page.
 - [Fetching band files](#fetching-band-files)
 - [Metering](#metering)
 - [Looking up one ID](#looking-up-one-id)
+- [L1 bands](#l1-bands)
+- [Lookup files](#lookup-files)
+- [Querying a dataset over HTTP](#querying-a-dataset-over-http)
 - [Reference client](#reference-client)
 - [Compatibility rules](#compatibility-rules)
 
@@ -30,9 +34,9 @@ SHA-256. The signature is made with the Ed25519 key registered as the
 gateway's observer address, so the registry, not the server you asked, says
 whose document it is. The digests then make every file checkable on its own,
 so the bytes may come from the publisher, a mirror, a CDN or other gateways
-over BitTorrent without anyone in between being trusted. Nothing in this chain vouches for
-what an index *says*: a root-tx index entry is a claim about where an item
-lives, and a gateway checks that claim when it serves the item.
+over BitTorrent without anyone in between being trusted. Nothing in this
+chain vouches for what an index *says*: a root-TX band entry is a claim about
+where an item lives, and a gateway checks that claim when it serves the item.
 
 ## Discovery
 
@@ -53,8 +57,8 @@ for choosing which publishers to fetch at all; the document itself is the
 authority on what each index contains.
 
 To find publishers, walk the gateway registry, fetch `/ar-io/info` from each
-gateway's registered FQDN, and keep those with an `indexes` block. For the
-root-tx index the canonical publisher is `turbo-gateway.com`.
+gateway's registered FQDN, and keep those with an `indexes` block.
+turbo-gateway.com publishes both root-TX and L1 bands.
 
 ## The publication document
 
@@ -113,7 +117,7 @@ shortened real example, with 254 of the 257 file entries removed:
 | Field | Type | Meaning |
 |---|---|---|
 | `name` | `[a-z0-9-]{1,64}` | Unique within the document. |
-| `kind` | `[a-z0-9-]{1,64}` | What the bands are and how to read them. Version 1 defines `cdb64-root-tx`. |
+| `kind` | `[a-z0-9-]{1,64}` | What the bands are and how to read them. Version 1 defines two kinds: `cdb64-root-tx` (root-TX bands) and `parquet-l1` (L1 bands). |
 | `filter` | any JSON | Optional. For `cdb64-root-tx`, the `ANS104_UNBUNDLE_FILTER` the index was built under, which says which bundles it covers. |
 | `bands` | array | The bands currently offered. |
 
@@ -148,18 +152,19 @@ document that is at least well formed.
 1. **It parses and validates.** `version` is `1` and the fields have the types
    and patterns above.
 2. **The key belongs to the publisher.** Look up the gateway whose wallet is
-   `publisher` in the registry (`getGateway` in the AR.IO SDK, or, if you
+   `publisher` in the registry: `getGateway` in the AR.IO SDK, or, if you
    trust that gateway, the entry for that wallet in a gateway's
-   `/ar-io/peers`, which is what the index-swarm sidecar reads). Its
+   `/ar-io/peers`, which is what the `index-swarm` sidecar reads. Its
    `observerAddress` must equal `signature.keyId` exactly. Both are base58;
    compare the strings. A document naming a gateway that is not registered is
    untrusted.
 3. **The signature is valid.** `alg` is `ed25519`. The public key is the
-   32 bytes `keyId` base58-decodes to. The signed message is the UTF-8 of the
-   fixed prefix `ar-io-index-publication/v1` and a newline (`\n`), followed
-   by the [RFC 8785](https://www.rfc-editor.org/rfc/rfc8785) canonical JSON
-   of the document **with the `signature` member removed**, including every
-   other member, even ones you do not recognise. `sig` is the 64-byte
+   32 bytes `keyId` base58-decodes to. The signed message is the UTF-8 of
+   the fixed prefix `ar-io-index-publication/v1` and a newline (`\n`),
+   followed by the [RFC 8785](https://www.rfc-editor.org/rfc/rfc8785)
+   canonical JSON of the document **with the `signature` member
+   removed**. Every other member is included, even ones you do not
+   recognise. `sig` is the 64-byte
    signature in standard base64. The prefix is domain separation: the
    observer key signs other things too (Solana transactions, HTTPSIG
    responses, and in a wallet, arbitrary messages), so a signature over bare
@@ -180,10 +185,9 @@ by a mirror verifies exactly as well as the original.
 
 **Canonical JSON.** Use a JCS library (`rfc8785` in Python,
 `json-canonicalize` in JavaScript). A key-sorted, whitespace-free
-serialization is not a substitute: it disagrees with RFC 8785 on numbers such
-as `1e-7` and `1.0`, and on the sort order of keys outside the Basic
-Multilingual Plane, and unknown fields a publisher adds later can carry
-either.
+serialization is not a substitute. It disagrees with RFC 8785 on numbers
+such as `1e-7` and `1.0`, and on the sort order of keys outside the Basic
+Multilingual Plane. Unknown fields a publisher adds later can carry either.
 
 **The response signature.** The gateway also signs the HTTP response
 (RFC 9421, configured by the `HTTPSIG_*` settings in
@@ -204,39 +208,37 @@ keeping history can check that each document names the one before it.
 A band's files are addressed two ways. Use whichever is convenient; the
 digest is the same whichever you use, so check it every time.
 
-| Route | Addresses | Cache-Control on success |
-|---|---|---|
-| `GET /ar-io/indexes` | The publication document itself | `public, max-age=60` |
-| `GET /ar-io/indexes/<name>/<band>/<file>` | A file by name, within the current publication | `public, no-cache`, or `private, no-cache` when metered |
-| `GET /ar-io/indexes/blob/<sha256>` | A file by content | `public, max-age=31536000, immutable`, or `private, max-age=31536000, immutable` when metered |
-| `GET /ar-io/indexes/webseed/<torrent name>/<file>` | A file as a BEP 19 WebSeed, for bands offered as torrents | As the blob route |
-| `GET /ar-io/indexes/torrents/<v1 infohash>.torrent` | A band as a torrent, at its `torrentUrl` | `public, max-age=86400` |
+| Route | Addresses |
+|---|---|
+| `GET /ar-io/indexes` | The publication document itself |
+| `GET /ar-io/indexes/<name>/<band>/<file>` | A file by name, within the current publication |
+| `GET /ar-io/indexes/blob/<sha256>` | A file by content |
+| `GET /ar-io/indexes/webseed/<torrent name>/<file>` | A file as a BEP 19 WebSeed, for bands offered as torrents |
+| `GET /ar-io/indexes/torrents/<v1 infohash>.torrent` | A band as a torrent, at its `torrentUrl` |
 
-A publisher that meters the byte routes (see [Metering](#metering)) marks
-their successes `private`: a shared cache replays what it stores without
-asking the publisher, so a `public` paid file would be free to anyone behind
-that cache. Your own client may still keep what it paid for. The document is
-never metered and is `public` either way.
+The three routes that serve file bytes (by name, blob and WebSeed) are the
+**byte routes**. Only a publisher serves them: they resolve against the
+gateway's own publication, so a subscriber that has installed the same bands
+answers `404`. A subscriber shares its bands over BitTorrent, not HTTP.
 
-Every error response from these routes (400, 402, 404, 416, 429, 503) carries
-`Cache-Control: no-store`, so a cache in front of the publisher never keeps a
-refusal or a gap and replays it. Only `200`, `206` and `304` carry the values
-above.
+When a publisher meters the byte routes (see [Metering](#metering)), their
+successful responses are `private`, and every error is `no-store`. The
+`Cache-Control` of each route is listed in
+[running behind nginx](index-swarm.md#running-behind-nginx).
 
 Prefer the blob route. A name is reused whenever a band is rebuilt, which the
 rolling tip band is on every cadence, so named files must be revalidated and
-a cache in front of the publisher cannot keep them; a digest can never change
+a cache in front of the publisher cannot keep them. A digest can never change
 meaning, so a cache may hold a blob indefinitely (a shared one, such as a
-CDN, only when the publisher does not meter). The sidecar fetches by digest
-for exactly this reason.
+CDN, only when the publisher does not meter). The sidecar fetches by digest.
 
 Only files the current publication lists are served. A name the document does
 not list is a 404 even if a file of that name exists on the server, and a
 blob is served only while some listed file has that digest.
 
-Both byte routes support single `Range` requests (`206` with
-`Content-Range`), which is how a download resumes and how a WebSeed client
-reads pieces; the WebSeed route behaves the same. Responses carry
+The byte routes support a single `Range` (`206` with `Content-Range`), which
+is how a download resumes and how a WebSeed client reads pieces. A request
+for several ranges gets the whole file. Responses carry
 `ETag: "<sha256>"` and `Repr-Digest: sha-256=:<base64>:`, the digest of the
 whole file, even on a partial response; full responses also carry
 `Content-Digest`. A response that serves a file also carries
@@ -269,8 +271,8 @@ $ sha256sum 00.cdb
 
 The byte routes are metered like data egress. When the gateway enables its
 rate limiter, each response spends tokens in proportion to the size of its
-body (the range, for a `Range` request; a `HEAD` costs only the minimum, and
-a `304` nothing), and a client that runs out gets `429 Too Many Requests`.
+body: the range, for a `Range` request; the minimum, for a `HEAD`; nothing,
+for a `304`. A client that runs out gets `429 Too Many Requests`.
 When x402 is enabled as well, it gets `402 Payment Required` with payment
 requirements instead, and can pay to continue. The publication document
 itself is never metered, so a client that has run out of tokens can still see
@@ -315,10 +317,10 @@ client requests.
 5. Decode the value as MessagePack. It is a map with short keys; see
    [the value format](cdb64-format.md#root-tx-index-value-format).
 
-The value is one of four shapes. `r` is the root transaction ID; `p` is the
+The value is one of four shapes. `r` is the root transaction ID. `p` is the
 bundle path from the root to the item's parent, whose first element is the
-root; `i` and `d` are the byte offsets of the item's header and payload
-within the root transaction's data; `s` is the item's total size.
+root. `i` and `d` are the byte offsets of the item's header and payload
+within the root transaction's data, and `s` is the item's total size.
 
 | Shape | Keys |
 |---|---|
@@ -340,6 +342,173 @@ so any band that holds its key gives the same answer. The gateway itself
 searches bands newest first, by the end of each band's `heightRange` (an
 open-ended tip band first, then the start as a tie-break), and takes the
 first match.
+
+## L1 bands
+
+A `parquet-l1` band carries the Arweave base layer (L1: blocks,
+transactions, tags, owners) for one height range, in Parquet. A new gateway
+can import it instead of indexing the chain block by block, and a client can
+query it where it sits. The whole chain is 24 bands, about 15 GB.
+
+A band is a directory of `band.json` and these files:
+
+| File | Holds |
+|---|---|
+| `blocks.parquet` | One row per block |
+| `block_transactions.parquet` | Each block's transactions, in the block's order |
+| `transactions.parquet` | One row per transaction. `signature` is null unless the publisher keeps signatures |
+| `tags.parquet` | Transaction tags, names and values in plaintext |
+| `wallets.parquet` | Owners' addresses and keys |
+| `lookup_tx_id.parquet`, `lookup_wallet.parquet`, `lookup_tag.parquet` | From layout `l1-3`: the [lookup files](#lookup-files) |
+
+`band.json` names the band's layout (`schema`: `l1-1`, `l1-2` or `l1-3`), its
+heights, and for each table and lookup file its row count and a digest of its
+rows, independent of the Parquet bytes. A band's id is a digest of its
+tables' rows; the lookup files are not part of it. Two publishers of the
+same chain therefore write bands with the same ids, and can compare them
+without exchanging files.
+
+A reader checks each file against the signed digests, then its footer and
+schema against the layout and the row counts in `band.json`. The file set it
+expects is the one the layout declares. A reader that does not know a layout
+refuses the band and names the layout.
+
+## Lookup files
+
+Parquet has no index, so finding one transaction by id means scanning every
+band's `id` column. A lookup file is a small Parquet file sorted by a key, in
+row groups of 16,384 rows. Parquet keeps each row group's minimum and
+maximum, and in a sorted file those ranges do not overlap. A reader holding
+a key reads the footer and then the one or two row groups that can hold it.
+
+| File | One row per | Columns | Sorted by |
+|---|---|---|---|
+| `lookup_tx_id.parquet` | Transaction | `id8`, `height` | `id8, height` |
+| `lookup_wallet.parquet` | Transaction an address signed (`role` 0), and one it received (`role` 1, non-empty `target`) | `addr8`, `role`, `height`, `data_size` | `addr8, height, role, data_size` |
+| `lookup_tag.parquet` | Distinct (name, value) tag pair | `name8`, `val8`, `name`, `value`, `txs` (distinct transactions), `first_height`, `last_height` | `name8, val8, name, value` |
+
+### Keys
+
+The keys are unsigned 64-bit integers, because readers prune on integer
+statistics and not on binary ones. Two encodings, which any client
+reproduces:
+
+- `prefix64(bytes)`: the first 8 bytes, big-endian, zero-padded on the right
+  when shorter. Used for ids and addresses, which are already uniform
+  hashes. In DuckDB: `('0x' || rpad(left(hex(x), 16), 16, '0'))::UBIGINT`.
+- `sha256_64(bytes)`: `prefix64` of the SHA-256. Used for tag names and
+  values. In DuckDB: `('0x' || left(sha256(x), 16))::UBIGINT`.
+
+| Encoding | Input | Output |
+|---|---|---|
+| `prefix64` | id `O048e9pT5nX1CPrMjGC1y1dWdtd3AChFX27hoRsVIdA` (its 32 bytes) | `0x3b4e3c7bda53e675` = 4273419599062754933 |
+| `prefix64` | the single byte `0xab` | `0xab00000000000000` |
+| `sha256_64` | `App-Name` (UTF-8) | `0xbf6cc2a967f23a82` = 13793613791578176130 |
+| `sha256_64` | `ArDrive-App` | `0xa2c30101e8045f65` = 11728218962302099301 |
+
+### Reading through a lookup file
+
+A key is a pointer, not an answer: two values may share one. So a read takes
+two steps: the lookup file for the heights, then the table at those heights
+for the row. The height filter confines the second read to the row groups
+that hold them.
+
+```sql
+-- a transaction by id (:id is its 32 bytes)
+SELECT t.* FROM read_parquet('…/*/transactions.parquet') t
+WHERE t.height IN (
+    SELECT height FROM read_parquet('…/*/lookup_tx_id.parquet')
+    WHERE id8 = ('0x' || rpad(left(hex(:id), 16), 16, '0'))::UBIGINT)
+  AND t.id = :id;
+
+-- a wallet's transactions sent, bytes stored, first and last block: no table read
+SELECT count(*) AS sent, sum(data_size) AS bytes_stored,
+       min(height) AS first_height, max(height) AS last_height
+FROM read_parquet('…/*/lookup_wallet.parquet')
+WHERE addr8 = ('0x' || rpad(left(hex(:address), 16), 16, '0'))::UBIGINT AND role = 0;
+
+-- the most used App-Name values, exact
+SELECT CAST(value AS VARCHAR) AS app, sum(txs) AS txs
+FROM read_parquet('…/*/lookup_tag.parquet')
+WHERE name8 = ('0x' || left(sha256('App-Name'::BLOB), 16))::UBIGINT
+  AND name = 'App-Name'::BLOB
+GROUP BY app ORDER BY txs DESC LIMIT 15;
+```
+
+Finding one transaction across the whole chain over HTTP fetches about
+12.9 MB in 0.7 s through the lookup files, against 2.6 GB in 26 s scanning
+every band's `id` column. A band of a layout before `l1-3` has no lookup
+files, so a transaction in it is found only by a scan.
+
+`lookup_wallet.data_size` and `lookup_tag.txs` are answers rather than
+pointers, so a wallet's bytes stored and a tag's count need no table read.
+They carry the same trust as the tables: each file's digest is signed in
+the publication, and anyone can recompute them from the tables
+(`ar-io-node index-l1-verify --bands-dir` does).
+
+## Querying a dataset over HTTP
+
+An L1 band is Parquet, and the byte routes serve ranges, so a client can
+query a published dataset where it sits: no download, no import, and no
+gateway of its own. Any engine that reads Parquet over HTTP range requests
+works. The examples use DuckDB, which installs its `httpfs` and `json`
+extensions on first use.
+
+Query a publisher: a subscriber answers `404` on the byte routes (see
+[fetching band files](#fetching-band-files)). The byte routes are metered, so
+an analytical client is a paying or allowlisted client.
+
+**The signed document is the catalog.** There is no directory listing, so a
+client cannot glob over HTTP. It reads `/ar-io/indexes`, picks the dataset by
+`name`, and builds the file URLs from the band ids:
+
+```bash
+# the band file URLs for a dataset, from the signed document
+curl -s https://<gateway>/ar-io/indexes \
+  | jq -r '.indexes[] | select(.name=="parquet-l1") | .bands[].id' \
+  | sed 's|^|https://<gateway>/ar-io/indexes/parquet-l1/|; s|$|/transactions.parquet|'
+```
+
+```sql
+INSTALL httpfs; LOAD httpfs;
+SELECT count(*)
+FROM read_parquet([
+  'https://<gateway>/ar-io/indexes/parquet-l1/<band-id>/transactions.parquet',
+  ...
+])
+WHERE height BETWEEN 1500000 AND 1500099;
+```
+
+Only the Parquet footer and the row groups a predicate selects cross the
+network.
+
+**A range read is still signed.** `Repr-Digest` is co-signable, and it
+commits to the whole file rather than the returned range. A client doing
+predicate pushdown therefore holds a signature over the digest of the file
+it reads bytes from. To check it, read `signature-input`, `signature` and
+`repr-digest` from any `206`.
+
+**A cache in front breaks it.** Range reads must work end to end, and a
+proxy cache zone takes them away; see
+[running behind nginx](index-swarm.md#running-behind-nginx).
+
+### Reading installed bands
+
+A subscriber that installed the bands reads them from disk with no HTTP at
+all. That is the better choice for repeated heavy queries:
+
+```sql
+SELECT * FROM read_parquet('data/indexes/installed/parquet-l1/*/transactions.parquet')
+WHERE height BETWEEN 1000000 AND 1000100;
+```
+
+Tags are plaintext in a band, so `tag_name = 'App-Name'` is a string
+comparison, where `core.db` needs two joins through its hash dictionaries.
+Querying in place suits scans, aggregates over a height range, and point
+lookups through the lookup files. It serves no gateway route, no GraphQL
+and no trust headers. To load the dataset into a gateway's own SQLite
+instead, use [`index-l1-import`](cli.md#index-l1-import), which needs the
+gateway stopped and leaves a `core.db` of about 120 GB.
 
 ## Reference client
 
