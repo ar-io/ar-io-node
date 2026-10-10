@@ -2306,16 +2306,12 @@ export const CLICKHOUSE_GQL_MAX_ROWS_TO_READ = env.positiveIntOrDefault(
 // it). The outer `LIMIT 1 BY` then dedupes unmerged
 // ReplacingMergeTree versions.
 //
-// Pagination correctness caveat: this multiplier must be at least as
-// large as the table's effective duplicate factor. If a region of the
-// table has more unmerged versions per PK than this headroom covers,
-// the deduped inner window can yield fewer than `pageSize + 1` unique
-// rows even when more unique matches exist further on — the result
-// will be a short page with `hasNextPage: false` and rows past the
-// window will be silently skipped. Regular background merges keep
-// the duplicate factor at 1-2 in practice, so 4 leaves comfortable
-// headroom; raise this if operators observe short pages (e.g. during
-// a heavy ingest that produces many unmerged parts).
+// When a region of the table has more unmerged versions per PK than this
+// covers, the deduped inner window yields fewer than `pageSize + 1` unique
+// rows even though more matches exist. The query detects that (the inner
+// window came back full) and continues from the last unique row's cursor;
+// id lookups, which have no order to continue from, retry with 4x the
+// headroom instead (see queryChTransactionRows).
 export const CLICKHOUSE_GQL_DEDUPE_HEADROOM = env.positiveIntOrDefault(
   'CLICKHOUSE_GQL_DEDUPE_HEADROOM',
   4,

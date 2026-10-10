@@ -480,6 +480,212 @@ describe('CompositeClickHouseDatabase', () => {
     });
   });
 
+  describe('dedupe headroom', () => {
+    // Emulates the ClickHouse envelope over a table holding `copies` unmerged
+    // versions of each row: the cursor predicate (HEIGHT_ASC, rows keyed by
+    // height here), then the inner LIMIT over raw rows (duplicates adjacent,
+    // as they sort by the full PK), then `LIMIT 1 BY` folds them and the
+    // outer LIMIT trims to `pageSize + 1`. Every row carries
+    // `gql_inner_rows`, the raw inner count.
+    function duplicatedTableComposite({
+      uniqueRows,
+      copies,
+      sqlite: sqliteStub = makeSqliteStub({}),
+    }: {
+      uniqueRows: Record<string, unknown>[];
+      copies: number;
+      sqlite?: GqlQueryable;
+    }): { composite: CompositeClickHouseDatabase; queries: string[] } {
+      const composite = buildComposite({ sqlite: sqliteStub, chRowsByLeg: {} });
+      const queries: string[] = [];
+      const raw = uniqueRows.flatMap((row) =>
+        Array.from({ length: copies }, () => row),
+      );
+      (composite as any).clickhouseClient = {
+        async query({ query: sql }: { query: string }) {
+          queries.push(sql);
+          const innerLimit = Number(/ LIMIT (\d+)\)/.exec(sql)![1]);
+          const outerLimit = Number(/ LIMIT (\d+) SETTINGS/.exec(sql)![1]);
+          const after = /\) > \((\d+),/.exec(sql);
+          const window = raw
+            .filter(
+              (row) =>
+                after === null || (row.height as number) > Number(after[1]),
+            )
+            .slice(0, innerLimit);
+          const folded = [...new Set(window)].slice(0, outerLimit);
+          return {
+            json: async () => ({
+              data: folded.map((row) => ({
+                ...row,
+                gql_inner_rows: String(window.length),
+              })),
+            }),
+          };
+        },
+      };
+      return { composite, queries };
+    }
+
+    const rows = (n: number, firstHeight = 1) =>
+      Array.from({ length: n }, (_, i) =>
+        chRow({ id: id(`dup${i}`), height: firstHeight + i }),
+      );
+    const innerLimits = (queries: string[]) =>
+      queries.map((sql) => Number(/ LIMIT (\d+)\)/.exec(sql)![1]));
+
+    it('continues from the cursor when duplicates leave the page short', async () => {
+      // 6 versions per PK against the default headroom of 4: each 12-row
+      // inner window folds to 2 unique rows for a pageSize of 2, so the
+      // second query picks up after the first one's last row.
+      const { composite, queries } = duplicatedTableComposite({
+        uniqueRows: rows(10),
+        copies: 6,
+      });
+
+      const result = await composite.getGqlTransactions({
+        pageSize: 2,
+        sortOrder: 'HEIGHT_ASC',
+      });
+
+      assert.deepEqual(innerLimits(queries), [12, 12]);
+      assert.match(queries[1], /\) > \(2,/);
+      assert.deepEqual(
+        result.edges.map((e) => e.node.height),
+        [1, 2],
+      );
+      assert.equal(result.pageInfo.hasNextPage, true);
+    });
+
+    it('returns a prefix with hasNextPage true when rounds run out', async () => {
+      // Far more versions than a window can see past: each round yields one
+      // unique row, and 4 rounds cannot fill a page of 10.
+      const { composite, queries } = duplicatedTableComposite({
+        uniqueRows: rows(20),
+        copies: 1000,
+      });
+
+      const result = await composite.getGqlTransactions({
+        pageSize: 10,
+        sortOrder: 'HEIGHT_ASC',
+      });
+
+      assert.deepEqual(innerLimits(queries), [44, 44, 44, 44]);
+      assert.deepEqual(
+        result.edges.map((e) => e.node.height),
+        [1, 2, 3, 4],
+      );
+      assert.equal(result.pageInfo.hasNextPage, true);
+    });
+
+    it("cuts the merged page at a saturated leg's last row", async () => {
+      // The stable leg is still short after its last round (heights 1-4 of
+      // 20), and SQLite holds rows at the tip. Filling the page with the tip
+      // rows would put the next cursor past stable heights 5-20 for good.
+      const tip = [100, 101, 102, 103, 104, 105].map((height) =>
+        sqliteEdge(sqliteTx({ id: id(`tip${height}`), height })),
+      );
+      const { composite } = duplicatedTableComposite({
+        uniqueRows: rows(20),
+        copies: 1000,
+        sqlite: makeSqliteStub({
+          transactions: { pageInfo: { hasNextPage: false }, edges: tip },
+        }),
+      });
+
+      const result = await composite.getGqlTransactions({
+        pageSize: 10,
+        sortOrder: 'HEIGHT_ASC',
+      });
+
+      assert.deepEqual(
+        result.edges.map((e) => e.node.height),
+        [1, 2, 3, 4],
+      );
+      assert.equal(result.pageInfo.hasNextPage, true);
+    });
+
+    it('returns a prefix when a follow-up query trips max_rows_to_read', async () => {
+      // The first 44-row window folds to 8 of the 11 rows needed; the
+      // continuation trips the row cap. The page keeps what it has rather
+      // than failing.
+      const { composite, queries } = duplicatedTableComposite({
+        uniqueRows: rows(20),
+        copies: 6,
+      });
+      const stub = (composite as any).clickhouseClient;
+      const first = stub.query.bind(stub);
+      stub.query = async (args: { query: string }) => {
+        if (queries.length >= 1) {
+          queries.push(args.query);
+          throw new Error('Code: 158. DB::Exception: TOO_MANY_ROWS');
+        }
+        return first(args);
+      };
+
+      const result = await composite.getGqlTransactions({
+        pageSize: 10,
+        sortOrder: 'HEIGHT_ASC',
+      });
+
+      assert.equal(queries.length, 2);
+      assert.deepEqual(
+        result.edges.map((e) => e.node.height),
+        [1, 2, 3, 4, 5, 6, 7, 8],
+      );
+      assert.equal(result.pageInfo.hasNextPage, true);
+    });
+
+    it('surfaces a first-query max_rows_to_read error as before', async () => {
+      const { composite } = duplicatedTableComposite({
+        uniqueRows: rows(20),
+        copies: 6,
+      });
+      (composite as any).clickhouseClient.query = async () => {
+        throw new Error('Code: 158. DB::Exception: TOO_MANY_ROWS');
+      };
+
+      await assert.rejects(
+        composite.getGqlTransactions({ pageSize: 10, sortOrder: 'HEIGHT_ASC' }),
+        /TOO_MANY_ROWS/,
+      );
+    });
+
+    it('grows the headroom for id lookups, which have no cursor order', async () => {
+      const { composite, queries } = duplicatedTableComposite({
+        uniqueRows: rows(3),
+        copies: 6,
+      });
+
+      const result = await composite.getGqlTransactions({
+        pageSize: 3,
+        ids: [id('dup0'), id('dup1'), id('dup2')],
+      });
+
+      assert.deepEqual(innerLimits(queries), [16, 64]);
+      assert.equal(result.edges.length, 3);
+      assert.equal(result.pageInfo.hasNextPage, false);
+    });
+
+    it('does not retry a genuinely short last page', async () => {
+      // 2 unique rows with 6 versions each: the 24-row window holds all of
+      // them, so the short page is real and hasNextPage stays false.
+      const { composite, queries } = duplicatedTableComposite({
+        uniqueRows: rows(2),
+        copies: 6,
+      });
+
+      const result = await composite.getGqlTransactions({
+        pageSize: 5,
+        sortOrder: 'HEIGHT_ASC',
+      });
+
+      assert.deepEqual(innerLimits(queries), [24]);
+      assert.equal(result.edges.length, 2);
+      assert.equal(result.pageInfo.hasNextPage, false);
+    });
+  });
+
   describe('SQLite fallback behavior', () => {
     it('returns CH-only with PARTIAL_RESULT warning when SQLite breaker rejects', async () => {
       sqlite = makeSqliteStub({ reject: new Error('sqlite down') });

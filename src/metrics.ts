@@ -843,6 +843,30 @@ export const clickhouseMaxImportedHeight = new promClient.Gauge({
 });
 
 /**
+ * Pages whose ClickHouse inner window filled with duplicate
+ * ReplacingMergeTree versions, leaving fewer unique rows than the page needs.
+ *
+ * Labels:
+ * - `leg`: `stable`, `unstable` or `window` (owner-window fallback)
+ * - `outcome`:
+ *   - `continued`: ran a follow-up query from the last unique row's cursor
+ *   - `grown`: re-ran an id lookup (no order to continue from) with 4x the
+ *     dedupe headroom
+ *   - `exhausted`: still short after the last round; the page was returned
+ *     as a prefix with `hasNextPage: true`
+ *   - `too_many_rows`: a follow-up query tripped `max_rows_to_read`; the
+ *     page was returned as a prefix with `hasNextPage: true`
+ *
+ * A steady non-zero rate means the table carries many unmerged versions
+ * per PK (check `count()` against `uniqExact(id)` per partition).
+ */
+export const clickhouseGqlDedupeHeadroomTotal = new promClient.Counter({
+  name: 'clickhouse_gql_dedupe_headroom_total',
+  help: 'Count of GQL ClickHouse pages left short by duplicate versions, by leg and outcome.',
+  labelNames: ['leg', 'outcome'] as const,
+});
+
+/**
  * Count of GQL stable-leg queries that tripped ClickHouse `max_rows_to_read`
  * (Code 158 TOO_MANY_ROWS). `filter` is a low-cardinality descriptor of which
  * filter families the query used (e.g. `owners+tags`, `ids`, `none`),
