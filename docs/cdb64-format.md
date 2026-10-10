@@ -534,4 +534,4 @@ The partitioned writer (`PartitionedCdb64Writer`) features:
 ## Related Documentation
 
 - **[CDB64 Tools Reference](cdb64-tools.md)** - CLI tools for creating, verifying, and uploading CDB64 indexes
-- **[CDB64 Operator Guide](cdb64-guide.md)** - Configuration, usage, and troubleshooting for gateway operators
+- **[CDB64 root-TX index](cdb64.md)** - Configuration, usage, and troubleshooting for gateway operators
