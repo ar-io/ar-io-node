@@ -1191,8 +1191,8 @@ paths:
         that has run out of tokens can still learn what it could fetch. HEAD
         is supported.
 
-        Every error response on the five /ar-io/indexes routes (document,
-        file by name, blob, torrent and WebSeed) carries
+        Every error response on the six /ar-io/indexes routes (document,
+        file by name, blob, torrent, WebSeed and feed) carries
         `Cache-Control: no-store`. Only 200, 206 and 304 carry a cacheable
         value. See docs/index-swarm.md, "Running behind nginx".
       responses:
@@ -1385,6 +1385,85 @@ paths:
           description: Not a 40-character lowercase hex infohash.
         '404':
           description: No band the publication offers has this infohash, or its torrent is not built yet.
+  '/ar-io/indexes/feed/{index}.xml':
+    get:
+      tags: [Indexes]
+      summary: Get an RSS feed of an index's torrents
+      description: |
+        RSS 2.0, one item per band of the index that the publication offers
+        as a torrent, newest heights first. Each item's `enclosure` is the
+        band's `.torrent` and its `link` the magnet, so a BitTorrent client
+        subscribed with an auto-download rule takes every band, and each new
+        one as it is published. `guid` is `urn:btih:<v1 infohash>`.
+        Elements in the `urn:ar-io:index-feed:1` namespace carry the
+        publisher, sequence, the publication's SHA-256, and each band's id,
+        v2 infohash and heights.
+
+        A view of the signed publication and nothing else. Absolute URLs
+        start with INDEXES_PUBLIC_URL (default `https://<ARNS_ROOT_HOST>`),
+        never with the request's Host header. Not metered. When
+        HTTPSIG_ENABLED is set, the response is signed, covering
+        `x-ar-io-index-feed` and Content-Digest. HEAD is supported. See
+        docs/index-publication.md, "Following an index in a BitTorrent
+        client".
+      parameters:
+        - name: index
+          in: path
+          required: true
+          schema: { type: string, pattern: '^[a-z0-9-]{1,64}$' }
+      responses:
+        '200':
+          description: The feed.
+          headers:
+            Cache-Control:
+              schema: { type: string, example: 'public, max-age=60' }
+            ETag:
+              schema: { type: string }
+            Content-Digest:
+              schema: { type: string }
+              description: RFC 9530 SHA-256 of the body.
+            x-ar-io-index-feed:
+              schema: { type: string }
+              description: SHA-256 (hex) of the publication document the feed was built from.
+          content:
+            application/rss+xml:
+              schema: { type: string }
+        '304':
+          description: Not modified.
+        '400':
+          description: Not `<index name>.xml`.
+        '404':
+          description: No such index is published, or the gateway has no public URL configured.
+        '500':
+          description: 'The feed could not be built. `Cache-Control: no-store`.'
+  '/ar-io/indexes/announce':
+    get:
+      tags: [Indexes]
+      summary: Announce to the publisher's closed BitTorrent tracker
+      description: |
+        A BitTorrent tracker announce (BEP 3, compact BEP 23), forwarded by
+        the gateway's Envoy to the index-swarm sidecar's tracker; core never
+        sees it. Answers only for the bands the publication offers as
+        torrents, under either infohash, and fails any other with
+        `unregistered torrent`. The peer's address is read from
+        X-Forwarded-For, so proxies in front of the gateway must append it.
+        Bodies are bencoded; every response is `Cache-Control: no-store`.
+        Routed only on the gateway's own host, not on ArNS subdomains. See
+        docs/index-swarm.md, "The tracker".
+      parameters:
+        - { name: info_hash, in: query, required: true, schema: { type: string } }
+        - { name: peer_id, in: query, required: true, schema: { type: string } }
+        - { name: port, in: query, required: true, schema: { type: integer } }
+        - { name: event, in: query, required: false, schema: { type: string, enum: [started, stopped, completed] } }
+        - { name: compact, in: query, required: false, schema: { type: integer } }
+      responses:
+        '200':
+          description: 'A bencoded tracker response: peers, or `failure reason`.'
+          content:
+            text/plain:
+              schema: { type: string, format: binary }
+        '503':
+          description: The gateway runs no tracker (no index-swarm sidecar publishing torrents).
   '/ar-io/peers':
     get:
       tags: [Gateway]

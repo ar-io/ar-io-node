@@ -480,13 +480,10 @@ export const ENGINE_GID = env.positiveIntOrDefault(
 );
 
 /**
- * Port the closed tracker listens on, when this node publishes torrents.
- * Point INDEX_SWARM_TRACKERS at it by the address peers reach it on, e.g.
- * `http://gateway.example:6969/announce`.
- */
-/**
  * Proxies (IPs or CIDRs, comma separated) whose `X-Forwarded-For` the
- * closed tracker believes, when it is served behind a load balancer.
+ * closed tracker believes on its published port, when that port is served
+ * behind a load balancer. The listener behind the gateway's Envoy
+ * (INDEX_SWARM_TRACKER_PROXY_PORT) believes these and private addresses.
  */
 export const TRACKER_TRUSTED_PROXIES = env
   .varOrDefault('INDEX_SWARM_TRACKER_TRUSTED_PROXIES', '')
@@ -517,9 +514,29 @@ export const ENGINE_PORT = env.positiveIntOrDefault(
   6881,
 );
 
+/**
+ * Port the closed tracker listens on, when this node publishes torrents,
+ * for peers that reach it directly (published to the host). Point
+ * INDEX_SWARM_TRACKERS at it by the address peers reach it on, e.g.
+ * `http://gateway.example:6969/announce`, or use the gateway's HTTPS route
+ * instead (see INDEX_SWARM_TRACKER_PROXY_PORT).
+ */
 export const TRACKER_PORT = env.positiveIntOrDefault(
   'INDEX_SWARM_TRACKER_PORT',
   6969,
+);
+
+/**
+ * Port of the tracker's second listener, the one the gateway's Envoy
+ * forwards `https://<gateway>/ar-io/indexes/announce` to. Never published:
+ * only containers on the gateway's network reach it, which is what makes it
+ * safe for it to believe `X-Forwarded-For` from private addresses. Point
+ * INDEX_SWARM_TRACKERS at the gateway's HTTPS URL to use it, and no tracker
+ * port needs opening.
+ */
+export const TRACKER_PROXY_PORT = env.positiveIntOrDefault(
+  'INDEX_SWARM_TRACKER_PROXY_PORT',
+  6970,
 );
 
 /** True when this process has nothing configured to do. */

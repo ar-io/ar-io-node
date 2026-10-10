@@ -9,6 +9,7 @@ import { describe, it } from 'node:test';
 import { AddressInfo } from 'node:net';
 
 import { bdecode } from '../lib/bencode.js';
+import { PRIVATE_NETWORK_RANGES } from '../lib/trusted-proxies.js';
 import { createTestLogger } from '../../test/test-logger.js';
 import {
   ClosedTracker,
@@ -508,6 +509,109 @@ describe('ClosedTracker', () => {
     } finally {
       server.closeAllConnections();
       await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+});
+
+describe('ClosedTracker behind the gateway', () => {
+  const listening = async (
+    t: ClosedTracker,
+    options?: { trustedProxies?: readonly string[] },
+  ) => {
+    const server = await t.listen('127.0.0.1', 0, options);
+    return {
+      base: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+      close: async () => {
+        server.closeAllConnections();
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+      },
+    };
+  };
+  const announce = async (
+    base: string,
+    port: number,
+    forwardedFor?: string,
+  ) => {
+    const res = await fetch(`${base}/announce?${query(OURS, port)}`, {
+      headers:
+        forwardedFor !== undefined ? { 'X-Forwarded-For': forwardedFor } : {},
+    });
+    return { res, body: decode(Buffer.from(await res.arrayBuffer())) };
+  };
+
+  it('marks every response no-store, so no cache on the path keeps one', async () => {
+    const { base, close } = await listening(tracker());
+    try {
+      const ok = await fetch(`${base}/announce?${query(OURS, 1111)}`);
+      assert.equal(ok.status, 200);
+      assert.equal(ok.headers.get('cache-control'), 'no-store');
+      const missing = await fetch(`${base}/scrape`);
+      assert.equal(missing.status, 404);
+      assert.equal(missing.headers.get('cache-control'), 'no-store');
+    } finally {
+      await close();
+    }
+  });
+
+  it('records a peer behind private proxies at its own address, on the listener that believes them', async () => {
+    const t = tracker();
+    const proxied = await listening(t, {
+      trustedProxies: PRIVATE_NETWORK_RANGES,
+    });
+    try {
+      // As Envoy forwards it: the client, then the front proxy, then the
+      // edge, all appended to the right.
+      await announce(
+        proxied.base,
+        1111,
+        '93.184.216.34, 192.168.2.195, 172.18.0.1',
+      );
+      const { body } = await announce(
+        proxied.base,
+        2222,
+        '93.184.216.35, 192.168.2.195',
+      );
+      assert.deepEqual(peersOf(body), ['93.184.216.34:1111']);
+    } finally {
+      await proxied.close();
+    }
+  });
+
+  it('takes the nearest untrusted hop, so a client cannot forge its address', async () => {
+    const t = tracker();
+    const proxied = await listening(t, {
+      trustedProxies: PRIVATE_NETWORK_RANGES,
+    });
+    try {
+      // The client claims 6.6.6.6; the front proxy appends what it saw.
+      await announce(
+        proxied.base,
+        1111,
+        '6.6.6.6, 93.184.216.36, 192.168.2.195',
+      );
+      const { body } = await announce(proxied.base, 2222, '93.184.216.37');
+      assert.deepEqual(peersOf(body), ['93.184.216.36:1111']);
+    } finally {
+      await proxied.close();
+    }
+  });
+
+  it('keeps ignoring X-Forwarded-For on the published listener', async () => {
+    const t = tracker();
+    const published = await listening(t);
+    const proxied = await listening(t, {
+      trustedProxies: PRIVATE_NETWORK_RANGES,
+    });
+    try {
+      // Straight in from loopback with a header naming a public address:
+      // recorded at the private socket address, which no peer on the
+      // internet is handed.
+      await announce(published.base, 1111, '93.184.216.38');
+      const { body } = await announce(proxied.base, 2222, '93.184.216.39');
+      assert.deepEqual(peersOf(body), []);
+    } finally {
+      await published.close();
+      await proxied.close();
     }
   });
 });

@@ -43,6 +43,10 @@ import { getRequestAttributes } from './data/handlers.js';
 import { RateLimiter } from '../limiter/types.js';
 import { PaymentProcessor } from '../payments/types.js';
 import * as metrics from '../metrics.js';
+import { FeedFormat, FeedSource } from '../feeds/types.js';
+import { IndexFeedParams } from '../feeds/index-bands.js';
+import { RenderingCache, serveFeed } from '../feeds/http.js';
+import { rss2 } from '../feeds/rss.js';
 
 const SHA256_HEX = /^[0-9a-f]{64}$/;
 /** What `torrentNameForFiles` produces. */
@@ -79,6 +83,13 @@ export interface IndexesRouterOptions {
    */
   rateLimitsEnabled?: boolean;
   paymentProcessor?: PaymentProcessor;
+  /**
+   * The feeds of what this gateway publishes, one per index, at
+   * `/ar-io/indexes/feed/<index>.xml`. Without it that route answers 404.
+   */
+  indexFeed?: FeedSource<IndexFeedParams>;
+  /** The feeds' wire format. RSS 2.0 unless a test says otherwise. */
+  feedFormat?: FeedFormat;
 }
 
 export function createIndexesRouter({
@@ -88,6 +99,8 @@ export function createIndexesRouter({
   rateLimiter,
   rateLimitsEnabled = rateLimiter !== undefined,
   paymentProcessor,
+  indexFeed,
+  feedFormat = rss2,
 }: IndexesRouterOptions): Router {
   const log = parentLog.child({ class: 'IndexesRouter' });
   const router = Router();
@@ -167,6 +180,60 @@ export function createIndexesRouter({
     res.status(200).end(req.method === 'HEAD' ? undefined : current.raw);
     finish(res, route, 200);
   });
+
+  // --- A feed of an index's bands ----------------------------------------
+  //
+  // For BitTorrent clients: one item per band offered as a torrent, each
+  // pointing at its .torrent, so a client subscribed with an auto-download
+  // rule takes every band and every new one. A view of the publication above
+  // and nothing else, so not metered either. Two segments under the prefix,
+  // where a published file always has three, so it cannot shadow one.
+
+  const renderings = new RenderingCache();
+  router.get(
+    '/ar-io/indexes/feed/:file',
+    async (req: Request, res: Response) => {
+      const route = 'feed';
+      const match = /^(.+)\.xml$/.exec(req.params.file);
+      if (match === null || !isValidIndexName(match[1])) {
+        uncacheable(res);
+        res.status(400).type('text').send('Invalid feed name');
+        finish(res, route, 400);
+        return;
+      }
+      const index = match[1];
+      try {
+        const snapshot =
+          indexFeed !== undefined
+            ? await indexFeed.snapshot({ index })
+            : undefined;
+        if (snapshot === undefined) {
+          notFound(res, route);
+          return;
+        }
+        const { status, bytes } = serveFeed(req, res, {
+          snapshot,
+          format: feedFormat,
+          cacheControl: 'public, max-age=60',
+          renderings,
+        });
+        finish(res, route, status);
+        if (bytes > 0) metrics.indexesBytesServedTotal.inc({ route }, bytes);
+      } catch (error: any) {
+        // A feed is a convenience: a fault building or rendering one is
+        // answered, never left hanging, and never cached.
+        log.error('Could not serve an index feed', {
+          index,
+          error: error?.message,
+        });
+        if (!res.headersSent) {
+          uncacheable(res);
+          res.status(500).type('text').send('Feed unavailable');
+        }
+        finish(res, route, 500);
+      }
+    },
+  );
 
   // --- Bytes, by content address -----------------------------------------
   //

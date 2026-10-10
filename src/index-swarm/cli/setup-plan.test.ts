@@ -213,6 +213,79 @@ describe('planSetup', () => {
     assert.match(p.notes.join('\n'), /tracker port 6969/);
   });
 
+  it('announces through the gateway’s HTTPS when it knows its public URL, with no tracker port to open', () => {
+    const base =
+      'INDEX_SWARM_OBSERVER_KEYPAIR_FILE=/k.json\nAR_IO_WALLET=W\nARNS_ROOT_HOST=gateway.example,other.example';
+    const p = plan(base, {
+      publish: true,
+      torrent: true,
+      publicHost: '203.0.113.7',
+    });
+    assert.deepEqual(p.errors, []);
+    assert.equal(
+      valueOf(p, 'INDEX_SWARM_TRACKERS'),
+      'https://gateway.example/ar-io/indexes/announce',
+    );
+    // The engine is still listed at the node's own address.
+    assert.equal(valueOf(p, 'INDEX_SWARM_ENGINE_PUBLIC_HOST'), '203.0.113.7');
+    assert.doesNotMatch(p.notes.join('\n'), /tracker port/);
+    assert.doesNotMatch(p.notes.join('\n'), /INDEXES_PUBLIC_URL/);
+    assert.doesNotMatch(p.notes.join('\n'), /lists this node's engine/);
+  });
+
+  it('says where the engine will be listed when only the gateway’s name is known', () => {
+    const base =
+      'INDEX_SWARM_OBSERVER_KEYPAIR_FILE=/k.json\nAR_IO_WALLET=W\nARNS_ROOT_HOST=gateway.example';
+    const p = plan(base, { publish: true, torrent: true });
+    assert.equal(
+      valueOf(p, 'INDEX_SWARM_TRACKERS'),
+      'https://gateway.example/ar-io/indexes/announce',
+    );
+    assert.match(
+      p.notes.join('\n'),
+      /lists this node's engine at gateway\.example:6881.*--public-host/,
+    );
+  });
+
+  it('takes --public-url over ARNS_ROOT_HOST', () => {
+    const base =
+      'INDEX_SWARM_OBSERVER_KEYPAIR_FILE=/k.json\nAR_IO_WALLET=W\nARNS_ROOT_HOST=gateway.example';
+    const p = plan(base, {
+      publish: true,
+      torrent: true,
+      publicUrl: 'https://fleet.example/',
+    });
+    assert.equal(
+      valueOf(p, 'INDEX_SWARM_TRACKERS'),
+      'https://fleet.example/ar-io/indexes/announce',
+    );
+  });
+
+  it('never replaces an existing tracker list, and asks to open the port it names', () => {
+    const base =
+      'INDEX_SWARM_OBSERVER_KEYPAIR_FILE=/k.json\nAR_IO_WALLET=W\nARNS_ROOT_HOST=gateway.example\nINDEX_SWARM_TRACKERS=http://203.0.113.7:6969/announce';
+    const p = plan(base, { publish: true, torrent: true });
+    assert.equal(valueOf(p, 'INDEX_SWARM_TRACKERS'), undefined);
+    assert.match(p.notes.join('\n'), /tracker port 6969/);
+  });
+
+  it('notes that the feed needs a public URL when the gateway has none', () => {
+    const base = 'INDEX_SWARM_OBSERVER_KEYPAIR_FILE=/k.json\nAR_IO_WALLET=W';
+    const p = plan(base, {
+      publish: true,
+      torrent: true,
+      publicUrl: 'https://gw.example',
+    });
+    assert.equal(
+      valueOf(p, 'INDEX_SWARM_TRACKERS'),
+      'https://gw.example/ar-io/indexes/announce',
+    );
+    assert.match(
+      p.notes.join('\n'),
+      /INDEXES_PUBLIC_URL=https:\/\/gw\.example/,
+    );
+  });
+
   it('sets up index-export when publishing, with the header check off this gateway by default', () => {
     const base =
       'INDEX_SWARM_OBSERVER_KEYPAIR_FILE=/k.json\nAR_IO_WALLET=W\nANS104_UNBUNDLE_FILTER={"always":true}';

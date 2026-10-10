@@ -8,6 +8,11 @@ set -e
 loglevel="${LOG_LEVEL:-}"
 USERID=$(id -u)
 
+# Values added after a compose file may have been written: default them, so
+# this image still renders under an older compose that does not pass them.
+export TVAL_INDEX_SWARM_TRACKER_HOST="${TVAL_INDEX_SWARM_TRACKER_HOST:-index-swarm}"
+export TVAL_INDEX_SWARM_TRACKER_PORT="${TVAL_INDEX_SWARM_TRACKER_PORT:-6970}"
+
 # Update env vars
 ytt --data-values-env TVAL -f /etc/envoy/envoy.template.yaml >  /etc/envoy/envoy.yaml
 chmod go+r /etc/envoy/envoy.yaml

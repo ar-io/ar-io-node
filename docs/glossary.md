@@ -365,6 +365,20 @@ reader check any piece of a band file on its own. Band torrents use 256 KiB
 pieces so a range reader can verify what it fetched without the rest of the
 file.
 
+<a id="index-feed"></a> **Index Feed** — An RSS 2.0 feed of one published
+index's torrents, at `/ar-io/indexes/feed/<index>.xml`: one item per band,
+whose enclosure is the band's `.torrent`. Lets an ordinary BitTorrent client
+follow a publisher with an auto-download rule. A view of the
+[publication](#index-publication), naming it by SHA-256, and never an
+authority of its own. See
+[index-publication.md](index-publication.md#following-an-index-in-a-bittorrent-client).
+
+<a id="closed-tracker"></a> **Closed Tracker** — The BitTorrent tracker a
+publishing sidecar runs, answering only for the bands its publication offers.
+Peers announce to it through the gateway, at `/ar-io/indexes/announce`, which
+Envoy forwards to the sidecar, or directly on port 6969. See
+[index-swarm.md](index-swarm.md#the-tracker).
+
 <a id="generation"></a> **Generation** — One installed copy of a band, in
 `installed/<index>/<band>~<generation>/`, named by the band id and a short
 digest of its files. A rebuilt band installs as a new generation beside the

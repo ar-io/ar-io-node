@@ -11,6 +11,8 @@ import { existsSync, readFileSync } from 'node:fs';
 import { createFilter } from './filters.js';
 import { assertMonotoneFilter } from './database/gql-l1-routing.js';
 import * as env from './lib/env.js';
+import { PRIVATE_NETWORK_RANGES } from './lib/trusted-proxies.js';
+import { parsePublicOrigin } from './lib/public-origin.js';
 import { resolveFacilitatorKeyId } from './payments/facilitator-utils.js';
 import { initHttpSig } from './lib/httpsig.js';
 import type { HttpSigSignerContext } from './lib/httpsig.js';
@@ -3523,6 +3525,32 @@ export const INDEXES_ADVERTISE_FROM_URL = env.varOrUndefined(
   'INDEXES_ADVERTISE_FROM_URL',
 );
 
+/**
+ * This gateway's public origin (`https://gateway.example`): the base of the
+ * absolute URLs in its index feeds (`/ar-io/indexes/feed/<index>.xml`).
+ * From configuration, never from a request's Host header, which whoever
+ * sends the request controls. Defaults to `https://<ARNS_ROOT_HOST>`; with
+ * neither, the feeds answer 404.
+ */
+export const INDEXES_PUBLIC_URL = (() => {
+  const value = env.varOrUndefined('INDEXES_PUBLIC_URL');
+  if (value !== undefined && value.trim() !== '') {
+    try {
+      return parsePublicOrigin(value);
+    } catch (error: any) {
+      throw new Error(`INDEXES_PUBLIC_URL: ${error.message}`);
+    }
+  }
+  if (ARNS_ROOT_HOST === undefined) return undefined;
+  // A default must not stop a gateway that started before: an
+  // ARNS_ROOT_HOST that makes no origin just means no feeds.
+  try {
+    return parsePublicOrigin(`https://${ARNS_ROOT_HOST}`);
+  } catch {
+    return undefined;
+  }
+})();
+
 export const ENABLE_RATE_LIMITER =
   env.varOrDefault('ENABLE_RATE_LIMITER', 'false') === 'true';
 
@@ -3566,7 +3594,7 @@ export const RATE_LIMITER_IP_REFILL_PER_SEC = +env.varOrDefault(
  */
 const TRUSTED_PROXIES_VALUE = env.varOrDefault(
   'TRUSTED_PROXIES',
-  '127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10,169.254.0.0/16,::1/128,fc00::/7,fe80::/10',
+  PRIVATE_NETWORK_RANGES.join(','),
 );
 export const TRUSTED_PROXIES =
   TRUSTED_PROXIES_VALUE.trim() === 'none'

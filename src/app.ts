@@ -167,6 +167,7 @@ app.use(
     rateLimiter: system.rateLimiter,
     rateLimitsEnabled: config.ENABLE_RATE_LIMITER,
     paymentProcessor: system.paymentProcessor,
+    indexFeed: system.indexFeedSource,
   }),
 );
 app.use(datasetsRouter);

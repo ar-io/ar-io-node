@@ -209,6 +209,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `index_swarm_tracker_seeding_hosts` (distinct addresses seeding at least one
   band, an IPv6 /64 counted once and this node's own engine left out: roughly
   how many other gateways share).
+- **An RSS feed of each published index's torrents**, at
+  `/ar-io/indexes/feed/<index>.xml`. One item per band offered as a torrent,
+  with the `.torrent` as its enclosure and the magnet as its link, so a
+  BitTorrent client such as qBittorrent follows a publisher with an
+  auto-download rule and takes each new band as it is published. A view of
+  the signed publication: it names the publication by SHA-256 in the channel
+  and in an `X-AR-IO-Index-Feed` header, which HTTPSIG signs along with
+  `Content-Digest`. Its URLs start with the new `INDEXES_PUBLIC_URL` (default
+  `https://<ARNS_ROOT_HOST>`), never the request's `Host` header. Not
+  metered; `public, max-age=60` with an `ETag`. Built on a format-independent
+  feed layer (`src/feeds/`): a source builds a feed, a format renders it.
+- **Peers announce to a publisher's tracker through the gateway's HTTPS**, at
+  `https://<gateway>/ar-io/indexes/announce`, so a publishing gateway no
+  longer needs port 6969 open. Envoy forwards the path to a second tracker
+  listener on the sidecar, `INDEX_SWARM_TRACKER_PROXY_PORT` (6970), which is
+  never published and reads the peer's address from `X-Forwarded-For`.
+  `tools/index-swarm-setup --publish --torrent` now writes that URL into
+  `INDEX_SWARM_TRACKERS` when the gateway has `ARNS_ROOT_HOST` (or
+  `--public-url`). An existing tracker list is kept; the direct port still
+  works.
 
 ### Changed
 

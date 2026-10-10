@@ -39,6 +39,7 @@ import {
   trackedInfohashes,
 } from './tracker.js';
 import { isAllowedTrackerUrl } from './torrent.js';
+import { PRIVATE_NETWORK_RANGES } from '../lib/trusted-proxies.js';
 import { Subscriber } from './subscriber.js';
 import { CoreGatewayRegistry } from './gateway-registry.js';
 import { CoreCompatibilityCheck } from './core-compatibility.js';
@@ -303,7 +304,7 @@ async function main(): Promise<void> {
   // A publisher of torrents runs the tracker its torrents announce to. It is
   // closed: it answers only for bands this node offers right now, so its
   // port cannot be used to run anyone else's swarm.
-  let tracker: http.Server | undefined;
+  const trackerServers: http.Server[] = [];
   let selfTimer: NodeJS.Timeout | undefined;
   if (publisher !== undefined && engine !== undefined) {
     const offering = publisher;
@@ -333,7 +334,7 @@ async function main(): Promise<void> {
     await resolveSelf();
     selfTimer = setInterval(() => void resolveSelf(), 600_000);
     selfTimer.unref();
-    tracker = await new ClosedTracker({
+    const closedTracker = new ClosedTracker({
       log,
       allowed: () => trackedInfohashes(offering.offered()),
       torrentOf: () => torrentsByInfohash(offering.offered()),
@@ -343,12 +344,25 @@ async function main(): Promise<void> {
           ? { ip: selfAddress, port: config.ENGINE_PORT }
           : undefined,
       trustedProxies: config.TRACKER_TRUSTED_PROXIES,
-    }).listen('0.0.0.0', config.TRACKER_PORT);
+    });
+    // Two doors to one tracker. The published port, for peers that reach it
+    // directly. And one the gateway's Envoy forwards
+    // https://<gateway>/ar-io/indexes/announce to, never published, so only
+    // the gateway's network reaches it: it believes X-Forwarded-For from
+    // private addresses, which is safe only where outside clients cannot
+    // connect.
+    trackerServers.push(
+      await closedTracker.listen('0.0.0.0', config.TRACKER_PORT),
+      await closedTracker.listen('0.0.0.0', config.TRACKER_PROXY_PORT, {
+        trustedProxies: [
+          ...PRIVATE_NETWORK_RANGES,
+          ...config.TRACKER_TRUSTED_PROXIES,
+        ],
+      }),
+    );
     if (config.TRACKERS.length === 0) {
       log.warn(
-        'Publishing torrents with no INDEX_SWARM_TRACKERS; peers can then find one another only through DHT and the WebSeed. Point it at this tracker, e.g. http://<public host>:' +
-          config.TRACKER_PORT +
-          '/announce',
+        'Publishing torrents with no INDEX_SWARM_TRACKERS; peers can then find one another only through DHT and the WebSeed. Point it at this tracker through the gateway, e.g. https://<gateway>/ar-io/indexes/announce',
       );
     }
   }
@@ -382,7 +396,7 @@ async function main(): Promise<void> {
       if (pollTimer !== undefined) clearInterval(pollTimer);
       if (engineTimer !== undefined) clearInterval(engineTimer);
       if (janitorTimer !== undefined) clearInterval(janitorTimer);
-      tracker?.close();
+      for (const server of trackerServers) server.close();
       if (selfTimer !== undefined) clearInterval(selfTimer);
       // Let work in progress finish, inside the timeout above: downloads
       // are aborted (they resume on the next start), but a band mid-install

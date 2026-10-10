@@ -16,7 +16,14 @@ import * as os from 'node:os';
 import express from 'express';
 import request from 'supertest';
 
+import { XMLParser } from 'fast-xml-parser';
+
 import { createIndexesRouter } from './indexes.js';
+import { PublishedIndexes } from './published-indexes.js';
+import {
+  INDEX_FEED_HEADER,
+  IndexBandFeedSource,
+} from '../feeds/index-bands.js';
 import { Publisher } from '../index-swarm/publisher.js';
 import { StateStore } from '../index-swarm/state.js';
 import { createKindRegistry } from '../index-swarm/kinds/registry.js';
@@ -922,5 +929,321 @@ describe('/ar-io/indexes/webseed', () => {
   it('leaves anything that is not a torrent name to the other routes', async () => {
     // An index named "webseed" is still reachable by name.
     await request(app).get('/ar-io/indexes/webseed/band-t/00.cdb').expect(404);
+  });
+});
+
+describe('/ar-io/indexes/feed', () => {
+  const BASE = 'https://gateway.example';
+  let tempDir: string;
+  let publishedDir: string;
+  let publication: IndexPublication;
+  let publicationSha256: string;
+  let published: PublishedIndexes;
+
+  const publish = async (bandIds: Array<[string, [number, number | null]]>) => {
+    for (const [bandId, heightRange] of bandIds) {
+      const bandDir = path.join(publishedDir, 'root-tx-index', bandId);
+      const writer = new PartitionedCdb64Writer(bandDir);
+      await writer.open();
+      for (let i = 0; i < 10; i++) {
+        await writer.add(
+          txId(i * 7 + heightRange[0]),
+          encodeCdb64Value({ rootTxId: txId(80 + i) }),
+        );
+      }
+      await writer.finalize();
+      // The height range a band covers is in its manifest's metadata.
+      const manifestPath = path.join(bandDir, 'manifest.json');
+      const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8'));
+      manifest.metadata = { ...(manifest.metadata ?? {}), heightRange };
+      await fs.writeFile(manifestPath, JSON.stringify(manifest));
+    }
+    const { privateKey, publicKey } = crypto.generateKeyPairSync('ed25519');
+    await new Publisher({
+      log,
+      state: new StateStore({
+        log,
+        filePath: path.join(tempDir, 'state.json'),
+      }),
+      kinds: createKindRegistry({ log }),
+      signer: {
+        privateKey,
+        keyId: getSolanaAddress(publicKey),
+        wallet: getSolanaAddress(publicKey),
+      },
+      publish: [{ name: 'root-tx-index', kind: 'cdb64-root-tx' }],
+      publishedDir,
+      blobsDir: path.join(publishedDir, 'blobs'),
+      publicationFile: path.join(publishedDir, 'publication.json'),
+      ttlMs: 86_400_000,
+      supersedeGraceMs: 0,
+      torrents: {
+        trackers: ['https://gateway.example/ar-io/indexes/announce'],
+      },
+    }).scanOnce();
+    const raw = await fs.readFile(path.join(publishedDir, 'publication.json'));
+    publication = parseIndexPublication(raw);
+    publicationSha256 = crypto.createHash('sha256').update(raw).digest('hex');
+  };
+
+  const appWith = (
+    options: {
+      baseUrl?: string | undefined;
+      feed?: boolean;
+      rateLimiter?: any;
+    } = {},
+  ) => {
+    const app = express();
+    app.use(
+      createIndexesRouter({
+        log,
+        publishedIndexes: published,
+        ...(options.rateLimiter !== undefined
+          ? { rateLimiter: options.rateLimiter }
+          : {}),
+        ...(options.feed === false
+          ? {}
+          : {
+              indexFeed: new IndexBandFeedSource({
+                log,
+                published,
+                publishedDir,
+                baseUrl: 'baseUrl' in options ? options.baseUrl : BASE,
+              }),
+            }),
+      }),
+    );
+    return app;
+  };
+
+  const parse = (xml: string) =>
+    new XMLParser({
+      ignoreAttributes: false,
+      attributeNamePrefix: '@',
+      parseTagValue: false,
+      isArray: (name) => name === 'item',
+    }).parse(xml);
+
+  before(async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'indexes-feed-'));
+    publishedDir = path.join(tempDir, 'published');
+    await publish([
+      ['band-old', [100, 199]],
+      ['band-tip', [200, null]],
+    ]);
+    published = new PublishedIndexes({ log, publishedDir });
+  });
+
+  after(async () => {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  it('serves an RSS feed of the index’s torrents, newest heights first', async () => {
+    const res = await request(appWith())
+      .get('/ar-io/indexes/feed/root-tx-index.xml')
+      .expect(200);
+    assert.equal(
+      res.headers['content-type'],
+      'application/rss+xml; charset=utf-8',
+    );
+    assert.equal(res.headers['cache-control'], 'public, max-age=60');
+    assert.match(res.headers['etag'], /^"rss2-1-[0-9a-f]{32}"$/);
+    assert.equal(res.headers[INDEX_FEED_HEADER], publicationSha256);
+    assert.equal(
+      res.headers['content-digest'],
+      `sha-256=:${crypto.createHash('sha256').update(res.text).digest('base64')}:`,
+    );
+
+    const channel = parse(res.text).rss.channel;
+    assert.equal(channel.link, `${BASE}/ar-io/indexes`);
+    assert.equal(channel['ario:publication'], publicationSha256);
+    assert.equal(channel['ario:sequence'], String(publication.sequence));
+    const bands = publication.indexes[0].bands;
+    const byId = new Map(bands.map((b) => [b.id, b]));
+    assert.deepEqual(
+      channel.item.map((i: any) => i['ario:band']),
+      ['band-tip', 'band-old'],
+    );
+    for (const item of channel.item) {
+      const band = byId.get(item['ario:band'])!;
+      const torrentFile = path.join(
+        publishedDir,
+        PUBLISHED_TORRENT_DIR,
+        `${band.torrent!.infohashV1}.torrent`,
+      );
+      assert.equal(item.guid['#text'], `urn:btih:${band.torrent!.infohashV1}`);
+      assert.equal(item.link, band.torrent!.magnet);
+      assert.equal(
+        item.enclosure['@url'],
+        `${BASE}/ar-io/indexes/torrents/${band.torrent!.infohashV1}.torrent`,
+      );
+      assert.equal(
+        item.enclosure['@length'],
+        String((await fs.stat(torrentFile)).size),
+      );
+    }
+  });
+
+  it('points each item at a .torrent the gateway serves, the one the publication names', async () => {
+    const app = appWith();
+    const res = await request(app)
+      .get('/ar-io/indexes/feed/root-tx-index.xml')
+      .expect(200);
+    for (const item of parse(res.text).rss.channel.item) {
+      const url = new URL(item.enclosure['@url']);
+      const torrent = await request(app)
+        .get(url.pathname)
+        .buffer(true)
+        .parse((r, cb) => {
+          const chunks: Buffer[] = [];
+          r.on('data', (c: Buffer) => chunks.push(c));
+          r.on('end', () => cb(null, Buffer.concat(chunks)));
+        })
+        .expect(200);
+      assert.equal(torrent.headers['content-type'], 'application/x-bittorrent');
+      assert.equal(
+        String((torrent.body as Buffer).length),
+        item.enclosure['@length'],
+      );
+    }
+  });
+
+  it('answers HEAD with headers only, and a current copy with 304', async () => {
+    const app = appWith();
+    const head = await request(app)
+      .head('/ar-io/indexes/feed/root-tx-index.xml')
+      .expect(200);
+    assert.ok(Number(head.headers['content-length']) > 0);
+    await request(app)
+      .get('/ar-io/indexes/feed/root-tx-index.xml')
+      .set('If-None-Match', head.headers['etag'])
+      .expect(304);
+  });
+
+  it('takes its URLs from configuration, never from the Host header', async () => {
+    const app = appWith();
+    const plain = await request(app)
+      .get('/ar-io/indexes/feed/root-tx-index.xml')
+      .expect(200);
+    const forged = await request(app)
+      .get('/ar-io/indexes/feed/root-tx-index.xml')
+      .set('Host', 'attacker.example')
+      .set('X-Forwarded-Host', 'attacker.example')
+      .set('X-Forwarded-Proto', 'http')
+      .expect(200);
+    assert.equal(forged.text, plain.text);
+    assert.doesNotMatch(forged.text, /attacker/);
+  });
+
+  it('refuses a malformed feed name with 400, uncacheable', async () => {
+    const app = appWith();
+    for (const name of ['root-tx-index', 'root-tx-index.json', 'Root.xml']) {
+      const res = await request(app)
+        .get(`/ar-io/indexes/feed/${name}`)
+        .expect(400);
+      assert.equal(res.headers['cache-control'], 'no-store', name);
+    }
+  });
+
+  it('is 404, uncacheable, for an unpublished index, without a feed source, and without a public URL', async () => {
+    for (const [label, app, url] of [
+      ['unknown index', appWith(), '/ar-io/indexes/feed/parquet-l1.xml'],
+      [
+        'no feed source',
+        appWith({ feed: false }),
+        '/ar-io/indexes/feed/root-tx-index.xml',
+      ],
+      [
+        'no public URL',
+        appWith({ baseUrl: undefined }),
+        '/ar-io/indexes/feed/root-tx-index.xml',
+      ],
+    ] as const) {
+      const res = await request(app).get(url).expect(404);
+      assert.equal(res.headers['cache-control'], 'no-store', label);
+    }
+  });
+
+  it('answers a fault in its source with 500, uncacheable, rather than hanging', async () => {
+    const app = express();
+    app.use(
+      createIndexesRouter({
+        log,
+        publishedIndexes: published,
+        indexFeed: {
+          snapshot: async () => {
+            throw new Error('source failed');
+          },
+        },
+      }),
+    );
+    const res = await request(app)
+      .get('/ar-io/indexes/feed/root-tx-index.xml')
+      .expect(500);
+    assert.equal(res.headers['cache-control'], 'no-store');
+  });
+
+  it('is not metered', async () => {
+    // A limiter that fails the test if the route consults it.
+    const refusing = new Proxy(
+      {},
+      {
+        get: () => () => {
+          throw new Error('the feed must not be metered');
+        },
+      },
+    );
+    await request(appWith({ rateLimiter: refusing }))
+      .get('/ar-io/indexes/feed/root-tx-index.xml')
+      .expect(200);
+  });
+
+  it('is signed, binding its body and the publication it names', async () => {
+    const { privateKey } = crypto.generateKeyPairSync('ed25519');
+    const signed = express();
+    signed.use(
+      createHttpSigMiddleware({
+        privateKey,
+        keyId: deriveKeyId(crypto.createPublicKey(privateKey)),
+        bindRequest: false,
+      }),
+    );
+    signed.use(
+      createIndexesRouter({
+        log,
+        publishedIndexes: published,
+        indexFeed: new IndexBandFeedSource({
+          log,
+          published,
+          publishedDir,
+          baseUrl: BASE,
+        }),
+      }),
+    );
+    const res = await request(signed)
+      .get('/ar-io/indexes/feed/root-tx-index.xml')
+      .expect(200);
+    assert.ok(res.headers.signature !== undefined, 'the feed is signed');
+    const covered = res.headers['signature-input'] ?? '';
+    assert.match(covered, /"x-ar-io-index-feed"/);
+    assert.match(covered, /"content-digest"/);
+  });
+
+  it('follows a new publication without a restart', async () => {
+    const app = appWith();
+    const before = await request(app)
+      .get('/ar-io/indexes/feed/root-tx-index.xml')
+      .expect(200);
+    await publish([['band-next', [300, null]]]);
+    // A view rechecks the file on every request here (revalidateMs 0).
+    const after = await request(app)
+      .get('/ar-io/indexes/feed/root-tx-index.xml')
+      .expect(200);
+    assert.notEqual(after.headers['etag'], before.headers['etag']);
+    assert.equal(after.headers[INDEX_FEED_HEADER], publicationSha256);
+    assert.equal(
+      parse(after.text).rss.channel.item[0]['ario:band'],
+      'band-next',
+    );
   });
 });
