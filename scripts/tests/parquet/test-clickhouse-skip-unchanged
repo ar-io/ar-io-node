@@ -92,6 +92,17 @@ migrate_staging_to_final "$TEST_PARTITION_NAME" >/dev/null
 expect "content reverting to an older version is inserted" "$(versions)" 3
 expect "reverted content wins under FINAL" "$(newest_offset)" 0
 
+# A table left by a run killed over an hour ago is dropped; one from a run
+# that may still be going is kept.
+stale_table=staging_final_transactions_1000000000_1_1
+fresh_table=staging_final_transactions_$(date +%s)_1_1
+ch_query "CREATE TABLE ${stale_table} (x UInt8) ENGINE = Memory"
+ch_query "CREATE TABLE ${fresh_table} (x UInt8) ENGINE = Memory"
+migrate_staging_to_final "$TEST_PARTITION_NAME" >/dev/null
+expect "a stale per-run staging table is dropped" "$(ch_query "EXISTS TABLE ${stale_table}" | tr -d '[:space:]')" 0
+expect "a recent per-run staging table is kept" "$(ch_query "EXISTS TABLE ${fresh_table}" | tr -d '[:space:]')" 1
+ch_query "DROP TABLE IF EXISTS ${fresh_table}"
+
 leftover=$(ch_query "SELECT count() FROM system.tables WHERE database = currentDatabase() AND name LIKE 'staging_final_transactions%'" | tr -d '[:space:]')
 expect "no per-run staging table is left behind" "$leftover" 0
 

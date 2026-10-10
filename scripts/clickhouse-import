@@ -488,6 +488,17 @@ migrate_staging_to_final() {
     # concurrent imports. (The staging_blocks/_transactions/_tags tables are
     # shared and truncated by every import, so concurrent imports were never
     # safe; run one at a time.) Built from the transactions schema each time.
+    # A run killed between CREATE and DROP leaves its table behind, holding
+    # up to a full bucket of rows. Drop any left by runs that started more
+    # than an hour ago; the name carries the creating run's epoch seconds.
+    local stale
+    stale=$("${ch[@]}" --query "SELECT name FROM system.tables
+      WHERE database = currentDatabase()
+        AND match(name, '^staging_final_transactions_[0-9]+_')
+        AND toUInt64OrZero(extract(name, '^staging_final_transactions_([0-9]+)_')) < toUInt64(now()) - 3600" 2>/dev/null) || stale=""
+    for t in $stale; do
+      "${ch[@]}" --query "DROP TABLE IF EXISTS ${t}" || true
+    done
     final_staging="staging_final_transactions_$(date +%s)_$$_${RANDOM}"
     target_table=$final_staging
     "${ch[@]}" --query "CREATE TABLE ${final_staging}
