@@ -379,7 +379,9 @@ Parquet has no index, so finding one transaction by id means scanning every
 band's `id` column. A lookup file is a small Parquet file sorted by a key, in
 row groups of 16,384 rows. Parquet keeps each row group's minimum and
 maximum, and in a sorted file those ranges do not overlap. A reader holding
-a key reads the footer and then the one or two row groups that can hold it.
+a key reads the footer and then every row group whose range includes the
+key: one or two for a transaction id, more for a wallet or tag with many
+rows.
 
 | File | One row per | Columns | Sorted by |
 |---|---|---|---|
@@ -482,11 +484,13 @@ WHERE height BETWEEN 1500000 AND 1500099;
 Only the Parquet footer and the row groups a predicate selects cross the
 network.
 
-**A range read is still signed.** `Repr-Digest` is co-signable, and it
-commits to the whole file rather than the returned range. A client doing
-predicate pushdown therefore holds a signature over the digest of the file
-it reads bytes from. To check it, read `signature-input`, `signature` and
-`repr-digest` from any `206`.
+**A range read names its file.** Every `206` carries `Repr-Digest`, the
+digest of the whole file rather than of the returned range. Compare it with
+the file's digest in a verified publication: that is what ties the bytes to
+the publisher. When the gateway signs responses (HTTPSIG enabled, the
+default, with a signing key), `Repr-Digest` is also covered by the
+`signature` and `signature-input` headers; without a signer they are absent,
+and the comparison with the publication is still the check.
 
 **A cache in front breaks it.** Range reads must work end to end, and a
 proxy cache zone takes them away; see

@@ -101,16 +101,24 @@ to_container() {
     return
   fi
   host="$(cd "${CALLER_DIR}" && realpath -m -- "${value}")"
+  # The most specific mount wins, so a SQLite directory inside the data
+  # directory still maps to its own (writable) mount.
+  local best=-1 best_len=-1
   for i in "${!MOUNT_HOSTS[@]}"; do
-    if [[ "${host}" == "${MOUNT_HOSTS[$i]}" ]]; then
-      echo "${MOUNT_TARGETS[$i]}"
-      return
-    elif [[ "${host}" == "${MOUNT_HOSTS[$i]}/"* ]]; then
-      echo "${MOUNT_TARGETS[$i]}/${host#"${MOUNT_HOSTS[$i]}/"}"
-      return
+    if [[ "${host}" == "${MOUNT_HOSTS[$i]}" || "${host}" == "${MOUNT_HOSTS[$i]}/"* ]]; then
+      if (( ${#MOUNT_HOSTS[$i]} > best_len )); then
+        best=$i
+        best_len=${#MOUNT_HOSTS[$i]}
+      fi
     fi
   done
-  echo "${value}"
+  if (( best < 0 )); then
+    echo "${value}"
+  elif [[ "${host}" == "${MOUNT_HOSTS[$best]}" ]]; then
+    echo "${MOUNT_TARGETS[$best]}"
+  else
+    echo "${MOUNT_TARGETS[$best]}/${host#"${MOUNT_HOSTS[$best]}/"}"
+  fi
 }
 # Rewrite the values of the named path options in ARGS.
 rewrite_paths() {
