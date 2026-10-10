@@ -64,6 +64,43 @@ describe('subscriberChecks', () => {
     assert.match(checks[3].text, /found 30 of 100/);
   });
 
+  it('compares only root-TX bands with what the gateway loads', () => {
+    // A subscriber that also installs parquet-l1 bands: the gateway never
+    // loads those, so they must not count as bands it failed to load.
+    const withL1 = parseMetrics(`
+index_swarm_installed_bands{index="root-tx-index"} 5
+index_swarm_installed_bands{index="parquet-l1"} 24
+index_subscription_sequence{publisher="${TURBO}",index="root-tx-index"} 11
+index_subscription_manifest_age_seconds{publisher="${TURBO}",index="root-tx-index"} 7200
+`);
+    const checks = subscriberChecks(
+      withL1,
+      gateway(),
+      [{ publisher: TURBO }],
+      undefined,
+    );
+    assert.match(checks[1].text, /29 bands installed/);
+    assert.equal(checks[2].level, 'ok');
+    assert.match(checks[2].text, /5 of 5 installed root-TX bands loaded/);
+  });
+
+  it('still warns when a root-TX band is not loaded', () => {
+    const behind = parseMetrics(`
+index_swarm_installed_bands{index="root-tx-index"} 6
+index_swarm_installed_bands{index="parquet-l1"} 24
+index_subscription_sequence{publisher="${TURBO}",index="root-tx-index"} 11
+index_subscription_manifest_age_seconds{publisher="${TURBO}",index="root-tx-index"} 7200
+`);
+    const checks = subscriberChecks(
+      behind,
+      gateway(),
+      [{ publisher: TURBO }],
+      undefined,
+    );
+    assert.equal(checks[2].level, 'warn');
+    assert.match(checks[2].text, /5 of 6 installed root-TX bands loaded/);
+  });
+
   it('fails when the gateway does not read the installed directory, and says how to fix it', () => {
     const checks = subscriberChecks(
       sidecar,
