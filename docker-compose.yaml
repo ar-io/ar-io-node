@@ -658,6 +658,7 @@ services:
       - CLICKHOUSE_AUTO_IMPORT_IDLE_WAIT_TIMEOUT_S=${CLICKHOUSE_AUTO_IMPORT_IDLE_WAIT_TIMEOUT_S:-}
       - CLICKHOUSE_AUTO_IMPORT_EXPORT_MAX_RETRIES=${CLICKHOUSE_AUTO_IMPORT_EXPORT_MAX_RETRIES:-}
       - CLICKHOUSE_AUTO_IMPORT_EXPORT_RETRY_DELAY_S=${CLICKHOUSE_AUTO_IMPORT_EXPORT_RETRY_DELAY_S:-}
+      - CLICKHOUSE_IMPORT_SKIP_UNCHANGED=${CLICKHOUSE_IMPORT_SKIP_UNCHANGED:-}
       - CLICKHOUSE_TTL_RULES_PATH=/app/config/clickhouse-ttl-rules.yaml
       # Read by scripts/clickhouse-import at schema-render time (not by the
       # gateway runtime), so it lives on this service rather than on core.

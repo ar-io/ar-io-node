@@ -93,6 +93,32 @@ batch_has_data() {
     return 1
 }
 
+# Returns 0 when bundles.db holds at least one stable data item in
+# [start, end]; 1 otherwise. Fails open (returns 0) on any error, like
+# batch_has_data.
+batch_has_data_items() {
+    local start=$1
+    local end=$2
+    local found rc
+
+    [ -f "$bundles_db_path" ] || return 0
+    found=$(sqlite3 "$bundles_db_path" \
+        "SELECT 1 FROM stable_data_items WHERE height >= $start AND height <= $end LIMIT 1;" 2>/dev/null)
+    rc=$?
+    if [ $rc -ne 0 ]; then return 0; fi
+    [ "$found" = "1" ]
+}
+
+# Prints how many stable data items in [start, end] have indexed_at below
+# (or at/above, with "newer") the given threshold, or nothing on any error.
+count_stable_items_in_range() {
+    local start=$1 end=$2 threshold=$3 cmp="<"
+    [ "${4:-}" = newer ] && cmp=">="
+    [ -f "$bundles_db_path" ] || return 0
+    sqlite3 "$bundles_db_path" \
+        "SELECT count(*) FROM stable_data_items WHERE height >= $start AND height <= $end AND indexed_at $cmp $threshold;" 2>/dev/null
+}
+
 # Block until the gateway's parquet-export singleton is no longer 'running',
 # so a new POST doesn't immediately 409. This guards against: (a) the
 # prior batch's script bailing out early while the server-side worker
@@ -156,6 +182,16 @@ set +e
 # Tracked across cycles for replay detection.
 prev_cycle_first_bucket=""
 
+# Highest height through which every bucket has been exported and imported,
+# without a gap, by an earlier cycle. A data item indexed late at an old
+# height (e.g. found on demand by a GraphQL lookup) pulls minStableDataItem
+# back, and the cycle would otherwise re-export and re-import every bucket
+# from there to the tip: all of their L1 rows again, for one item. Buckets
+# at or below this mark are skipped unless they hold stable data items.
+# Kept in memory; after a restart it starts from the first cycle's starting
+# bucket.
+imported_through=""
+
 while true; do
     loop_start_time=$(date +%s)
     echo "Starting new import cycle at $(date)"
@@ -169,6 +205,9 @@ while true; do
     cycle_prune_unverified=0
     cycle_debug_failed=0
     cycle_skipped_empty=0
+    cycle_skipped_imported=0
+    # Advances imported_through only while every batch so far succeeded.
+    cycle_contiguous=true
 
     # Refresh operator TTL rules before importing new partitions. The loader
     # exits 0 for missing/malformed files and leaves any previously loaded
@@ -227,6 +266,13 @@ while true; do
     fi
     prev_cycle_first_bucket="$current_height"
 
+    # Everything below the first bucket was handled by earlier cycles (this
+    # loop never revisits it), so it counts as imported.
+    if [ "$current_height" -gt 0 ] && \
+        { [ -z "$imported_through" ] || [ "$imported_through" -lt $((current_height - 1)) ]; }; then
+        imported_through=$((current_height - 1))
+    fi
+
     # Inner loop for heights
     height_process_start_time=$(date +%s)
     while [ "$current_height" -le "$max_height" ]; do
@@ -259,6 +305,9 @@ while true; do
             batch_result="debug_failed"
             cycle_batches=$((cycle_batches + 1))
             cycle_debug_failed=$((cycle_debug_failed + 1))
+            # Nothing was imported, so later batches must not mark this
+            # bucket as imported.
+            cycle_contiguous=false
             echo "METRIC batch_result range=${current_height}-${end_height} export=skipped import=skipped prune=skipped post_prune_min_stable= result=debug_failed duration_s=$(( $(date +%s) - batch_start_time ))"
             current_height=$((end_height + 1))
             continue
@@ -272,6 +321,9 @@ while true; do
             batch_result="debug_failed"
             cycle_batches=$((cycle_batches + 1))
             cycle_debug_failed=$((cycle_debug_failed + 1))
+            # Nothing was imported, so later batches must not mark this
+            # bucket as imported.
+            cycle_contiguous=false
             echo "METRIC batch_result range=${current_height}-${end_height} export=skipped import=skipped prune=skipped post_prune_min_stable= result=debug_failed duration_s=$(( $(date +%s) - batch_start_time ))"
             current_height=$((end_height + 1))
             continue
@@ -288,6 +340,22 @@ while true; do
             cycle_batches=$((cycle_batches + 1))
             cycle_skipped_empty=$((cycle_skipped_empty + 1))
             echo "METRIC batch_result range=${current_height}-${end_height} export=skipped import=skipped prune=skipped post_prune_min_stable= result=skipped_empty duration_s=$(( $(date +%s) - batch_start_time ))"
+            current_height=$((end_height + 1))
+            continue
+        fi
+
+        # Skip ranges an earlier cycle already imported whose only pending
+        # work would be data items, when there are none. Their L1 rows are in
+        # ClickHouse already; re-importing them only stacks duplicate
+        # versions for background merges to fold.
+        if [ "$skip_empty_batches" = true ] && [ -n "$imported_through" ] && \
+            [ "$end_height" -le "$imported_through" ] && \
+            ! batch_has_data_items "$current_height" "$end_height"; then
+            echo "Skipping already-imported range $current_height-$end_height (no stable data items)."
+            batch_result="skipped_imported"
+            cycle_batches=$((cycle_batches + 1))
+            cycle_skipped_imported=$((cycle_skipped_imported + 1))
+            echo "METRIC batch_result range=${current_height}-${end_height} export=skipped import=skipped prune=skipped post_prune_min_stable= result=skipped_imported duration_s=$(( $(date +%s) - batch_start_time ))"
             current_height=$((end_height + 1))
             continue
         fi
@@ -489,30 +557,54 @@ while true; do
             else
                 log_timing "Prune stable data items" "$prune_start_time" "$prune_end_time"
 
-                # Post-prune verification: re-fetch debug and compare
-                # minStableDataItem against this batch's end_height and the
-                # pre-prune value. Purely observational.
-                verify_debug_info="$(curl -s --fail --show-error -H "Authorization: Bearer $ADMIN_API_KEY" "http://${ar_io_host}:${ar_io_port}/ar-io/admin/debug")"
-                verify_status=$?
-                if [ $verify_status -ne 0 ] || [ -z "$verify_debug_info" ]; then
-                    echo "Warning: Post-prune debug fetch failed; cannot verify prune for $current_height-$end_height."
-                    prune_stage="unverified"
-                else
-                    post_prune_min_stable="$(echo "$verify_debug_info" | jq -r '.db.heights.minStableDataItem' 2>/dev/null)"
-                    if [ -z "$post_prune_min_stable" ] || [ "$post_prune_min_stable" = "null" ]; then
-                        echo "Warning: Post-prune debug missing minStableDataItem; cannot verify."
-                        prune_stage="unverified"
-                        post_prune_min_stable=""
-                    elif [ "$pre_prune_min_stable" -gt "$end_height" ]; then
-                        prune_stage="already_drained"
-                    elif [ "$post_prune_min_stable" -gt "$end_height" ]; then
+                # Post-prune verification. Purely observational.
+                #
+                # Preferred: count what is left in this batch's own range.
+                # Items at or above the threshold are expected to stay (they
+                # were indexed after the export snapshot) and go next cycle.
+                # The global minStableDataItem comparison below cannot tell a
+                # working prune from a no-op when an older straggler sits
+                # below this batch, so it reported every such batch as noop.
+                range_left=""
+                range_newer=""
+                if [ "$skip_empty_batches" = true ]; then
+                    range_left="$(count_stable_items_in_range "$current_height" "$end_height" "$batch_max_indexed_at")"
+                    range_newer="$(count_stable_items_in_range "$current_height" "$end_height" "$batch_max_indexed_at" newer)"
+                fi
+                if [[ "$range_left" =~ ^[0-9]+$ ]] && [[ "$range_newer" =~ ^[0-9]+$ ]]; then
+                    if [ "$range_left" -eq 0 ]; then
                         prune_stage="ok"
-                    elif [ "$post_prune_min_stable" -gt "$pre_prune_min_stable" ]; then
-                        echo "Warning: Prune partial for $current_height-$end_height: minStableDataItem advanced $pre_prune_min_stable -> $post_prune_min_stable but still <= $end_height."
-                        prune_stage="partial"
+                        if [ "$range_newer" -gt 0 ]; then
+                            echo "Prune ok for $current_height-$end_height; $range_newer item(s) indexed after the export snapshot stay for the next cycle."
+                        fi
                     else
-                        echo "Warning: Prune appears to be a no-op for $current_height-$end_height: minStableDataItem unchanged at $post_prune_min_stable."
+                        echo "Warning: Prune left $range_left item(s) older than the threshold in $current_height-$end_height."
                         prune_stage="noop"
+                    fi
+                    post_prune_min_stable=""
+                else
+                    verify_debug_info="$(curl -s --fail --show-error -H "Authorization: Bearer $ADMIN_API_KEY" "http://${ar_io_host}:${ar_io_port}/ar-io/admin/debug")"
+                    verify_status=$?
+                    if [ $verify_status -ne 0 ] || [ -z "$verify_debug_info" ]; then
+                        echo "Warning: Post-prune debug fetch failed; cannot verify prune for $current_height-$end_height."
+                        prune_stage="unverified"
+                    else
+                        post_prune_min_stable="$(echo "$verify_debug_info" | jq -r '.db.heights.minStableDataItem' 2>/dev/null)"
+                        if [ -z "$post_prune_min_stable" ] || [ "$post_prune_min_stable" = "null" ]; then
+                            echo "Warning: Post-prune debug missing minStableDataItem; cannot verify."
+                            prune_stage="unverified"
+                            post_prune_min_stable=""
+                        elif [ "$pre_prune_min_stable" -gt "$end_height" ]; then
+                            prune_stage="already_drained"
+                        elif [ "$post_prune_min_stable" -gt "$end_height" ]; then
+                            prune_stage="ok"
+                        elif [ "$post_prune_min_stable" -gt "$pre_prune_min_stable" ]; then
+                            echo "Warning: Prune partial for $current_height-$end_height: minStableDataItem advanced $pre_prune_min_stable -> $post_prune_min_stable but still <= $end_height."
+                            prune_stage="partial"
+                        else
+                            echo "Warning: Prune appears to be a no-op for $current_height-$end_height: minStableDataItem unchanged at $post_prune_min_stable."
+                            prune_stage="noop"
+                        fi
                     fi
                 fi
             fi
@@ -548,6 +640,17 @@ while true; do
         log_timing "Batch processing (heights $current_height to $end_height)" "$batch_start_time" "$batch_end_time"
         echo "METRIC batch_result range=${current_height}-${end_height} export=${export_stage} import=${import_stage} prune=${prune_stage} post_prune_min_stable=${post_prune_min_stable} result=${batch_result} duration_s=$((batch_end_time - batch_start_time))"
 
+        # A bucket counts as imported only when the stable chain already
+        # covered all of it at cycle start (end_height <= max_height) and no
+        # earlier batch in this cycle failed. The tip bucket is still filling,
+        # so it is never marked and is re-imported each cycle as before.
+        if [ "$import_success" != true ]; then
+            cycle_contiguous=false
+        elif [ "$cycle_contiguous" = true ] && [ "$end_height" -le "$max_height" ] && \
+            [ "$end_height" -gt "${imported_through:--1}" ]; then
+            imported_through=$end_height
+        fi
+
         # Bump current_height
         current_height=$((end_height + 1))
     done
@@ -560,7 +663,7 @@ while true; do
     loop_end_time=$(date +%s)
     log_timing "Complete import cycle" "$loop_start_time" "$loop_end_time"
 
-    echo "METRIC cycle_summary batches=${cycle_batches} ok=${cycle_ok} skipped_empty=${cycle_skipped_empty} export_failed=${cycle_export_failed} import_failed=${cycle_import_failed} prune_failed=${cycle_prune_failed} prune_unverified=${cycle_prune_unverified} debug_failed=${cycle_debug_failed} duration_s=$((loop_end_time - loop_start_time))"
+    echo "METRIC cycle_summary batches=${cycle_batches} ok=${cycle_ok} skipped_empty=${cycle_skipped_empty} skipped_imported=${cycle_skipped_imported} export_failed=${cycle_export_failed} import_failed=${cycle_import_failed} prune_failed=${cycle_prune_failed} prune_unverified=${cycle_prune_unverified} debug_failed=${cycle_debug_failed} duration_s=$((loop_end_time - loop_start_time))"
 
     echo "Sleeping for $sleep_interval seconds..."
     sleep "$sleep_interval"
