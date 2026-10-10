@@ -222,6 +222,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `PREFERRED_CHUNK_GET_NODE_URLS` or `PREFERRED_CHUNK_POST_NODE_URLS`
   should drop it from their own lists too.
 
+- **A chunk fetch now tries up to 8 Arweave peers, up from 5**
+  (`ARWEAVE_PEER_CHUNK_GET_MAX_PEER_ATTEMPT_COUNT`). On the older half of
+  the weave a chunk is often held by only one of the preferred `tip` nodes,
+  and peers are picked by weighted random, so 5 attempts regularly ran out
+  first and `/chunk/<offset>` answered 404 for a chunk the network holds.
+  Measured from a US gateway: 16 of 20 random offsets served at 5 attempts,
+  19 of 20 at 8 (turbo-gateway.com: 19 of 20). The observer's offset checks,
+  restored in this release, fail a gateway that 404s on chunks it should
+  serve. Each attempt is still capped at 500 ms, so a chunk no peer has now
+  takes up to 4 s to fail instead of 2.5 s, and makes three more peer
+  requests. Set the variable to keep the old value.
+
 - **`index-export` derives `parquet-l1` lookups before it builds**, not
   after: a band that only lacks its lookups gets them in seconds to minutes
   at the start of a run, rather than after up to 4 hours of builds. The
