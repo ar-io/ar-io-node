@@ -32,6 +32,12 @@ max_rows_per_file=${CLICKHOUSE_AUTO_IMPORT_MAX_ROWS_PER_FILE:-1000000}
 idle_wait_timeout_s=${CLICKHOUSE_AUTO_IMPORT_IDLE_WAIT_TIMEOUT_S:-600}
 export_retry_max=${CLICKHOUSE_AUTO_IMPORT_EXPORT_MAX_RETRIES:-3}
 export_retry_delay_s=${CLICKHOUSE_AUTO_IMPORT_EXPORT_RETRY_DELAY_S:-5}
+debug_retry_window_s=${CLICKHOUSE_AUTO_IMPORT_DEBUG_RETRY_WINDOW_S:-600}
+# Upper bound for one /ar-io/admin/debug request. It usually answers in
+# milliseconds but has been seen to take over two minutes while the
+# gateway's SQLite worker is busy, so this only guards against a request
+# that never returns.
+debug_request_timeout_s=300
 core_db_path="${CORE_DB_PATH:-data/sqlite/core.db}"
 bundles_db_path="${BUNDLES_DB_PATH:-data/sqlite/bundles.db}"
 
@@ -159,6 +165,39 @@ wait_for_export_idle() {
     done
 }
 
+# Prints the gateway's /ar-io/admin/debug response. While the gateway is
+# unreachable or answers with an error, as it does for a minute or two
+# during a restart, retries with backoff for up to $debug_retry_window_s
+# seconds; returns 1 with nothing printed once that runs out. A response
+# that arrives but lacks the expected fields is returned as is: the callers
+# validate it, and retrying would not change it.
+fetch_debug_info() {
+    local start elapsed body status delay=5
+    start=$(date +%s)
+
+    while true; do
+        body="$(curl -s --fail --show-error \
+            --connect-timeout 10 --max-time "$debug_request_timeout_s" \
+            -H "Authorization: Bearer $ADMIN_API_KEY" \
+            "http://${ar_io_host}:${ar_io_port}/ar-io/admin/debug")"
+        status=$?
+        if [ $status -eq 0 ] && [ -n "$body" ]; then
+            printf '%s\n' "$body"
+            return 0
+        fi
+
+        elapsed=$(( $(date +%s) - start ))
+        if [ "$elapsed" -ge "$debug_retry_window_s" ]; then
+            echo "Warning: debug info still unavailable after ${elapsed}s; giving up." >&2
+            return 1
+        fi
+        echo "Warning: debug info fetch failed (curl status $status); retrying in ${delay}s (elapsed ${elapsed}s/${debug_retry_window_s}s)." >&2
+        sleep "$delay"
+        delay=$(( delay * 2 ))
+        [ "$delay" -gt 60 ] && delay=60
+    done
+}
+
 # Check critical preconditions
 if [ -z "${ADMIN_API_KEY:-}" ]; then
     echo "Error: Either no ADMIN_API_KEY environment variable set in .env or no ADMIN_API_KEY_FILE path provided"
@@ -231,7 +270,7 @@ while true; do
 
     echo "Attempting to fetch debug info from admin endpoint..."
     fetch_debug_start_time=$(date +%s)
-    debug_info="$(curl -s --fail --show-error -H "Authorization: Bearer $ADMIN_API_KEY" "http://${ar_io_host}:${ar_io_port}/ar-io/admin/debug")"
+    debug_info="$(fetch_debug_info)"
     curl_status=$?
     fetch_debug_end_time=$(date +%s)
 
@@ -290,45 +329,9 @@ while true; do
         post_prune_min_stable=""
         batch_result="unknown"
 
-        # Step 0: Refresh debug info for this batch so the prune threshold
-        # is taken *before* this batch's export runs. The export will see
-        # at least every item with indexed_at <= batch_max_indexed_at, so
-        # using that same value for the subsequent prune call guarantees
-        # prune can never remove un-exported items.
-        batch_debug_start_time=$(date +%s)
-        batch_debug_info="$(curl -s --fail --show-error -H "Authorization: Bearer $ADMIN_API_KEY" "http://${ar_io_host}:${ar_io_port}/ar-io/admin/debug")"
-        batch_debug_status=$?
-        log_timing "Fetch per-batch debug info" "$batch_debug_start_time" "$(date +%s)"
-
-        if [ $batch_debug_status -ne 0 ] || [ -z "$batch_debug_info" ]; then
-            echo "Warning: Per-batch debug fetch failed; skipping batch $current_height-$end_height."
-            batch_result="debug_failed"
-            cycle_batches=$((cycle_batches + 1))
-            cycle_debug_failed=$((cycle_debug_failed + 1))
-            # Nothing was imported, so later batches must not mark this
-            # bucket as imported.
-            cycle_contiguous=false
-            echo "METRIC batch_result range=${current_height}-${end_height} export=skipped import=skipped prune=skipped post_prune_min_stable= result=debug_failed duration_s=$(( $(date +%s) - batch_start_time ))"
-            current_height=$((end_height + 1))
-            continue
-        fi
-
-        batch_max_indexed_at="$(echo "$batch_debug_info" | jq -r '.db.timestamps.maxStableDataItemIndexedAt' 2>/dev/null)"
-        pre_prune_min_stable="$(echo "$batch_debug_info" | jq -r '.db.heights.minStableDataItem' 2>/dev/null)"
-
-        if [ -z "$batch_max_indexed_at" ] || [ "$batch_max_indexed_at" = "null" ] || [ -z "$pre_prune_min_stable" ] || [ "$pre_prune_min_stable" = "null" ]; then
-            echo "Warning: Per-batch debug info missing fields; skipping batch $current_height-$end_height."
-            batch_result="debug_failed"
-            cycle_batches=$((cycle_batches + 1))
-            cycle_debug_failed=$((cycle_debug_failed + 1))
-            # Nothing was imported, so later batches must not mark this
-            # bucket as imported.
-            cycle_contiguous=false
-            echo "METRIC batch_result range=${current_height}-${end_height} export=skipped import=skipped prune=skipped post_prune_min_stable= result=debug_failed duration_s=$(( $(date +%s) - batch_start_time ))"
-            current_height=$((end_height + 1))
-            continue
-        fi
-
+        # The skip checks read only the local SQLite files, so they run
+        # before the debug fetch below, which only batches that export need.
+        #
         # Skip ranges with no source rows. With sparse backfills most
         # buckets between min/maxStableDataItem are empty, and attempting
         # export/import for them just produces "Input directory does not
@@ -356,6 +359,45 @@ while true; do
             cycle_batches=$((cycle_batches + 1))
             cycle_skipped_imported=$((cycle_skipped_imported + 1))
             echo "METRIC batch_result range=${current_height}-${end_height} export=skipped import=skipped prune=skipped post_prune_min_stable= result=skipped_imported duration_s=$(( $(date +%s) - batch_start_time ))"
+            current_height=$((end_height + 1))
+            continue
+        fi
+
+        # Step 0: Refresh debug info for this batch so the prune threshold
+        # is taken *before* this batch's export runs. The export will see
+        # at least every item with indexed_at <= batch_max_indexed_at, so
+        # using that same value for the subsequent prune call guarantees
+        # prune can never remove un-exported items.
+        batch_debug_start_time=$(date +%s)
+        batch_debug_info="$(fetch_debug_info)"
+        batch_debug_status=$?
+        log_timing "Fetch per-batch debug info" "$batch_debug_start_time" "$(date +%s)"
+
+        # fetch_debug_info has already retried for the whole window, so the
+        # gateway is down for longer than a restart. Every later batch needs
+        # it too; end the cycle instead of failing each of them in turn.
+        if [ $batch_debug_status -ne 0 ] || [ -z "$batch_debug_info" ]; then
+            echo "Warning: Per-batch debug fetch failed; ending this cycle at batch $current_height-$end_height."
+            batch_result="debug_failed"
+            cycle_batches=$((cycle_batches + 1))
+            cycle_debug_failed=$((cycle_debug_failed + 1))
+            cycle_contiguous=false
+            echo "METRIC batch_result range=${current_height}-${end_height} export=skipped import=skipped prune=skipped post_prune_min_stable= result=debug_failed duration_s=$(( $(date +%s) - batch_start_time ))"
+            break
+        fi
+
+        batch_max_indexed_at="$(echo "$batch_debug_info" | jq -r '.db.timestamps.maxStableDataItemIndexedAt' 2>/dev/null)"
+        pre_prune_min_stable="$(echo "$batch_debug_info" | jq -r '.db.heights.minStableDataItem' 2>/dev/null)"
+
+        if [ -z "$batch_max_indexed_at" ] || [ "$batch_max_indexed_at" = "null" ] || [ -z "$pre_prune_min_stable" ] || [ "$pre_prune_min_stable" = "null" ]; then
+            echo "Warning: Per-batch debug info missing fields; skipping batch $current_height-$end_height."
+            batch_result="debug_failed"
+            cycle_batches=$((cycle_batches + 1))
+            cycle_debug_failed=$((cycle_debug_failed + 1))
+            # Nothing was imported, so later batches must not mark this
+            # bucket as imported.
+            cycle_contiguous=false
+            echo "METRIC batch_result range=${current_height}-${end_height} export=skipped import=skipped prune=skipped post_prune_min_stable= result=debug_failed duration_s=$(( $(date +%s) - batch_start_time ))"
             current_height=$((end_height + 1))
             continue
         fi
@@ -583,7 +625,7 @@ while true; do
                     fi
                     post_prune_min_stable=""
                 else
-                    verify_debug_info="$(curl -s --fail --show-error -H "Authorization: Bearer $ADMIN_API_KEY" "http://${ar_io_host}:${ar_io_port}/ar-io/admin/debug")"
+                    verify_debug_info="$(curl -s --fail --show-error --connect-timeout 10 --max-time "$debug_request_timeout_s" -H "Authorization: Bearer $ADMIN_API_KEY" "http://${ar_io_host}:${ar_io_port}/ar-io/admin/debug")"
                     verify_status=$?
                     if [ $verify_status -ne 0 ] || [ -z "$verify_debug_info" ]; then
                         echo "Warning: Post-prune debug fetch failed; cannot verify prune for $current_height-$end_height."
