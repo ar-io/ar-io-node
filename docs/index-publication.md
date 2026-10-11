@@ -297,10 +297,11 @@ bands of heights: about 15 GB in 24 bands in October 2026. In qBittorrent:
    the feed, and set the save path to an empty folder, such as
    `~/arweave-l1`.
 
-Every band starts at once. Each lands in its own folder, named after its
-torrent (`ario:torrentName`, a 16-character hex name), not its band id: the
-name comes from the files, so publishers of the same files agree on it. The
-folder's `band.json` says which heights it holds.
+Every band is added at once, and qBittorrent downloads a few at a time (its
+queue, under **Options → BitTorrent**). Each lands in its own folder, named
+after its torrent (`ario:torrentName`, a 16-character hex name), not its
+band id: the name comes from the files, so publishers of the same files
+agree on it. The folder's `band.json` says which heights it holds.
 
 To check what arrived against the chain's own commitments, run
 [`index-l1-verify`](cli.md#index-l1-verify) over the folder. It needs no
