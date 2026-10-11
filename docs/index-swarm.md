@@ -94,8 +94,11 @@ themselves. The gateway loads each within 30 seconds.
    gateway itself, at `https://<ARNS_ROOT_HOST>/ar-io/indexes/announce`
    (`--public-url` names another origin). The first scan hashes every file
    once (minutes for tens of GB).
-5. With `--torrent`, open 6881 (TCP and UDP) to the internet. The tracker
-   needs no port of its own: see [the tracker](#the-tracker).
+5. With `--torrent`, open 6881 (TCP and UDP) to the internet. Announcing
+   through the gateway, the tracker needs no port of its own (see
+   [the tracker](#the-tracker)); that route is Envoy's, so run the Envoy
+   image from release 85 or later. Without a gateway URL, setup writes the
+   direct tracker port instead and says to open it.
 6. Check it with `./tools/index-swarm-status`, and from outside:
    `curl -s https://<your gateway>/ar-io/indexes | jq '{sequence, publisher, bands: [.indexes[].bands[].id]}'`.
 7. Behind nginx, read [running behind nginx](#running-behind-nginx) before
@@ -323,13 +326,18 @@ The gateway serves each `.torrent` with one addition: its own WebSeed
 dictionary, so the infohashes are unchanged. That is for stock BitTorrent
 clients following the
 [feed](index-publication.md#following-an-index-in-a-bittorrent-client),
-which have no other way to finish a band nobody is seeding. Subscribers drop every WebSeed from a
-torrent they fetch and add the publisher's themselves, only when peers are
-not delivering: an engine otherwise pulls about half of a band from a
-WebSeed even with a seeder available, and the WebSeed is the publisher's
-metered tier. The file the publisher keeps in `published/.torrents/` has no
-WebSeed; without `INDEXES_PUBLIC_URL` (or `ARNS_ROOT_HOST`) the gateway
-serves it as it is.
+which have no other way to finish a band nobody is seeding. Such a client
+pulls a good share of every band from the WebSeed even with seeders
+available (an engine pulls about half), so on a gateway that does not meter
+its byte routes that is core's egress, read from disk and outside the
+engine's upload limits. Meter the byte routes to bound it, or set
+`INDEXES_TORRENT_WEBSEED=false` to serve torrents without it. Subscribers
+drop every WebSeed from a torrent they fetch and add the publisher's
+themselves, only when peers are not delivering. The file the publisher
+keeps in `published/.torrents/` has no WebSeed; without `INDEXES_PUBLIC_URL`
+(or `ARNS_ROOT_HOST`) the gateway serves it as it is. Before serving one,
+the gateway checks that its info dictionary hashes to the infohash it is
+filed under, which the response names in a signed header.
 
 Every torrent is hybrid (v1 and BEP 52 v2) with 256 KiB pieces. The piece
 size is fixed so that publishers of the same bytes agree on the torrent. It
@@ -363,10 +371,13 @@ under both infohashes of each torrent, and refuses every other torrent with
 - **Through the gateway** (recommended):
   `https://<gateway>/ar-io/indexes/announce`. The gateway's Envoy forwards
   that path to the sidecar's `INDEX_SWARM_TRACKER_PROXY_PORT` (default 6970),
-  which is never published, so no port needs opening. Only the gateway's own
-  host is routed; ArNS subdomains keep their paths. The route sits under
-  `/ar-io/indexes`, so an nginx location or a fleet pin for that prefix
-  already covers it.
+  which is never published, so no port needs opening. The route is in the
+  Envoy image from release 85 on: an older Envoy passes the path to core,
+  which answers `404`, and every announce fails without a word. Only the
+  gateway's own host is routed; ArNS subdomains keep their paths. The route
+  sits under `/ar-io/indexes`, so an nginx location or a fleet pin for that
+  prefix covers it, as long as it reaches Envoy (port 3000), not core
+  (port 4000).
 - **Directly**, on `INDEX_SWARM_TRACKER_PORT` (default 6969), published on
   the host: `http://<public address>:6969/announce`.
 
@@ -391,9 +402,18 @@ Every answer is `no-store`.
 A tracker hands out addresses, so it must record each peer's real one. On
 the gateway route every connection comes from Envoy, and the tracker reads
 the peer's address from `X-Forwarded-For`, believing the hops added by
-private addresses (Envoy, and an nginx on the same network) and by
-`INDEX_SWARM_TRACKER_TRUSTED_PROXIES`. So every proxy in front of the
-gateway must append `X-Forwarded-For`, as the [nginx
+`INDEX_SWARM_TRACKER_PROXY_TRUSTED_PROXIES` (by default every private
+address: Envoy, and an nginx on the same network) and by
+`INDEX_SWARM_TRACKER_TRUSTED_PROXIES`. That default, like core's
+`TRUSTED_PROXIES`, also believes any client that reaches Envoy from a
+private address (the LAN, a tailnet, another container, or IPv6 relayed by
+Docker's userland proxy), which can then list any address as a peer. Pieces
+are checked, so that costs a swarm availability, not integrity. Where such
+clients can reach the gateway, set `INDEX_SWARM_TRACKER_PROXY_TRUSTED_PROXIES`
+to the proxies alone, such as the Docker network and the nginx host. The
+tracker refuses announces a web page makes (`Sec-Fetch-Site`,
+`Sec-Fetch-Dest` or `Origin`), so a page cannot list its visitors. Every
+proxy in front of the gateway must append `X-Forwarded-For`, as the [nginx
 location](#running-behind-nginx) does, and a proxy that reaches the gateway
 from a public address must be listed in `INDEX_SWARM_TRACKER_TRUSTED_PROXIES`.
 Otherwise peers appear at the proxy's address and the per-address caps
@@ -429,8 +449,9 @@ BitTorrent needs a few things an HTTP proxy does not give:
    the load balancer.
 3. **The tracker, through the load balancer.** Announce to
    `https://<gateway>/ar-io/indexes/announce`. The `/ar-io/indexes*` pin
-   already sends it to the signing node, whose Envoy forwards it to the
-   tracker. The load balancer and any proxy after it must append
+   sends it to the signing node, whose Envoy forwards it to the tracker, so
+   the pin must reach that node's Envoy (port 3000): pinned to core's
+   port 4000, announces get `404`. The load balancer and any proxy after it must append
    `X-Forwarded-For` (`proxy_set_header X-Forwarded-For
    $proxy_add_x_forwarded_for;`), and any that reach the node from a public
    address go in `INDEX_SWARM_TRACKER_TRUSTED_PROXIES`. Otherwise every peer

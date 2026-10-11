@@ -226,15 +226,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   listener on the sidecar, `INDEX_SWARM_TRACKER_PROXY_PORT` (6970), which is
   never published and reads the peer's address from `X-Forwarded-For`.
   `tools/index-swarm-setup --publish --torrent` now writes that URL into
-  `INDEX_SWARM_TRACKERS` when the gateway has `ARNS_ROOT_HOST` (or
-  `--public-url`). An existing tracker list is kept; the direct port still
-  works.
+  `INDEX_SWARM_TRACKERS` when it knows the gateway's origin (`--public-url`,
+  `INDEXES_PUBLIC_URL` or `ARNS_ROOT_HOST`). An existing tracker list is
+  kept; the direct port still works. **Upgrade the Envoy image with core:**
+  the route is Envoy's, and an older Envoy passes the path to core, which
+  answers `404`, so every announce fails without a word. The listener
+  believes `X-Forwarded-For` from `INDEX_SWARM_TRACKER_PROXY_TRUSTED_PROXIES`,
+  every private range by default, like core's `TRUSTED_PROXIES`; narrow it
+  where clients can reach Envoy from a private address. It refuses announces
+  a web page makes (`Sec-Fetch-Site`, `Sec-Fetch-Dest` or `Origin`), so a
+  page cannot list its visitors as peers.
 - **`/ar-io/info` points at each index's feed.** Its `indexes` block gains
   `feeds`, mapping each index that has a band offered as a torrent to
   `/ar-io/indexes/feed/<index>.xml`, present only when the gateway serves
   feeds (it has `INDEXES_PUBLIC_URL` or `ARNS_ROOT_HOST`). A node that
   advertises another node's publication, on a fleet, advertises its feeds
-  the same way. So one request per registered gateway finds every feed.
+  from that publication, when it has a public origin of its own; the feeds
+  themselves are served by the signing node the `/ar-io/indexes*` pin
+  reaches, so give it one too. So one request per registered gateway finds
+  every feed.
 - **A `.torrent` served by the gateway names the gateway as its WebSeed**
   (BEP 19 `url-list`, `<INDEXES_PUBLIC_URL>/ar-io/indexes/webseed/`), so a
   stock BitTorrent client following an index feed can finish a band that no
@@ -246,7 +256,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   match), a `Content-Digest`, and an `X-AR-IO-Index-Torrent` header naming
   the v1 infohash, which HTTPSIG signs. Feed items name the folder a band is
   saved in (`ario:torrentName`) and the bands it replaces
-  (`ario:supersedes`), and each enclosure's length is the served torrent's.
+  (`ario:supersedes`, only the claims the publisher honours), and each
+  enclosure's length is the served torrent's. A stock client pulls a good
+  share of every band from the WebSeed even while seeders could serve it,
+  through the byte routes' meter when that is on;
+  `INDEXES_TORRENT_WEBSEED=false` serves torrents without it. A stored
+  `.torrent` whose info dictionary does not hash to the infohash it is filed
+  under is not served.
 
 ### Changed
 
