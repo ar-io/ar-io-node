@@ -26,6 +26,7 @@ import { checkParquetFile, openFooterReader } from '../../lib/parquet/check.js';
 import {
   BAND_FILE,
   bandFiles,
+  bandSupersedes,
   isL1BandRange,
   L1_SPAN,
   L1_SUB_SPAN,
@@ -108,6 +109,10 @@ export class ParquetL1Kind implements ArtifactKind {
         }),
       ),
     );
+    // What the band replaces is this publisher's own, kept beside the band
+    // (or, in a band written before that, in its band.json): it goes in the
+    // signed publication, never in the band's files.
+    const supersedes = await bandSupersedes({ dir, band });
     return {
       id: path.basename(dir),
       heightRange: band.heightRange,
@@ -115,9 +120,7 @@ export class ParquetL1Kind implements ArtifactKind {
       files,
       metadata: {
         schema: band.schema,
-        ...(band.supersedes !== undefined
-          ? { supersedes: band.supersedes }
-          : {}),
+        ...(supersedes !== undefined ? { supersedes } : {}),
       },
     };
   }
