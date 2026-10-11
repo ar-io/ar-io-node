@@ -361,6 +361,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **`index-l1-verify --bands-dir` no longer fails the `lookups` check of a
+  large `l1-3` band on a directory it cannot write.** DuckDB had no spill
+  directory, so it tried `.tmp` under the working directory, which is the
+  image's `/app` when run through `tools/ar-io-node` or `docker run` as the
+  caller's user. 15 of the 24 L1 bands failed that way with `Failed to
+  create directory ".tmp": Permission denied`, though their lookups were
+  sound. It now spills to a folder of its own under `TMPDIR`, removed when
+  the run ends.
+
 - **`index-l1-import`, `index-l1-verify` and `index-l1-audit` now run
   through `tools/ar-io-node`.** The wrapper mounted data only for
   `index-band-*`, and `docs/cli.md` showed these commands as

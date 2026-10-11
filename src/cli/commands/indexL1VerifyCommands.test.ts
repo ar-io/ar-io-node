@@ -15,7 +15,10 @@ import Sqlite from 'better-sqlite3';
 import { buildCoreDb } from '../../../test/parquet-l1-core-db.js';
 import { createTestLogger } from '../../../test/test-logger.js';
 import { VerifyRefused } from '../../lib/parquet-l1/verify.js';
-import { indexL1VerifyCLICommand } from './indexL1VerifyCommands.js';
+import {
+  indexL1VerifyCLICommand,
+  openBandsDuck,
+} from './indexL1VerifyCommands.js';
 
 const log = createTestLogger({ suite: 'index-l1-verify' });
 const FIRST = 300_000;
@@ -265,5 +268,42 @@ describe('indexL1VerifyCLICommand', () => {
       [],
       'and left no journal or wal beside it',
     );
+  });
+});
+
+describe('openBandsDuck', () => {
+  let root: string;
+
+  beforeEach(async () => {
+    root = await fsp.mkdtemp(path.join(os.tmpdir(), 'l1-verify-spill-'));
+  });
+
+  afterEach(async () => {
+    await fsp.rm(root, { recursive: true, force: true });
+  });
+
+  it('spills to a folder of its own under the temp root, and removes it on close', async () => {
+    const session = await openBandsDuck({ tmpRoot: root });
+    // Not `.tmp` under the working directory, which the CLI wrapper's /app,
+    // run as the caller's user, does not let DuckDB create.
+    const [setting] = (await session.duck.all(
+      "SELECT current_setting('temp_directory') AS dir",
+    )) as Array<{ dir: string }>;
+    assert.equal(setting.dir, session.spill);
+    assert.equal(path.dirname(session.spill), root);
+    assert.ok((await fsp.stat(session.spill)).isDirectory());
+
+    await session.close();
+    await assert.rejects(fsp.stat(session.spill), { code: 'ENOENT' });
+  });
+
+  it('removes its folder even when the temp root is shared', async () => {
+    const a = await openBandsDuck({ tmpRoot: root });
+    const b = await openBandsDuck({ tmpRoot: root });
+    assert.notEqual(a.spill, b.spill);
+    await a.close();
+    assert.ok((await fsp.stat(b.spill)).isDirectory(), 'b keeps its own');
+    await b.close();
+    assert.deepEqual(await fsp.readdir(root), []);
   });
 });
