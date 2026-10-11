@@ -423,7 +423,8 @@ before importing a byte, or without ever importing.
 It reads the Parquet in height windows, so the whole chain (24 bands)
 never has to fit in memory. The block checks take about half a minute per
 500,000 blocks; with every block's `tx_root` and every band's lookups
-checked, the whole chain took about an hour on one host (2026-10-11). A set of bands that overlaps, or leaves a
+checked, the whole chain from a `--bands-dir` took about an hour on one
+host (2026-10-11). A set of bands that overlaps, or leaves a
 hole, is refused rather than partly checked — a consumer holding a broken
 set has a different problem from one holding a faithful one.
 
@@ -437,8 +438,10 @@ Bands of older layouts carry none and are counted in `lookupsSkipped`.
 
 Checking the largest lookups needs more than the 2 GB DuckDB is given, so
 it spills to a folder of its own under the system temp directory
-(`TMPDIR`, `/tmp` by default; inside the image, the container's), removed
-when the run ends. Give it a few GB of free space there.
+(`TMPDIR`, `/tmp` by default; inside the image, the container's), at most
+16 GB, removed when the run ends or fails. A run killed outright (SIGKILL,
+or Ctrl-C outside the wrapper) can leave `ar-io-node-l1-verify-*` behind;
+delete it. Give it a few GB of free space there.
 
 Both views drive the **same** chain rules, in `chain.ts`, over different
 readers, and a differential test runs the two over one chain and requires

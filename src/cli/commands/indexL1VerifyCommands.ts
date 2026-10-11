@@ -34,6 +34,9 @@ import { verifyBands } from '../../lib/parquet-l1/verify-bands.js';
 import type { IndexL1VerifyCLIOptions, JsonSerializable } from '../types.js';
 import { requiredStringFromOptions } from '../utils.js';
 
+/** The most a check may spill, the cap `index-l1-import` uses too. */
+export const BANDS_SPILL_MAX = '16GB';
+
 /**
  * A DuckDB session for checking bands: bounded memory, two threads, no
  * extensions, and somewhere it can always spill.
@@ -43,7 +46,8 @@ import { requiredStringFromOptions } from '../utils.js';
  * caller's user, that is the image's `/app`, which the caller cannot write,
  * so checking the lookups of a large band failed on the directory, not the
  * band. The spill goes in a folder of its own under the system temp
- * directory (`TMPDIR`), which `close` removes.
+ * directory (`TMPDIR`), which `close` removes, and is capped so a run cannot
+ * fill the disk under it (through the wrapper, the container layer on `/`).
  */
 export async function openBandsDuck(
   options: { tmpRoot?: string } = {},
@@ -57,7 +61,7 @@ export async function openBandsDuck(
     const { Database } = await import('duckdb-async');
     duck = await Database.create(':memory:');
     await duck.exec(
-      `SET memory_limit = '2GB'; SET threads = 2; SET temp_directory = '${spill.replace(/'/g, "''")}'; SET autoinstall_known_extensions = false; SET autoload_known_extensions = false;`,
+      `SET memory_limit = '2GB'; SET threads = 2; SET temp_directory = '${spill.replace(/'/g, "''")}'; SET max_temp_directory_size = '${BANDS_SPILL_MAX}'; SET autoinstall_known_extensions = false; SET autoload_known_extensions = false;`,
     );
   } catch (error) {
     await duck?.close().catch(() => undefined);

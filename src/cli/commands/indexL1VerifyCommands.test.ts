@@ -290,6 +290,10 @@ describe('openBandsDuck', () => {
       "SELECT current_setting('temp_directory') AS dir",
     )) as Array<{ dir: string }>;
     assert.equal(setting.dir, session.spill);
+    const [cap] = (await session.duck.all(
+      "SELECT current_setting('max_temp_directory_size') AS max",
+    )) as Array<{ max: string }>;
+    assert.match(cap.max, /^1[0-9.]+ ?Gi?B$/, 'capped, not 90% of the disk');
     assert.equal(path.dirname(session.spill), root);
     assert.ok((await fsp.stat(session.spill)).isDirectory());
 
