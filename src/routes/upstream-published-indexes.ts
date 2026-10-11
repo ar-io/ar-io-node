@@ -176,6 +176,11 @@ export class UpstreamPublishedIndexes {
     return this.refreshing;
   }
 
+  /**
+   * Fetch the signing node's document and, when it is new, verify it and
+   * take what it advertises. A failure to fetch keeps what was confirmed
+   * until it goes stale; a 404 or an invalid document withdraws it.
+   */
   private async fetchAndCheck(): Promise<void> {
     this.abort = new AbortController();
     let response: { status: number; body: Buffer };
