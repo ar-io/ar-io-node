@@ -267,6 +267,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **An L1 band's `band.json` is the same from every publisher of the same
+  rows**, so two publishers' bands share one torrent and one swarm, each
+  signing the same infohash. It holds only what the rows determine, written
+  in one canonical order, and its `createdAt` is now the time of the band's
+  top block rather than when it was built. What is the publisher's own, the
+  bands it replaces and its build time, moved beside the band into
+  `.publisher.json`, which is never published; the bands it replaces still
+  reach readers through the signed publication. index-export settles each
+  band published before this in place on its next run, keeping its id and
+  rows (`l1Normalized`, `index_export_runs_total{kind="normalize"}`), so
+  subscribers fetch only the new `band.json`. Readers accept both forms.
+  Checked on 2026-10-11 against turbo-gateway.com's and vilenarios.com's
+  live L1 bands: all 24, once settled, are byte-identical.
+
 - **`tip-5.arweave.xyz` is no longer a default preferred chunk node**, for
   GET or POST. Its port 1984 was closed from two separate networks on
   2026-10-10, it served none of 60 random offsets, and `tip-1`'s own peer
