@@ -168,6 +168,7 @@ app.use(
     rateLimitsEnabled: config.ENABLE_RATE_LIMITER,
     paymentProcessor: system.paymentProcessor,
     indexFeed: system.indexFeedSource,
+    torrents: system.publishedTorrents,
   }),
 );
 app.use(datasetsRouter);

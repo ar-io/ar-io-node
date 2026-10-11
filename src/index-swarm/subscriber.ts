@@ -36,6 +36,7 @@ import {
   manifestSha256,
   parseIndexPublicationDocument,
   verifyIndexPublication,
+  WEBSEED_PATH,
 } from '../lib/index-publication.js';
 import { publicKeyFromSolanaAddress } from '../lib/httpsig.js';
 import {
@@ -2126,7 +2127,7 @@ export class Subscriber {
       ) {
         try {
           await transport.setWebSeeds(pending.id, [
-            new URL('/ar-io/indexes/webseed/', origin).toString(),
+            new URL(WEBSEED_PATH, origin).toString(),
           ]);
           pending.webSeeded = true;
           pending.webSeededAt = now;

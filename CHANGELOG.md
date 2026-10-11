@@ -229,6 +229,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `INDEX_SWARM_TRACKERS` when the gateway has `ARNS_ROOT_HOST` (or
   `--public-url`). An existing tracker list is kept; the direct port still
   works.
+- **A `.torrent` served by the gateway names the gateway as its WebSeed**
+  (BEP 19 `url-list`, `<INDEXES_PUBLIC_URL>/ar-io/indexes/webseed/`), so a
+  stock BitTorrent client following an index feed can finish a band that no
+  peer is delivering, and can download a whole index, such as all of L1,
+  from the feed alone. It sits outside the info dictionary, so the
+  infohashes are the publisher's; the stored file is unchanged, and
+  subscribers still drop every WebSeed and add the publisher's only when
+  peers stall. The torrent route now answers with an `ETag` (`304` on a
+  match), a `Content-Digest`, and an `X-AR-IO-Index-Torrent` header naming
+  the v1 infohash, which HTTPSIG signs. Feed items name the folder a band is
+  saved in (`ario:torrentName`) and the bands it replaces
+  (`ario:supersedes`), and each enclosure's length is the served torrent's.
 
 ### Changed
 

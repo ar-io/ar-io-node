@@ -347,8 +347,10 @@ HTTPSIG covers it, so a signed range read is bound to the whole file.
 <a id="webseed"></a> **WebSeed** — An HTTP URL (BEP 19) that serves the same
 bytes as the swarm, so a download completes even with no peers. On a gateway
 it is `/ar-io/indexes/webseed/`, metered while the swarm itself is free.
-Index torrents do not list it: subscribers add a publisher's WebSeed
-themselves, and only when peers stall.
+The torrents a publisher builds do not list it. The gateway adds its own
+when it serves a `.torrent`, for stock clients following an
+[index feed](#index-feed); subscribers drop it, and add a publisher's
+WebSeed themselves only when peers stall.
 
 <a id="torrent-name"></a> **Torrent Name** — The name inside a band's
 torrent: the first 16 hex characters of SHA-256 over one line per file,
@@ -367,8 +369,9 @@ file.
 
 <a id="index-feed"></a> **Index Feed** — An RSS 2.0 feed of one published
 index's torrents, at `/ar-io/indexes/feed/<index>.xml`: one item per band,
-whose enclosure is the band's `.torrent`. Lets an ordinary BitTorrent client
-follow a publisher with an auto-download rule. A view of the
+whose enclosure is the band's `.torrent`, served with the gateway's
+[WebSeed](#webseed). Lets an ordinary BitTorrent client follow a publisher
+with an auto-download rule, and finish every band. A view of the
 [publication](#index-publication), naming it by SHA-256, and never an
 authority of its own. See
 [index-publication.md](index-publication.md#following-an-index-in-a-bittorrent-client).

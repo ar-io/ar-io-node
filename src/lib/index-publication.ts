@@ -76,6 +76,12 @@ function isReservedName(value: string): boolean {
  */
 export const PUBLISHED_TORRENT_DIR = '.torrents';
 
+/**
+ * A publisher's BEP 19 WebSeed, relative to its origin. A client appends
+ * `<torrent name>/<file>`; the gateway answers it from the band's files.
+ */
+export const WEBSEED_PATH = '/ar-io/indexes/webseed/';
+
 export const INDEX_PUBLICATION_MAX_INDEXES = 64;
 export const INDEX_PUBLICATION_MAX_BANDS_PER_INDEX = 1024;
 export const INDEX_PUBLICATION_MAX_FILES_PER_BAND = 1024;
@@ -765,6 +771,18 @@ export function verifyIndexPublication(
 }
 
 /**
+ * The band ids a band says it supersedes, as its metadata claims them: one
+ * id or a list. Anything else in the claim is ignored. A claim, not a
+ * verdict: {@link supersededBands} decides which claims a set honours.
+ */
+export function supersedesClaim(band: BandDescriptor): string[] {
+  const claim = band.metadata?.supersedes;
+  return (
+    typeof claim === 'string' ? [claim] : Array.isArray(claim) ? claim : []
+  ).filter((id): id is string => typeof id === 'string');
+}
+
+/**
  * The band ids that other bands in the set supersede.
  *
  * A self-reference is ignored, and so is every claim in a cycle (A replaces
@@ -779,11 +797,7 @@ export function supersededBands(
   const ids = new Set(bands.map((band) => band.id));
   const claims = new Map<string, string[]>();
   for (const band of bands) {
-    const claim = band.metadata?.supersedes;
-    const targets = (
-      typeof claim === 'string' ? [claim] : Array.isArray(claim) ? claim : []
-    ).filter((id): id is string => typeof id === 'string');
-    const valid = targets.filter((id) => {
+    const valid = supersedesClaim(band).filter((id) => {
       if (id === band.id) {
         warn('Band supersedes itself; ignoring that', { band: band.id });
         return false;

@@ -8,8 +8,16 @@ import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
 
 import { createTestLogger } from '../../test/test-logger.js';
-import { BandDescriptor, IndexPublication } from '../lib/index-publication.js';
+import {
+  BandDescriptor,
+  IndexPublication,
+  torrentNameForFiles,
+} from '../lib/index-publication.js';
 import type { PublicationView } from '../routes/published-indexes.js';
+import type {
+  ServedTorrent,
+  TorrentMetainfoSource,
+} from '../routes/published-torrents.js';
 import {
   buildIndexBandFeed,
   INDEX_FEED_HEADER,
@@ -26,6 +34,7 @@ const band = (
     heightRange?: [number, number | null];
     torrent?: string;
     schema?: string;
+    supersedes?: string | string[];
   } = {},
 ): BandDescriptor => ({
   id,
@@ -46,8 +55,15 @@ const band = (
         },
       }
     : {}),
-  ...(options.schema !== undefined
-    ? { metadata: { schema: options.schema } }
+  ...(options.schema !== undefined || options.supersedes !== undefined
+    ? {
+        metadata: {
+          ...(options.schema !== undefined ? { schema: options.schema } : {}),
+          ...(options.supersedes !== undefined
+            ? { supersedes: options.supersedes }
+            : {}),
+        },
+      }
     : {}),
 });
 
@@ -61,6 +77,20 @@ const publication = (bands: BandDescriptor[]): IndexPublication =>
     indexes: [{ name: 'parquet-l1', kind: 'parquet-l1', bands }],
     signature: { alg: 'ed25519', keyId: 'K', sig: 'S' },
   }) as IndexPublication;
+
+/** An in-memory torrent source: each served torrent `size` bytes long. */
+const servedOf = (size: number): ServedTorrent => ({
+  body: Buffer.alloc(size),
+  sha256: 'f'.repeat(64),
+});
+const torrentsOf = (
+  size: (infohashV1: string) => number | undefined,
+): TorrentMetainfoSource => ({
+  torrent: async (infohashV1) => {
+    const n = size(infohashV1);
+    return n === undefined ? undefined : servedOf(n);
+  },
+});
 
 const sizesFor = (bands: BandDescriptor[], size = 48_213) =>
   new Map(
@@ -106,7 +136,11 @@ describe('buildIndexBandFeed', () => {
     })!;
     const item = feed.items.find((i) => i.id === `urn:btih:${hex('a', 40)}`)!;
     assert.equal(item.title, 'l1-h100000-199999 (heights 100000 to 199999)');
-    assert.equal(item.description, '2 files, 1.5 MB, layout l1-3');
+    const folder = torrentNameForFiles(bands[0].files);
+    assert.equal(
+      item.description,
+      `2 files, 1.5 MB, layout l1-3, saved in folder ${folder}`,
+    );
     assert.equal(item.link, `magnet:?xt=urn:btih:${hex('a', 40)}&dn=x`);
     assert.deepEqual(item.enclosure, {
       url: `${BASE}/ar-io/indexes/torrents/${hex('a', 40)}.torrent`,
@@ -119,6 +153,7 @@ describe('buildIndexBandFeed', () => {
     );
     assert.deepEqual(facts, {
       band: 'l1-h100000-199999',
+      torrentName: folder,
       infohashV2: hex('a', 64),
       heightFrom: '100000',
       heightTo: '199999',
@@ -174,6 +209,43 @@ describe('buildIndexBandFeed', () => {
     assert.ok(!feed.items.some((i) => i.id === `urn:btih:${hex('b', 40)}`));
   });
 
+  it('names, for each band, the bands it supersedes, so a follower can drop them', () => {
+    const replacing = [
+      band('l1-h0-99999', {
+        heightRange: [0, 99999],
+        torrent: 'e',
+        supersedes: ['l1-h0-99999-old-1', 'l1-h0-99999-old-2'],
+      }),
+      band('l1-h100000-tip', {
+        heightRange: [100000, null],
+        torrent: 'f',
+        supersedes: 'l1-h100000-tip-old',
+      }),
+      band('l1-h200000-299999', {
+        heightRange: [200000, 299999],
+        torrent: 'a',
+      }),
+    ];
+    const feed = buildIndexBandFeed({
+      publication: publication(replacing),
+      publicationSha256: 'f'.repeat(64),
+      index: 'parquet-l1',
+      baseUrl: BASE,
+      torrentSizes: sizesFor(replacing),
+    })!;
+    const supersedes = (id: string) =>
+      feed.items
+        .find((i) => i.elements?.some((e) => e.value === id))!
+        .elements!.filter((e) => e.name === 'supersedes')
+        .map((e) => e.value);
+    assert.deepEqual(supersedes('l1-h0-99999'), [
+      'l1-h0-99999-old-1',
+      'l1-h0-99999-old-2',
+    ]);
+    assert.deepEqual(supersedes('l1-h100000-tip'), ['l1-h100000-tip-old']);
+    assert.deepEqual(supersedes('l1-h200000-299999'), []);
+  });
+
   it('is undefined for an index the publication does not have, and empty for one with no torrents', () => {
     const args = {
       publicationSha256: 'f'.repeat(64),
@@ -206,23 +278,22 @@ describe('IndexBandFeedSource', () => {
   it('builds a snapshot naming the publication, and memoises it per publication', async () => {
     const bands = [band('a', { heightRange: [0, 1], torrent: 'a' })];
     let current = view(publication(bands), '1'.repeat(64));
-    let stats = 0;
+    let reads = 0;
     const source = new IndexBandFeedSource({
       log,
       published: { current: async () => current },
-      publishedDir: '/nowhere',
       baseUrl: BASE,
-      torrentSize: async () => {
-        stats += 1;
+      torrents: torrentsOf(() => {
+        reads += 1;
         return 100;
-      },
+      }),
     });
     const first = await source.snapshot({ index: 'parquet-l1' });
     assert.equal(first?.headers?.[INDEX_FEED_HEADER], '1'.repeat(64));
     assert.equal(first?.feed.items.length, 1);
     const again = await source.snapshot({ index: 'parquet-l1' });
     assert.equal(again, first, 'the same snapshot, not rebuilt');
-    assert.equal(stats, 1);
+    assert.equal(reads, 1);
 
     current = view(
       publication([...bands, band('b', { heightRange: [2, 3], torrent: 'b' })]),
@@ -245,9 +316,8 @@ describe('IndexBandFeedSource', () => {
       published: {
         current: async () => view(publication(bands), '1'.repeat(64)),
       },
-      publishedDir: '/nowhere',
       baseUrl: BASE,
-      torrentSize: async (ih) => (present.has(ih) ? 100 : undefined),
+      torrents: torrentsOf((ih) => (present.has(ih) ? 100 : undefined)),
     });
     const before = await source.snapshot({ index: 'parquet-l1' });
     assert.equal(before?.feed.items.length, 1);
@@ -266,27 +336,38 @@ describe('IndexBandFeedSource', () => {
     const noBase = new IndexBandFeedSource({
       log,
       published,
-      publishedDir: '/nowhere',
       baseUrl: undefined,
-      torrentSize: async () => 100,
+      torrents: torrentsOf(() => 100),
     });
     assert.equal(await noBase.snapshot({ index: 'parquet-l1' }), undefined);
     const source = new IndexBandFeedSource({
       log,
       published,
-      publishedDir: '/nowhere',
       baseUrl: BASE,
-      torrentSize: async () => 100,
+      torrents: torrentsOf(() => 100),
     });
     assert.equal(await source.snapshot({ index: 'root-tx-index' }), undefined);
     const nothing = new IndexBandFeedSource({
       log,
       published: { current: async () => undefined },
-      publishedDir: '/nowhere',
       baseUrl: BASE,
-      torrentSize: async () => 100,
+      torrents: torrentsOf(() => 100),
     });
     assert.equal(await nothing.snapshot({ index: 'parquet-l1' }), undefined);
+  });
+
+  it('gives each enclosure the length of the torrent the gateway serves', async () => {
+    const bands = [band('a', { heightRange: [0, 1], torrent: 'a' })];
+    const source = new IndexBandFeedSource({
+      log,
+      published: {
+        current: async () => view(publication(bands), '1'.repeat(64)),
+      },
+      baseUrl: BASE,
+      torrents: torrentsOf(() => 4_584),
+    });
+    const snapshot = await source.snapshot({ index: 'parquet-l1' });
+    assert.equal(snapshot?.feed.items[0].enclosure?.length, 4_584);
   });
 
   it('gives equal versions for equal content', async () => {
@@ -297,9 +378,8 @@ describe('IndexBandFeedSource', () => {
         published: {
           current: async () => view(publication(bands), '1'.repeat(64)),
         },
-        publishedDir: '/nowhere',
         baseUrl: BASE,
-        torrentSize: async () => 100,
+        torrents: torrentsOf(() => 100),
       });
     const [a, b] = await Promise.all([
       make().snapshot({ index: 'parquet-l1' }),

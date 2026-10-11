@@ -20,6 +20,7 @@ import { XMLParser } from 'fast-xml-parser';
 
 import { createIndexesRouter } from './indexes.js';
 import { PublishedIndexes } from './published-indexes.js';
+import { PublishedTorrents } from './published-torrents.js';
 import {
   INDEX_FEED_HEADER,
   IndexBandFeedSource,
@@ -35,7 +36,7 @@ import {
   PUBLISHED_TORRENT_DIR,
   torrentNameForFiles,
 } from '../lib/index-publication.js';
-import { bdecode } from '../lib/bencode.js';
+import { bdecode, bencode } from '../lib/bencode.js';
 import { createHttpSigMiddleware } from '../middleware/httpsig.js';
 import { deriveKeyId, getSolanaAddress } from '../lib/httpsig.js';
 import { createTestLogger } from '../../test/test-logger.js';
@@ -926,6 +927,123 @@ describe('/ar-io/indexes/webseed', () => {
     );
   });
 
+  const bytesOf = (r: request.Test) =>
+    r.buffer(true).parse((res, cb) => {
+      const chunks: Buffer[] = [];
+      res.on('data', (c: Buffer) => chunks.push(c));
+      res.on('end', () => cb(null, Buffer.concat(chunks)));
+    });
+
+  const withWebSeed = (origin = 'https://gateway.example') => {
+    const seeded = express();
+    seeded.use(
+      createIndexesRouter({
+        log,
+        publishedDir,
+        torrents: new PublishedTorrents({
+          log,
+          publishedDir,
+          publicOrigin: origin,
+        }),
+      }),
+    );
+    return seeded;
+  };
+
+  it('serves each torrent naming this gateway’s WebSeed, under the signed infohash', async () => {
+    const band = publication.indexes[0].bands[0];
+    const res = await bytesOf(
+      request(withWebSeed()).get(band.torrent!.torrentUrl!),
+    ).expect(200);
+    const torrent = res.body as Buffer;
+    const decoded = bdecode(torrent) as any;
+    assert.deepEqual(
+      decoded['url-list'].map((u: Buffer) => u.toString()),
+      ['https://gateway.example/ar-io/indexes/webseed/'],
+    );
+    assert.equal(
+      crypto.createHash('sha1').update(bencode(decoded.info)).digest('hex'),
+      band.torrent!.infohashV1,
+    );
+    const sha256 = crypto.createHash('sha256').update(torrent).digest('hex');
+    assert.equal(res.headers['etag'], `"${sha256}"`);
+    assert.equal(
+      res.headers['content-digest'],
+      `sha-256=:${Buffer.from(sha256, 'hex').toString('base64')}:`,
+    );
+    assert.equal(
+      res.headers['x-ar-io-index-torrent'],
+      band.torrent!.infohashV1,
+    );
+    assert.equal(res.headers['cache-control'], 'public, max-age=86400');
+  });
+
+  it('answers a current copy of a torrent with 304, and HEAD with headers only', async () => {
+    const band = publication.indexes[0].bands[0];
+    const app = withWebSeed();
+    const head = await request(app).head(band.torrent!.torrentUrl!).expect(200);
+    assert.ok(Number(head.headers['content-length']) > 0);
+    const res = await request(app)
+      .get(band.torrent!.torrentUrl!)
+      .set('If-None-Match', `W/${head.headers['etag']}`)
+      .expect(304);
+    assert.equal(res.headers['etag'], head.headers['etag']);
+    assert.equal(res.headers['cache-control'], 'public, max-age=86400');
+  });
+
+  it('gives a stock client, from the torrent alone, every file of the band through its WebSeed', async () => {
+    // What a BEP 19 client does with a multi-file torrent: for each file of
+    // the v1 list that is not padding, fetch <url-list entry><name>/<path>.
+    const app = withWebSeed();
+    const band = publication.indexes[0].bands[0];
+    const torrent = bdecode(
+      (await bytesOf(request(app).get(band.torrent!.torrentUrl!)).expect(200))
+        .body as Buffer,
+    ) as any;
+    const seed = new URL(torrent['url-list'][0].toString());
+    const name = torrent.info.name.toString();
+    const signed = new Map(band.files.map((f) => [f.name, f.sha256]));
+    const files = (torrent.info.files as any[]).filter(
+      (f) => f.attr?.toString() !== 'p',
+    );
+    assert.equal(files.length, band.files.length);
+    for (const file of files) {
+      const filePath = (file.path as Buffer[]).map((p) => p.toString());
+      const res = await bytesOf(
+        request(app).get(`${seed.pathname}${name}/${filePath.join('/')}`),
+      ).expect(200);
+      assert.equal(
+        crypto
+          .createHash('sha256')
+          .update(res.body as Buffer)
+          .digest('hex'),
+        signed.get(filePath.join('/')),
+        filePath.join('/'),
+      );
+    }
+  });
+
+  it('signs a served torrent, binding its WebSeed and trackers to this gateway', async () => {
+    const { privateKey } = crypto.generateKeyPairSync('ed25519');
+    const signed = express();
+    signed.use(
+      createHttpSigMiddleware({
+        privateKey,
+        keyId: deriveKeyId(crypto.createPublicKey(privateKey)),
+        bindRequest: false,
+      }),
+    );
+    signed.use(withWebSeed());
+    const band = publication.indexes[0].bands[0];
+    const res = await request(signed)
+      .get(band.torrent!.torrentUrl!)
+      .expect(200);
+    assert.ok(res.headers.signature !== undefined, 'the torrent is signed');
+    const covered = res.headers['signature-input'] ?? '';
+    assert.match(covered, /"x-ar-io-index-torrent"/);
+    assert.match(covered, /"content-digest"/);
+  });
+
   it('leaves anything that is not a torrent name to the other routes', async () => {
     // An index named "webseed" is still reachable by name.
     await request(app).get('/ar-io/indexes/webseed/band-t/00.cdb').expect(404);
@@ -939,9 +1057,12 @@ describe('/ar-io/indexes/feed', () => {
   let publication: IndexPublication;
   let publicationSha256: string;
   let published: PublishedIndexes;
+  let torrents: PublishedTorrents;
 
-  const publish = async (bandIds: Array<[string, [number, number | null]]>) => {
-    for (const [bandId, heightRange] of bandIds) {
+  const publish = async (
+    bandIds: Array<[string, [number, number | null], string[]?]>,
+  ) => {
+    for (const [bandId, heightRange, supersedes] of bandIds) {
       const bandDir = path.join(publishedDir, 'root-tx-index', bandId);
       const writer = new PartitionedCdb64Writer(bandDir);
       await writer.open();
@@ -955,7 +1076,11 @@ describe('/ar-io/indexes/feed', () => {
       // The height range a band covers is in its manifest's metadata.
       const manifestPath = path.join(bandDir, 'manifest.json');
       const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8'));
-      manifest.metadata = { ...(manifest.metadata ?? {}), heightRange };
+      manifest.metadata = {
+        ...(manifest.metadata ?? {}),
+        heightRange,
+        ...(supersedes !== undefined ? { supersedes } : {}),
+      };
       await fs.writeFile(manifestPath, JSON.stringify(manifest));
     }
     const { privateKey, publicKey } = crypto.generateKeyPairSync('ed25519');
@@ -998,6 +1123,7 @@ describe('/ar-io/indexes/feed', () => {
       createIndexesRouter({
         log,
         publishedIndexes: published,
+        torrents,
         ...(options.rateLimiter !== undefined
           ? { rateLimiter: options.rateLimiter }
           : {}),
@@ -1007,8 +1133,8 @@ describe('/ar-io/indexes/feed', () => {
               indexFeed: new IndexBandFeedSource({
                 log,
                 published,
-                publishedDir,
                 baseUrl: 'baseUrl' in options ? options.baseUrl : BASE,
+                torrents,
               }),
             }),
       }),
@@ -1032,6 +1158,7 @@ describe('/ar-io/indexes/feed', () => {
       ['band-tip', [200, null]],
     ]);
     published = new PublishedIndexes({ log, publishedDir });
+    torrents = new PublishedTorrents({ log, publishedDir, publicOrigin: BASE });
   });
 
   after(async () => {
@@ -1066,21 +1193,19 @@ describe('/ar-io/indexes/feed', () => {
     );
     for (const item of channel.item) {
       const band = byId.get(item['ario:band'])!;
-      const torrentFile = path.join(
-        publishedDir,
-        PUBLISHED_TORRENT_DIR,
-        `${band.torrent!.infohashV1}.torrent`,
-      );
+      const served = await torrents.torrent(band.torrent!.infohashV1);
       assert.equal(item.guid['#text'], `urn:btih:${band.torrent!.infohashV1}`);
       assert.equal(item.link, band.torrent!.magnet);
       assert.equal(
         item.enclosure['@url'],
         `${BASE}/ar-io/indexes/torrents/${band.torrent!.infohashV1}.torrent`,
       );
-      assert.equal(
-        item.enclosure['@length'],
-        String((await fs.stat(torrentFile)).size),
-      );
+      // The length of the torrent served, WebSeed and all.
+      assert.equal(item.enclosure['@length'], String(served!.body.byteLength));
+      // The folder a client saves the band in: the torrent's own name.
+      const folder = torrentNameForFiles(band.files);
+      assert.equal(item['ario:torrentName'], folder);
+      assert.match(item.description, new RegExp(`saved in folder ${folder}$`));
     }
   });
 
@@ -1215,8 +1340,8 @@ describe('/ar-io/indexes/feed', () => {
         indexFeed: new IndexBandFeedSource({
           log,
           published,
-          publishedDir,
           baseUrl: BASE,
+          torrents,
         }),
       }),
     );
@@ -1234,16 +1359,16 @@ describe('/ar-io/indexes/feed', () => {
     const before = await request(app)
       .get('/ar-io/indexes/feed/root-tx-index.xml')
       .expect(200);
-    await publish([['band-next', [300, null]]]);
+    await publish([['band-next', [300, null], ['band-tip']]]);
     // A view rechecks the file on every request here (revalidateMs 0).
     const after = await request(app)
       .get('/ar-io/indexes/feed/root-tx-index.xml')
       .expect(200);
     assert.notEqual(after.headers['etag'], before.headers['etag']);
     assert.equal(after.headers[INDEX_FEED_HEADER], publicationSha256);
-    assert.equal(
-      parse(after.text).rss.channel.item[0]['ario:band'],
-      'band-next',
-    );
+    const newest = parse(after.text).rss.channel.item[0];
+    assert.equal(newest['ario:band'], 'band-next');
+    // A follower that took band-tip learns it can drop it.
+    assert.equal(newest['ario:supersedes'], 'band-tip');
   });
 });

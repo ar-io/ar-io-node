@@ -1366,10 +1366,17 @@ paths:
       description: |
         The `.torrent` for a band the publication offers as a torrent, at the
         `torrentUrl` the band's signed entry names, addressed by the v1
-        infohash. Not metered. A client must check it against the infohashes
-        in the signed publication before using it: nothing outside the info
-        dictionary is covered by the signature. `Cache-Control: public,
-        max-age=86400`; errors carry `no-store`.
+        infohash. Not metered. When the gateway knows its public origin
+        (INDEXES_PUBLIC_URL, default `https://<ARNS_ROOT_HOST>`), the torrent
+        names its WebSeed, `<origin>/ar-io/indexes/webseed/` (BEP 19
+        `url-list`), so a stock client can finish a band no peer delivers.
+        That and the trackers are outside the info dictionary, so the
+        infohashes are the publisher's. A client must check the info
+        dictionary against the infohashes in the signed publication before
+        using it: nothing outside it is covered by that signature. When
+        HTTPSIG_ENABLED is set, the response is signed, covering
+        `x-ar-io-index-torrent` and Content-Digest. `Cache-Control: public,
+        max-age=86400`; errors carry `no-store`. HEAD is supported.
       parameters:
         - name: infohash
           in: path
@@ -1378,9 +1385,23 @@ paths:
       responses:
         '200':
           description: The torrent metainfo.
+          headers:
+            Cache-Control:
+              schema: { type: string, example: 'public, max-age=86400' }
+            ETag:
+              schema: { type: string }
+              description: The SHA-256 (hex) of the body, quoted.
+            Content-Digest:
+              schema: { type: string }
+              description: RFC 9530 SHA-256 of the body.
+            x-ar-io-index-torrent:
+              schema: { type: string }
+              description: The v1 infohash, the one the publication signs.
           content:
             application/x-bittorrent:
               schema: { type: string, format: binary }
+        '304':
+          description: Not modified.
         '400':
           description: Not a 40-character lowercase hex infohash.
         '404':
@@ -1397,7 +1418,9 @@ paths:
         one as it is published. `guid` is `urn:btih:<v1 infohash>`.
         Elements in the `urn:ar-io:index-feed:1` namespace carry the
         publisher, sequence, the publication's SHA-256, and each band's id,
-        v2 infohash and heights.
+        v2 infohash, heights, torrent name (the folder a client saves it in)
+        and the bands it supersedes. Each enclosure's `length` is that of
+        the `.torrent` as served, WebSeed included.
 
         A view of the signed publication and nothing else. Absolute URLs
         start with INDEXES_PUBLIC_URL (default `https://<ARNS_ROOT_HOST>`),
