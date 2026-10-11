@@ -47,15 +47,23 @@ A gateway that publishes says so in `/ar-io/info`:
 $ curl -s https://gateway.example/ar-io/info | jq .indexes
 {
   "manifestUrl": "/ar-io/indexes",
-  "names": ["root-tx-index"]
+  "names": ["parquet-l1", "root-tx-index"],
+  "feeds": {
+    "parquet-l1": "/ar-io/indexes/feed/parquet-l1.xml",
+    "root-tx-index": "/ar-io/indexes/feed/root-tx-index.xml"
+  }
 }
 ```
 
 The block is absent when the gateway publishes nothing or its publication is
 currently invalid, so its presence is a reasonable signal that the document is
-fetchable. `manifestUrl` is relative to the gateway's own origin. `names` is
-for choosing which publishers to fetch at all; the document itself is the
-authority on what each index contains.
+fetchable. `manifestUrl` and the feed URLs are relative to the gateway's own
+origin. `names` is for choosing which publishers to fetch at all; the
+document itself is the authority on what each index contains. `feeds` names
+the [RSS feed](#following-an-index-in-a-bittorrent-client) of each index
+that has a band offered as a torrent, when the gateway serves feeds at all
+(it needs a public origin). A list of every gateway's feeds is therefore one
+`/ar-io/info` request per registered gateway.
 
 To find publishers, walk the gateway registry, fetch `/ar-io/info` from each
 gateway's registered FQDN, and keep those with an `indexes` block.

@@ -11,9 +11,10 @@ import http from 'node:http';
 import { AddressInfo } from 'node:net';
 
 import {
+  advertisementOf,
   FetchDocument,
   UpstreamPublishedIndexes,
-  indexNamesToAdvertise,
+  indexesToAdvertise,
 } from './upstream-published-indexes.js';
 import {
   IndexPublication,
@@ -34,7 +35,10 @@ const STRANGER = getSolanaAddress(stranger.publicKey);
 
 const publicationOf = (
   names: string[],
-  { publisher = WALLET }: { publisher?: string } = {},
+  {
+    publisher = WALLET,
+    torrents = [],
+  }: { publisher?: string; torrents?: string[] } = {},
 ): IndexPublication => ({
   version: 1,
   publisher,
@@ -49,6 +53,15 @@ const publicationOf = (
       {
         id: 'band-a',
         files: [{ name: '00.cdb', size: 1, sha256: 'a'.repeat(64) }],
+        ...(torrents.includes(name)
+          ? {
+              torrent: {
+                infohashV1: 'c'.repeat(40),
+                magnet: `magnet:?xt=urn:btih:${'c'.repeat(40)}`,
+                torrentUrl: `/ar-io/indexes/torrents/${'c'.repeat(40)}.torrent`,
+              },
+            }
+          : {}),
       },
     ],
   })),
@@ -60,11 +73,21 @@ const signed = (
     publisher = WALLET,
     key = operator.privateKey,
     keyId = WALLET,
-  }: { publisher?: string; key?: crypto.KeyObject; keyId?: string } = {},
+    torrents = [],
+  }: {
+    publisher?: string;
+    key?: crypto.KeyObject;
+    keyId?: string;
+    torrents?: string[];
+  } = {},
 ): Buffer =>
   Buffer.from(
     serializeIndexPublication(
-      signIndexPublication(publicationOf(names, { publisher }), key, keyId),
+      signIndexPublication(
+        publicationOf(names, { publisher, torrents }),
+        key,
+        keyId,
+      ),
     ),
   );
 
@@ -118,6 +141,23 @@ describe('UpstreamPublishedIndexes', () => {
     assert.deepStrictEqual(fetch.calls, [
       'http://signer.internal:4000/ar-io/indexes',
     ]);
+  });
+
+  it("advertises which of the signing node's indexes offer torrents, so feeds", async () => {
+    const upstream = make(
+      scripted({
+        status: 200,
+        body: signed(['tx-index', 'parquet-l1'], { torrents: ['parquet-l1'] }),
+      }),
+    );
+    assert.strictEqual(upstream.advertisement(), undefined);
+
+    await upstream.refresh();
+
+    assert.deepStrictEqual(upstream.advertisement(), {
+      names: ['parquet-l1', 'tx-index'],
+      torrentNames: ['parquet-l1'],
+    });
   });
 
   it('withdraws at once when the signing node publishes nothing', async () => {
@@ -355,24 +395,47 @@ describe('UpstreamPublishedIndexes over HTTP', () => {
   });
 });
 
-describe('indexNamesToAdvertise', () => {
+describe('advertisementOf', () => {
+  it('names every index, and those with a torrent band, each sorted once', () => {
+    const publication = publicationOf(['tx-index', 'parquet-l1', 'root-tx'], {
+      torrents: ['root-tx', 'parquet-l1'],
+    });
+    publication.indexes.push({ ...publication.indexes[1] });
+    assert.deepStrictEqual(advertisementOf(publication), {
+      names: ['parquet-l1', 'root-tx', 'tx-index'],
+      torrentNames: ['parquet-l1', 'root-tx'],
+    });
+  });
+
+  it('names no feeds when no band is offered as a torrent', () => {
+    assert.deepStrictEqual(
+      advertisementOf(publicationOf(['root-tx-index'])).torrentNames,
+      [],
+    );
+  });
+});
+
+describe('indexesToAdvertise', () => {
+  const own = { names: ['own'], torrentNames: ['own'] };
+  const upstream = { names: ['upstream'], torrentNames: [] };
+
   it("prefers the node's own publication", () => {
     assert.deepStrictEqual(
-      indexNamesToAdvertise({ published: ['own'], upstream: ['upstream'] }),
-      ['own'],
+      indexesToAdvertise({ published: own, upstream }),
+      own,
     );
   });
 
-  it("falls back to the signing node's names", () => {
+  it("falls back to the signing node's", () => {
     assert.deepStrictEqual(
-      indexNamesToAdvertise({ published: undefined, upstream: ['upstream'] }),
-      ['upstream'],
+      indexesToAdvertise({ published: undefined, upstream }),
+      upstream,
     );
   });
 
-  it('advertises nothing when neither has names', () => {
+  it('advertises nothing when neither has anything', () => {
     assert.strictEqual(
-      indexNamesToAdvertise({ published: undefined, upstream: undefined }),
+      indexesToAdvertise({ published: undefined, upstream: undefined }),
       undefined,
     );
   });

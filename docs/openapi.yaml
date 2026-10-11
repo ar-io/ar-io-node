@@ -1165,6 +1165,19 @@ paths:
                         items:
                           type: string
                         example: ['root-tx-index']
+                      feeds:
+                        type: object
+                        description: |
+                          The RSS feed of each index that has a band offered as a
+                          torrent, relative to this gateway (see
+                          `/ar-io/indexes/feed/{index}.xml`). A BitTorrent client
+                          subscribed to one follows that index. Present only when
+                          the gateway serves a feed, which needs a public origin
+                          (INDEXES_PUBLIC_URL, or ARNS_ROOT_HOST).
+                        additionalProperties:
+                          type: string
+                        example:
+                          parquet-l1: '/ar-io/indexes/feed/parquet-l1.xml'
                     required:
                       - manifestUrl
                       - names

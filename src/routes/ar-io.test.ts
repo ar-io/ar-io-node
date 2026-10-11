@@ -613,6 +613,40 @@ describe('buildArIoInfo', () => {
       });
     });
 
+    it('points at the feed of each index offering torrents', () => {
+      const result = buildArIoInfo({
+        ...base,
+        indexNames: ['parquet-l1', 'root-tx-index', 'tx-index'],
+        indexFeedNames: ['parquet-l1', 'root-tx-index'],
+      });
+      assert.deepStrictEqual(result.indexes, {
+        manifestUrl: '/ar-io/indexes',
+        names: ['parquet-l1', 'root-tx-index', 'tx-index'],
+        feeds: {
+          'parquet-l1': '/ar-io/indexes/feed/parquet-l1.xml',
+          'root-tx-index': '/ar-io/indexes/feed/root-tx-index.xml',
+        },
+      });
+    });
+
+    it('names no feeds when none is served, and none for an index not advertised', () => {
+      for (const indexFeedNames of [undefined, [], ['other-index']]) {
+        assert.deepStrictEqual(
+          buildArIoInfo({
+            ...base,
+            indexNames: ['root-tx-index'],
+            ...(indexFeedNames !== undefined ? { indexFeedNames } : {}),
+          }).indexes,
+          { manifestUrl: '/ar-io/indexes', names: ['root-tx-index'] },
+        );
+      }
+      // Feeds without names advertise nothing: no publication, no block.
+      assert.strictEqual(
+        buildArIoInfo({ ...base, indexFeedNames: ['root-tx-index'] }).indexes,
+        undefined,
+      );
+    });
+
     it('omits the block when nothing is published', () => {
       // Absent, not empty: a crawler should not fetch a document that is not
       // there, and an empty list would read as "publishes, but nothing".

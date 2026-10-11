@@ -229,6 +229,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `INDEX_SWARM_TRACKERS` when the gateway has `ARNS_ROOT_HOST` (or
   `--public-url`). An existing tracker list is kept; the direct port still
   works.
+- **`/ar-io/info` points at each index's feed.** Its `indexes` block gains
+  `feeds`, mapping each index that has a band offered as a torrent to
+  `/ar-io/indexes/feed/<index>.xml`, present only when the gateway serves
+  feeds (it has `INDEXES_PUBLIC_URL` or `ARNS_ROOT_HOST`). A node that
+  advertises another node's publication, on a fleet, advertises its feeds
+  the same way. So one request per registered gateway finds every feed.
 - **A `.torrent` served by the gateway names the gateway as its WebSeed**
   (BEP 19 `url-list`, `<INDEXES_PUBLIC_URL>/ar-io/indexes/webseed/`), so a
   stock BitTorrent client following an index feed can finish a band that no
