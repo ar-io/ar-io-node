@@ -477,9 +477,12 @@ export async function settleBandFile(
  */
 export async function bandFileSettled(band: L1PublishedBand): Promise<boolean> {
   if (band.band.supersedes !== undefined) return false;
-  if (
-    (await readPublisherFacts(band.dir).catch(() => undefined)) === undefined
-  ) {
+  const facts = await readPublisherFacts(band.dir).catch(() => undefined);
+  if (facts === undefined) return false;
+  // Still dated by when it was built: a settle cut short after the facts
+  // were written, on a band whose old file was otherwise already canonical.
+  // A settled band is dated by its top block, which precedes any build.
+  if (facts.builtAt !== undefined && facts.builtAt === band.band.createdAt) {
     return false;
   }
   const text = await fs

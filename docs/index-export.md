@@ -371,7 +371,7 @@ shipped `prometheus.yml` scrapes it as the `index-export` job.
 
 | Metric | Read it as |
 |---|---|
-| `index_export_runs_total{index,kind,result,reason}` | Outcomes per band role. `kind="derive"` counts lookup files added in place |
+| `index_export_runs_total{index,kind,result,reason}` | Outcomes per band role. `kind="derive"` counts lookup files added in place; `kind="normalize"` counts `band.json` files settled in place |
 | `index_export_last_success_timestamp_seconds{index,kind}` | The last success per role. Set again from `state.json` after a restart |
 | `index_export_run_in_progress`, `index_export_run_started_timestamp_seconds` | A run that is taking long |
 | `index_export_heartbeat_timestamp_seconds` | The loop is alive |

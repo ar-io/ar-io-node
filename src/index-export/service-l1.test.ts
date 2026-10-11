@@ -251,6 +251,30 @@ describe('ExportService parquet-l1', () => {
       assert.deepEqual(normalized(report), [], 'settled once');
     });
 
+    it('finishes a settle cut short after the facts were written, though the old file looks canonical', async () => {
+      await publishedBelow();
+      let report = await service().runOnce({ toHeight: FIRST + 9 });
+      const id = report.l1Steps[0].id as string;
+      const bandDir = path.join(config().l1PublishDir, id);
+      const file = path.join(bandDir, BAND_FILE);
+      // An older band with nothing it replaces: its file already in the
+      // canonical order, but dated by its build. The facts were written,
+      // then the run stopped before band.json was replaced.
+      const builtAt = '2026-10-01T04:00:20.418Z';
+      const band = JSON.parse(await fs.readFile(file, 'utf8'));
+      await fs.writeFile(
+        file,
+        serializeBandFile({ ...band, createdAt: builtAt }),
+      );
+      await writePublisherFacts(bandDir, { builtAt });
+
+      report = await service().runOnce({ toHeight: FIRST + 9 });
+      assert.deepEqual(normalized(report), [[id, 'published', 'settled']]);
+      const settled = JSON.parse(await fs.readFile(file, 'utf8'));
+      assert.notEqual(settled.createdAt, builtAt, 'dated by its top block now');
+      assert.deepEqual(await readPublisherFacts(bandDir), { builtAt });
+    });
+
     it('settles nothing on a dry run', async () => {
       await publishedBelow();
       const report1 = await service().runOnce({ toHeight: FIRST + 9 });
