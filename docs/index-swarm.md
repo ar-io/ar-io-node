@@ -314,10 +314,22 @@ Torrents are deterministic. The name comes from the band's file names, sizes
 and digests (see [Torrent Name](glossary.md#torrent-name)), and nothing
 publisher-specific goes in: no creation date, no WebSeed and no private
 flag. Two publishers holding the same bytes share one infohash and one
-swarm. Subscribers add the publisher's WebSeed (`/ar-io/indexes/webseed/`)
-themselves, and only when peers are not delivering. Engines otherwise pull
-about half of a band from a WebSeed even with a seeder available, and the
-WebSeed is the publisher's metered tier.
+swarm. An L1 band's own `band.json` still differs between publishers (it
+records when it was built and the ids of the bands it replaces), so
+publishers' L1 swarms do not merge yet.
+
+The gateway serves each `.torrent` with one addition: its own WebSeed
+(`<INDEXES_PUBLIC_URL>/ar-io/indexes/webseed/`), outside the info
+dictionary, so the infohashes are unchanged. That is for stock BitTorrent
+clients following the
+[feed](index-publication.md#following-an-index-in-a-bittorrent-client),
+which have no other way to finish a band nobody is seeding. Subscribers drop every WebSeed from a
+torrent they fetch and add the publisher's themselves, only when peers are
+not delivering: an engine otherwise pulls about half of a band from a
+WebSeed even with a seeder available, and the WebSeed is the publisher's
+metered tier. The file the publisher keeps in `published/.torrents/` has no
+WebSeed; without `INDEXES_PUBLIC_URL` (or `ARNS_ROOT_HOST`) the gateway
+serves it as it is.
 
 Every torrent is hybrid (v1 and BEP 52 v2) with 256 KiB pieces. The piece
 size is fixed so that publishers of the same bytes agree on the torrent. It
@@ -681,10 +693,11 @@ still being written, or the sidecar's own state, is unreachable. A seventh
 path, `/ar-io/indexes/announce`, is not core's: Envoy forwards it to the
 sidecar's tracker.
 
-The feed's absolute URLs (each `.torrent` and the publication) start with
-`INDEXES_PUBLIC_URL`, by default `https://<ARNS_ROOT_HOST>`, and never with
-the request's `Host` header, which whoever sends the request controls. With
-neither set, the feeds answer `404`.
+The feed's absolute URLs (each `.torrent` and the publication), and the
+WebSeed each served `.torrent` names, start with `INDEXES_PUBLIC_URL`, by
+default `https://<ARNS_ROOT_HOST>`, and never with the request's `Host`
+header, which whoever sends the request controls. With neither set, the
+feeds answer `404` and `.torrent` files are served without a WebSeed.
 See [openapi.yaml](openapi.yaml) for the headers each returns, and
 [index-publication.md](index-publication.md) for the protocol.
 
@@ -763,7 +776,7 @@ What the gateway sends:
 | A blob (by digest), `200`/`206`/`304` | `public, max-age=31536000, immutable`; `private, …` when metered | The address is the digest, so the bytes can never change |
 | A file by name, `200`/`206`/`304` | `public, no-cache`; `private, no-cache` when metered | A rebuild under the same name must be revalidated. The `ETag` is the digest, so an unchanged file costs a `304` |
 | A WebSeed file, `200`/`206`/`304` | As a blob | Its address is derived from the digests |
-| A `.torrent`, `200` | `public, max-age=86400`, never metered | Addressed by infohash |
+| A `.torrent`, `200`/`304` | `public, max-age=86400`, never metered | Addressed by infohash. Its trackers and WebSeed can change under that address; the `ETag` (its SHA-256) says when |
 | A feed, `200`/`304` | `public, max-age=60`, never metered | Like the document it is built from |
 | A tracker announce | `no-store` | Each answer is a sample of live peers |
 | **Every error** (400, 402, 404, 416, 429, 500, 503) | `no-store` | A cache never keeps a refusal and replays it |

@@ -276,31 +276,77 @@ at `/ar-io/indexes/feed/<index>.xml`. It has one item per band offered as a
 torrent, newest heights first. An item's enclosure is the band's `.torrent`
 and its link is the magnet. Subscribe to the feed in a BitTorrent client with
 an auto-download rule, and the client takes every band now and each new band
-as it is published. The bytes come over BitTorrent, from the publisher and
-anyone else seeding.
+as it is published.
 
-In qBittorrent:
+The `.torrent` a gateway serves names that gateway as a WebSeed (BEP 19), so
+a client can always finish a band. Pieces come from peers when there are
+any: the publisher's torrent engine and whoever else is seeding. The rest
+comes over HTTPS from the gateway. Either way the client checks every piece
+against the torrent's hashes, so the WebSeed cannot slip in different bytes.
+
+### Downloading the whole L1 index
+
+The `parquet-l1` index is every Arweave block and transaction as Parquet, in
+bands of heights: about 15 GB in 24 bands in October 2026. In qBittorrent:
 
 1. **Options → RSS:** turn on fetching RSS feeds and the RSS torrent auto
    downloader.
 2. **RSS tab → New subscription:**
    `https://gateway.example/ar-io/indexes/feed/parquet-l1.xml`.
 3. **RSS Downloader:** add a rule with nothing in "Must contain", apply it to
-   the feed, and choose a save path.
+   the feed, and set the save path to an empty folder, such as
+   `~/arweave-l1`.
+
+Every band starts at once. Each lands in its own folder, named after its
+torrent (`ario:torrentName`, a 16-character hex name), not its band id: the
+name comes from the files, so publishers of the same files agree on it. The
+folder's `band.json` says which heights it holds.
+
+To check what arrived against the chain's own commitments, run
+[`index-l1-verify`](cli.md#index-l1-verify) over the folder. It needs no
+gateway and no key; the core image (release 85 or later) carries it:
+
+```bash
+docker run --rm -u "$(id -u):$(id -g)" -v "$HOME/arweave-l1:/bands:ro" \
+  -w /app --entrypoint /nodejs/bin/node ghcr.io/ar-io/ar-io-core:latest \
+  /app/dist/cli/cli.js index-l1-verify --bands-dir /bands
+```
+
+Then query it where it lies, for example with DuckDB:
+
+```sql
+SELECT count(*) AS blocks, max(height) AS tip
+FROM read_parquet('~/arweave-l1/*/blocks.parquet');
+```
+
+### Keeping up
+
+The band at the tip is rebuilt each day, as a new band holding the same
+starting height and more blocks, and a band rebuilt for a new layout gets a
+new id too. Each says what it replaces in `ario:supersedes`. A client
+following the feed keeps the old folder as well as the new one, and
+`index-l1-verify` refuses a set whose bands overlap, naming the folders.
+Of two folders whose `band.json` starts at the same height, keep the newer,
+the one whose `createdAt` is later, and delete the other.
 
 A band appears once the publisher has built its `.torrent`. Bands offered
-only over HTTP are not in the feed. The `.torrent` files carry no WebSeed,
-so a client downloads from peers only. The feed is not metered and asks to be
-polled at most every 30 minutes (`<ttl>`).
+only over HTTP are not in the feed. The feed is not metered and asks to be
+polled at most every 30 minutes (`<ttl>`). The WebSeed is metered like the
+other byte routes (see [Metering](#metering)). A client that runs past its
+allowance is answered `429` or `402`, backs off the WebSeed, and goes on
+from peers.
 
 | Element | Value |
 |---|---|
 | `guid` | `urn:btih:<v1 infohash>`. A band rebuilt under the same id has a new infohash, so it is a new item, and an unchanged band is never fetched twice |
 | `title` | The band id and its heights, such as `l1-h1900000-1999999 (heights 1900000 to 1999999)` |
-| `enclosure` | The `.torrent`, `type="application/x-bittorrent"` |
-| `link` | The magnet link |
+| `description` | Its file count, size and layout, and the folder it is saved in |
+| `enclosure` | The `.torrent`, `type="application/x-bittorrent"`, as the gateway serves it: `length` counts its WebSeed |
+| `link` | The magnet link, as the publication signs it |
 | `pubDate` | When the publication was issued (the publication does not record when each band first appeared) |
 | `ario:band`, `ario:infohashV2`, `ario:heightFrom`, `ario:heightTo` | The band's id, v2 infohash and heights; `heightTo` is absent for a band open at the tip |
+| `ario:torrentName` | The torrent's name, which is the folder a client saves the band in |
+| `ario:supersedes` | One per band id this band replaces, from the band's metadata |
 
 The channel carries `ario:publisher`, `ario:sequence`, `ario:index`,
 `ario:kind` and `ario:publication`, the SHA-256 of the publication document
@@ -317,12 +363,18 @@ trusts the gateway it subscribes to can stop here. To check:
    `ario:publication`, and the `X-AR-IO-Index-Feed` response header. If the
    publication has moved on, fetch both again.
 3. Check that each item's v1 infohash is a `torrent.infohashV1` the
-   publication lists for that band.
+   publication lists for that band, and that the `.torrent`'s info
+   dictionary hashes to it.
 
-With `HTTPSIG_ENABLED`, the feed response is signed with HTTPSIG, covering
-`X-AR-IO-Index-Feed` and `Content-Digest`. That binds the feed's bytes to
-the publication it names, as served by that gateway. The index-swarm sidecar
-reads the publication directly and does not use the feed.
+What the infohash leaves out is the rest of the `.torrent`: its trackers and
+the WebSeed. The gateway that served it chose those, and they decide only
+where pieces come from, never what they are. With `HTTPSIG_ENABLED`, both
+responses are signed with HTTPSIG. The feed's signature covers
+`X-AR-IO-Index-Feed` and `Content-Digest`, binding its bytes to the
+publication it names; the `.torrent`'s covers `X-AR-IO-Index-Torrent` (its
+v1 infohash) and `Content-Digest`, binding the trackers and WebSeed to that
+gateway. The index-swarm sidecar reads the publication directly, does not
+use the feed, and drops every WebSeed from a torrent it is given.
 
 ## Metering
 
