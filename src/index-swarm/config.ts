@@ -20,6 +20,7 @@ import * as path from 'node:path';
 
 import * as env from '../lib/env.js';
 import { isValidIndexName } from '../lib/index-publication.js';
+import { PRIVATE_NETWORK_RANGES } from '../lib/trusted-proxies.js';
 
 /** One index this node publishes. */
 export interface PublishConfig {
@@ -483,10 +484,32 @@ export const ENGINE_GID = env.positiveIntOrDefault(
  * Proxies (IPs or CIDRs, comma separated) whose `X-Forwarded-For` the
  * closed tracker believes on its published port, when that port is served
  * behind a load balancer. The listener behind the gateway's Envoy
- * (INDEX_SWARM_TRACKER_PROXY_PORT) believes these and private addresses.
+ * (INDEX_SWARM_TRACKER_PROXY_PORT) believes these too, beside
+ * TRACKER_PROXY_TRUSTED_PROXIES.
  */
 export const TRACKER_TRUSTED_PROXIES = env
   .varOrDefault('INDEX_SWARM_TRACKER_TRUSTED_PROXIES', '')
+  .split(',')
+  .map((entry) => entry.trim())
+  .filter((entry) => entry.length > 0);
+
+/**
+ * Hops (IPs or CIDRs, comma separated) the listener behind the gateway's
+ * Envoy believes added a true `X-Forwarded-For` entry: by default every
+ * private address, as core's TRUSTED_PROXIES does, so the usual nginx and
+ * Envoy in front of the gateway need no setting.
+ *
+ * That trusts any client that reaches Envoy from a private address (the LAN,
+ * a tailnet, another container, or IPv6 relayed by Docker's userland proxy)
+ * to say which address it announces from, so it can list any address as a
+ * peer. Where such clients can reach the gateway, name only the proxies,
+ * such as the Docker network and the nginx host.
+ */
+export const TRACKER_PROXY_TRUSTED_PROXIES = env
+  .varOrDefault(
+    'INDEX_SWARM_TRACKER_PROXY_TRUSTED_PROXIES',
+    PRIVATE_NETWORK_RANGES.join(','),
+  )
   .split(',')
   .map((entry) => entry.trim())
   .filter((entry) => entry.length > 0);

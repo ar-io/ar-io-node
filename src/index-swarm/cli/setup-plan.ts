@@ -5,6 +5,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import { DEFAULT_CDB64_ROOT_TX_INDEX_SOURCES } from '../../lib/root-tx-defaults.js';
+import { parsePublicOrigin } from '../../lib/public-origin.js';
 import {
   DEFAULT_ENGINE_URL,
   parseEngineAuth,
@@ -105,14 +106,25 @@ export function urlHost(host: string): string {
 }
 
 /**
- * The gateway's public origin: the one given, else `https://` and the first
- * `ARNS_ROOT_HOST`, else undefined. Without a trailing slash.
+ * The gateway's public origin, as core works it out for its feeds and
+ * WebSeed: the one given, else `INDEXES_PUBLIC_URL`, else `https://` and the
+ * first `ARNS_ROOT_HOST`, else undefined. Without a trailing slash. An
+ * `INDEXES_PUBLIC_URL` that is not an origin is passed over: core refuses
+ * to start with it, and says why.
  */
 export function gatewayOrigin(
   env: EnvReader,
   publicUrl: string | undefined,
 ): string | undefined {
   if (publicUrl !== undefined) return publicUrl.replace(/\/+$/, '');
+  const configured = env.get('INDEXES_PUBLIC_URL');
+  if (configured !== undefined && configured.trim() !== '') {
+    try {
+      return parsePublicOrigin(configured);
+    } catch {
+      // Fall through to ARNS_ROOT_HOST.
+    }
+  }
   const root = splitList(env.get('ARNS_ROOT_HOST') ?? '')[0];
   return root !== undefined ? `https://${root}` : undefined;
 }
@@ -397,6 +409,11 @@ export function planSetup(
           reason:
             'this node’s closed tracker, announced to through the gateway’s HTTPS, written into its torrents',
         });
+        // The route is Envoy's: an older Envoy image sends it to core, which
+        // answers 404, and every announce fails without a word.
+        plan.notes.push(
+          `Announces reach the tracker through the gateway's Envoy, which must be release 85 or later: recreate envoy (then core) if it is older. Check with: curl -s '${origin}${GATEWAY_ANNOUNCE_PATH}?info_hash=x' (a bencoded "failure reason", not a 404).`,
+        );
         // Without a public host the tracker lists this node's engine under
         // the gateway's name, which is right only when that name reaches
         // this node on the peer port.

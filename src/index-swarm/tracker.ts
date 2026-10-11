@@ -198,6 +198,22 @@ function addressBucket(ip: string): string {
  * @throws on an entry that is neither an address nor a CIDR, so a typo is a
  *   startup error rather than a proxy silently not trusted.
  */
+/**
+ * Whether a request came from a web page rather than a BitTorrent client.
+ * Behind the gateway the tracker shares an HTTPS origin any page can embed,
+ * so an `<img src=".../announce?...">` would list every visitor as a peer.
+ * Browsers mark their requests with `Sec-Fetch-Site` and `Sec-Fetch-Dest`,
+ * and many with `Origin`; BitTorrent clients send none of them. Not
+ * `Sec-Fetch-Mode`: Node's own `fetch` sends that one.
+ */
+export function fromBrowser(headers: http.IncomingHttpHeaders): boolean {
+  return (
+    headers['sec-fetch-site'] !== undefined ||
+    headers['sec-fetch-dest'] !== undefined ||
+    headers['origin'] !== undefined
+  );
+}
+
 export class ClosedTracker {
   private readonly log: Logger;
   private readonly allowed: () => Set<string>;
@@ -483,6 +499,10 @@ export class ClosedTracker {
       const pathname = q < 0 ? url : url.slice(0, q);
       if (req.method !== 'GET' || pathname !== '/announce') {
         res.writeHead(404, { 'Cache-Control': 'no-store' }).end();
+        return;
+      }
+      if (fromBrowser(req.headers)) {
+        res.writeHead(403, { 'Cache-Control': 'no-store' }).end();
         return;
       }
       const body = this.announce(

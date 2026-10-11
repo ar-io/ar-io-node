@@ -261,6 +261,45 @@ describe('planSetup', () => {
     );
   });
 
+  it('takes INDEXES_PUBLIC_URL over ARNS_ROOT_HOST, as core does for its feeds and WebSeed', () => {
+    const base =
+      'INDEX_SWARM_OBSERVER_KEYPAIR_FILE=/k.json\nAR_IO_WALLET=W\nARNS_ROOT_HOST=ar.example\nINDEXES_PUBLIC_URL=http://gw.example:8443/';
+    const p = plan(base, { publish: true, torrent: true });
+    assert.equal(
+      valueOf(p, 'INDEX_SWARM_TRACKERS'),
+      'http://gw.example:8443/ar-io/indexes/announce',
+    );
+    // Alone, too.
+    const alone = plan(
+      'INDEX_SWARM_OBSERVER_KEYPAIR_FILE=/k.json\nAR_IO_WALLET=W\nINDEXES_PUBLIC_URL=https://gw.example',
+      { publish: true, torrent: true },
+    );
+    assert.equal(
+      valueOf(alone, 'INDEX_SWARM_TRACKERS'),
+      'https://gw.example/ar-io/indexes/announce',
+    );
+    // One that is not an origin is passed over; core refuses to start on it.
+    const bad = plan(
+      'INDEX_SWARM_OBSERVER_KEYPAIR_FILE=/k.json\nAR_IO_WALLET=W\nARNS_ROOT_HOST=ar.example\nINDEXES_PUBLIC_URL=gw.example/path',
+      { publish: true, torrent: true },
+    );
+    assert.equal(
+      valueOf(bad, 'INDEX_SWARM_TRACKERS'),
+      'https://ar.example/ar-io/indexes/announce',
+    );
+  });
+
+  it('says the announce route needs a current Envoy, and how to check it', () => {
+    const p = plan(
+      'INDEX_SWARM_OBSERVER_KEYPAIR_FILE=/k.json\nAR_IO_WALLET=W\nARNS_ROOT_HOST=gateway.example',
+      { publish: true, torrent: true },
+    );
+    assert.match(
+      p.notes.join('\n'),
+      /Envoy, which must be release 85 or later.*curl -s 'https:\/\/gateway\.example\/ar-io\/indexes\/announce\?info_hash=x'/,
+    );
+  });
+
   it('never replaces an existing tracker list, and asks to open the port it names', () => {
     const base =
       'INDEX_SWARM_OBSERVER_KEYPAIR_FILE=/k.json\nAR_IO_WALLET=W\nARNS_ROOT_HOST=gateway.example\nINDEX_SWARM_TRACKERS=http://203.0.113.7:6969/announce';

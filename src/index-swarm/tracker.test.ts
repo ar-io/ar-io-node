@@ -553,6 +553,34 @@ describe('ClosedTracker behind the gateway', () => {
     }
   });
 
+  it('refuses an announce a web page makes, so a page cannot list its visitors', async () => {
+    const t = tracker();
+    const { base, close } = await listening(t, {
+      trustedProxies: PRIVATE_NETWORK_RANGES,
+    });
+    try {
+      const pages: Array<Record<string, string>> = [
+        { 'Sec-Fetch-Site': 'cross-site', 'Sec-Fetch-Dest': 'image' },
+        { 'Sec-Fetch-Dest': 'empty' },
+        { Origin: 'https://evil.example' },
+      ];
+      for (const headers of pages) {
+        const res = await fetch(`${base}/announce?${query(OURS, 4444)}`, {
+          headers,
+        });
+        assert.equal(res.status, 403, JSON.stringify(headers));
+        assert.equal(res.headers.get('cache-control'), 'no-store');
+      }
+      // Nothing was recorded; a client (Node's fetch sends Sec-Fetch-Mode,
+      // which is no sign of a browser) still gets its answer.
+      const { res, body } = await announce(base, 5555);
+      assert.equal(res.status, 200);
+      assert.equal(body.incomplete, 1, 'only the client, none of the pages');
+    } finally {
+      await close();
+    }
+  });
+
   it('records a peer behind private proxies at its own address, on the listener that believes them', async () => {
     const t = tracker();
     const proxied = await listening(t, {
