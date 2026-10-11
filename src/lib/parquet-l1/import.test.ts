@@ -39,8 +39,7 @@ import {
 
 const log = createTestLogger({ suite: 'parquet-l1 import' });
 const FIRST = 1_900_000;
-const MIGRATION =
-  'migrations/2026.10.04T12.00.00.core.add-parquet-l1-imports.sql';
+const MIGRATION = `migrations/${LEDGER_MIGRATION}`;
 
 /** An empty core.db with the ledger table, as a migrated gateway has. */
 function emptyCore(file: string): Sqlite.Database {
@@ -732,6 +731,16 @@ describe('assertImportable', () => {
     }
     return db;
   };
+
+  it('looks for the ledger migration under the name the migrator records', () => {
+    // src/migrate.ts records each migration by its file's name, `.sql` and
+    // all. A name that is not a file in migrations/ is one no gateway's
+    // core.db holds, and every real import would be refused.
+    assert.ok(
+      fs.existsSync(path.join('migrations', LEDGER_MIGRATION)),
+      `${LEDGER_MIGRATION} is not a file in migrations/`,
+    );
+  });
 
   it('accepts a migrated, quiet database', () => {
     const db = core(true);
