@@ -757,15 +757,31 @@ export function bandTablesDigest(band: ParquetL1Band): Buffer {
     .digest();
 }
 
-/** A band directory that could be read: its name, its path, and its description. */
+/** A band directory that could be read: its band id, its path, and its description. */
 export interface BandOnDisk {
+  /** The band id: the directory's name without any installed generation. */
   id: string;
   dir: string;
   band: ParquetL1Band;
 }
 
 /**
- * Every band of a directory whose `band.json` could be read.
+ * Separates a band id from its generation in the name the index-swarm
+ * sidecar installs a band under, `<band id>~<generation>`
+ * (`GENERATION_SEPARATOR` in `src/index-swarm/subscriber.ts`). A band id
+ * cannot contain it.
+ */
+export const INSTALLED_GENERATION_SEPARATOR = '~';
+
+/**
+ * Every band of a directory whose `band.json` could be read, once each.
+ *
+ * A directory is named by its band id as a publisher writes it, or
+ * `<band id>~<generation>` as the index-swarm sidecar installs it; `id` is
+ * the band id either way. While the sidecar replaces a band it holds two
+ * generations of it for a while. Both have the same tables, since a band's
+ * id is their digest, so only the one changed last is returned: the
+ * replacement, not the copy about to be retired.
  *
  * Shared by the publisher's view of what it has published and the
  * importer's view of what it may import, so the two cannot drift on what
@@ -781,7 +797,7 @@ export interface BandOnDisk {
 export async function readBandDirectory(dir: string): Promise<BandOnDisk[]> {
   const fs = await import('node:fs/promises');
   const path = await import('node:path');
-  const found: BandOnDisk[] = [];
+  const found = new Map<string, BandOnDisk & { changedAt: number }>();
   for (const name of await fs.readdir(dir).catch(() => [] as string[])) {
     if (name.startsWith('.')) continue;
     const bandDir = path.join(dir, name);
@@ -794,7 +810,17 @@ export async function readBandDirectory(dir: string): Promise<BandOnDisk[]> {
     } catch {
       continue;
     }
-    found.push({ id: name, dir: bandDir, band });
+    const id = name.split(INSTALLED_GENERATION_SEPARATOR)[0];
+    // ctime, as the sidecar judges an installed copy's age: a rename into
+    // place keeps a directory's mtime but not its ctime.
+    const changedAt = (await fs.stat(bandDir).catch(() => stat)).ctimeMs;
+    const held = found.get(id);
+    if (held !== undefined && held.changedAt >= changedAt) continue;
+    found.set(id, { id, dir: bandDir, band, changedAt });
   }
-  return found;
+  return [...found.values()].map((b) => ({
+    id: b.id,
+    dir: b.dir,
+    band: b.band,
+  }));
 }

@@ -120,7 +120,7 @@ const UNTRACKED_MIN_AGE_MS = 10 * 60_000;
  * Separates a band id from its generation in an installed directory name.
  * A band id can't contain it, so no directory name is ambiguous.
  */
-const GENERATION_SEPARATOR = '~';
+export const GENERATION_SEPARATOR = '~';
 
 /** A short digest of a band's files: its identity on disk. */
 export function bandGeneration(band: BandDescriptor): string {

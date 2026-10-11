@@ -308,7 +308,7 @@ underneath.
 
 | Option | |
 |---|---|
-| `--bands-dir` | A directory of bands, as the sidecar installs them. Required |
+| `--bands-dir` | A directory of bands: as the sidecar installs them (`<band id>~<generation>`), or as a publisher writes them (by band id). Of two generations of one band, the newer is read. Required |
 | `--core-db` | The gateway's `core.db`. Required |
 | `--from` | Start here instead of continuing above what `core.db` holds |
 | `--to` | Stop after the band covering this height |

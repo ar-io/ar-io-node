@@ -12,6 +12,8 @@ import { describe, it } from 'node:test';
 
 import {
   BAND_FILE,
+  INSTALLED_GENERATION_SEPARATOR,
+  readBandDirectory,
   bandFiles,
   bandTablesDigest,
   canonicalDataRoot,
@@ -34,6 +36,7 @@ import {
   writePublisherFacts,
 } from './layout.js';
 import { FORK_2_0 } from './chain.js';
+import { GENERATION_SEPARATOR } from '../../index-swarm/subscriber.js';
 
 const digest = 'a'.repeat(64);
 /** A valid description of a band at `schema`, with its layout's lookups. */
@@ -331,6 +334,58 @@ describe('the publisher’s facts beside a band', () => {
       const settled = parseBandFile(JSON.stringify(valid()));
       await writePublisherFacts(dir, {});
       assert.equal(await bandSupersedes({ dir, band: settled }), undefined);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('readBandDirectory', () => {
+  const ID = 'l1-h0-99999-f5b1208c-0123456789ab';
+  const write = async (dir: string, name: string, band: object) => {
+    await fs.mkdir(path.join(dir, name));
+    await fs.writeFile(path.join(dir, name, BAND_FILE), JSON.stringify(band));
+  };
+
+  it('splits on the separator the sidecar installs bands under', () => {
+    assert.equal(INSTALLED_GENERATION_SEPARATOR, GENERATION_SEPARATOR);
+  });
+
+  it('names a band the sidecar installed by its band id, as it names a published one', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'band-dir-'));
+    try {
+      const other = 'l1-h100000-199999-f5b1208c-0123456789ab';
+      await write(dir, `${ID}${GENERATION_SEPARATOR}aaaaaaaaaaaa`, valid());
+      await write(dir, other, { ...valid(), heightRange: [100_000, 199_999] });
+      const found = await readBandDirectory(dir);
+      assert.deepEqual(found.map((b) => b.id).sort(), [ID, other]);
+      const installed = found.find((b) => b.id === ID);
+      assert.equal(
+        path.basename(installed?.dir ?? ''),
+        `${ID}${GENERATION_SEPARATOR}aaaaaaaaaaaa`,
+      );
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('returns one copy of a band held in two generations: the one changed last', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'band-dir-'));
+    try {
+      await write(dir, `${ID}${GENERATION_SEPARATOR}aaaaaaaaaaaa`, valid());
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      await write(dir, `${ID}${GENERATION_SEPARATOR}bbbbbbbbbbbb`, {
+        ...valid(),
+        createdAt: '2026-10-11T00:00:00.000Z',
+      });
+      const found = await readBandDirectory(dir);
+      assert.equal(found.length, 1);
+      assert.equal(found[0].id, ID);
+      assert.equal(
+        path.basename(found[0].dir),
+        `${ID}${GENERATION_SEPARATOR}bbbbbbbbbbbb`,
+      );
+      assert.equal(found[0].band.createdAt, '2026-10-11T00:00:00.000Z');
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
     }

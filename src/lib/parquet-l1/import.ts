@@ -108,8 +108,10 @@ export function idHeightRange(id: string): [number, number] | undefined {
  * Every band of a `parquet-l1` directory, lowest first, with its band file
  * read.
  *
- * A directory whose name is not a band id, or whose name disagrees with the
- * band inside it, is passed over rather than refused: the directory holds
+ * A directory is named by its band id, or `<band id>~<generation>` as the
+ * index-swarm sidecar installs it ({@link readBandDirectory} reads both, and
+ * one copy of each band). One whose band id is not a band id, or disagrees
+ * with the band inside it, is passed over rather than refused: the directory holds
  * whatever a publisher and a subscriber left there, and one band nobody can
  * read must not stop the rest importing.
  *

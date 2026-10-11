@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import Sqlite from 'better-sqlite3';
 
 import { exportL1Band } from '../../index-export/kinds/parquet-l1/export.js';
+import { GENERATION_SEPARATOR } from '../../index-swarm/subscriber.js';
 import { LEDGER_MIGRATION } from '../../lib/parquet-l1/import.js';
 import { buildCoreDb } from '../../../test/parquet-l1-core-db.js';
 import { createTestLogger } from '../../../test/test-logger.js';
@@ -81,6 +82,30 @@ describe('indexL1ImportCLICommand', () => {
     );
     // Everything it reports must survive JSON, which is the CLI's contract.
     assert.deepEqual(JSON.parse(JSON.stringify(result)), result);
+  });
+
+  it('imports bands as the index-swarm sidecar installs them, keyed by band id', async () => {
+    const id = `l1-h${FIRST}-${FIRST + 19}-f5b1208c-${'0'.repeat(12)}`;
+    await fsp.rename(
+      path.join(bandsDir, id),
+      path.join(bandsDir, `${id}${GENERATION_SEPARATOR}${'a'.repeat(12)}`),
+    );
+    const result = (await indexL1ImportCLICommand(
+      { bandsDir, coreDb },
+      { log },
+    )) as Record<string, unknown>;
+    assert.equal(result.imported, 1);
+    assert.equal(result.haveTo, FIRST + 19);
+    // The ledger names the band, not the directory it was installed in.
+    const db = new Sqlite(coreDb, { readonly: true });
+    try {
+      assert.deepEqual(
+        db.prepare('SELECT band_id FROM parquet_l1_imports').pluck().all(),
+        [id],
+      );
+    } finally {
+      db.close();
+    }
   });
 
   it('does nothing the second time', async () => {
