@@ -399,9 +399,13 @@ export function heldRuns(db: Sqlite.Database): Array<[number, number]> {
   ).map((r) => [r.lo, r.hi]);
 }
 
-/** The migration this importer was written against; its table must exist. */
+/**
+ * The migration this importer was written against; its table must exist.
+ * Named as `src/migrate.ts` records it in `migrations`: the file's name,
+ * `.sql` and all.
+ */
 export const LEDGER_MIGRATION =
-  '2026.10.04T12.00.00.core.add-parquet-l1-imports';
+  '2026.10.04T12.00.00.core.add-parquet-l1-imports.sql';
 
 /**
  * Refuses a `core.db` an import would damage or silently half-fill.

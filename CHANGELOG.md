@@ -392,6 +392,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **`index-l1-import` accepts a gateway's own `core.db`.** It checked for its
+  ledger migration under the name without `.sql`, while `yarn db:migrate`
+  records every migration by its file's name, `.sql` and all, so it refused
+  every database the gateway had migrated with "has not run
+  ...add-parquet-l1-imports: run `yarn db:migrate up` first", however often
+  that was run. The tests recorded the migration under the importer's own
+  spelling, so they passed. Found filling a mid-chain gateway's history.
+
 - **`index-l1-verify --bands-dir` no longer fails the `lookups` check of a
   large `l1-3` band on a directory it cannot write.** DuckDB had no spill
   directory, so it tried `.tmp` under the working directory, which is the

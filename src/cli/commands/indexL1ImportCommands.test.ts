@@ -20,8 +20,7 @@ import { indexL1ImportCLICommand } from './indexL1ImportCommands.js';
 
 const log = createTestLogger({ suite: 'index-l1-import' });
 const FIRST = 1_900_000;
-const MIGRATION =
-  'migrations/2026.10.04T12.00.00.core.add-parquet-l1-imports.sql';
+const MIGRATION = `migrations/${LEDGER_MIGRATION}`;
 
 describe('indexL1ImportCLICommand', () => {
   let dir: string;
