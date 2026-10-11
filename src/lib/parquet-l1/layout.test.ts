@@ -390,6 +390,26 @@ describe('readBandDirectory', () => {
       await fs.rm(dir, { recursive: true, force: true });
     }
   });
+
+  it('never lets a copy that disagrees with its id hide one that agrees, however new', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'band-dir-'));
+    try {
+      await write(dir, `${ID}${GENERATION_SEPARATOR}aaaaaaaaaaaa`, valid());
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      await write(dir, `${ID}${GENERATION_SEPARATOR}bbbbbbbbbbbb`, {
+        ...valid(),
+        heightRange: [100_000, 199_999],
+      });
+      const found = await readBandDirectory(dir);
+      assert.equal(found.length, 1);
+      assert.equal(
+        path.basename(found[0].dir),
+        `${ID}${GENERATION_SEPARATOR}aaaaaaaaaaaa`,
+      );
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('canonicalTxRoot', () => {

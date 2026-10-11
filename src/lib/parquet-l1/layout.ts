@@ -766,6 +766,17 @@ export interface BandOnDisk {
 }
 
 /**
+ * The heights a band's id claims, or `undefined` if it is not a band id.
+ * The id is whoever-published-it's, and it is the import ledger's key, so it
+ * has to agree with the band it names.
+ */
+export function idHeightRange(id: string): [number, number] | undefined {
+  const m = /^l1-h(\d{1,15})-(\d{1,15})-[0-9a-f]{8}-[0-9a-f]{12}$/.exec(id);
+  if (m === null) return undefined;
+  return [Number(m[1]), Number(m[2])];
+}
+
+/**
  * Separates a band id from its generation in the name the index-swarm
  * sidecar installs a band under, `<band id>~<generation>`
  * (`GENERATION_SEPARATOR` in `src/index-swarm/subscriber.ts`). A band id
@@ -780,8 +791,10 @@ export const INSTALLED_GENERATION_SEPARATOR = '~';
  * `<band id>~<generation>` as the index-swarm sidecar installs it; `id` is
  * the band id either way. While the sidecar replaces a band it holds two
  * generations of it for a while. Both have the same tables, since a band's
- * id is their digest, so only the one changed last is returned: the
- * replacement, not the copy about to be retired.
+ * id is their digest, so only one is returned: one whose heights agree with
+ * its id over one that does not (a copy that disagrees is no copy of that
+ * band, and must not hide one that is), then the one changed last, the
+ * replacement rather than the copy about to be retired.
  *
  * Shared by the publisher's view of what it has published and the
  * importer's view of what it may import, so the two cannot drift on what
@@ -797,7 +810,10 @@ export const INSTALLED_GENERATION_SEPARATOR = '~';
 export async function readBandDirectory(dir: string): Promise<BandOnDisk[]> {
   const fs = await import('node:fs/promises');
   const path = await import('node:path');
-  const found = new Map<string, BandOnDisk & { changedAt: number }>();
+  type Candidate = BandOnDisk & { agrees: boolean; changedAt: number };
+  const better = (a: Candidate, b: Candidate) =>
+    a.agrees !== b.agrees ? a.agrees : a.changedAt > b.changedAt;
+  const found = new Map<string, Candidate>();
   for (const name of await fs.readdir(dir).catch(() => [] as string[])) {
     if (name.startsWith('.')) continue;
     const bandDir = path.join(dir, name);
@@ -811,12 +827,22 @@ export async function readBandDirectory(dir: string): Promise<BandOnDisk[]> {
       continue;
     }
     const id = name.split(INSTALLED_GENERATION_SEPARATOR)[0];
-    // ctime, as the sidecar judges an installed copy's age: a rename into
-    // place keeps a directory's mtime but not its ctime.
-    const changedAt = (await fs.stat(bandDir).catch(() => stat)).ctimeMs;
+    const named = idHeightRange(id);
+    const candidate: Candidate = {
+      id,
+      dir: bandDir,
+      band,
+      agrees:
+        named !== undefined &&
+        named[0] === band.heightRange[0] &&
+        named[1] === band.heightRange[1],
+      // ctime, as the sidecar judges an installed copy's age: a rename into
+      // place keeps a directory's mtime but not its ctime.
+      changedAt: (await fs.stat(bandDir).catch(() => stat)).ctimeMs,
+    };
     const held = found.get(id);
-    if (held !== undefined && held.changedAt >= changedAt) continue;
-    found.set(id, { id, dir: bandDir, band, changedAt });
+    if (held !== undefined && !better(candidate, held)) continue;
+    found.set(id, candidate);
   }
   return [...found.values()].map((b) => ({
     id: b.id,

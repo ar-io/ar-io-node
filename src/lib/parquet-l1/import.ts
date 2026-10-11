@@ -33,6 +33,7 @@ import { Logger } from 'winston';
 import {
   BAND_FILE,
   bandTablesDigest,
+  idHeightRange,
   PARQUET_L1_TABLES,
   ParquetL1Band,
   readBandDirectory,
@@ -93,16 +94,7 @@ export const PROGRESS_EVERY_MS = 60_000;
  */
 export const bandDigest = bandTablesDigest;
 
-/**
- * The heights a band's directory name claims, or `undefined` if it is not a
- * band id. The name is whoever-published-it's, and it is the ledger's key,
- * so it has to agree with the band it names.
- */
-export function idHeightRange(id: string): [number, number] | undefined {
-  const m = /^l1-h(\d{1,15})-(\d{1,15})-[0-9a-f]{8}-[0-9a-f]{12}$/.exec(id);
-  if (m === null) return undefined;
-  return [Number(m[1]), Number(m[2])];
-}
+export { idHeightRange };
 
 /**
  * Every band of a `parquet-l1` directory, lowest first, with its band file
