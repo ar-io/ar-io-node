@@ -141,7 +141,13 @@ jobs:
       - run: brew install python-setuptools
       - run: yarn --immutable --immutable-cache
       - run: yarn build
+      # c8 merges every test process's coverage into one report after the
+      # tests finish. That peaks just over 2 GB, node's default heap on the
+      # 7 GB macOS runners (the Linux runners' default is higher), so the job
+      # died there twice with every test passed.
       - run: yarn test:ci
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
       - name: Send Slack failure notification
         if: failure()
         env:
