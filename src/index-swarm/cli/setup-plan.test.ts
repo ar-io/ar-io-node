@@ -281,13 +281,18 @@ describe('planSetup', () => {
   });
 
   it('stops on an INDEXES_PUBLIC_URL the gateway would not start with', () => {
-    for (const value of ['gw.example', 'https://gw.example/path']) {
+    for (const value of [
+      'gw.example',
+      'https://gw.example/path',
+      'https://user:secret@gw.example',
+    ]) {
       const bad = plan(
         `INDEX_SWARM_OBSERVER_KEYPAIR_FILE=/k.json\nAR_IO_WALLET=W\nARNS_ROOT_HOST=ar.example\nINDEXES_PUBLIC_URL=${value}`,
         { publish: true, torrent: true },
       );
       assert.equal(bad.errors.length, 1, value);
-      assert.match(bad.errors[0], /INDEXES_PUBLIC_URL .* is not an origin/);
+      assert.match(bad.errors[0], /INDEXES_PUBLIC_URL is not an origin/);
+      assert.ok(!bad.errors[0].includes(value), 'the value is not echoed');
       assert.deepEqual(bad.changes, [], 'nothing is written');
     }
   });

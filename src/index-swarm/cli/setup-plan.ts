@@ -194,9 +194,10 @@ export function planSetup(
   if (configuredOrigin !== undefined && configuredOrigin.trim() !== '') {
     try {
       parsePublicOrigin(configuredOrigin);
-    } catch (error: any) {
+    } catch {
+      // Not the value itself: one that fails may carry credentials.
       plan.errors.push(
-        `INDEXES_PUBLIC_URL (${configuredOrigin}) is not an origin, and the gateway will not start with it: ${error?.message}. Set it to the gateway's scheme and host, such as https://gateway.example, or remove it.`,
+        "INDEXES_PUBLIC_URL is not an origin, and the gateway will not start with it. Set it to the gateway's scheme, host and optional port only, such as https://gateway.example, or remove it.",
       );
       return plan;
     }

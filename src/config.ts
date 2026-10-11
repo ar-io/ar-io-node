@@ -3556,7 +3556,9 @@ export const INDEXES_PUBLIC_URL = (() => {
 
 /**
  * Whether each served `.torrent` names this gateway as its WebSeed, so a
- * stock BitTorrent client can always finish a band. Such a client draws part
+ * stock BitTorrent client can finish a band no peer is delivering, while the
+ * gateway still offers the band and within its allowance where the byte
+ * routes are metered. Such a client draws part
  * of every band from it even while peers could serve it, through the byte
  * routes' meter when that is on; `false` serves torrents as the publisher
  * wrote them, for peers only.
