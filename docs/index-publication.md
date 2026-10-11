@@ -288,8 +288,10 @@ auto-download rule, and the client takes every band now and each new band
 as it is published.
 
 The `.torrent` a gateway serves names that gateway as a WebSeed (BEP 19), so
-a client can finish a band with no seeders at all, as long as the WebSeed is
-on and the client is within the gateway's allowance. A client uses the WebSeed
+a client can finish a band with no seeders at all, as long as the gateway
+still offers the band (see [Keeping up](#keeping-up-with-the-l1-index)), the
+WebSeed is on and the client is within the gateway's allowance. A client uses
+the WebSeed
 alongside its peers from the start, not only when they stall: expect a good
 share of each band to come over HTTPS from the gateway, through its meter
 when it meters (see [Metering](#metering)). Past its allowance a client is
