@@ -702,7 +702,8 @@ See [openapi.yaml](openapi.yaml) for the headers each returns, and
 [index-publication.md](index-publication.md) for the protocol.
 
 While a valid publication exists, `/ar-io/info` carries an `indexes` block
-naming what is published and where the document lives. The routes and that
+naming what is published and where the document lives, and, for each index
+offering torrents, where its feed is (`feeds`). The routes and that
 block read one shared view of the publication, so an index is advertised
 exactly when it is servable. The gateway rechecks the document file every
 five seconds, off the request path, so a new document is served within a few

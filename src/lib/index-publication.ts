@@ -82,6 +82,12 @@ export const PUBLISHED_TORRENT_DIR = '.torrents';
  */
 export const WEBSEED_PATH = '/ar-io/indexes/webseed/';
 
+/**
+ * Where a gateway serves the RSS feed of each index it publishes, relative
+ * to its origin: `<INDEX_FEED_PATH><index>.xml`.
+ */
+export const INDEX_FEED_PATH = '/ar-io/indexes/feed/';
+
 export const INDEX_PUBLICATION_MAX_INDEXES = 64;
 export const INDEX_PUBLICATION_MAX_BANDS_PER_INDEX = 1024;
 export const INDEX_PUBLICATION_MAX_FILES_PER_BAND = 1024;

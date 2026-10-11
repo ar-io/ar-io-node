@@ -26,7 +26,11 @@ import {
 import { validateOptimisticTxBatch } from './optimistic-tx-validation.js';
 import { evaluateDataItemQueueAdmission } from './data-item-queue-admission.js';
 import { buildArIoInfo } from './ar-io-info-builder.js';
-import { indexNamesToAdvertise } from './upstream-published-indexes.js';
+import {
+  advertisementOf,
+  IndexAdvertisement,
+  indexesToAdvertise,
+} from './upstream-published-indexes.js';
 import { buildGatewayPeers } from './ar-io-peers-builder.js';
 
 const arweave = Arweave.init({});
@@ -196,17 +200,19 @@ export const arIoInfoHandler = async (_req: Request, res: Response) => {
   // What this gateway publishes, from the same view the /ar-io/indexes routes
   // serve from, so an index is advertised exactly when it is servable. Any
   // failure here only omits the block: /ar-io/info must answer regardless.
-  let published: string[] | undefined;
+  let published: IndexAdvertisement | undefined;
   try {
-    published = (await system.publishedIndexes.current())?.names;
+    const view = await system.publishedIndexes.current();
+    published =
+      view !== undefined ? advertisementOf(view.publication) : undefined;
   } catch {
     published = undefined;
   }
   // A node that does not sign advertises what the signing node publishes,
   // when configured to, so every node of a fleet answers alike.
-  const indexNames = indexNamesToAdvertise({
+  const advertised = indexesToAdvertise({
     published,
-    upstream: system.upstreamPublishedIndexes?.names(),
+    upstream: system.upstreamPublishedIndexes?.advertisement(),
   });
 
   const response = buildArIoInfo({
@@ -249,7 +255,13 @@ export const arIoInfoHandler = async (_req: Request, res: Response) => {
             solanaAddress: config.HTTPSIG_SIGNER.solanaAddress,
           }
         : undefined,
-    indexNames,
+    indexNames: advertised?.names,
+    // A feed is served only with a public origin to build its URLs from,
+    // and lists only bands offered as torrents.
+    indexFeedNames:
+      config.INDEXES_PUBLIC_URL !== undefined
+        ? advertised?.torrentNames
+        : undefined,
   });
 
   res.status(200).send(response);

@@ -30,6 +30,7 @@ import { Logger } from 'winston';
 
 import {
   isValidIndexName,
+  INDEX_FEED_PATH,
   isValidPathSegment,
   WEBSEED_PATH,
 } from '../lib/index-publication.js';
@@ -220,50 +221,47 @@ export function createIndexesRouter({
   // where a published file always has three, so it cannot shadow one.
 
   const renderings = new RenderingCache();
-  router.get(
-    '/ar-io/indexes/feed/:file',
-    async (req: Request, res: Response) => {
-      const route = 'feed';
-      const match = /^(.+)\.xml$/.exec(req.params.file);
-      if (match === null || !isValidIndexName(match[1])) {
-        uncacheable(res);
-        res.status(400).type('text').send('Invalid feed name');
-        finish(res, route, 400);
+  router.get(`${INDEX_FEED_PATH}:file`, async (req: Request, res: Response) => {
+    const route = 'feed';
+    const match = /^(.+)\.xml$/.exec(req.params.file);
+    if (match === null || !isValidIndexName(match[1])) {
+      uncacheable(res);
+      res.status(400).type('text').send('Invalid feed name');
+      finish(res, route, 400);
+      return;
+    }
+    const index = match[1];
+    try {
+      const snapshot =
+        indexFeed !== undefined
+          ? await indexFeed.snapshot({ index })
+          : undefined;
+      if (snapshot === undefined) {
+        notFound(res, route);
         return;
       }
-      const index = match[1];
-      try {
-        const snapshot =
-          indexFeed !== undefined
-            ? await indexFeed.snapshot({ index })
-            : undefined;
-        if (snapshot === undefined) {
-          notFound(res, route);
-          return;
-        }
-        const { status, bytes } = serveFeed(req, res, {
-          snapshot,
-          format: feedFormat,
-          cacheControl: 'public, max-age=60',
-          renderings,
-        });
-        finish(res, route, status);
-        if (bytes > 0) metrics.indexesBytesServedTotal.inc({ route }, bytes);
-      } catch (error: any) {
-        // A feed is a convenience: a fault building or rendering one is
-        // answered, never left hanging, and never cached.
-        log.error('Could not serve an index feed', {
-          index,
-          error: error?.message,
-        });
-        if (!res.headersSent) {
-          uncacheable(res);
-          res.status(500).type('text').send('Feed unavailable');
-        }
-        finish(res, route, 500);
+      const { status, bytes } = serveFeed(req, res, {
+        snapshot,
+        format: feedFormat,
+        cacheControl: 'public, max-age=60',
+        renderings,
+      });
+      finish(res, route, status);
+      if (bytes > 0) metrics.indexesBytesServedTotal.inc({ route }, bytes);
+    } catch (error: any) {
+      // A feed is a convenience: a fault building or rendering one is
+      // answered, never left hanging, and never cached.
+      log.error('Could not serve an index feed', {
+        index,
+        error: error?.message,
+      });
+      if (!res.headersSent) {
+        uncacheable(res);
+        res.status(500).type('text').send('Feed unavailable');
       }
-    },
-  );
+      finish(res, route, 500);
+    }
+  });
 
   // --- Bytes, by content address -----------------------------------------
   //
