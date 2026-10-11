@@ -24,7 +24,6 @@
  */
 import { createReadStream } from 'node:fs';
 import * as fs from 'node:fs/promises';
-import * as path from 'node:path';
 import { Request, Response, Router } from 'express';
 import rangeParser from 'range-parser';
 import { Logger } from 'winston';
@@ -32,9 +31,13 @@ import { Logger } from 'winston';
 import {
   isValidIndexName,
   isValidPathSegment,
-  PUBLISHED_TORRENT_DIR,
+  WEBSEED_PATH,
 } from '../lib/index-publication.js';
 import { PublishedFile, PublishedIndexes } from './published-indexes.js';
+import {
+  PublishedTorrents,
+  TorrentMetainfoSource,
+} from './published-torrents.js';
 import {
   adjustRateLimitTokens,
   checkPaymentAndRateLimits,
@@ -45,7 +48,11 @@ import { PaymentProcessor } from '../payments/types.js';
 import * as metrics from '../metrics.js';
 import { FeedFormat, FeedSource } from '../feeds/types.js';
 import { IndexFeedParams } from '../feeds/index-bands.js';
-import { RenderingCache, serveFeed } from '../feeds/http.js';
+import {
+  ifNoneMatchMatches,
+  RenderingCache,
+  serveFeed,
+} from '../feeds/http.js';
 import { rss2 } from '../feeds/rss.js';
 
 const SHA256_HEX = /^[0-9a-f]{64}$/;
@@ -60,6 +67,14 @@ export const INDEX_PUBLICATION_HEADER = 'x-ar-io-index-publication';
  * Also an HTTPSIG trigger, so the response is signed like data responses are.
  */
 export const INDEX_FILE_HEADER = 'x-ar-io-index-file';
+
+/**
+ * Set on a served `.torrent`, with its v1 infohash, the one the publication
+ * signs. Also an HTTPSIG trigger: the infohash pins only the info
+ * dictionary, and signing binds the rest, the trackers and WebSeed this
+ * gateway put in, through Content-Digest to this gateway.
+ */
+export const INDEX_TORRENT_HEADER = 'x-ar-io-index-torrent';
 
 /** Standard base64 of a hex digest, as RFC 9530 digest fields want it. */
 function digestField(hexSha256: string): string {
@@ -90,6 +105,13 @@ export interface IndexesRouterOptions {
   indexFeed?: FeedSource<IndexFeedParams>;
   /** The feeds' wire format. RSS 2.0 unless a test says otherwise. */
   feedFormat?: FeedFormat;
+  /**
+   * The `.torrent` files served. Pass the system instance, the one the
+   * feeds read, so an enclosure's length is that of the torrent served.
+   * Without it, torrents are served as the publisher wrote them, with no
+   * WebSeed.
+   */
+  torrents?: TorrentMetainfoSource;
 }
 
 export function createIndexesRouter({
@@ -101,6 +123,7 @@ export function createIndexesRouter({
   paymentProcessor,
   indexFeed,
   feedFormat = rss2,
+  torrents: suppliedTorrents,
 }: IndexesRouterOptions): Router {
   const log = parentLog.child({ class: 'IndexesRouter' });
   const router = Router();
@@ -116,6 +139,13 @@ export function createIndexesRouter({
     );
   }
   const currentView = () => published.current();
+  const torrents =
+    suppliedTorrents ??
+    new PublishedTorrents({
+      log,
+      publishedDir: published.publishedDir,
+      publicOrigin: undefined,
+    });
 
   /**
    * Who may cache a served file. A shared cache replays what it holds without
@@ -272,7 +302,7 @@ export function createIndexesRouter({
   // that is not a torrent name falls through.
 
   router.get(
-    '/ar-io/indexes/webseed/:torrentName/:file',
+    `${WEBSEED_PATH}:torrentName/:file`,
     async (req: Request, res: Response, next) => {
       const { torrentName, file } = req.params;
       if (!TORRENT_NAME.test(torrentName)) {
@@ -301,46 +331,49 @@ export function createIndexesRouter({
   //
   // By v1 infohash, the address the signed publication names: a band rebuilt
   // under the same id gets a new infohash and so a new address, and a given
-  // address only ever serves that torrent. Not metered: a few hundred
-  // kilobytes, and a subscriber checks it against the signed infohashes
-  // anyway. Only the tracker list, outside the info dictionary, can change
-  // under one address, so it is cacheable for a while but not immutable.
+  // address only ever serves that torrent. Not metered: a few kilobytes, and
+  // a subscriber checks it against the signed infohashes anyway. What is
+  // outside the info dictionary, the trackers and this gateway's WebSeed,
+  // can change under one address, so it is cacheable for a while but not
+  // immutable, and the ETag says when it has.
 
   router.get(
     '/ar-io/indexes/torrents/:file',
     async (req: Request, res: Response) => {
+      const route = 'torrent';
       const match = /^([0-9a-f]{40})\.torrent$/.exec(req.params.file);
       if (match === null) {
         uncacheable(res);
         res.status(400).type('text').send('Invalid torrent name');
-        finish(res, 'torrent', 400);
+        finish(res, route, 400);
         return;
       }
       const infohashV1 = match[1];
       const current = await currentView();
       if (current === undefined || !current.torrents.has(infohashV1)) {
-        notFound(res, 'torrent');
+        notFound(res, route);
         return;
       }
-      let body: Buffer;
-      try {
-        body = await fs.readFile(
-          path.join(
-            published.publishedDir,
-            PUBLISHED_TORRENT_DIR,
-            `${infohashV1}.torrent`,
-          ),
-        );
-      } catch {
-        // Offered, but the publisher has not built it yet.
-        notFound(res, 'torrent');
+      // Offered, but possibly not built yet.
+      const served = await torrents.torrent(infohashV1);
+      if (served === undefined) {
+        notFound(res, route);
         return;
       }
-      res.setHeader('Content-Type', 'application/x-bittorrent');
+      const etag = `"${served.sha256}"`;
+      res.setHeader('ETag', etag);
       res.setHeader('Cache-Control', 'public, max-age=86400');
-      res.setHeader('Content-Length', String(body.byteLength));
-      res.status(200).end(req.method === 'HEAD' ? undefined : body);
-      finish(res, 'torrent', 200);
+      if (ifNoneMatchMatches(req.headers['if-none-match'], etag)) {
+        res.status(304).end();
+        finish(res, route, 304);
+        return;
+      }
+      res.setHeader(INDEX_TORRENT_HEADER, infohashV1);
+      res.setHeader('Content-Type', 'application/x-bittorrent');
+      res.setHeader('Content-Digest', digestField(served.sha256));
+      res.setHeader('Content-Length', String(served.body.byteLength));
+      res.status(200).end(req.method === 'HEAD' ? undefined : served.body);
+      finish(res, route, 200);
     },
   );
 

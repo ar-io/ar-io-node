@@ -5,6 +5,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import { PublishedIndexes } from './routes/published-indexes.js';
+import { PublishedTorrents } from './routes/published-torrents.js';
 import { IndexBandFeedSource } from './feeds/index-bands.js';
 import { UpstreamPublishedIndexes } from './routes/upstream-published-indexes.js';
 import { default as Arweave } from 'arweave';
@@ -962,14 +963,26 @@ export const publishedIndexes = new PublishedIndexes({
 });
 
 /**
+ * The `.torrent` files served for published bands, each with this gateway's
+ * WebSeed added when its public origin is known, so a stock BitTorrent
+ * client can finish a band no peer is delivering. One instance backs the
+ * torrent route and the feeds, so an enclosure's length is the served one.
+ */
+export const publishedTorrents = new PublishedTorrents({
+  log,
+  publishedDir: config.INDEXES_PUBLISHED_DIR,
+  publicOrigin: config.INDEXES_PUBLIC_URL,
+});
+
+/**
  * The RSS feeds of what this gateway publishes, one per index, built from
  * the same view as the routes. No feeds without a public origin.
  */
 export const indexFeedSource = new IndexBandFeedSource({
   log,
   published: publishedIndexes,
-  publishedDir: config.INDEXES_PUBLISHED_DIR,
   baseUrl: config.INDEXES_PUBLIC_URL,
+  torrents: publishedTorrents,
 });
 
 /**

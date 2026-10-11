@@ -5,16 +5,16 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import crypto from 'node:crypto';
-import * as fs from 'node:fs/promises';
-import * as path from 'node:path';
 import { Logger } from 'winston';
 
 import {
   BandDescriptor,
   IndexPublication,
-  PUBLISHED_TORRENT_DIR,
+  supersedesClaim,
+  torrentNameForFiles,
 } from '../lib/index-publication.js';
 import type { PublicationView } from '../routes/published-indexes.js';
+import type { TorrentMetainfoSource } from '../routes/published-torrents.js';
 import {
   Feed,
   FeedElement,
@@ -104,13 +104,24 @@ function bandItem(
     range === undefined ? '' : ` (heights ${range[0]} to ${range[1] ?? 'tip'})`;
   const size = band.files.reduce((sum, file) => sum + file.size, 0);
   const schema = band.metadata?.schema;
-  const elements: FeedElement[] = [ario('band', band.id)];
+  // What a client names the band's folder: the torrent's name, derived from
+  // its files so publishers of the same files agree on it, not the band id.
+  const folder = torrentNameForFiles(band.files);
+  const elements: FeedElement[] = [
+    ario('band', band.id),
+    ario('torrentName', folder),
+  ];
   if (torrent.infohashV2 !== undefined) {
     elements.push(ario('infohashV2', torrent.infohashV2));
   }
   if (range !== undefined) {
     elements.push(ario('heightFrom', range[0]));
     if (range[1] !== null) elements.push(ario('heightTo', range[1]));
+  }
+  // A follower that kept an earlier band can drop it: this one holds its
+  // heights. One element per id, in the order claimed.
+  for (const id of supersedesClaim(band)) {
+    elements.push(ario('supersedes', id));
   }
   return {
     // A band rebuilt under the same id has new bytes and a new infohash,
@@ -119,7 +130,8 @@ function bandItem(
     title: `${band.id}${heights}`,
     description:
       `${band.files.length} files, ${formatBytes(size)}` +
-      (typeof schema === 'string' ? `, layout ${schema}` : ''),
+      (typeof schema === 'string' ? `, layout ${schema}` : '') +
+      `, saved in folder ${folder}`,
     // The publication does not record when each band first appeared;
     // inventing a time would be wrong, so every item carries its issue time.
     published: options.published,
@@ -136,9 +148,9 @@ function bandItem(
 /**
  * The feed for one index of a publication. Pure.
  *
- * @param input.torrentSizes the size of each band's `.torrent`, by v1
- *   infohash. A band offered as a torrent whose file is not there (yet) is
- *   left out, as the torrent route would answer 404 for it.
+ * @param input.torrentSizes the size of each band's `.torrent` as served,
+ *   by v1 infohash. A band offered as a torrent whose file is not there
+ *   (yet) is left out, as the torrent route would answer 404 for it.
  * @returns undefined when the publication has no such index
  */
 export function buildIndexBandFeed(input: {
@@ -202,8 +214,8 @@ function feedVersion(feed: Feed): string {
 
 /**
  * The index feeds of what this gateway publishes. Reads the publication
- * view and the size of each band's `.torrent`; memoised per publication, so
- * a poll costs a map lookup.
+ * view and each band's `.torrent` as the gateway serves it; memoised per
+ * publication, so a poll costs a map lookup.
  */
 export class IndexBandFeedSource implements FeedSource<IndexFeedParams> {
   private readonly log: Logger;
@@ -211,9 +223,7 @@ export class IndexBandFeedSource implements FeedSource<IndexFeedParams> {
     current(): Promise<PublicationView | undefined>;
   };
   private readonly baseUrl: string | undefined;
-  private readonly torrentSize: (
-    infohashV1: string,
-  ) => Promise<number | undefined>;
+  private readonly torrents: TorrentMetainfoSource;
   /** Snapshots of the current publication, by index name. */
   private memo = new Map<string, FeedSnapshot>();
   private memoFor: string | undefined;
@@ -223,36 +233,20 @@ export class IndexBandFeedSource implements FeedSource<IndexFeedParams> {
    * @param options.baseUrl the gateway's public origin, the base of the
    *   feed's absolute URLs (`INDEXES_PUBLIC_URL`). Without it there are no
    *   feeds: a URL from the request's Host header could be pointed anywhere.
-   * @param options.publishedDir where the `.torrent` files are, under
-   *   `.torrents/`; used by the default `torrentSize`.
+   * @param options.torrents the `.torrent` files the gateway serves: the
+   *   instance its torrent route serves from, so each enclosure's length is
+   *   that of the bytes a client is sent.
    */
   constructor(options: {
     log: Logger;
     published: { current(): Promise<PublicationView | undefined> };
-    publishedDir: string;
     baseUrl: string | undefined;
-    torrentSize?: (infohashV1: string) => Promise<number | undefined>;
+    torrents: TorrentMetainfoSource;
   }) {
     this.log = options.log.child({ class: 'IndexBandFeedSource' });
     this.published = options.published;
     this.baseUrl = options.baseUrl;
-    this.torrentSize =
-      options.torrentSize ??
-      (async (infohashV1) => {
-        try {
-          return (
-            await fs.stat(
-              path.join(
-                options.publishedDir,
-                PUBLISHED_TORRENT_DIR,
-                `${infohashV1}.torrent`,
-              ),
-            )
-          ).size;
-        } catch {
-          return undefined;
-        }
-      });
+    this.torrents = options.torrents;
   }
 
   async snapshot(params: IndexFeedParams): Promise<FeedSnapshot | undefined> {
@@ -283,11 +277,11 @@ export class IndexBandFeedSource implements FeedSource<IndexFeedParams> {
     await Promise.all(
       entry.bands.map(async (band) => {
         if (band.torrent === undefined) return;
-        const size = await this.torrentSize(band.torrent.infohashV1);
-        if (size === undefined) {
+        const served = await this.torrents.torrent(band.torrent.infohashV1);
+        if (served === undefined) {
           complete = false;
         } else {
-          torrentSizes.set(band.torrent.infohashV1, size);
+          torrentSizes.set(band.torrent.infohashV1, served.body.byteLength);
         }
       }),
     );
