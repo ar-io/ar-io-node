@@ -33,6 +33,13 @@ idle_wait_timeout_s=${CLICKHOUSE_AUTO_IMPORT_IDLE_WAIT_TIMEOUT_S:-600}
 export_retry_max=${CLICKHOUSE_AUTO_IMPORT_EXPORT_MAX_RETRIES:-3}
 export_retry_delay_s=${CLICKHOUSE_AUTO_IMPORT_EXPORT_RETRY_DELAY_S:-5}
 debug_retry_window_s=${CLICKHOUSE_AUTO_IMPORT_DEBUG_RETRY_WINDOW_S:-600}
+# Checked here because a value [ cannot compare would make every deadline
+# test fail, and the retry loop would never end.
+if ! [[ "$debug_retry_window_s" =~ ^[0-9]{1,9}$ ]]; then
+    echo "Error: CLICKHOUSE_AUTO_IMPORT_DEBUG_RETRY_WINDOW_S must be a whole number of seconds (0-999999999), got '$debug_retry_window_s'" >&2
+    exit 1
+fi
+debug_retry_window_s=$((10#$debug_retry_window_s))
 # Upper bound for one /ar-io/admin/debug request. It usually answers in
 # milliseconds but has been seen to take over two minutes while the
 # gateway's SQLite worker is busy, so this only guards against a request
@@ -167,17 +174,20 @@ wait_for_export_idle() {
 
 # Prints the gateway's /ar-io/admin/debug response. While the gateway is
 # unreachable or answers with an error, as it does for a minute or two
-# during a restart, retries with backoff for up to $debug_retry_window_s
-# seconds; returns 1 with nothing printed once that runs out. A response
-# that arrives but lacks the expected fields is returned as is: the callers
-# validate it, and retrying would not change it.
+# during a restart, retries with backoff until $debug_retry_window_s seconds
+# have passed; returns 1 with nothing printed once they have. The first
+# request always gets the full $debug_request_timeout_s. Retries, and the
+# sleeps before them, are cut to the time left in the window, with a floor
+# of 10 s per retry, so the call ends at most about 10 s past the window. A
+# response that arrives but lacks the expected fields is returned as is:
+# the callers validate it, and retrying would not change it.
 fetch_debug_info() {
-    local start elapsed body status delay=5
+    local start remaining body status delay=5 max_time=$debug_request_timeout_s
     start=$(date +%s)
 
     while true; do
         body="$(curl -s --fail --show-error \
-            --connect-timeout 10 --max-time "$debug_request_timeout_s" \
+            --connect-timeout 10 --max-time "$max_time" \
             -H "Authorization: Bearer $ADMIN_API_KEY" \
             "http://${ar_io_host}:${ar_io_port}/ar-io/admin/debug")"
         status=$?
@@ -186,13 +196,19 @@ fetch_debug_info() {
             return 0
         fi
 
-        elapsed=$(( $(date +%s) - start ))
-        if [ "$elapsed" -ge "$debug_retry_window_s" ]; then
-            echo "Warning: debug info still unavailable after ${elapsed}s; giving up." >&2
+        remaining=$(( debug_retry_window_s - ($(date +%s) - start) ))
+        if [ "$remaining" -le 0 ]; then
+            echo "Warning: debug info still unavailable after $(( $(date +%s) - start ))s; giving up." >&2
             return 1
         fi
-        echo "Warning: debug info fetch failed (curl status $status); retrying in ${delay}s (elapsed ${elapsed}s/${debug_retry_window_s}s)." >&2
+        [ "$delay" -gt "$remaining" ] && delay=$remaining
+        echo "Warning: debug info fetch failed (curl status $status); retrying in ${delay}s (${remaining}s left of ${debug_retry_window_s}s)." >&2
         sleep "$delay"
+
+        remaining=$(( debug_retry_window_s - ($(date +%s) - start) ))
+        max_time=$debug_request_timeout_s
+        [ "$max_time" -gt "$remaining" ] && max_time=$remaining
+        [ "$max_time" -lt 10 ] && max_time=10
         delay=$(( delay * 2 ))
         [ "$delay" -gt 60 ] && delay=60
     done
