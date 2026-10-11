@@ -246,6 +246,59 @@ describe('buildIndexBandFeed', () => {
     assert.deepEqual(supersedes('l1-h200000-299999'), []);
   });
 
+  it('names only the supersessions the publisher honours', () => {
+    const claims = [
+      band('a', { heightRange: [0, 1], torrent: 'a', supersedes: 'b' }),
+      band('b', { heightRange: [0, 1], torrent: 'b', supersedes: ['a'] }),
+      band('c', { heightRange: [2, 3], torrent: 'c', supersedes: 'c' }),
+      band('d', { heightRange: [4, 5], torrent: 'd', supersedes: 'gone' }),
+      band('e', { heightRange: [6, 9], torrent: 'e', supersedes: ['f'] }),
+      band('f', { heightRange: [6, 7], torrent: 'f' }),
+    ];
+    const feed = buildIndexBandFeed({
+      publication: publication(claims),
+      publicationSha256: 'f'.repeat(64),
+      index: 'parquet-l1',
+      baseUrl: BASE,
+      torrentSizes: sizesFor(claims),
+    })!;
+    const named = Object.fromEntries(
+      feed.items.map((i) => [
+        i.elements!.find((e) => e.name === 'band')!.value,
+        i.elements!.filter((e) => e.name === 'supersedes').map((e) => e.value),
+      ]),
+    );
+    assert.deepEqual(named, {
+      // A cycle and a band naming itself retire nothing at the publisher.
+      a: [],
+      b: [],
+      c: [],
+      // A band no longer offered was retired for its replacement.
+      d: ['gone'],
+      // One still offered, in its grace period, is being retired.
+      e: ['f'],
+      f: [],
+    });
+  });
+
+  it('leaves out of the description a layout that is not a plain name', () => {
+    const odd = [
+      band('x', {
+        heightRange: [0, 1],
+        torrent: 'a',
+        schema: '<img src=x onerror=alert(1)>',
+      }),
+    ];
+    const feed = buildIndexBandFeed({
+      publication: publication(odd),
+      publicationSha256: 'f'.repeat(64),
+      index: 'parquet-l1',
+      baseUrl: BASE,
+      torrentSizes: sizesFor(odd),
+    })!;
+    assert.doesNotMatch(feed.items[0].description!, /layout|img/);
+  });
+
   it('is undefined for an index the publication does not have, and empty for one with no torrents', () => {
     const args = {
       publicationSha256: 'f'.repeat(64),
@@ -354,6 +407,42 @@ describe('IndexBandFeedSource', () => {
       torrents: torrentsOf(() => 100),
     });
     assert.equal(await nothing.snapshot({ index: 'parquet-l1' }), undefined);
+  });
+
+  it('never leaves an older publication’s feed in a newer one’s memo', async () => {
+    const bands = [band('a', { heightRange: [0, 1], torrent: 'a' })];
+    let current = view(publication(bands), '1'.repeat(64));
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    let first = true;
+    const source = new IndexBandFeedSource({
+      log,
+      published: { current: async () => current },
+      baseUrl: BASE,
+      torrents: {
+        // The first read, for the first publication, is slow.
+        torrent: async () => {
+          if (first) {
+            first = false;
+            await gate;
+          }
+          return servedOf(100);
+        },
+      },
+    });
+    const slow = source.snapshot({ index: 'parquet-l1' });
+    await new Promise((resolve) => setImmediate(resolve));
+    current = view(
+      publication([...bands, band('b', { heightRange: [2, 3], torrent: 'b' })]),
+      '2'.repeat(64),
+    );
+    await source.snapshot({ index: 'parquet-l1' });
+    release();
+    assert.equal((await slow)?.headers?.[INDEX_FEED_HEADER], '1'.repeat(64));
+
+    const after = await source.snapshot({ index: 'parquet-l1' });
+    assert.equal(after?.headers?.[INDEX_FEED_HEADER], '2'.repeat(64));
+    assert.equal(after?.feed.items.length, 2);
   });
 
   it('gives each enclosure the length of the torrent the gateway serves', async () => {
