@@ -399,7 +399,14 @@ export function lookupsOf(schema: ParquetL1Schema): LookupSpec[] {
   return schema === 'l1-3' ? PARQUET_L1_LOOKUPS : [];
 }
 
-/** What a band says about itself, in `band.json`. */
+/**
+ * What a band says about itself, in `band.json`.
+ *
+ * Only what its rows determine, so every publisher of the same rows writes
+ * the same file ({@link serializeBandFile}), the same torrent, and so one
+ * swarm. What is the publisher's own, which bands this one replaces and
+ * when it was built, is kept beside the band in {@link PUBLISHER_FILE}.
+ */
 export interface ParquetL1Band {
   version: 1;
   /** The version this band was written with, not the one we write. */
@@ -413,10 +420,171 @@ export interface ParquetL1Band {
    * tables, so not part of the band's id ({@link bandTablesDigest}).
    */
   lookups?: Record<string, LookupDescription>;
-  /** Ids of bands this one replaces (a rebuilt tip band). */
+  /**
+   * Ids of bands this one replaces. Only in a band written before band files
+   * were made the same for every publisher: the ids carry the publisher's
+   * tag. A publisher now keeps them in {@link PUBLISHER_FILE}, and the
+   * signed publication carries them.
+   */
   supersedes?: string[];
-  /** When the band was built. */
+  /**
+   * The time of the band's top block ({@link bandTime}), the same for every
+   * publisher, and stable, so importing a band twice writes the same rows.
+   * A band written before band files were made the same for every publisher
+   * carries when it was built.
+   */
   createdAt: string;
+}
+
+/**
+ * Beside a band its publisher wrote, never part of it: no band file names
+ * it, so it is not published, put in a torrent or served. What is the
+ * publisher's own about the band, as {@link BandPublisherFacts}.
+ */
+export const PUBLISHER_FILE = '.publisher.json';
+
+/** What only the band's publisher knows about it, in {@link PUBLISHER_FILE}. */
+export interface BandPublisherFacts {
+  /** Ids of this publisher's bands that this one replaces. */
+  supersedes?: string[];
+  /** When this publisher built it. */
+  builtAt?: string;
+}
+
+/** A band's `createdAt`: its top block's timestamp, in seconds, as a date. */
+export function bandTime(topBlockTimestamp: number): string {
+  if (!Number.isSafeInteger(topBlockTimestamp) || topBlockTimestamp < 0) {
+    throw new Error(`not a block timestamp: ${topBlockTimestamp}`);
+  }
+  return new Date(topBlockTimestamp * 1000).toISOString();
+}
+
+/**
+ * A band's `band.json`, written the one way: fields, tables and lookups in
+ * the layout's order, and no `supersedes`, which is the publisher's own.
+ * Two publishers of the same rows therefore write the same bytes.
+ */
+export function serializeBandFile(band: ParquetL1Band): string {
+  const lookups = lookupsOf(band.schema);
+  const canonical = {
+    version: band.version,
+    schema: band.schema,
+    heightRange: [band.heightRange[0], band.heightRange[1]],
+    tables: Object.fromEntries(
+      PARQUET_L1_TABLES.map(({ name }) => [
+        name,
+        {
+          rows: band.tables[name].rows,
+          rowDigest: band.tables[name].rowDigest,
+        },
+      ]),
+    ),
+    ...(lookups.length > 0 && band.lookups !== undefined
+      ? {
+          lookups: Object.fromEntries(
+            lookups.map(({ name }) => [
+              name,
+              {
+                rows: band.lookups![name].rows,
+                rowDigest: band.lookups![name].rowDigest,
+              },
+            ]),
+          ),
+        }
+      : {}),
+    createdAt: band.createdAt,
+  };
+  return JSON.stringify(canonical, null, 2);
+}
+
+/**
+ * Parses {@link PUBLISHER_FILE}. It is this node's own, but checked all the
+ * same: a malformed one is refused rather than half-read.
+ *
+ * @throws with a message naming what is wrong.
+ */
+export function parsePublisherFile(text: string): BandPublisherFacts {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch (error) {
+    throw new Error(
+      `${PUBLISHER_FILE} is not JSON: ${(error as Error).message}`,
+    );
+  }
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    throw new Error(`${PUBLISHER_FILE} must be an object`);
+  }
+  const facts = raw as Record<string, unknown>;
+  const out: BandPublisherFacts = {};
+  if (facts.supersedes !== undefined) {
+    if (
+      !Array.isArray(facts.supersedes) ||
+      !facts.supersedes.every((id) => typeof id === 'string' && id.length > 0)
+    ) {
+      throw new Error(
+        `${PUBLISHER_FILE}: supersedes must be a list of band ids`,
+      );
+    }
+    out.supersedes = facts.supersedes as string[];
+  }
+  if (facts.builtAt !== undefined) {
+    if (
+      typeof facts.builtAt !== 'string' ||
+      Number.isNaN(Date.parse(facts.builtAt))
+    ) {
+      throw new Error(`${PUBLISHER_FILE}: builtAt must be a date`);
+    }
+    out.builtAt = facts.builtAt;
+  }
+  return out;
+}
+
+/**
+ * The publisher's facts kept beside a band, or undefined when there is no
+ * {@link PUBLISHER_FILE} (a band written before it existed, or one a
+ * subscriber installed).
+ */
+export async function readPublisherFacts(
+  bandDir: string,
+): Promise<BandPublisherFacts | undefined> {
+  const fs = await import('node:fs/promises');
+  const path = await import('node:path');
+  let text: string;
+  try {
+    text = await fs.readFile(path.join(bandDir, PUBLISHER_FILE), 'utf8');
+  } catch (error: any) {
+    if (error?.code === 'ENOENT') return undefined;
+    throw error;
+  }
+  return parsePublisherFile(text);
+}
+
+/** Writes {@link PUBLISHER_FILE} beside a band, replacing it by a rename. */
+export async function writePublisherFacts(
+  bandDir: string,
+  facts: BandPublisherFacts,
+): Promise<void> {
+  const fs = await import('node:fs/promises');
+  const path = await import('node:path');
+  const file = path.join(bandDir, PUBLISHER_FILE);
+  const temporary = `${file}.tmp`;
+  await fs.writeFile(temporary, JSON.stringify(facts, null, 2));
+  await fs.rename(temporary, file);
+}
+
+/**
+ * The ids a band of this publisher's replaces: from {@link PUBLISHER_FILE},
+ * else, for a band written before it existed, from the band's own file.
+ * The one rule for the publication (the sidecar) and the exporter's view of
+ * its live bands, so the two cannot disagree on what is retired.
+ */
+export async function bandSupersedes(found: {
+  dir: string;
+  band: ParquetL1Band;
+}): Promise<string[] | undefined> {
+  const facts = await readPublisherFacts(found.dir);
+  return facts?.supersedes ?? found.band.supersedes;
 }
 
 const isHeight = (value: unknown): value is number =>
