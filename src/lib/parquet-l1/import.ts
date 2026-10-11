@@ -33,6 +33,7 @@ import { Logger } from 'winston';
 import {
   BAND_FILE,
   bandTablesDigest,
+  idHeightRange,
   PARQUET_L1_TABLES,
   ParquetL1Band,
   readBandDirectory,
@@ -93,23 +94,16 @@ export const PROGRESS_EVERY_MS = 60_000;
  */
 export const bandDigest = bandTablesDigest;
 
-/**
- * The heights a band's directory name claims, or `undefined` if it is not a
- * band id. The name is whoever-published-it's, and it is the ledger's key,
- * so it has to agree with the band it names.
- */
-export function idHeightRange(id: string): [number, number] | undefined {
-  const m = /^l1-h(\d{1,15})-(\d{1,15})-[0-9a-f]{8}-[0-9a-f]{12}$/.exec(id);
-  if (m === null) return undefined;
-  return [Number(m[1]), Number(m[2])];
-}
+export { idHeightRange };
 
 /**
  * Every band of a `parquet-l1` directory, lowest first, with its band file
  * read.
  *
- * A directory whose name is not a band id, or whose name disagrees with the
- * band inside it, is passed over rather than refused: the directory holds
+ * A directory is named by its band id, or `<band id>~<generation>` as the
+ * index-swarm sidecar installs it ({@link readBandDirectory} reads both, and
+ * one copy of each band). One whose band id is not a band id, or disagrees
+ * with the band inside it, is passed over rather than refused: the directory holds
  * whatever a publisher and a subscriber left there, and one band nobody can
  * read must not stop the rest importing.
  *

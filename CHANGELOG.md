@@ -392,6 +392,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **`index-l1-import` and `index-l1-verify` read bands as the sidecar
+  installs them.** The sidecar names an installed band
+  `<band id>~<generation>`, and the importer took the whole name as the band
+  id, found it was not one, and passed every band over: the documented
+  `--bands-dir data/indexes/installed/parquet-l1` imported nothing, with
+  "holds no bands with a band.json". Its tests and the full-chain trial read a
+  publisher's `published/` directory, whose names carry no generation. A band
+  directory's id is now its name less any generation, and while the sidecar
+  holds two generations of one band during a replacement, only the newer is
+  read, so `index-l1-verify` no longer sees the two as overlapping bands.
+
 - **`index-l1-import` accepts a gateway's own `core.db`.** It checked for its
   ledger migration under the name without `.sql`, while `yarn db:migrate`
   records every migration by its file's name, `.sql` and all, so it refused
