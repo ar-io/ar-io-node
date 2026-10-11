@@ -11,7 +11,11 @@
  *
  * Read-only, so it is safe to run while the gateway is up.
  */
+import * as fsp from 'node:fs/promises';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import Sqlite from 'better-sqlite3';
+import type { Database } from 'duckdb-async';
 import { Logger } from 'winston';
 
 import {
@@ -30,6 +34,54 @@ import { verifyBands } from '../../lib/parquet-l1/verify-bands.js';
 import type { IndexL1VerifyCLIOptions, JsonSerializable } from '../types.js';
 import { requiredStringFromOptions } from '../utils.js';
 
+/** The most a check may spill, the cap `index-l1-import` uses too. */
+export const BANDS_SPILL_MAX = '16GB';
+
+/**
+ * A DuckDB session for checking bands: bounded memory, two threads, no
+ * extensions, and somewhere it can always spill.
+ *
+ * Without a `temp_directory`, an in-memory DuckDB spills to `.tmp` under the
+ * working directory. Through `tools/ar-io-node`, or `docker run` as the
+ * caller's user, that is the image's `/app`, which the caller cannot write,
+ * so checking the lookups of a large band failed on the directory, not the
+ * band. The spill goes in a folder of its own under the system temp
+ * directory (`TMPDIR`), which `close` removes, and is capped so a run cannot
+ * fill the disk under it (through the wrapper, the container layer on `/`).
+ */
+export async function openBandsDuck(
+  options: { tmpRoot?: string } = {},
+): Promise<{ duck: Database; spill: string; close(): Promise<void> }> {
+  const spill = await fsp.mkdtemp(
+    path.join(options.tmpRoot ?? os.tmpdir(), 'ar-io-node-l1-verify-'),
+  );
+  const removeSpill = () => fsp.rm(spill, { recursive: true, force: true });
+  let duck: Database | undefined;
+  try {
+    const { Database } = await import('duckdb-async');
+    duck = await Database.create(':memory:');
+    await duck.exec(
+      `SET memory_limit = '2GB'; SET threads = 2; SET temp_directory = '${spill.replace(/'/g, "''")}'; SET max_temp_directory_size = '${BANDS_SPILL_MAX}'; SET autoinstall_known_extensions = false; SET autoload_known_extensions = false;`,
+    );
+  } catch (error) {
+    await duck?.close().catch(() => undefined);
+    await removeSpill();
+    throw error;
+  }
+  const opened = duck;
+  return {
+    duck: opened,
+    spill,
+    close: async () => {
+      try {
+        await opened.close();
+      } finally {
+        await removeSpill();
+      }
+    },
+  };
+}
+
 /** Checks a directory of bands, with no database involved. */
 async function verifyBandsCLI(
   options: IndexL1VerifyCLIOptions,
@@ -44,13 +96,10 @@ async function verifyBandsCLI(
     }
     return n;
   };
-  const { Database } = await import('duckdb-async');
-  const duck = await Database.create(':memory:');
+  const session = await openBandsDuck();
+  const { duck } = session;
   try {
-    await duck.exec(
-      `SET memory_limit = '2GB'; SET threads = 2; SET autoinstall_known_extensions = false; SET autoload_known_extensions = false;`,
-    );
-    log.info('Checking bands', { bandsDir });
+    log.info('Checking bands', { bandsDir, spill: session.spill });
     const out = await verifyBands(duck, bandsDir, {
       ...(whole(options.from, '--from') !== undefined
         ? { from: whole(options.from, '--from') as number }
@@ -96,7 +145,7 @@ async function verifyBandsCLI(
     if (!out.ok) throw answer;
     return answer;
   } finally {
-    await duck.close();
+    await session.close();
   }
 }
 
