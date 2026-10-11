@@ -278,15 +278,18 @@ describe('planSetup', () => {
       valueOf(alone, 'INDEX_SWARM_TRACKERS'),
       'https://gw.example/ar-io/indexes/announce',
     );
-    // One that is not an origin is passed over; core refuses to start on it.
-    const bad = plan(
-      'INDEX_SWARM_OBSERVER_KEYPAIR_FILE=/k.json\nAR_IO_WALLET=W\nARNS_ROOT_HOST=ar.example\nINDEXES_PUBLIC_URL=gw.example/path',
-      { publish: true, torrent: true },
-    );
-    assert.equal(
-      valueOf(bad, 'INDEX_SWARM_TRACKERS'),
-      'https://ar.example/ar-io/indexes/announce',
-    );
+  });
+
+  it('stops on an INDEXES_PUBLIC_URL the gateway would not start with', () => {
+    for (const value of ['gw.example', 'https://gw.example/path']) {
+      const bad = plan(
+        `INDEX_SWARM_OBSERVER_KEYPAIR_FILE=/k.json\nAR_IO_WALLET=W\nARNS_ROOT_HOST=ar.example\nINDEXES_PUBLIC_URL=${value}`,
+        { publish: true, torrent: true },
+      );
+      assert.equal(bad.errors.length, 1, value);
+      assert.match(bad.errors[0], /INDEXES_PUBLIC_URL .* is not an origin/);
+      assert.deepEqual(bad.changes, [], 'nothing is written');
+    }
   });
 
   it('says the announce route needs a current Envoy, and how to check it', () => {

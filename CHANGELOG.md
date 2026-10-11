@@ -234,8 +234,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   believes `X-Forwarded-For` from `INDEX_SWARM_TRACKER_PROXY_TRUSTED_PROXIES`,
   every private range by default, like core's `TRUSTED_PROXIES`; narrow it
   where clients can reach Envoy from a private address. It refuses announces
-  a web page makes (`Sec-Fetch-Site`, `Sec-Fetch-Dest` or `Origin`), so a
-  page cannot list its visitors as peers.
+  that bear a browser's marks (`Sec-Fetch-Site`, `Sec-Fetch-Dest`, `Origin`,
+  `Referer`, or an `Accept` asking for an image or a page), so a page cannot
+  list its visitors as peers.
 - **`/ar-io/info` points at each index's feed.** Its `indexes` block gains
   `feeds`, mapping each index that has a band offered as a torrent to
   `/ar-io/indexes/feed/<index>.xml`, present only when the gateway serves

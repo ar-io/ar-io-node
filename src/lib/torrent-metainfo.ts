@@ -66,8 +66,23 @@ export function withWebSeeds(torrent: Buffer, urls: readonly string[]): Buffer {
  * @throws when the input is not a strict bencoded dictionary with `info`
  */
 export function infohashV1Of(torrent: Buffer): string {
-  const span = bdecodeWithSpans(torrent).spans.get('info');
-  if (span === undefined) throw new Error('not a torrent: no info dictionary');
+  const { value, spans } = bdecodeWithSpans(torrent);
+  const info =
+    typeof value === 'object' &&
+    !Buffer.isBuffer(value) &&
+    !Array.isArray(value)
+      ? value['info']
+      : undefined;
+  const span = spans.get('info');
+  if (
+    span === undefined ||
+    info === undefined ||
+    typeof info !== 'object' ||
+    Buffer.isBuffer(info) ||
+    Array.isArray(info)
+  ) {
+    throw new Error('not a torrent: no info dictionary');
+  }
   return crypto
     .createHash('sha1')
     .update(torrent.subarray(span[0], span[1]))

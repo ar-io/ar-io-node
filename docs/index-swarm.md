@@ -411,8 +411,10 @@ Docker's userland proxy), which can then list any address as a peer. Pieces
 are checked, so that costs a swarm availability, not integrity. Where such
 clients can reach the gateway, set `INDEX_SWARM_TRACKER_PROXY_TRUSTED_PROXIES`
 to the proxies alone, such as the Docker network and the nginx host. The
-tracker refuses announces a web page makes (`Sec-Fetch-Site`,
-`Sec-Fetch-Dest` or `Origin`), so a page cannot list its visitors. Every
+tracker refuses announces that bear a browser's marks (`Sec-Fetch-Site`,
+`Sec-Fetch-Dest`, `Origin`, `Referer`, or an `Accept` asking for an image
+or a page), so a page cannot list its visitors. That is a heuristic: a
+client that lies about its headers is bounded like any peer. Every
 proxy in front of the gateway must append `X-Forwarded-For`, as the [nginx
 location](#running-behind-nginx) does, and a proxy that reaches the gateway
 from a public address must be listed in `INDEX_SWARM_TRACKER_TRUSTED_PROXIES`.

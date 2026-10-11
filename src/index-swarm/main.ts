@@ -56,6 +56,11 @@ import {
  */
 const ENGINE_STARTUP_WAIT_MS = 120_000;
 
+/**
+ * Runs the sidecar: the subscriber, and with a publication the publisher,
+ * its torrent engine and the closed tracker's two listeners, until a signal
+ * stops them.
+ */
 async function main(): Promise<void> {
   // The sidecar ships in the core image, so the core's release is its own.
   buildInfo.set({ version: release, node_version: process.version }, 1);

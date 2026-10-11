@@ -109,8 +109,8 @@ export function urlHost(host: string): string {
  * The gateway's public origin, as core works it out for its feeds and
  * WebSeed: the one given, else `INDEXES_PUBLIC_URL`, else `https://` and the
  * first `ARNS_ROOT_HOST`, else undefined. Without a trailing slash. An
- * `INDEXES_PUBLIC_URL` that is not an origin is passed over: core refuses
- * to start with it, and says why.
+ * `INDEXES_PUBLIC_URL` that is not an origin is passed over here;
+ * {@link planSetup} refuses it before it gets this far.
  */
 export function gatewayOrigin(
   env: EnvReader,
@@ -147,6 +147,12 @@ export function subscriberSources(current: string | undefined): string {
   return [INSTALLED_ROOT_TX_SOURCE, ...rest].join(',');
 }
 
+/**
+ * What `tools/index-swarm-setup` would change in `.env`, and what it would
+ * restart, for the roles asked for. Pure: it reads the environment through
+ * `env` and writes nothing. Errors stop setup before anything is written;
+ * warnings and notes are said and the plan goes ahead.
+ */
 export function planSetup(
   env: EnvReader,
   options: SetupOptions,
@@ -180,6 +186,20 @@ export function planSetup(
       'Nothing to set up: pass --subscribe <publisher wallet>, --publish, or both.',
     );
     return plan;
+  }
+
+  // Core refuses to start with an INDEXES_PUBLIC_URL that is not an origin,
+  // and setup may restart core: stop here rather than plan around it.
+  const configuredOrigin = env.get('INDEXES_PUBLIC_URL');
+  if (configuredOrigin !== undefined && configuredOrigin.trim() !== '') {
+    try {
+      parsePublicOrigin(configuredOrigin);
+    } catch (error: any) {
+      plan.errors.push(
+        `INDEXES_PUBLIC_URL (${configuredOrigin}) is not an origin, and the gateway will not start with it: ${error?.message}. Set it to the gateway's scheme and host, such as https://gateway.example, or remove it.`,
+      );
+      return plan;
+    }
   }
 
   // An explicit budget applies to any gateway set up here, not only one

@@ -563,6 +563,12 @@ describe('ClosedTracker behind the gateway', () => {
         { 'Sec-Fetch-Site': 'cross-site', 'Sec-Fetch-Dest': 'image' },
         { 'Sec-Fetch-Dest': 'empty' },
         { Origin: 'https://evil.example' },
+        // An older browser's image request: no Fetch Metadata, no Origin.
+        {
+          Referer: 'https://evil.example/',
+          Accept: 'image/webp,image/apng,image/*,*/*;q=0.8',
+        },
+        { Accept: 'text/html,application/xhtml+xml' },
       ];
       for (const headers of pages) {
         const res = await fetch(`${base}/announce?${query(OURS, 4444)}`, {

@@ -1503,7 +1503,7 @@ paths:
             text/plain:
               schema: { type: string, format: binary }
         '403':
-          description: 'The request came from a web page (it carries `Sec-Fetch-Site`, `Sec-Fetch-Dest` or `Origin`), which may not list its visitors as peers.'
+          description: 'The request bears a browser''s marks (`Sec-Fetch-Site`, `Sec-Fetch-Dest`, `Origin`, `Referer`, or an `Accept` asking for an image or a page): a web page may not list its visitors as peers.'
         '503':
           description: The gateway runs no tracker (no index-swarm sidecar publishing torrents).
   '/ar-io/peers':

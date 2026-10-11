@@ -248,7 +248,11 @@ describe('buildIndexBandFeed', () => {
 
   it('names only the supersessions the publisher honours', () => {
     const claims = [
-      band('a', { heightRange: [0, 1], torrent: 'a', supersedes: 'b' }),
+      band('a', {
+        heightRange: [0, 1],
+        torrent: 'a',
+        supersedes: ['b', 'gone-too'],
+      }),
       band('b', { heightRange: [0, 1], torrent: 'b', supersedes: ['a'] }),
       band('c', { heightRange: [2, 3], torrent: 'c', supersedes: 'c' }),
       band('d', { heightRange: [4, 5], torrent: 'd', supersedes: 'gone' }),
@@ -269,7 +273,8 @@ describe('buildIndexBandFeed', () => {
       ]),
     );
     assert.deepEqual(named, {
-      // A cycle and a band naming itself retire nothing at the publisher.
+      // A cycle and a band naming itself retire nothing at the publisher:
+      // not even a cycle member's claim on a band no longer offered.
       a: [],
       b: [],
       c: [],

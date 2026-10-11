@@ -156,5 +156,13 @@ describe('infohashV1Of', () => {
   it('refuses what is not a torrent', () => {
     assert.throws(() => infohashV1Of(Buffer.from('nope')), Error);
     assert.throws(() => infohashV1Of(bencode({ announce: 'x' })), Error);
+    // An info that is not a dictionary is no torrent, whatever it hashes to.
+    for (const info of ['a string', [1, 2], 7]) {
+      assert.throws(
+        () => infohashV1Of(bencode({ info } as any)),
+        Error,
+        JSON.stringify(info),
+      );
+    }
   });
 });

@@ -10,8 +10,7 @@ import { Logger } from 'winston';
 import {
   BandDescriptor,
   IndexPublication,
-  supersededBands,
-  supersedesClaim,
+  honouredSupersessions,
   torrentNameForFiles,
 } from '../lib/index-publication.js';
 import type { PublicationView } from '../routes/published-indexes.js';
@@ -183,15 +182,10 @@ export function buildIndexBandFeed(input: {
   const entry = publication.indexes.find(({ name }) => name === index);
   if (entry === undefined) return undefined;
   const published = new Date(publication.issuedAt);
-  // A claim the publisher itself does not honour (a band naming itself, or
-  // one of a cycle) must not tell a follower to delete anything. A claim on a
-  // band no longer offered stands: that band was retired for it.
-  const offered = new Set(entry.bands.map((band) => band.id));
-  const retired = supersededBands(entry.bands);
-  const honoured = (band: BandDescriptor) =>
-    supersedesClaim(band).filter(
-      (id) => id !== band.id && (!offered.has(id) || retired.has(id)),
-    );
+  // Exactly the claims the publisher honours: one it refuses (a band naming
+  // itself, or any claim of a band on a cycle) must not tell a follower to
+  // delete anything.
+  const honoured = honouredSupersessions(entry.bands);
   const items = entry.bands
     .filter(
       (band) =>
@@ -203,7 +197,7 @@ export function buildIndexBandFeed(input: {
         baseUrl,
         published,
         torrentSize: torrentSizes.get(band.torrent!.infohashV1)!,
-        supersedes: honoured(band),
+        supersedes: honoured.get(band.id) ?? [],
       }),
     );
   return {

@@ -380,7 +380,7 @@ polled at most every 30 minutes (`<ttl>`).
 | `pubDate` | When the publication was issued (the publication does not record when each band first appeared) |
 | `ario:band`, `ario:infohashV2`, `ario:heightFrom`, `ario:heightTo` | The band's id, v2 infohash and heights; `heightTo` is absent for a band open at the tip |
 | `ario:torrentName` | The torrent's name, which is the folder a client saves the band in |
-| `ario:supersedes` | One per band id this band replaces: its metadata's claims, less any the publisher does not honour (one naming the band itself, or a cycle) |
+| `ario:supersedes` | One per band id this band replaces: its metadata's claims as the publisher honours them (none naming the band itself, and none at all from a band on a cycle) |
 
 The channel carries `ario:publisher`, `ario:sequence`, `ario:index`,
 `ario:kind` and `ario:publication`, the SHA-256 of the publication document
