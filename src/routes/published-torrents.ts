@@ -7,9 +7,10 @@
 /**
  * The `.torrent` files a gateway serves for the bands its sidecar publishes.
  *
- * The publisher builds each torrent deterministically, with nothing
- * publisher-specific in it, and keeps it under `published/.torrents/`. What
- * the gateway serves is that torrent plus one thing only the gateway knows:
+ * The publisher builds each torrent and keeps it under `published/.torrents/`.
+ * Its info dictionary is deterministic, the same for any publisher of the
+ * same files; outside it are the publisher's own trackers. What the gateway
+ * serves is that torrent plus one thing only the gateway knows:
  * its own WebSeed (BEP 19), the public URL its `/ar-io/indexes/webseed/`
  * route answers on. A stock BitTorrent client then has somewhere to fetch
  * pieces from when no peer can deliver them, which a gateway subscriber
@@ -28,7 +29,7 @@ import {
   PUBLISHED_TORRENT_DIR,
   WEBSEED_PATH,
 } from '../lib/index-publication.js';
-import { withWebSeeds } from '../lib/torrent-metainfo.js';
+import { infohashV1Of, withWebSeeds } from '../lib/torrent-metainfo.js';
 
 /** A `.torrent` as the gateway serves it. */
 export interface ServedTorrent {
@@ -64,8 +65,9 @@ export class PublishedTorrents implements TorrentMetainfoSource {
   /**
    * @param options.publicOrigin the gateway's public origin
    *   (`INDEXES_PUBLIC_URL`). Its WebSeed goes into every torrent served.
-   *   Without it torrents are served exactly as the publisher wrote them: a
-   *   URL from a request's Host header could be pointed anywhere.
+   *   Without it, or with `INDEXES_TORRENT_WEBSEED=false`, torrents are
+   *   served exactly as the publisher wrote them: a URL from a request's
+   *   Host header could be pointed anywhere.
    * @param options.maxEntries served torrents kept in memory, a few
    *   kilobytes each.
    */
@@ -88,7 +90,7 @@ export class PublishedTorrents implements TorrentMetainfoSource {
    * The served `.torrent` for a v1 infohash: the stored file with this
    * gateway's WebSeed, made once per version of the file. Undefined for a
    * name that is not an infohash, a file not built, or one that does not
-   * parse.
+   * parse or is not the torrent of that infohash.
    */
   async torrent(infohashV1: string): Promise<ServedTorrent | undefined> {
     if (!INFOHASH_V1.test(infohashV1)) return undefined;
@@ -116,6 +118,11 @@ export class PublishedTorrents implements TorrentMetainfoSource {
     }
     let body: Buffer;
     try {
+      // The route names this infohash in a signed header, so the file must
+      // be the torrent it is filed under, not merely a torrent.
+      if (infohashV1Of(stored) !== infohashV1) {
+        throw new Error('its info dictionary is not this infohash');
+      }
       body =
         this.webSeeds.length > 0 ? withWebSeeds(stored, this.webSeeds) : stored;
     } catch (error: any) {
@@ -123,7 +130,7 @@ export class PublishedTorrents implements TorrentMetainfoSource {
       // once rather than on every poll of the feed.
       if (!this.warned.has(infohashV1)) {
         this.warned.add(infohashV1);
-        this.log.warn('Not serving a .torrent that does not parse', {
+        this.log.warn('Not serving a .torrent that does not check', {
           infohashV1,
           error: error?.message,
         });

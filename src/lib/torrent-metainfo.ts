@@ -4,6 +4,8 @@
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+import crypto from 'node:crypto';
+
 import { bdecodeWithSpans, bencode } from './bencode.js';
 
 const KEY = (k: string): Buffer => Buffer.from(k, 'latin1');
@@ -55,4 +57,19 @@ export function withWebSeeds(torrent: Buffer, urls: readonly string[]): Buffer {
   }
   parts.push(Buffer.from('e'));
   return Buffer.concat(parts);
+}
+
+/**
+ * A torrent's v1 infohash: the SHA-1 of its info dictionary's bytes, as
+ * written.
+ *
+ * @throws when the input is not a strict bencoded dictionary with `info`
+ */
+export function infohashV1Of(torrent: Buffer): string {
+  const span = bdecodeWithSpans(torrent).spans.get('info');
+  if (span === undefined) throw new Error('not a torrent: no info dictionary');
+  return crypto
+    .createHash('sha1')
+    .update(torrent.subarray(span[0], span[1]))
+    .digest('hex');
 }

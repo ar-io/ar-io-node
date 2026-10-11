@@ -971,7 +971,9 @@ export const publishedIndexes = new PublishedIndexes({
 export const publishedTorrents = new PublishedTorrents({
   log,
   publishedDir: config.INDEXES_PUBLISHED_DIR,
-  publicOrigin: config.INDEXES_PUBLIC_URL,
+  publicOrigin: config.INDEXES_TORRENT_WEBSEED
+    ? config.INDEXES_PUBLIC_URL
+    : undefined,
 });
 
 /**

@@ -96,9 +96,20 @@ describe('PublishedTorrents', () => {
     }
   });
 
+  /** Another band's torrent, filed under its own infohash. */
+  const another = async (name: string, trackers: string[] = []) => {
+    const built = await buildTorrent({
+      dir: path.join(tempDir, 'band'),
+      name,
+      pieceLength: 16 * 1024,
+      trackers,
+    });
+    await write(built.infohashV1, built.torrent);
+    return built;
+  };
+
   it('remembers a served torrent until its file changes', async () => {
-    const ih = 'd'.repeat(40);
-    await write(ih, stored);
+    const ih = (await another('0000000000000001')).infohashV1;
     const torrents = new PublishedTorrents({
       log,
       publishedDir,
@@ -107,14 +118,12 @@ describe('PublishedTorrents', () => {
     const first = await torrents.torrent(ih);
     assert.equal(await torrents.torrent(ih), first, 'the same object');
 
-    // The publisher rewrites it, say with a new tracker list.
-    const rebuilt = await buildTorrent({
-      dir: path.join(tempDir, 'band'),
-      name: 'fedcba9876543210',
-      pieceLength: 16 * 1024,
-      trackers: ['https://gateway.example/ar-io/indexes/announce'],
-    });
-    await write(ih, rebuilt.torrent);
+    // The publisher rewrites it, say with a new tracker list: the same
+    // infohash, other bytes.
+    const rebuilt = await another('0000000000000001', [
+      'https://gateway.example/ar-io/indexes/announce',
+    ]);
+    assert.equal(rebuilt.infohashV1, ih);
     const next = (await torrents.torrent(ih))!;
     assert.notEqual(next.sha256, first!.sha256);
     assert.equal(
@@ -135,6 +144,20 @@ describe('PublishedTorrents', () => {
     assert.equal(await torrents.torrent(ih), undefined);
   });
 
+  it('serves nothing for a torrent filed under an infohash that is not its own', async () => {
+    // The route names the infohash in a signed header: it must be this file's.
+    const ih = 'a'.repeat(40);
+    await write(ih, stored);
+    for (const publicOrigin of [ORIGIN, undefined]) {
+      const torrents = new PublishedTorrents({
+        log,
+        publishedDir,
+        publicOrigin,
+      });
+      assert.equal(await torrents.torrent(ih), undefined, String(publicOrigin));
+    }
+  });
+
   it('keeps only the most recently served', async () => {
     const torrents = new PublishedTorrents({
       log,
@@ -142,8 +165,7 @@ describe('PublishedTorrents', () => {
       publicOrigin: ORIGIN,
       maxEntries: 1,
     });
-    const ih = 'f'.repeat(40);
-    await write(ih, stored);
+    const ih = (await another('0000000000000002')).infohashV1;
     const a = await torrents.torrent(infohashV1);
     await torrents.torrent(ih);
     // Evicted, so made again: equal bytes, a new object.
