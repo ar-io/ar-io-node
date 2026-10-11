@@ -89,6 +89,12 @@ function byNewestHeights(a: BandDescriptor, b: BandDescriptor): number {
   return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
 }
 
+/**
+ * One band as a feed item: its torrent as the enclosure, the signed magnet as
+ * the link, and the facts a script needs (id, infohashes, heights, folder,
+ * what it supersedes) as `ario:` elements. Only called for a band the
+ * publication offers as a torrent.
+ */
 function bandItem(
   band: BandDescriptor,
   options: {
@@ -249,6 +255,11 @@ export class IndexBandFeedSource implements FeedSource<IndexFeedParams> {
     this.torrents = options.torrents;
   }
 
+  /**
+   * The feed of one index of the current publication, or undefined when
+   * there is no public origin, no publication, or no such index. Memoised
+   * until the publication changes, unless a band's `.torrent` was missing.
+   */
   async snapshot(params: IndexFeedParams): Promise<FeedSnapshot | undefined> {
     if (this.baseUrl === undefined) {
       if (!this.warnedNoBaseUrl) {

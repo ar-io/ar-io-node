@@ -84,6 +84,12 @@ export class PublishedTorrents implements TorrentMetainfoSource {
     this.maxEntries = options.maxEntries ?? 256;
   }
 
+  /**
+   * The served `.torrent` for a v1 infohash: the stored file with this
+   * gateway's WebSeed, made once per version of the file. Undefined for a
+   * name that is not an infohash, a file not built, or one that does not
+   * parse.
+   */
   async torrent(infohashV1: string): Promise<ServedTorrent | undefined> {
     if (!INFOHASH_V1.test(infohashV1)) return undefined;
     const file = path.join(this.dir, `${infohashV1}.torrent`);
