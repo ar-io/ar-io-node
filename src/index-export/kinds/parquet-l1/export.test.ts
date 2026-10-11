@@ -13,10 +13,16 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import Sqlite from 'better-sqlite3';
 
 import {
+  BAND_FILE,
+  bandFiles,
+  bandTime,
   PARQUET_L1_LOOKUPS,
   PARQUET_L1_SCHEMA,
   PARQUET_L1_TABLES,
+  readPublisherFacts,
 } from '../../../lib/parquet-l1/layout.js';
+import { torrentNameForFiles } from '../../../lib/index-publication.js';
+import { buildTorrent } from '../../../index-swarm/torrent.js';
 import { readTable } from '../../../lib/parquet-l1/read.js';
 import { verifyBandLookups } from '../../../lib/parquet-l1/lookups.js';
 import { ParquetL1Kind } from '../../../index-swarm/kinds/parquet-l1.js';
@@ -75,7 +81,14 @@ describe('exportL1Band', () => {
     assert.equal(result.band.tables.tags.rows, 86);
     assert.equal(result.band.tables.block_transactions.rows, 43);
     assert.equal(result.band.tables.wallets.rows, 1);
-    assert.deepEqual(result.band.supersedes, ['l1-old']);
+    // What it replaces is the publisher's own: beside the band, not in it.
+    assert.equal(result.band.supersedes, undefined);
+    const facts = await readPublisherFacts(result.dir);
+    assert.deepEqual(facts?.supersedes, ['l1-old']);
+    assert.ok(
+      facts?.builtAt !== undefined,
+      'when it was built, kept beside it',
+    );
 
     // Read back through the importer's own reader, which checks each
     // table's rows against the digest and count the band claims. That is
@@ -462,6 +475,71 @@ describe('exportL1Band', () => {
     } finally {
       db.close();
     }
+  });
+
+  it('gives two publishers of the same rows the same band.json, and so the same torrent', async () => {
+    // Two publishers, each with its own history of bands it replaces, build
+    // the same rows a moment apart.
+    const a = await exportL1Band({
+      coreDbPath: coreDb,
+      workDir,
+      from: FIRST,
+      to: FIRST + 29,
+      supersedes: ['l1-h1900000-1900009-aaaaaaaa-000000000001'],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const b = await exportL1Band({
+      coreDbPath: coreDb,
+      workDir,
+      from: FIRST,
+      to: FIRST + 29,
+      supersedes: [
+        'l1-h1900000-1900019-bbbbbbbb-000000000002',
+        'l1-h1900000-1900009-bbbbbbbb-000000000003',
+      ],
+    });
+    const read = (dir: string) =>
+      fsp.readFile(path.join(dir, BAND_FILE), 'utf8');
+    assert.equal(await read(a.dir), await read(b.dir), 'byte for byte');
+
+    // Dated by the band's top block, not when either built it.
+    const db = new Sqlite(coreDb, { readonly: true });
+    const topTime = db
+      .prepare('SELECT block_timestamp FROM stable_blocks WHERE height = ?')
+      .pluck()
+      .get(FIRST + 29) as number;
+    db.close();
+    assert.equal(a.band.createdAt, bandTime(topTime));
+    assert.notEqual(
+      (await readPublisherFacts(a.dir))?.builtAt,
+      (await readPublisherFacts(b.dir))?.builtAt,
+      'each keeps its own build time, beside the band',
+    );
+
+    // Every file of the band is the same, so the torrent is: one infohash,
+    // one swarm for both publishers.
+    const torrentOf = async (dir: string) => {
+      const names = bandFiles(PARQUET_L1_SCHEMA);
+      const files = await Promise.all(
+        names.map(async (name) => {
+          const bytes = await fsp.readFile(path.join(dir, name));
+          return {
+            name,
+            size: bytes.length,
+            sha256: crypto.createHash('sha256').update(bytes).digest('hex'),
+          };
+        }),
+      );
+      return buildTorrent({
+        dir,
+        name: torrentNameForFiles(files),
+        files: names,
+        pieceLength: 16 * 1024,
+      });
+    };
+    const [ta, tb] = await Promise.all([torrentOf(a.dir), torrentOf(b.dir)]);
+    assert.equal(ta.infohashV1, tb.infohashV1);
+    assert.equal(ta.infohashV2, tb.infohashV2);
   });
 });
 

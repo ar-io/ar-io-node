@@ -46,13 +46,16 @@ import { writeBandLookups } from '../../../lib/parquet-l1/lookups.js';
 import {
   BAND_FILE,
   BandTag,
+  bandTime,
   canonicalDataRoot,
   canonicalTxRoot,
   firstTagValue,
   PARQUET_L1_SCHEMA,
   PARQUET_L1_TABLES,
   ParquetL1Band,
+  serializeBandFile,
   TableSpec,
+  writePublisherFacts,
 } from '../../../lib/parquet-l1/layout.js';
 
 /**
@@ -228,6 +231,11 @@ export function prepareCoreStatements(db: Sqlite.Database): CoreStatements {
  * `workDir`, checks it, and returns it ready to publish. The directory is
  * the caller's to rename into place or remove.
  *
+ * Its `band.json` holds only what the rows determine, dated by the top
+ * block, so another publisher of the same rows writes the same file. The
+ * bands it `supersedes`, and when it was built, are this publisher's own
+ * and go in `.publisher.json` beside it.
+ *
  * @throws when the range fails the chain checks, naming the heights.
  */
 export async function exportL1Band({
@@ -243,6 +251,7 @@ export async function exportL1Band({
   workDir: string;
   from: number;
   to: number;
+  /** This publisher's bands this one replaces, kept beside it, not in it. */
   supersedes?: string[];
   windowHeights?: number;
   /**
@@ -286,6 +295,8 @@ export async function exportL1Band({
     );
     const owners = new Set<string>();
     const chainBlocks: ChainBlock[] = [];
+    // The band's own time, its top block's: what every publisher writes.
+    let topTimestamp: number | undefined;
     const txRoots = { checked: 0, skipped: 0, failed: [] as number[] };
     let missingTransactions = 0;
     let missingWallets = 0;
@@ -321,6 +332,9 @@ export async function exportL1Band({
           'blocks',
           table('blocks').columns.map((c) => block[c.name]),
         );
+        if (Number(block.height) === to) {
+          topTimestamp = Number(block.block_timestamp);
+        }
         chainBlocks.push({
           height: block.height,
           indep_hash: block.indep_hash,
@@ -541,6 +555,11 @@ export async function exportL1Band({
     const lookups = await writeParquet(bandDir, staging, scratch);
     await fs.rm(scratchDir, { recursive: true, force: true });
 
+    if (topTimestamp === undefined) {
+      throw new L1CheckError(`no block ${to} to date the band by`);
+    }
+    // Only what the rows determine, so any publisher of them writes these
+    // bytes; what is this publisher's own goes beside the band.
     const band: ParquetL1Band = {
       version: 1,
       schema: PARQUET_L1_SCHEMA,
@@ -552,13 +571,13 @@ export async function exportL1Band({
         ]),
       ),
       lookups,
-      ...(supersedes.length > 0 ? { supersedes } : {}),
-      createdAt: new Date().toISOString(),
+      createdAt: bandTime(topTimestamp),
     };
-    await fs.writeFile(
-      path.join(bandDir, BAND_FILE),
-      JSON.stringify(band, null, 2),
-    );
+    await fs.writeFile(path.join(bandDir, BAND_FILE), serializeBandFile(band));
+    await writePublisherFacts(bandDir, {
+      ...(supersedes.length > 0 ? { supersedes } : {}),
+      builtAt: new Date().toISOString(),
+    });
     return {
       dir: bandDir,
       band,
