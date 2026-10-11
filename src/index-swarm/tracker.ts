@@ -198,6 +198,31 @@ function addressBucket(ip: string): string {
  * @throws on an entry that is neither an address nor a CIDR, so a typo is a
  *   startup error rather than a proxy silently not trusted.
  */
+/**
+ * Whether a request bears a browser's marks rather than a BitTorrent
+ * client's. Behind the gateway the tracker shares an HTTPS origin any page
+ * can embed, so an `<img src=".../announce?...">` would list every visitor
+ * as a peer.
+ *
+ * Browsers send `Sec-Fetch-Site` and `Sec-Fetch-Dest`, many send `Origin`,
+ * most send a `Referer`, and an image or a page asks for one in `Accept`;
+ * older browsers lack the Fetch Metadata headers but not the rest.
+ * BitTorrent clients send none of these. Not `Sec-Fetch-Mode`: Node's own
+ * `fetch` sends that one. A heuristic, not proof: a client can send any
+ * headers it likes, so this stops pages, not a deliberate liar, who is
+ * bounded like any peer by the per-address caps.
+ */
+export function fromBrowser(headers: http.IncomingHttpHeaders): boolean {
+  const accept = headers['accept'] ?? '';
+  return (
+    headers['sec-fetch-site'] !== undefined ||
+    headers['sec-fetch-dest'] !== undefined ||
+    headers['origin'] !== undefined ||
+    headers['referer'] !== undefined ||
+    /\b(image|text\/html)\b/i.test(accept)
+  );
+}
+
 export class ClosedTracker {
   private readonly log: Logger;
   private readonly allowed: () => Set<string>;
@@ -483,6 +508,10 @@ export class ClosedTracker {
       const pathname = q < 0 ? url : url.slice(0, q);
       if (req.method !== 'GET' || pathname !== '/announce') {
         res.writeHead(404, { 'Cache-Control': 'no-store' }).end();
+        return;
+      }
+      if (fromBrowser(req.headers)) {
+        res.writeHead(403, { 'Cache-Control': 'no-store' }).end();
         return;
       }
       const body = this.announce(

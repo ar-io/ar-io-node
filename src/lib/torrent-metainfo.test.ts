@@ -16,7 +16,7 @@ import {
   torrentIds,
 } from '../index-swarm/torrent.js';
 import { bdecode, bdecodeWithSpans, bencode } from './bencode.js';
-import { withWebSeeds } from './torrent-metainfo.js';
+import { infohashV1Of, withWebSeeds } from './torrent-metainfo.js';
 
 const SEED = 'https://gateway.example/ar-io/indexes/webseed/';
 
@@ -134,5 +134,35 @@ describe('withWebSeeds', () => {
     const sanitized = sanitizeTorrent(served, torrentIds(torrent));
     assert.equal((bdecode(sanitized) as any)['url-list'], undefined);
     assert.deepEqual(torrentIds(sanitized), torrentIds(torrent));
+  });
+});
+
+describe('infohashV1Of', () => {
+  it('is the SHA-1 of the info dictionary as written', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'infohash-of-'));
+    try {
+      await fs.writeFile(path.join(dir, 'a.bin'), Buffer.alloc(30_000, 3));
+      const built = await buildTorrent({ dir, name: 'abcdefabcdefabcd' });
+      assert.equal(infohashV1Of(built.torrent), built.infohashV1);
+      assert.equal(
+        infohashV1Of(withWebSeeds(built.torrent, [SEED])),
+        built.infohashV1,
+      );
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses what is not a torrent', () => {
+    assert.throws(() => infohashV1Of(Buffer.from('nope')), Error);
+    assert.throws(() => infohashV1Of(bencode({ announce: 'x' })), Error);
+    // An info that is not a dictionary is no torrent, whatever it hashes to.
+    for (const info of ['a string', [1, 2], 7]) {
+      assert.throws(
+        () => infohashV1Of(bencode({ info } as any)),
+        Error,
+        JSON.stringify(info),
+      );
+    }
   });
 });

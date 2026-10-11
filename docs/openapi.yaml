@@ -1484,20 +1484,26 @@ paths:
         `unregistered torrent`. The peer's address is read from
         X-Forwarded-For, so proxies in front of the gateway must append it.
         Bodies are bencoded; every response is `Cache-Control: no-store`.
-        Routed only on the gateway's own host, not on ArNS subdomains. See
+        Peers are always listed compactly (`peers`, and `peers6` for IPv6),
+        whatever `compact` asks. Routed only on the gateway's own host, not
+        on ArNS subdomains, and only by the Envoy image from release 85 on
+        (an older Envoy passes the path to core, which answers 404). See
         docs/index-swarm.md, "The tracker".
       parameters:
-        - { name: info_hash, in: query, required: true, schema: { type: string } }
-        - { name: peer_id, in: query, required: true, schema: { type: string } }
-        - { name: port, in: query, required: true, schema: { type: integer } }
-        - { name: event, in: query, required: false, schema: { type: string, enum: [started, stopped, completed] } }
-        - { name: compact, in: query, required: false, schema: { type: integer } }
+        - { name: info_hash, in: query, required: true, schema: { type: string }, description: 'The 20-byte v1 infohash (or a v2 infohash truncated to 20 bytes), percent-encoded.' }
+        - { name: port, in: query, required: true, schema: { type: integer, minimum: 1, maximum: 65535 } }
+        - { name: left, in: query, required: false, schema: { type: integer }, description: 'Bytes still to download; 0 counts the peer as a seeder. Taken as 1 when absent.' }
+        - { name: event, in: query, required: false, schema: { type: string, enum: [started, stopped, completed] }, description: '`stopped` forgets the peer.' }
+        - { name: peer_id, in: query, required: false, schema: { type: string }, description: 'Accepted and ignored: a peer is known by its address and port.' }
+        - { name: compact, in: query, required: false, schema: { type: integer }, description: 'Accepted and ignored: answers are always compact.' }
       responses:
         '200':
           description: 'A bencoded tracker response: peers, or `failure reason`.'
           content:
             text/plain:
               schema: { type: string, format: binary }
+        '403':
+          description: 'The request bears a browser''s marks (`Sec-Fetch-Site`, `Sec-Fetch-Dest`, `Origin`, `Referer`, or an `Accept` asking for an image or a page): a web page may not list its visitors as peers.'
         '503':
           description: The gateway runs no tracker (no index-swarm sidecar publishing torrents).
   '/ar-io/peers':

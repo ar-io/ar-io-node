@@ -779,7 +779,7 @@ export function verifyIndexPublication(
 /**
  * The band ids a band says it supersedes, as its metadata claims them: one
  * id or a list. Anything else in the claim is ignored. A claim, not a
- * verdict: {@link supersededBands} decides which claims a set honours.
+ * verdict: {@link honouredSupersessions} decides which claims a set honours.
  */
 export function supersedesClaim(band: BandDescriptor): string[] {
   const claim = band.metadata?.supersedes;
@@ -789,17 +789,19 @@ export function supersedesClaim(band: BandDescriptor): string[] {
 }
 
 /**
- * The band ids that other bands in the set supersede.
+ * The claims of a set of bands that stand, by claiming band: what each band
+ * really supersedes.
  *
- * A self-reference is ignored, and so is every claim in a cycle (A replaces
- * B, B replaces A): honouring them would retire, then delete, every band in
- * it. A chain (C replaces B, B replaces A) retires A and B as intended.
+ * A self-reference is ignored, and so is every claim of a band on a cycle
+ * (A replaces B, B replaces A), whatever else it names: honouring them would
+ * retire, then delete, every band in it. A chain (C replaces B, B replaces A)
+ * stands as intended. A band whose claims all fall has no entry.
  */
-export function supersededBands(
+export function honouredSupersessions(
   bands: BandDescriptor[],
   warn: (message: string, fields: Record<string, unknown>) => void = () =>
     undefined,
-): Set<string> {
+): Map<string, string[]> {
   const ids = new Set(bands.map((band) => band.id));
   const claims = new Map<string, string[]>();
   for (const band of bands) {
@@ -836,10 +838,18 @@ export function supersededBands(
     });
   }
 
-  const superseded = new Set<string>();
-  for (const [claimer, targets] of claims) {
-    if (onCycle.has(claimer)) continue;
-    for (const id of targets) superseded.add(id);
-  }
-  return superseded;
+  for (const claimer of onCycle) claims.delete(claimer);
+  return claims;
+}
+
+/**
+ * The band ids that other bands in the set supersede: the targets of
+ * {@link honouredSupersessions}.
+ */
+export function supersededBands(
+  bands: BandDescriptor[],
+  warn: (message: string, fields: Record<string, unknown>) => void = () =>
+    undefined,
+): Set<string> {
+  return new Set([...honouredSupersessions(bands, warn).values()].flat());
 }

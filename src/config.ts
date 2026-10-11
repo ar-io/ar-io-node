@@ -3527,10 +3527,13 @@ export const INDEXES_ADVERTISE_FROM_URL = env.varOrUndefined(
 
 /**
  * This gateway's public origin (`https://gateway.example`): the base of the
- * absolute URLs in its index feeds (`/ar-io/indexes/feed/<index>.xml`).
- * From configuration, never from a request's Host header, which whoever
- * sends the request controls. Defaults to `https://<ARNS_ROOT_HOST>`; with
- * neither, the feeds answer 404.
+ * absolute URLs in its index feeds (`/ar-io/indexes/feed/<index>.xml`) and of
+ * the WebSeed each served `.torrent` names. From configuration, never from a
+ * request's Host header, which whoever sends the request controls. Defaults
+ * to `https://<ARNS_ROOT_HOST>`; with neither, the feeds answer 404 and
+ * torrents are served without a WebSeed. An origin only (scheme, host and
+ * port): a value that is not one stops the gateway at startup, as an explicit
+ * setting that is wrong would otherwise publish broken links.
  */
 export const INDEXES_PUBLIC_URL = (() => {
   const value = env.varOrUndefined('INDEXES_PUBLIC_URL');
@@ -3550,6 +3553,16 @@ export const INDEXES_PUBLIC_URL = (() => {
     return undefined;
   }
 })();
+
+/**
+ * Whether each served `.torrent` names this gateway as its WebSeed, so a
+ * stock BitTorrent client can always finish a band. Such a client draws part
+ * of every band from it even while peers could serve it, through the byte
+ * routes' meter when that is on; `false` serves torrents as the publisher
+ * wrote them, for peers only.
+ */
+export const INDEXES_TORRENT_WEBSEED =
+  env.varOrDefault('INDEXES_TORRENT_WEBSEED', 'true') === 'true';
 
 export const ENABLE_RATE_LIMITER =
   env.varOrDefault('ENABLE_RATE_LIMITER', 'false') === 'true';

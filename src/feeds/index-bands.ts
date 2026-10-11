@@ -10,7 +10,7 @@ import { Logger } from 'winston';
 import {
   BandDescriptor,
   IndexPublication,
-  supersedesClaim,
+  honouredSupersessions,
   torrentNameForFiles,
 } from '../lib/index-publication.js';
 import type { PublicationView } from '../routes/published-indexes.js';
@@ -95,12 +95,21 @@ function byNewestHeights(a: BandDescriptor, b: BandDescriptor): number {
  * what it supersedes) as `ario:` elements. Only called for a band the
  * publication offers as a torrent.
  */
+/**
+ * A layout name fit for a description. Readers render a description as HTML,
+ * and `metadata.schema` is free-form, so anything but a plain token is left
+ * out rather than escaped into markup.
+ */
+const LAYOUT = /^[A-Za-z0-9._-]{1,32}$/;
+
 function bandItem(
   band: BandDescriptor,
   options: {
     baseUrl: string;
     published: Date;
     torrentSize: number;
+    /** The band ids this band's claims really retire, as the publisher reads them. */
+    supersedes: string[];
   },
 ): FeedItem {
   // Only bands with a torrent reach here.
@@ -126,7 +135,7 @@ function bandItem(
   }
   // A follower that kept an earlier band can drop it: this one holds its
   // heights. One element per id, in the order claimed.
-  for (const id of supersedesClaim(band)) {
+  for (const id of options.supersedes) {
     elements.push(ario('supersedes', id));
   }
   return {
@@ -136,7 +145,9 @@ function bandItem(
     title: `${band.id}${heights}`,
     description:
       `${band.files.length} files, ${formatBytes(size)}` +
-      (typeof schema === 'string' ? `, layout ${schema}` : '') +
+      (typeof schema === 'string' && LAYOUT.test(schema)
+        ? `, layout ${schema}`
+        : '') +
       `, saved in folder ${folder}`,
     // The publication does not record when each band first appeared;
     // inventing a time would be wrong, so every item carries its issue time.
@@ -171,6 +182,10 @@ export function buildIndexBandFeed(input: {
   const entry = publication.indexes.find(({ name }) => name === index);
   if (entry === undefined) return undefined;
   const published = new Date(publication.issuedAt);
+  // Exactly the claims the publisher honours: one it refuses (a band naming
+  // itself, or any claim of a band on a cycle) must not tell a follower to
+  // delete anything.
+  const honoured = honouredSupersessions(entry.bands);
   const items = entry.bands
     .filter(
       (band) =>
@@ -182,6 +197,7 @@ export function buildIndexBandFeed(input: {
         baseUrl,
         published,
         torrentSize: torrentSizes.get(band.torrent!.infohashV1)!,
+        supersedes: honoured.get(band.id) ?? [],
       }),
     );
   return {
@@ -276,7 +292,12 @@ export class IndexBandFeedSource implements FeedSource<IndexFeedParams> {
       this.memo = new Map();
       this.memoFor = view.sha256;
     }
-    const cached = this.memo.get(params.index);
+    // This publication's memo, held across the awaits below: a request that
+    // finishes after a newer publication has replaced it must not leave its
+    // snapshot in the newer one's memo, where it would be served until the
+    // publication changed again.
+    const memo = this.memo;
+    const cached = memo.get(params.index);
     if (cached !== undefined) return cached;
 
     const entry = view.publication.indexes.find(
@@ -311,7 +332,7 @@ export class IndexBandFeedSource implements FeedSource<IndexFeedParams> {
     };
     // A band whose .torrent is not there yet is left out; look again next
     // time rather than keep the feed without it.
-    if (complete) this.memo.set(params.index, snapshot);
+    if (complete) memo.set(params.index, snapshot);
     return snapshot;
   }
 }

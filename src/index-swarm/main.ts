@@ -39,7 +39,6 @@ import {
   trackedInfohashes,
 } from './tracker.js';
 import { isAllowedTrackerUrl } from './torrent.js';
-import { PRIVATE_NETWORK_RANGES } from '../lib/trusted-proxies.js';
 import { Subscriber } from './subscriber.js';
 import { CoreGatewayRegistry } from './gateway-registry.js';
 import { CoreCompatibilityCheck } from './core-compatibility.js';
@@ -57,6 +56,11 @@ import {
  */
 const ENGINE_STARTUP_WAIT_MS = 120_000;
 
+/**
+ * Runs the sidecar: the subscriber, and with a publication the publisher,
+ * its torrent engine and the closed tracker's two listeners, until a signal
+ * stops them.
+ */
 async function main(): Promise<void> {
   // The sidecar ships in the core image, so the core's release is its own.
   buildInfo.set({ version: release, node_version: process.version }, 1);
@@ -347,15 +351,15 @@ async function main(): Promise<void> {
     });
     // Two doors to one tracker. The published port, for peers that reach it
     // directly. And one the gateway's Envoy forwards
-    // https://<gateway>/ar-io/indexes/announce to, never published, so only
-    // the gateway's network reaches it: it believes X-Forwarded-For from
-    // private addresses, which is safe only where outside clients cannot
-    // connect.
+    // https://<gateway>/ar-io/indexes/announce to, never published: it
+    // believes X-Forwarded-For from INDEX_SWARM_TRACKER_PROXY_TRUSTED_PROXIES
+    // (every private address unless narrowed), so a client that reaches
+    // Envoy from a private address can name its own address.
     trackerServers.push(
       await closedTracker.listen('0.0.0.0', config.TRACKER_PORT),
       await closedTracker.listen('0.0.0.0', config.TRACKER_PROXY_PORT, {
         trustedProxies: [
-          ...PRIVATE_NETWORK_RANGES,
+          ...config.TRACKER_PROXY_TRUSTED_PROXIES,
           ...config.TRACKER_TRUSTED_PROXIES,
         ],
       }),
