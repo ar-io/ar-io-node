@@ -21,6 +21,7 @@ import {
   bandFiles,
   PARQUET_L1_LOOKUPS,
   PARQUET_L1_TABLES,
+  writePublisherFacts,
 } from '../../lib/parquet-l1/layout.js';
 import { createTestLogger } from '../../../test/test-logger.js';
 import { ParquetL1Kind } from './parquet-l1.js';
@@ -96,6 +97,17 @@ describe('ParquetL1Kind', () => {
       schema: 'l1-2',
       supersedes: ['l1-h0-99999-old'],
     });
+  });
+
+  it('takes what a band supersedes from the publisher’s facts beside it, not from its band.json', async () => {
+    await writePublisherFacts(band, { supersedes: ['l1-h0-99999-newer'] });
+    const descriptor = await kind.describe(band);
+    assert.deepEqual(descriptor.metadata?.supersedes, ['l1-h0-99999-newer']);
+    // The facts file is the publisher's, never one of the band's files.
+    assert.deepEqual(
+      descriptor.files.map((f) => f.name),
+      bandFiles('l1-2'),
+    );
   });
 
   it('validates a band of the layout', async () => {

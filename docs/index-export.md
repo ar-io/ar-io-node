@@ -235,6 +235,19 @@ files. This needs no `core.db`, so it runs first, before any build, and
 again after them. It reports each band under `l1Derived` and counts it as
 `index_export_runs_total{kind="derive"}`.
 
+`band.json` holds only what the band's rows determine, dated by its top
+block, so every publisher of the same rows writes the same file and the
+same torrent. The bands a build replaces, and when it was built, are this
+publisher's own: the service keeps them beside the band in
+`.publisher.json`, which the sidecar reads for the publication and no
+subscriber ever sees. A band published before this carried both in its
+`band.json`. Each run settles any such band of this publisher's in place,
+before any build: it moves them into `.publisher.json`, dates `band.json`
+by the top block (one column of `blocks.parquet` read, no `core.db`), and
+replaces it by a rename. The band keeps its id and its rows, so a
+subscriber fetches only the new `band.json`. It reports each band under
+`l1Normalized` and counts it as `index_export_runs_total{kind="normalize"}`.
+
 **Upgrading a publisher from `l1-1` rebuilds every band once.** A rebuilt
 band whose rows did not change keeps its id, since the id comes from the
 rows. Its files are left alone, so subscribers download nothing. Only
@@ -358,7 +371,7 @@ shipped `prometheus.yml` scrapes it as the `index-export` job.
 
 | Metric | Read it as |
 |---|---|
-| `index_export_runs_total{index,kind,result,reason}` | Outcomes per band role. `kind="derive"` counts lookup files added in place |
+| `index_export_runs_total{index,kind,result,reason}` | Outcomes per band role. `kind="derive"` counts lookup files added in place; `kind="normalize"` counts `band.json` files settled in place |
 | `index_export_last_success_timestamp_seconds{index,kind}` | The last success per role. Set again from `state.json` after a restart |
 | `index_export_run_in_progress`, `index_export_run_started_timestamp_seconds` | A run that is taking long |
 | `index_export_heartbeat_timestamp_seconds` | The loop is alive |

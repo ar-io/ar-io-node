@@ -44,12 +44,15 @@ import {
   deriveL1Bands,
   L1_INDEX,
   L1DeriveOutcome,
+  L1NormalizeOutcome,
   L1Outcome,
   L1PublishedBand,
   L1Step,
   planL1,
   planL1Derive,
+  planL1Normalize,
   runL1Derive,
+  runL1Normalize,
   runL1Step,
 } from './kinds/parquet-l1/kind.js';
 import { CsvOverlaySource } from './kinds/root-tx/sources/csv.js';
@@ -119,6 +122,11 @@ export interface RunReport {
   l1Deferred?: Array<[number, number]>;
   /** Published `parquet-l1` bands whose lookups were derived and added in place. */
   l1Derived?: L1DeriveOutcome[];
+  /**
+   * Published `parquet-l1` bands whose `band.json` was settled in place, as
+   * every publisher of their rows writes it.
+   */
+  l1Normalized?: L1NormalizeOutcome[];
   gateUrl: string;
   /** Disk the run's builds needed together (each step's scratch and band). */
   peakBytes: number;
@@ -181,6 +189,7 @@ export function runResult(report: RunReport): string {
     ...report.steps,
     ...(report.l1Steps ?? []),
     ...(report.l1Derived ?? []),
+    ...(report.l1Normalized ?? []),
   ];
   for (const result of order) {
     if (all.some((step) => step.result === result)) return result;
@@ -711,8 +720,10 @@ export class ExportService {
     try {
       await fs.mkdir(workDir, { recursive: true });
       await fs.mkdir(publishDir, { recursive: true });
-      // First, since it takes seconds to minutes and reads no core.db: a
-      // band waiting only for its lookups shouldn't wait hours for builds.
+      // First, since they take seconds to minutes and read no core.db: a
+      // band waiting only for its description or its lookups shouldn't
+      // wait hours for builds.
+      await this.normalizeL1Files(report, workDir, dryRun);
       await this.deriveL1Lookups(report, workDir, dryRun);
       // The budget is the builds': it starts after the derive.
       const started = this.now();
@@ -819,6 +830,45 @@ export class ExportService {
       log.error('L1 export stopped', { error: message });
     }
     await this.deriveL1Lookups(report, workDir, dryRun);
+  }
+
+  /**
+   * Settles the `band.json` of every published band written before band
+   * files were made the same for every publisher: canonical, dated by its
+   * top block, and with what is this publisher's own (the bands it replaces,
+   * when it was built) moved beside it. In place, under the band's id, its
+   * rows untouched, so subscribers fetch only the new `band.json` and
+   * publishers of the same rows then share one torrent.
+   */
+  private async normalizeL1Files(
+    report: RunReport,
+    workDir: string,
+    dryRun: boolean,
+  ): Promise<void> {
+    const { config, log } = this.deps;
+    try {
+      const bands = await deriveL1Bands(config.l1PublishDir, config.publisher);
+      const due = await planL1Normalize(bands);
+      if (due.length === 0) return;
+      report.l1Normalized ??= [];
+      for (const band of due) {
+        report.l1Normalized.push(
+          await runL1Normalize(band, {
+            workDir,
+            dryRun,
+            log,
+            ...(this.lock !== undefined
+              ? { stillHeld: async () => this.lock?.held() ?? false }
+              : {}),
+          }),
+        );
+      }
+      recordL1Bands(await deriveL1Bands(config.l1PublishDir, config.publisher));
+    } catch (error) {
+      log.error('L1 band files not settled', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   /**
@@ -1184,7 +1234,12 @@ export class ExportService {
         reasons: [report.failed.reason, report.failed.message],
       };
     }
-    const result = runResult({ ...report, l1Steps: [], l1Derived: [] });
+    const result = runResult({
+      ...report,
+      l1Steps: [],
+      l1Derived: [],
+      l1Normalized: [],
+    });
     if (result === 'couldnt_check') {
       const attempts = (state.retry?.attempts ?? 0) + 1;
       const delay = Math.min(

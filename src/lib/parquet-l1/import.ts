@@ -641,9 +641,11 @@ export async function importBand(
     ),
   };
 
-  // When the band was built, not when it is being imported: importing the
-  // same band twice must leave the same rows, and the band's own time is
-  // the closest stable stand-in for when this gateway learned of them.
+  // The band's own time, not when it is being imported: importing the same
+  // band twice must leave the same rows. Its top block's time, so every
+  // publisher's copy of a band gives the same rows too (a band written
+  // before band files were the same for every publisher carries when it
+  // was built).
   const indexedAt = Math.floor(Date.parse(band.createdAt) / 1000);
   let rows = 0;
   let missingTransactions = 0;

@@ -275,6 +275,10 @@ layer (blocks, transactions, tags and owners) for one height range, in
 Parquet, with a `band.json` of per-table row counts and row digests. A new
 gateway can import it instead of indexing the chain, and a client can query
 it in place. The gateway does not read L1 bands. The whole chain is 24 bands.
+Its `band.json` holds only what the rows determine, dated by the top block,
+so every publisher of the same rows writes the same band and torrent; what
+is a publisher's own (the bands it replaces, when it built it) is kept
+beside it in `.publisher.json`, never published.
 See [index-publication.md](index-publication.md#l1-bands).
 
 <a id="layout"></a> **Layout** (`l1-1`, `l1-2`, `l1-3`) — The `schema` value in

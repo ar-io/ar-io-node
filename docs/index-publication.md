@@ -358,8 +358,8 @@ claim. A client following the feed keeps the old folders beside the new, and
 folders' `band.json` files:
 
 - delete a folder whose `heightRange` lies inside another folder's;
-- of two with the same `heightRange`, keep the later layout (`schema`), then
-  the later `createdAt`.
+- of two with the same `heightRange`, keep the later layout (`schema`). Two
+  of the same layout hold the same rows, so keep either.
 
 A band that leaves the feed before the client has it is gone for good: the
 gateway stops seeding it, its WebSeed answers `404` and the tracker refuses
@@ -512,6 +512,17 @@ rows, independent of the Parquet bytes. A band's id is a digest of its
 tables' rows; the lookup files are not part of it. Two publishers of the
 same chain therefore write bands with the same ids, and can compare them
 without exchanging files.
+
+`band.json` holds only what the rows determine, written one way: its
+`createdAt` is the time of the band's top block, not when it was built. Two
+publishers of the same rows write the same `band.json` byte for byte, so the
+same band files, the same torrent and one swarm. What is a publisher's own,
+the bands a band replaces and when it was built, is kept beside the band in
+`.publisher.json`, which is not one of the band's files; the bands it
+replaces reach readers through the signed publication (`metadata.supersedes`).
+A band written before this (2026-10) also carries `supersedes`, and its build
+time as `createdAt`; readers accept both, and a publisher settles its own in
+place.
 
 A reader checks each file against the signed digests, then its footer and
 schema against the layout and the row counts in `band.json`. The file set it

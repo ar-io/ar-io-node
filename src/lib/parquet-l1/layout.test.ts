@@ -5,6 +5,9 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import { strict as assert } from 'node:assert';
+import * as fs from 'node:fs/promises';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { describe, it } from 'node:test';
 
 import {
@@ -21,7 +24,14 @@ import {
   PARQUET_L1_SCHEMAS,
   PARQUET_L1_TABLES,
   parseBandFile,
+  parsePublisherFile,
+  PUBLISHER_FILE,
+  bandSupersedes,
+  bandTime,
+  readPublisherFacts,
+  serializeBandFile,
   tablesCurrent,
+  writePublisherFacts,
 } from './layout.js';
 import { FORK_2_0 } from './chain.js';
 
@@ -210,6 +220,120 @@ describe('parseBandFile', () => {
         ),
       /layout l1-2 has no lookups/,
     );
+  });
+});
+
+describe('serializeBandFile', () => {
+  /** Every object's keys in reverse, as another writer might order them. */
+  const reversed = (value: any): any =>
+    value !== null && typeof value === 'object' && !Array.isArray(value)
+      ? Object.fromEntries(
+          Object.entries(value)
+            .reverse()
+            .map(([k, v]) => [k, reversed(v)]),
+        )
+      : value;
+
+  it('writes the same bytes whatever order the fields came in, and none of the publisher’s own', () => {
+    const a = serializeBandFile(parseBandFile(JSON.stringify(valid())));
+    const b = serializeBandFile(
+      parseBandFile(
+        JSON.stringify(
+          reversed({ ...valid(), supersedes: ['l1-h0-99999-aaaaaaaa-1'] }),
+        ),
+      ),
+    );
+    assert.equal(a, b);
+    assert.doesNotMatch(a, /supersedes/);
+    assert.deepEqual(parseBandFile(a), parseBandFile(JSON.stringify(valid())));
+  });
+
+  it('writes tables and lookups in the layout’s order', () => {
+    const json = JSON.parse(
+      serializeBandFile(parseBandFile(JSON.stringify(reversed(valid())))),
+    );
+    assert.deepEqual(Object.keys(json), [
+      'version',
+      'schema',
+      'heightRange',
+      'tables',
+      'lookups',
+      'createdAt',
+    ]);
+    assert.deepEqual(
+      Object.keys(json.tables),
+      PARQUET_L1_TABLES.map((t) => t.name),
+    );
+    assert.deepEqual(
+      Object.keys(json.lookups),
+      PARQUET_L1_LOOKUPS.map((l) => l.name),
+    );
+  });
+
+  it('writes an older layout without lookups', () => {
+    const json = JSON.parse(
+      serializeBandFile(parseBandFile(JSON.stringify(valid('l1-2')))),
+    );
+    assert.equal(json.lookups, undefined);
+    assert.equal(json.schema, 'l1-2');
+  });
+});
+
+describe('bandTime', () => {
+  it('dates a band by its top block, in seconds', () => {
+    assert.equal(bandTime(1_700_000_000), '2023-11-14T22:13:20.000Z');
+    for (const bad of [-1, 1.5, Number.NaN]) {
+      assert.throws(() => bandTime(bad), Error, String(bad));
+    }
+  });
+});
+
+describe('the publisher’s facts beside a band', () => {
+  it('reads none where there are none, and what was written where there are', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'publisher-facts-'));
+    try {
+      assert.equal(await readPublisherFacts(dir), undefined);
+      const facts = {
+        supersedes: ['l1-h0-99999-aaaaaaaa-000000000001'],
+        builtAt: '2026-10-11T04:00:20.418Z',
+      };
+      await writePublisherFacts(dir, facts);
+      assert.deepEqual(await readPublisherFacts(dir), facts);
+      assert.deepEqual(await fs.readdir(dir), [PUBLISHER_FILE]);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses a malformed facts file rather than half-read it', () => {
+    for (const text of [
+      'not json',
+      '[]',
+      '{"supersedes":"one"}',
+      '{"supersedes":[""]}',
+      '{"builtAt":"yesterday"}',
+    ]) {
+      assert.throws(() => parsePublisherFile(text), Error, text);
+    }
+  });
+
+  it('takes what a band replaces from the facts, else from a band.json written before them', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'publisher-facts-'));
+    try {
+      const older = parseBandFile(
+        JSON.stringify({ ...valid(), supersedes: ['l1-old'] }),
+      );
+      assert.deepEqual(await bandSupersedes({ dir, band: older }), ['l1-old']);
+      await writePublisherFacts(dir, { supersedes: ['l1-newer'] });
+      assert.deepEqual(await bandSupersedes({ dir, band: older }), [
+        'l1-newer',
+      ]);
+      const settled = parseBandFile(JSON.stringify(valid()));
+      await writePublisherFacts(dir, {});
+      assert.equal(await bandSupersedes({ dir, band: settled }), undefined);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
   });
 });
 

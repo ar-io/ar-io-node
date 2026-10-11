@@ -34,9 +34,13 @@ import { Logger } from 'winston';
 
 import { bandPublisherTag } from '../../../lib/index-band/build.js';
 import { supersededBands } from '../../../lib/index-publication.js';
+import type { Database } from 'duckdb-async';
+
 import {
   BAND_FILE,
+  bandSupersedes,
   bandTablesDigest,
+  bandTime,
   L1_SPAN,
   L1_SUB_SPAN,
   l1RangeOf,
@@ -44,9 +48,13 @@ import {
   lookupsCurrent,
   lookupsOf,
   PARQUET_L1_SCHEMA,
+  PARQUET_L1_TABLES,
   ParquetL1Band,
   readBandDirectory,
+  readPublisherFacts,
+  serializeBandFile,
   tablesCurrent,
+  writePublisherFacts,
 } from '../../../lib/parquet-l1/layout.js';
 import { writeBandLookups } from '../../../lib/parquet-l1/lookups.js';
 import * as metrics from '../../metrics.js';
@@ -112,13 +120,16 @@ export async function deriveL1Bands(
     }),
   );
   const superseded = supersededBands(
-    all.map(({ id, band }) => ({
-      id,
-      files: [],
-      ...(band.supersedes !== undefined
-        ? { metadata: { supersedes: band.supersedes } }
-        : {}),
-    })),
+    await Promise.all(
+      all.map(async (found) => {
+        const supersedes = await bandSupersedes(found);
+        return {
+          id: found.id,
+          files: [],
+          ...(supersedes !== undefined ? { metadata: { supersedes } } : {}),
+        };
+      }),
+    ),
   );
   return all
     .filter((b) => !superseded.has(b.id) && b.id.split('-')[3] === tag)
@@ -410,6 +421,170 @@ export async function runL1Step(
   return outcome;
 }
 
+/**
+ * The time of a published band's top block, from its own blocks table: the
+ * `createdAt` every publisher of the band's rows writes.
+ */
+export async function bandTopTime(
+  duck: Database,
+  band: L1PublishedBand,
+): Promise<string> {
+  const blocks = PARQUET_L1_TABLES.find((t) => t.name === 'blocks')!.file;
+  const file = path.join(band.dir, blocks).replace(/'/g, "''");
+  const [row] = (await duck.all(
+    `SELECT CAST(block_timestamp AS BIGINT) AS ts FROM read_parquet('${file}') WHERE height = ${band.to}`,
+  )) as Array<{ ts: bigint | number }>;
+  if (row === undefined) {
+    throw new Error(`band ${band.id} has no block ${band.to} to date it by`);
+  }
+  return bandTime(Number(row.ts));
+}
+
+/**
+ * Puts a band's description in place as every publisher of its rows writes
+ * it ({@link serializeBandFile}), keeping what is this publisher's own, the
+ * bands it replaces and when it was built, beside it in `.publisher.json`.
+ *
+ * The facts are written first: a crash between the two leaves an old
+ * `band.json` and a facts file naming the same bands, which readers agree
+ * on, and the next run finishes the job. `band.json` is replaced by a
+ * rename, so a reader sees one whole description or the other.
+ */
+export async function settleBandFile(
+  band: L1PublishedBand,
+  next: ParquetL1Band,
+): Promise<void> {
+  const facts = await readPublisherFacts(band.dir);
+  const supersedes = facts?.supersedes ?? band.band.supersedes;
+  // A band written before the facts file held its build time in band.json.
+  const builtAt =
+    facts?.builtAt ?? (facts === undefined ? band.band.createdAt : undefined);
+  await writePublisherFacts(band.dir, {
+    ...(supersedes !== undefined && supersedes.length > 0
+      ? { supersedes }
+      : {}),
+    ...(builtAt !== undefined ? { builtAt } : {}),
+  });
+  const temporary = path.join(band.dir, `.${BAND_FILE}.tmp`);
+  await fs.writeFile(temporary, serializeBandFile(next));
+  await fs.rename(temporary, path.join(band.dir, BAND_FILE));
+}
+
+/**
+ * Whether a published band's description is already as every publisher of
+ * its rows writes it: canonical, with nothing of this publisher's in it, and
+ * the publisher's facts beside it. Reads only the two small files.
+ */
+export async function bandFileSettled(band: L1PublishedBand): Promise<boolean> {
+  if (band.band.supersedes !== undefined) return false;
+  const facts = await readPublisherFacts(band.dir).catch(() => undefined);
+  if (facts === undefined) return false;
+  // Still dated by when it was built: a settle cut short after the facts
+  // were written, on a band whose old file was otherwise already canonical.
+  // A settled band is dated by its top block, which precedes any build.
+  if (facts.builtAt !== undefined && facts.builtAt === band.band.createdAt) {
+    return false;
+  }
+  const text = await fs
+    .readFile(path.join(band.dir, BAND_FILE), 'utf8')
+    .catch(() => undefined);
+  return text === serializeBandFile(band.band);
+}
+
+/** What settling one published band's description came to. */
+export interface L1NormalizeOutcome {
+  index: typeof L1_INDEX;
+  id: string;
+  heightRange: [number, number];
+  /** `published`: the band's `band.json` is now as every publisher writes it. */
+  result: 'published' | 'couldnt_check' | 'dry_run';
+  reason: string;
+  details?: string[];
+  seconds: number;
+}
+
+/**
+ * The published bands whose `band.json` is not yet as every publisher of
+ * their rows writes it: those written before band files were made the same
+ * for every publisher. Each is settled in place under its id, its rows
+ * untouched, so subscribers fetch only the new `band.json`.
+ */
+export async function planL1Normalize(
+  bands: L1PublishedBand[],
+): Promise<L1PublishedBand[]> {
+  const settled = await Promise.all(bands.map(bandFileSettled));
+  return bands.filter((_, i) => !settled[i]);
+}
+
+/**
+ * Settles one published band's `band.json` ({@link settleBandFile}), dating
+ * it by its top block. Reads one column of the band's blocks table; no read
+ * of `core.db`, and no file of the band's rows changes.
+ */
+export async function runL1Normalize(
+  band: L1PublishedBand,
+  {
+    workDir,
+    dryRun,
+    log,
+    stillHeld,
+  }: {
+    workDir: string;
+    dryRun: boolean;
+    log: Logger;
+    /** Asked just before the band is changed, as for a build. */
+    stillHeld?: () => Promise<boolean>;
+  },
+): Promise<L1NormalizeOutcome> {
+  const started = Date.now();
+  const base = {
+    index: L1_INDEX,
+    id: band.id,
+    heightRange: [band.from, band.to] as [number, number],
+  } as const;
+  let outcome: L1NormalizeOutcome;
+  await fs.mkdir(workDir, { recursive: true });
+  const staging = await fs.mkdtemp(path.join(workDir, 'normalize-'));
+  try {
+    const createdAt = await withBandWriter(staging, (duck) =>
+      bandTopTime(duck, band),
+    );
+    if (dryRun) {
+      outcome = { ...base, result: 'dry_run', reason: 'dry_run', seconds: 0 };
+    } else if (stillHeld !== undefined && !(await stillHeld())) {
+      outcome = {
+        ...base,
+        result: 'couldnt_check',
+        reason: 'lock_lost',
+        details: ['another run took the lock while this one stalled'],
+        seconds: 0,
+      };
+    } else {
+      await settleBandFile(band, { ...band.band, createdAt });
+      outcome = { ...base, result: 'published', reason: 'settled', seconds: 0 };
+    }
+  } catch (error) {
+    outcome = {
+      ...base,
+      result: 'couldnt_check',
+      reason: 'normalize',
+      details: [error instanceof Error ? error.message : String(error)],
+      seconds: 0,
+    };
+  } finally {
+    await fs.rm(staging, { recursive: true, force: true });
+  }
+  outcome.seconds = (Date.now() - started) / 1000;
+  metrics.runs.inc({
+    index: L1_INDEX,
+    kind: 'normalize',
+    result: outcome.result,
+    reason: outcome.reason,
+  });
+  log.info('L1 band file settled', { ...outcome });
+  return outcome;
+}
+
 /** What deriving one published band's lookups came to. */
 export interface L1DeriveOutcome {
   index: typeof L1_INDEX;
@@ -477,8 +652,12 @@ export async function runL1Derive(
   await fs.mkdir(workDir, { recursive: true });
   const staging = await fs.mkdtemp(path.join(workDir, 'derive-'));
   try {
-    const lookups = await withBandWriter(staging, (duck) =>
-      writeBandLookups(duck, band.dir, staging),
+    const { lookups, createdAt } = await withBandWriter(
+      staging,
+      async (duck) => ({
+        lookups: await writeBandLookups(duck, band.dir, staging),
+        createdAt: await bandTopTime(duck, band),
+      }),
     );
     const rows = Object.fromEntries(
       Object.entries(lookups).map(([name, l]) => [name, l.rows]),
@@ -507,20 +686,14 @@ export async function runL1Derive(
           path.join(band.dir, spec.file),
         );
       }
-      const next: ParquetL1Band = {
+      await settleBandFile(band, {
         version: 1,
         schema: PARQUET_L1_SCHEMA,
         heightRange: band.band.heightRange,
         tables: band.band.tables,
         lookups,
-        ...(band.band.supersedes !== undefined
-          ? { supersedes: band.band.supersedes }
-          : {}),
-        createdAt: band.band.createdAt,
-      };
-      const temporary = path.join(band.dir, `.${BAND_FILE}.tmp`);
-      await fs.writeFile(temporary, JSON.stringify(next, null, 2));
-      await fs.rename(temporary, path.join(band.dir, BAND_FILE));
+        createdAt,
+      });
       outcome = {
         ...base,
         result: 'published',

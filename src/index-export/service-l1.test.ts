@@ -16,10 +16,15 @@ import { bandPublisherTag } from '../lib/index-band/build.js';
 import {
   BAND_FILE,
   bandFiles,
+  bandTime,
   L1_SPAN,
   PARQUET_L1_LOOKUPS,
   PARQUET_L1_SCHEMA,
   PARQUET_L1_TABLES,
+  PUBLISHER_FILE,
+  readPublisherFacts,
+  serializeBandFile,
+  writePublisherFacts,
 } from '../lib/parquet-l1/layout.js';
 import { verifyBandLookups } from '../lib/parquet-l1/lookups.js';
 import { buildCoreDb } from '../../test/parquet-l1-core-db.js';
@@ -82,7 +87,11 @@ describe('ExportService parquet-l1', () => {
   const steps = (report: { l1Steps: any[] }) =>
     report.l1Steps.map((s) => [s.role, s.heightRange, s.result, s.reason]);
 
-  /** Band files for every whole history range below FIRST, as if published before. */
+  /**
+   * Band files for every whole history range below FIRST, as if published
+   * before by this exporter: band.json as every publisher writes it, and the
+   * publisher's facts beside it, so there is nothing to settle.
+   */
   async function publishedBelow(skip: number[] = []) {
     const tag = bandPublisherTag(PUBLISHER);
     const ranges: Array<[number, number]> = [];
@@ -93,9 +102,10 @@ describe('ExportService parquet-l1', () => {
       if (skip.includes(from)) continue;
       const id = `l1-h${from}-${to}-${tag}-000000000000`;
       await fs.mkdir(path.join(config().l1PublishDir, id), { recursive: true });
+      await writePublisherFacts(path.join(config().l1PublishDir, id), {});
       await fs.writeFile(
         path.join(config().l1PublishDir, id, BAND_FILE),
-        JSON.stringify({
+        serializeBandFile({
           version: 1,
           schema: PARQUET_L1_SCHEMA,
           heightRange: [from, to],
@@ -112,7 +122,7 @@ describe('ExportService parquet-l1', () => {
               { rows: 0, rowDigest: '0'.repeat(64) },
             ]),
           ),
-          createdAt: '2026-10-01T00:00:00Z',
+          createdAt: '2026-10-01T00:00:00.000Z',
         }),
       );
     }
@@ -153,8 +163,135 @@ describe('ExportService parquet-l1', () => {
     const tip = bands.at(-1);
     assert.deepEqual([tip?.from, tip?.to], [FIRST, TOP]);
     // The one it replaces, and the one before that, for a subscriber that
-    // missed the second.
-    assert.deepEqual(tip?.band.supersedes, [first, second]);
+    // missed the second: the publisher's own, so beside the band, not in it.
+    assert.equal(tip?.band.supersedes, undefined);
+    assert.deepEqual((await readPublisherFacts(tip!.dir))?.supersedes, [
+      first,
+      second,
+    ]);
+    // Dated by its top block, so any publisher of these rows writes the same.
+    const db = new Sqlite(path.join(dir, 'core.db'), { readonly: true });
+    const topTime = db
+      .prepare('SELECT block_timestamp FROM stable_blocks WHERE height = ?')
+      .pluck()
+      .get(TOP) as number;
+    db.close();
+    assert.equal(tip?.band.createdAt, bandTime(topTime));
+  });
+
+  describe('settling band files written before they were the same for every publisher', () => {
+    /** Rewrites a published band's band.json as an older exporter wrote it. */
+    async function writtenTheOldWay(id: string, supersedes: string[]) {
+      const bandDir = path.join(config().l1PublishDir, id);
+      const file = path.join(bandDir, BAND_FILE);
+      const { createdAt: _date, ...band } = JSON.parse(
+        await fs.readFile(file, 'utf8'),
+      );
+      await fs.writeFile(
+        file,
+        JSON.stringify(
+          { ...band, supersedes, createdAt: '2026-10-01T04:00:20.418Z' },
+          null,
+          2,
+        ),
+      );
+      await fs.rm(path.join(bandDir, PUBLISHER_FILE), { force: true });
+      return bandDir;
+    }
+    const tableStats = async (bandDir: string) =>
+      Promise.all(
+        PARQUET_L1_TABLES.map(async (t) => {
+          const st = await fs.stat(path.join(bandDir, t.file));
+          return [t.file, st.ino, st.size, st.mtimeMs];
+        }),
+      );
+    const normalized = (report: { l1Normalized?: any[] }) =>
+      (report.l1Normalized ?? []).map((d) => [d.id, d.result, d.reason]);
+
+    it('settles one in place: canonical, dated by its top block, its replacements kept beside it', async () => {
+      await publishedBelow();
+      let report = await service().runOnce({ toHeight: FIRST + 9 });
+      const id = report.l1Steps[0].id as string;
+      const replaced = [
+        `l1-h${FIRST}-${FIRST + 4}-${bandPublisherTag(PUBLISHER)}-000000000001`,
+      ];
+      const bandDir = await writtenTheOldWay(id, replaced);
+      const before = await tableStats(bandDir);
+
+      report = await service().runOnce({ toHeight: FIRST + 9 });
+      assert.deepEqual(report.l1Steps, [], 'nothing rebuilt');
+      assert.deepEqual(normalized(report), [[id, 'published', 'settled']]);
+
+      const text = await fs.readFile(path.join(bandDir, BAND_FILE), 'utf8');
+      const band = JSON.parse(text);
+      assert.equal(
+        text,
+        serializeBandFile(band),
+        'as every publisher writes it',
+      );
+      assert.equal(band.supersedes, undefined);
+      const db = new Sqlite(path.join(dir, 'core.db'), { readonly: true });
+      const topTime = db
+        .prepare('SELECT block_timestamp FROM stable_blocks WHERE height = ?')
+        .pluck()
+        .get(FIRST + 9) as number;
+      db.close();
+      assert.equal(band.createdAt, bandTime(topTime));
+      assert.deepEqual(await readPublisherFacts(bandDir), {
+        supersedes: replaced,
+        builtAt: '2026-10-01T04:00:20.418Z',
+      });
+      assert.deepEqual(await tableStats(bandDir), before, 'rows untouched');
+      // The band is still this publisher's live band, and still names what
+      // it replaced for the publication.
+      const tip = (await live()).at(-1);
+      assert.equal(tip?.id, id);
+
+      report = await service().runOnce({ toHeight: FIRST + 9 });
+      assert.deepEqual(normalized(report), [], 'settled once');
+    });
+
+    it('finishes a settle cut short after the facts were written, though the old file looks canonical', async () => {
+      await publishedBelow();
+      let report = await service().runOnce({ toHeight: FIRST + 9 });
+      const id = report.l1Steps[0].id as string;
+      const bandDir = path.join(config().l1PublishDir, id);
+      const file = path.join(bandDir, BAND_FILE);
+      // An older band with nothing it replaces: its file already in the
+      // canonical order, but dated by its build. The facts were written,
+      // then the run stopped before band.json was replaced.
+      const builtAt = '2026-10-01T04:00:20.418Z';
+      const band = JSON.parse(await fs.readFile(file, 'utf8'));
+      await fs.writeFile(
+        file,
+        serializeBandFile({ ...band, createdAt: builtAt }),
+      );
+      await writePublisherFacts(bandDir, { builtAt });
+
+      report = await service().runOnce({ toHeight: FIRST + 9 });
+      assert.deepEqual(normalized(report), [[id, 'published', 'settled']]);
+      const settled = JSON.parse(await fs.readFile(file, 'utf8'));
+      assert.notEqual(settled.createdAt, builtAt, 'dated by its top block now');
+      assert.deepEqual(await readPublisherFacts(bandDir), { builtAt });
+    });
+
+    it('settles nothing on a dry run', async () => {
+      await publishedBelow();
+      const report1 = await service().runOnce({ toHeight: FIRST + 9 });
+      const id = report1.l1Steps[0].id as string;
+      const bandDir = await writtenTheOldWay(id, ['l1-old']);
+      const text = await fs.readFile(path.join(bandDir, BAND_FILE), 'utf8');
+      const report = await service().runOnce({
+        toHeight: FIRST + 9,
+        dryRun: true,
+      });
+      assert.deepEqual(normalized(report), [[id, 'dry_run', 'dry_run']]);
+      assert.equal(
+        await fs.readFile(path.join(bandDir, BAND_FILE), 'utf8'),
+        text,
+      );
+      assert.equal(await readPublisherFacts(bandDir), undefined);
+    });
   });
 
   describe('adding lookups to published bands', () => {
@@ -200,8 +337,8 @@ describe('ExportService parquet-l1', () => {
       assert.deepEqual(await tableStats(bandDir), before, 'tables untouched');
       assert.deepEqual(
         (await fs.readdir(bandDir)).sort(),
-        bandFiles('l1-3'),
-        'nothing else left in the band',
+        [...bandFiles('l1-3'), PUBLISHER_FILE].sort(),
+        'nothing else left in the band but the publisher’s own facts',
       );
       const duck = await Database.create(':memory:');
       try {
@@ -254,7 +391,10 @@ describe('ExportService parquet-l1', () => {
         await fs.readFile(path.join(bandDir, BAND_FILE), 'utf8'),
         json,
       );
-      assert.deepEqual((await fs.readdir(bandDir)).sort(), bandFiles('l1-2'));
+      assert.deepEqual(
+        (await fs.readdir(bandDir)).sort(),
+        [...bandFiles('l1-2'), PUBLISHER_FILE].sort(),
+      );
     });
 
     it('confirms an l1-1 band rebuilt identical and derives it in the same run', async () => {

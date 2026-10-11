@@ -317,9 +317,11 @@ Torrents are deterministic. The name comes from the band's file names, sizes
 and digests (see [Torrent Name](glossary.md#torrent-name)), and nothing
 publisher-specific goes in: no creation date, no WebSeed and no private
 flag. Two publishers holding the same bytes share one infohash and one
-swarm. An L1 band's own `band.json` still differs between publishers (it
-records when it was built and the ids of the bands it replaces), so
-publishers' L1 swarms do not merge yet.
+swarm. An L1 band's `band.json` holds only what its rows determine (see
+[L1 bands](index-publication.md#l1-bands)), so two publishers of the same
+rows share one swarm too, each signing the same infohash. A band written
+before 2026-10 carried its publisher's build time and the ids of the bands
+it replaces; each publisher's index-export settles those in place, once.
 
 The gateway serves each `.torrent` with one addition: its own WebSeed
 (`<INDEXES_PUBLIC_URL>/ar-io/indexes/webseed/`), outside the info
