@@ -88,7 +88,9 @@ proxies the Arweave node routes the gateway does not serve itself (such as
 `POST /tx`) to Arweave nodes: by default, public peers it discovers through
 `ARWEAVE_PEER_DNS_RECORDS` (`peers.arweave.xyz`); with
 `ENABLE_ARWEAVE_PEER_EDS=false`, the static `TRUSTED_NODE_HOST` (default
-`arweave.net`) and `FALLBACK_NODE_HOST`.
+`arweave.net`) and `FALLBACK_NODE_HOST`. With `ARWEAVE_POST_DRY_RUN=true`,
+Envoy sends `POST /tx` to the gateway instead, which answers it itself and
+broadcasts nothing.
 
 ```shell
 docker compose up --build

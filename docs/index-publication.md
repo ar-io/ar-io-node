@@ -672,8 +672,11 @@ directory can read some rows twice. So can a band and the bands it
 superseded, which have ids of their own and stay installed through the same
 grace period: a new tip beside the old one, or a finished `h` band beside
 the twenty `d` bands it replaces. For exact counts, read only the bands the
-publisher's current signed document lists (over HTTP, as above), or drop
-every band whose heights lie inside another's before querying.
+publisher's current signed document lists (over HTTP, as above). Failing
+that, before querying, drop every band whose heights lie inside a wider
+band's, and keep only one of any bands with the same heights: two
+generations of a band, a band and the rebuild that superseded it, or two
+publishers' copies of it.
 
 Tags are plaintext in a band, so `tag_name = 'App-Name'` is a string
 comparison, where `core.db` needs two joins through its hash dictionaries.
