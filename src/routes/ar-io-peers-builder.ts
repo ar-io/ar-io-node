@@ -17,6 +17,38 @@ export interface GatewayPeerEntry {
   status?: string;
 }
 
+/** This node's own registry entry, as `/ar-io/peers` reports it under `self`. */
+export interface SelfEntry {
+  url: string;
+  wallet: string;
+  observerAddress?: string;
+  operatorStake?: number;
+  status?: string;
+}
+
+/**
+ * `self` for `/ar-io/peers`: this node's own registry entry, apart from its
+ * peers, so nothing that picks peers from the list picks this node.
+ */
+export function buildSelfEntry(
+  record: SelfEntry | undefined,
+): { self: SelfEntry } | Record<string, never> {
+  if (record === undefined) return {};
+  return {
+    self: {
+      url: record.url,
+      wallet: record.wallet,
+      ...(record.observerAddress !== undefined
+        ? { observerAddress: record.observerAddress }
+        : {}),
+      ...(record.operatorStake !== undefined
+        ? { operatorStake: record.operatorStake }
+        : {}),
+      ...(record.status !== undefined ? { status: record.status } : {}),
+    },
+  };
+}
+
 /**
  * Build the `gateways` map of `GET /ar-io/peers` from the peer manager's
  * formatted peers.

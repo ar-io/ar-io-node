@@ -72,6 +72,12 @@ export class ArIOPeerManager implements WithFormattedPeers {
   private peers: Record<string, string> = {};
   /** Registry fields for each peer, by wallet; replaced with `peers`. */
   private records: Record<string, PeerRegistryRecord> = {};
+  /**
+   * This node's own registry entry. It is never a peer, but a fleet node
+   * that subscribes to its own fleet's index publication resolves the
+   * publisher, its own wallet, through the peer list's `self`.
+   */
+  private self: (PeerRegistryRecord & { url: string }) | undefined;
   private intervalId?: NodeJS.Timeout;
 
   // Weight management per category
@@ -449,6 +455,11 @@ export class ArIOPeerManager implements WithFormattedPeers {
     return Object.values(this.peers);
   }
 
+  /** This node's own registry entry, when its wallet is registered. */
+  getSelfRecord(): (PeerRegistryRecord & { url: string }) | undefined {
+    return this.self;
+  }
+
   /**
    * Get peers formatted as host:port keys with weights for specified categories
    * @param categories - Array of weight categories to include
@@ -536,6 +547,7 @@ export class ArIOPeerManager implements WithFormattedPeers {
 
     const peers: Record<string, string> = {};
     const records: Record<string, PeerRegistryRecord> = {};
+    let self: (PeerRegistryRecord & { url: string }) | undefined;
     const skipLeaving = config.SKIP_LEAVING_GATEWAYS;
     let skippedLeaving = 0;
     let cursor: string | undefined;
@@ -549,11 +561,24 @@ export class ArIOPeerManager implements WithFormattedPeers {
           });
 
         for (const gateway of items) {
-          // skip our own node wallet
+          // Our own node is never a peer, but its entry is kept apart.
           if (
             this.nodeWallet !== undefined &&
             this.nodeWallet === gateway.gatewayAddress
           ) {
+            self = {
+              url: `${gateway.settings.protocol}://${gateway.settings.fqdn}`,
+              wallet: gateway.gatewayAddress,
+              ...(typeof gateway.observerAddress === 'string'
+                ? { observerAddress: gateway.observerAddress }
+                : {}),
+              ...(typeof gateway.operatorStake === 'number'
+                ? { operatorStake: gateway.operatorStake }
+                : {}),
+              ...(typeof gateway.status === 'string'
+                ? { status: gateway.status }
+                : {}),
+            };
             continue;
           }
 
@@ -625,6 +650,7 @@ export class ArIOPeerManager implements WithFormattedPeers {
     const oldPeers = this.peers;
     this.peers = peers;
     this.records = records;
+    this.self = self;
     this.hashRing.rebuild(Object.values(peers));
 
     // Update weights for all categories

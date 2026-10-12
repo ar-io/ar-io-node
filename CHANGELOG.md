@@ -386,6 +386,15 @@ with core**).
 
 ### Fixed
 
+- **A fleet node could not subscribe to its own fleet's index publication.**
+  The fleet recipe in `docs/index-swarm.md` subscribes a non-signing node to
+  the fleet wallet, which is that node's own `AR_IO_WALLET` (it must be, for
+  `INDEXES_ADVERTISE_FROM_URL`). The sidecar resolves publishers from the
+  gateway's `/ar-io/peers`, and a gateway never lists its own wallet there,
+  so the publisher never resolved and every poll counted `unreachable`.
+  `/ar-io/peers` now reports the gateway's own registry entry as `self`,
+  apart from its peers, and the sidecar resolves its own wallet from it.
+
 - **Gateways far from the preferred chunk nodes served only about a third of
   old chunks.** A chunk GET tried nodes that advertise the chunk's range
   (`/sync_buckets`) first, then preferred nodes in list order, each capped

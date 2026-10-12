@@ -1578,6 +1578,29 @@ paths:
                         - url
                         - dataWeight
                         - chunkWeight
+                  self:
+                    type: object
+                    description: |
+                      This gateway's own registry entry, present when its
+                      `AR_IO_WALLET` is registered. A gateway is never its own
+                      peer, so it is kept out of `gateways`; the index-swarm
+                      sidecar of a fleet node resolves its own fleet's
+                      publication through it.
+                    properties:
+                      url:
+                        type: string
+                        format: uri
+                      wallet:
+                        type: string
+                      observerAddress:
+                        type: string
+                      operatorStake:
+                        type: number
+                      status:
+                        type: string
+                    required:
+                      - url
+                      - wallet
                   arweaveNodes:
                     type: object
                     description: Arweave node peers with their metadata
