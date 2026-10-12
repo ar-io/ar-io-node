@@ -8,6 +8,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **L1 index bands (`parquet-l1`)**: the Arweave base layer (blocks,
+  transactions, tags in plaintext, owners) as Parquet, one fixed height
+  range per band (whole 100,000-height history bands over 5,000-height
+  delta bands, so only the tip is ever rebuilt), so a new gateway can
+  import its L1 index rather than index the chain block by block, and apps
+  can query it with DuckDB. `index-export` builds them from `core.db` with
+  `INDEX_EXPORT_KINDS` including `parquet-l1`, checking every block's
+  links, `hash_list_merkle`, `tx_root`, transaction positions and owners'
+  addresses before publishing; the index-swarm sidecar publishes them as
+  `{"name":"parquet-l1","kind":"parquet-l1"}`, and a subscriber that names
+  `parquet-l1` (`INDEX_SWARM_SUBSCRIBE` `name` may now be a list) checks
+  each band's files, footers, schema and row counts before installing it.
+  A subscription without `name` doesn't take them.
+  - Two honest publishers of the same chain write identical bands, so they
+    can check each other by digest and share one torrent and one swarm.
+    Three columns a gateway fills in for itself are written one way:
+    `blocks.tx_root` below the 2.0 fork is null (the block hash doesn't
+    commit it, and nodes disagree), a format-1 `transactions.data_root` is
+    null (the header carries none), and `content_type`/`content_encoding`
+    come from the band's own tags, first by position. A band's `band.json`
+    holds only what its rows determine, and its `createdAt` is the time of
+    its top block. What is the publisher's own, the bands it replaces and
+    its build time, sits beside the band in `.publisher.json`, which is
+    never published. Checked on 2026-10-11 against turbo-gateway.com's and
+    vilenarios.com's live L1 bands: all 24 are byte-identical.
+  See *L1 bands* in [docs/index-publication.md](docs/index-publication.md)
+  for the format and [docs/index-export.md](docs/index-export.md) for
+  building them.
+
 - **`parquet-l1` bands carry lookup files (layout `l1-3`)**, so one
   transaction, wallet or tag value can be found without scanning a band:
   `lookup_tx_id`, `lookup_wallet` and `lookup_tag`, each sorted by an
@@ -21,38 +50,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Declared in the layout beside the tables, described in `band.json` with
     rows and row digests, and left out of a band's id, which stays a digest
     of the tables' rows.
-  - New bands are written with them. A published band whose tables are
-    current is not rebuilt: `index-export` derives its lookups from its own
-    tables and adds them in place, under the same id, with no read of
-    `core.db` (reported as `l1Derived`,
-    `index_export_runs_total{kind="derive"}`).
   - Subscribers check a band's files against the layout its `band.json`
-    names, and lookup footers and row counts as tables'. A gateway that
-    doesn't know `l1-3` refuses such a band explicitly and keeps its copy,
-    and a publisher's sidecar that doesn't can't publish one: upgrade
-    subscribers first, then a publisher's `index-swarm` with or before its
-    `index-export`.
+    names, and lookup footers and row counts as tables'.
   - `index-l1-verify --bands-dir` checks each band's lookups against its
     tables and `band.json` (the `lookups` check; `--skip-lookups` to leave
     it out).
   - The engine (`src/lib/parquet/lookups.ts`, `keys.ts`) knows no dataset,
     and `RowDigest` moves beside it (`src/lib/parquet/digest.ts`), so another
     Parquet dataset declares lookups without new code.
-  See `docs/index-swarm.md`, *Lookup files*.
-
-- `docs/index-swarm.md` documents querying a published dataset over HTTP: a
-  `parquet-l1` band is Parquet and the byte routes serve ranges, so a client
-  can read a dataset where it sits, with no band files to download, no import
-  into a database and no gateway of its own, fetching only the footer and the
-  row groups a predicate selects. DuckDB installs its own `httpfs` and `json`
-  extensions on first use. The
-  signed document is the catalog, since HTTP has no directory listing to glob.
-  Because `Repr-Digest` is co-signable and commits to the whole file, a ranged
-  read still carries a signature over the digest of the file it read from.
-  Measured against a 24-band dataset covering heights 0 to 2,016,168 whose
-  `transactions.parquet` files total 5.51 GB: a 100-block window across all 24
-  bands in 0.1 s, and the full height span and row count in 0.6 s, over HTTPS,
-  with nothing written to disk.
+  See *Lookup files* in [docs/index-publication.md](docs/index-publication.md).
 
 - **A trusted gateway that answers 429 is skipped until its `Retry-After` has
   passed** (`GATEWAYS_THROTTLE_BACKOFF_ENABLED`, default `true`). Before, every
@@ -138,21 +144,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   1000 of 208,812 sampled, all 1000 matched, bounding the error rate at
   0.3%. See [docs/cli.md](docs/cli.md).
 
-- L1 index bands (`parquet-l1`): the Arweave base layer (blocks,
-  transactions, tags in plaintext, owners) as Parquet, one fixed height
-  range per band (whole 100,000-height history bands over 5,000-height
-  delta bands, so only the tip is ever rebuilt), so a new gateway can
-  import its L1 index rather than index the chain block by block, and apps
-  can query it with DuckDB. `index-export` builds them from `core.db` with
-  `INDEX_EXPORT_KINDS` including `parquet-l1`, checking every block's
-  links, `hash_list_merkle`, `tx_root`, transaction positions and owners'
-  addresses before publishing; the index-swarm sidecar publishes them as
-  `{"name":"parquet-l1","kind":"parquet-l1"}`, and a subscriber that names
-  `parquet-l1` (`INDEX_SWARM_SUBSCRIBE` `name` may now be a list) checks
-  each band's files, footers, schema and row counts before installing it.
-  A subscription without `name` doesn't take them. See "L1 bands" in
-  [docs/index-swarm.md](docs/index-swarm.md).
-
 - The `index-export` service (compose profile `index-export`) builds this
   gateway's root-TX index bands from its own index once a day and puts them
   where the index-swarm sidecar signs and offers them: history bands cut at
@@ -165,8 +156,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   check is retried, a rejected one waits for an operator, and nothing
   published is withdrawn on failure. `index-swarm-setup --publish` sets it
   up (`--start-height`, `--header-check-url`), `index-swarm-status` reports
-  it, and `prometheus.yml` scrapes it and the sidecar. See "Producing
-  bands" in [docs/index-swarm.md](docs/index-swarm.md).
+  it, and `prometheus.yml` scrapes it and the sidecar.
+  `INDEX_EXPORT_L1_RUN_BUDGET_MINUTES` (default 240) sets how long a run may
+  keep starting `parquet-l1` history bands; raise it for a bootstrap that
+  would otherwise spread over several runs. Its other settings
+  (`INDEX_EXPORT_*`) are in [docs/envs.md](docs/envs.md). See
+  [docs/index-export.md](docs/index-export.md).
 
 - `ar-io-node index-band-export` writes one record source's root-TX index
   records for a height range as the CSV `index-band-build` reads: this
@@ -223,7 +218,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Peers announce to a publisher's tracker through the gateway's HTTPS**, at
   `https://<gateway>/ar-io/indexes/announce`, so a publishing gateway no
   longer needs port 6969 open. Envoy forwards the path to a second tracker
-  listener on the sidecar, `INDEX_SWARM_TRACKER_PROXY_PORT` (6970), which is
+  listener on the sidecar (`INDEX_SWARM_TRACKER_PROXY_HOST`, default
+  `index-swarm`), on `INDEX_SWARM_TRACKER_PROXY_PORT` (6970), which is
   never published and reads the peer's address from `X-Forwarded-For`.
   `tools/index-swarm-setup --publish --torrent` now writes that URL into
   `INDEX_SWARM_TRACKERS` when it knows the gateway's origin (`--public-url`,
@@ -267,20 +263,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
-- **An L1 band's `band.json` is the same from every publisher of the same
-  rows**, so two publishers' bands share one torrent and one swarm, each
-  signing the same infohash. It holds only what the rows determine, written
-  in one canonical order, and its `createdAt` is now the time of the band's
-  top block rather than when it was built. What is the publisher's own, the
-  bands it replaces and its build time, moved beside the band into
-  `.publisher.json`, which is never published; the bands it replaces still
-  reach readers through the signed publication. index-export settles each
-  band published before this in place on its next run, keeping its id and
-  rows (`l1Normalized`, `index_export_runs_total{kind="normalize"}`), so
-  subscribers fetch only the new `band.json`. Readers accept both forms.
-  Checked on 2026-10-11 against turbo-gateway.com's and vilenarios.com's
-  live L1 bands: all 24, once settled, are byte-identical.
-
 - **`tip-5.arweave.xyz` is no longer a default preferred chunk node**, for
   GET or POST. Its port 1984 was closed from two separate networks on
   2026-10-10, it served none of 60 random offsets, and `tip-1`'s own peer
@@ -302,15 +284,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   serve. Each attempt is still capped at 500 ms, so a chunk no peer has now
   takes up to 4 s to fail instead of 2.5 s, and makes three more peer
   requests. Set the variable to keep the old value.
-
-- **`index-export` derives `parquet-l1` lookups before it builds**, not
-  after: a band that only lacks its lookups gets them in seconds to minutes
-  at the start of a run, rather than after up to 4 hours of builds. The
-  derive runs again after the builds for a band they confirmed; each band is
-  tried once a run.
-- **`INDEX_EXPORT_L1_RUN_BUDGET_MINUTES`** (default 240) sets how long a run
-  may keep starting `parquet-l1` history bands, for a one-time rebuild or a
-  bootstrap that would otherwise spread over several runs.
 
 - **Offset (chunk-proof) checks are back in the observer, and fail gateways
   by default.** A share of gateways (`OFFSET_OBSERVATION_SAMPLE_RATE`, default
@@ -345,6 +318,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   tick, which removes a pair of full-registry scans per tick from the
   window after each distribution (ar-io/ar-io-observer#146).
 
+- **`@ar.io/sdk` updated from 4.0.0 to 4.5.0.** The hourly refresh of the
+  gateway registry now reads only the registry's slot window and retries a
+  failed batch (429 or 5xx) up to 3 times; before, one failed batch failed
+  the whole refresh.
+
 - **Index-swarm torrents are built with 256 KiB pieces, down from 4 MiB**, so
   a browser can verify a byte range of a band file against the signed
   `infohashV2` without the whole file: it rebuilds the file's BEP 52
@@ -355,27 +333,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   publisher rebuilds every band's torrent once and offers it under new
   infohashes, and subscribers keep their installed bands and seed the new
   torrents. Band ids and files are unchanged. See `docs/index-swarm.md`.
-
-- **`parquet-l1` bands are now layout `l1-2`: three columns a gateway fills
-  in for itself are written one canonical way**, so two honest publishers
-  of the same chain write identical bands and can check each other by
-  digest. Comparing turbo-gateway.com with vilenarios.com across the whole
-  chain found every chain-committed column in agreement and these
-  disagreeing: `blocks.tx_root` below the 2.0 fork (346 blocks; the block
-  hash doesn't commit it, and nodes disagree) is now null; a format-1
-  `transactions.data_root` (352 transactions; the header carries none) is
-  now null; and `content_type`/`content_encoding` (86 transactions with two
-  Content-Type tags) now come from the band's own tags, first by position.
-  The last of these differed because the indexer kept the *last* matching
-  tag before r70 and the first since. No check reads the nulled columns.
-  Readers accept `l1-1` and `l1-2`, and an import keeps a pre-fork
-  `tx_root` or format-1 `data_root` the gateway already holds. **Upgrading
-  a publisher rebuilds every band once** (about nine hours for the whole
-  chain): an `l1-1` band can't be judged without it. A band whose rows
-  didn't change keeps its id and files, so subscribers download only the
-  ranges that did, and the service records it in `state.json`
-  (`layoutConfirmed`) so it isn't rebuilt again. See the "L1 bands" section
-  of [docs/index-swarm.md](docs/index-swarm.md).
 
 - `GET /ar-io/offsets/:id` answers are now signed (HTTPSIG), with a
   `Content-Digest` binding the body and an `X-AR-IO-Root-Transaction-Id`
@@ -391,47 +348,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   Every other path on a sandbox host is unchanged.
 
 ### Fixed
-
-- **`index-l1-import` and `index-l1-verify` read bands as the sidecar
-  installs them.** The sidecar names an installed band
-  `<band id>~<generation>`, and the importer took the whole name as the band
-  id, found it was not one, and passed every band over: the documented
-  `--bands-dir data/indexes/installed/parquet-l1` imported nothing, with
-  "holds no bands with a band.json". Its tests and the full-chain trial read a
-  publisher's `published/` directory, whose names carry no generation. A band
-  directory's id is now its name less any generation, and while the sidecar
-  holds two generations of one band during a replacement, only the newer is
-  read, so `index-l1-verify` no longer sees the two as overlapping bands.
-
-- **`index-l1-import` accepts a gateway's own `core.db`.** It checked for its
-  ledger migration under the name without `.sql`, while `yarn db:migrate`
-  records every migration by its file's name, `.sql` and all, so it refused
-  every database the gateway had migrated with "has not run
-  ...add-parquet-l1-imports: run `yarn db:migrate up` first", however often
-  that was run. The tests recorded the migration under the importer's own
-  spelling, so they passed. Found filling a mid-chain gateway's history.
-
-- **`index-l1-verify --bands-dir` no longer fails the `lookups` check of a
-  large `l1-3` band on a directory it cannot write.** DuckDB had no spill
-  directory, so it tried `.tmp` under the working directory, which is the
-  image's `/app` when run through `tools/ar-io-node` or `docker run` as the
-  caller's user. 15 of the 24 L1 bands failed that way with `Failed to
-  create directory ".tmp": Permission denied`, though their lookups were
-  sound. It now spills to a folder of its own under `TMPDIR`, removed when
-  the run ends.
-
-- **`index-l1-import`, `index-l1-verify` and `index-l1-audit` now run
-  through `tools/ar-io-node`.** The wrapper mounted data only for
-  `index-band-*`, and `docs/cli.md` showed these commands as
-  `docker compose run … core ar-io-node …`, which starts the gateway instead
-  (the core image's entrypoint ignores arguments, and the image has no
-  `ar-io-node` binary). The wrapper now mounts `data/indexes` read-only and
-  the SQLite directory (read-write for `index-l1-import`, read-only
-  otherwise), rewrites `--bands-dir` and `--core-db` to their container
-  paths, and joins the gateway's network. `docs/cli.md` uses it throughout,
-  and drops a `--bands-dir` option `index-l1-audit` never had. The
-  `index_subscription_bytes_total` help string no longer says "only http
-  today".
 
 - **Gateways far from the preferred chunk nodes served only about a third of
   old chunks.** A chunk GET tried nodes that advertise the chunk's range
@@ -458,13 +374,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `PREFERRED_CHUNK_GET_NODE_URLS` and `PREFERRED_CHUNK_POST_NODE_URLS` are
   now documented, and the documented default for
   `WEIGHTED_PEERS_TEMPERATURE_DELTA` is corrected to 2.
-
-- **`tools/index-swarm-status` warned on every subscriber that installs
-  `parquet-l1` bands** that the gateway had not loaded them ("5 of 29
-  installed bands loaded"). It compared all installed bands with the
-  gateway's CDB64 readers, but the gateway loads only root-TX bands, so L1
-  bands always counted as missing. It now compares the root-TX bands alone
-  and still warns when one of those is not loaded.
 
 - **Byte-identical uploads with different `Content-Type` tags were all
   served as the first one a gateway saw.** For a data item the gateway had
@@ -501,15 +410,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   is indexed (for example with `POST /ar-io/admin/queue-bundle` for its
   bundle) or fetched again.
 
-- **Building `lookup_tag` no longer crashes `index-export` intermittently.**
-  It counted distinct transactions with `count(DISTINCT id)`, and DuckDB
-  1.4.2's parallel hash aggregate can fail while combining a DISTINCT
-  aggregate's thread states: a segfault in the release build, about 3 runs in
-  8 on vilenarios.com's 1,900,000 band, which stopped that band and every band
-  above it. It now counts in two grouping steps. The rows are unchanged
-  (recomputed digests match published bands), so no band is rebuilt; the
-  `index-l1-verify` lookups check, which runs the same query, is fixed too.
-
 - **A response served through an ArNS name kept its old resolution after
   the name was re-pointed, for as long as the bytes stayed the same.** The
   entity tag was the content digest alone, so a cache revalidating its copy
@@ -531,27 +431,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   excludes the gateway. Other gateways' references are unchanged
   (ar-io/ar-io-observer#144).
 
-- The nginx guidance for `/ar-io/indexes` in `docs/index-swarm.md` named the
-  wrong remedy and understated the cost. It said to set `proxy_buffering off`,
-  which does not fix anything: when a location has a cache zone, nginx strips
-  the client's `Range` from the upstream request and fetches the whole object
-  so it can store it, before it has seen any `Cache-Control`, so no response
-  header helps either. What the client sees then depends on whether the
-  response was cacheable: a gateway that does not meter sends `public` and
-  nginx answers the range from its cache, while a metering gateway sends
-  `private`, nothing is stored, and nginx returns `200` with the whole body on
-  every request. A cache zone is wrong on both branches, since the whole file
-  crosses from the gateway either way and band files reach 1.35 GB. The fix is
-  `proxy_cache off` for the prefix, with no trailing slash,
-  since a `proxy_pass` location whose prefix ends in `/` answers the unslashed
-  form with a `301` and the document every subscriber polls lives there, with
-  HTTPSig signing `@path`. The stated band size (7 to 30 MB) also predated
-  `parquet-l1`, whose files reach 541 MB. Core and envoy answer ranges
-  correctly, so the default stack was never affected; the guidance only
-  mattered once an operator added a cache, and it failed quietly, because a
-  `200` carrying more bytes than were asked for looks like success. Verified
-  against a 541 MB band file: a 100-byte range returned all 541,753,181 bytes
-  through a cache zone and `206` with it off.
+- **GraphQL pages served from ClickHouse could come back short with
+  `hasNextPage: false`, silently dropping the rest of the results.** The
+  query reads `(pageSize + 1) × CLICKHOUSE_GQL_DEDUPE_HEADROOM` rows before
+  it folds duplicate ReplacingMergeTree versions, and where re-imported
+  ranges held more versions of a row than that, the page came up short: on
+  turbo-gateway.com and vilenarios.com, `first: 100` for one owner returned
+  68 of 323 transactions. A short page whose read window was full now
+  continues from its last row's cursor, and an id lookup re-runs with more
+  headroom. A page still short after a few rounds is returned with
+  `hasNextPage: true`, and rows from the other sources that sort after it
+  wait for the next page. New metric:
+  `clickhouse_gql_dedupe_headroom_total{leg,outcome}`.
+
+- **ClickHouse auto-import no longer re-imports history it already holds.**
+  A data item indexed late at an old height pulled each cycle's start back,
+  and the cycle then re-imported every bucket from there to the tip: one
+  item at height 783,731 cost 124 batches and 66 minutes, several times a
+  day, and the duplicate versions it left behind caused the short GraphQL
+  pages above. Buckets already imported without a gap are now skipped
+  unless they hold stable data items. `clickhouse-import` now inserts only
+  rows that differ from the newest stored version of their key
+  (`CLICKHOUSE_IMPORT_SKIP_UNCHANGED`, default `true`), so a re-import adds
+  no duplicate versions; an unchanged re-import no longer refreshes
+  `expires_at`.
+
+- **A core restart during a ClickHouse auto-import cycle failed every
+  remaining batch as `debug_failed`**, leaving ClickHouse behind until the
+  next cycle. The `/ar-io/admin/debug` fetch now retries with backoff, from
+  5 s up to 60 s, for `CLICKHOUSE_AUTO_IMPORT_DEBUG_RETRY_WINDOW_S` (default
+  600); a cycle that still can't reach it stops at that batch. Skipped
+  buckets no longer wait on the fetch, and each request has a 10 s connect
+  timeout and a 300 s total timeout.
 
 - **An item tagged `Content-Encoding: gzip` whose bytes are plain was
   served with `Content-Encoding: gzip`, so every client that decodes failed
@@ -597,13 +508,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   rejection. On turbo-gateway.com that was ~24,000 warnings a day from one
   fallback gateway's 429s.
 
-- A CLI result larger than the 64 KiB pipe buffer was truncated mid-token,
-  so stdout held JSON that would not parse. `process.exit` discards
-  whatever is still buffered and a write to a pipe is asynchronous, which
-  a file hid because those writes are synchronous — the shapes that broke
-  are the documented ones, `| jq` and `docker run`. The result is now
-  written in full before the process exits. Found by a 1000-block
-  `index-l1-audit`, and it applied to every command.
+- An ArNS name the trusted gateway does not resolve (a `404` with no
+  `X-ArNS-Resolved-Id`) was logged as a warning, `Cannot read properties of
+  undefined (reading 'match')`. It now logs `Name not resolved by trusted
+  gateway` at info. Resolution is unchanged.
 
 - `tools/index-swarm-setup --engine-port` and `--public-host` did nothing
   without `--torrent`: moving an existing engine to another peer port printed
@@ -704,6 +612,42 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `docker-compose.yaml` and corrected where it differed. The PlantUML
   diagrams are rendered to SVG under `docs/diagrams/`, and five stale drafts
   are removed.
+
+- *Querying a dataset over HTTP* in `docs/index-publication.md` shows how to
+  read a published dataset where it sits: a `parquet-l1` band is Parquet and
+  the byte routes serve ranges, so a client needs no band files, no import
+  into a database and no gateway of its own, and fetches only the footer and
+  the row groups a predicate selects. DuckDB installs its own `httpfs` and
+  `json` extensions on first use. The signed document is the catalog, since
+  HTTP has no directory listing to glob.
+  Because `Repr-Digest` is co-signable and commits to the whole file, a ranged
+  read still carries a signature over the digest of the file it read from.
+  Measured against a 24-band dataset covering heights 0 to 2,016,168 whose
+  `transactions.parquet` files total 5.51 GB: a 100-block window across all 24
+  bands in 0.1 s, and the full height span and row count in 0.6 s, over HTTPS,
+  with nothing written to disk.
+
+- The nginx guidance for `/ar-io/indexes` in `docs/index-swarm.md` named the
+  wrong remedy and understated the cost. It said to set `proxy_buffering off`,
+  which does not fix anything: when a location has a cache zone, nginx strips
+  the client's `Range` from the upstream request and fetches the whole object
+  so it can store it, before it has seen any `Cache-Control`, so no response
+  header helps either. What the client sees then depends on whether the
+  response was cacheable: a gateway that does not meter sends `public` and
+  nginx answers the range from its cache, while a metering gateway sends
+  `private`, nothing is stored, and nginx returns `200` with the whole body on
+  every request. A cache zone is wrong on both branches, since the whole file
+  crosses from the gateway either way and one band file can exceed 600 MB. The fix is
+  `proxy_cache off` for the prefix, with no trailing slash,
+  since a `proxy_pass` location whose prefix ends in `/` answers the unslashed
+  form with a `301` and the document every subscriber polls lives there, with
+  HTTPSig signing `@path`. The stated band size (7 to 30 MB) also predated
+  `parquet-l1`, whose files can exceed 600 MB. Core and envoy answer ranges
+  correctly, so the default stack was never affected; the guidance only
+  mattered once an operator added a cache, and it failed quietly, because a
+  `200` carrying more bytes than were asked for looks like success. Verified
+  against a 541 MB band file: a 100-byte range returned all 541,753,181 bytes
+  through a cache zone and `206` with it off.
 
 ## [Release 84] - 2026-09-29
 
