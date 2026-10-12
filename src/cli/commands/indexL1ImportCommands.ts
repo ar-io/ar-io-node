@@ -160,9 +160,7 @@ export async function indexL1ImportCLICommand(
     // Holding the lock, no other run is using a spill directory here: any
     // left over is from a run that was killed, and goes.
     await removeStaleSpills(path.dirname(coreDb));
-    spill = await fsp.mkdtemp(
-      path.join(path.dirname(coreDb), SPILL_PREFIX),
-    );
+    spill = await fsp.mkdtemp(path.join(path.dirname(coreDb), SPILL_PREFIX));
     await duck.exec(
       `SET memory_limit = '1GB'; SET threads = 2; SET temp_directory = '${spill.replace(/'/g, "''")}'; SET max_temp_directory_size = '16GB'; SET autoinstall_known_extensions = false; SET autoload_known_extensions = false;`,
     );

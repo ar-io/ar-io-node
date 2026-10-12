@@ -1678,7 +1678,8 @@ export const START_WRITERS =
 // Indexing range
 export const START_HEIGHT = +env.varOrDefault('START_HEIGHT', '0');
 /** Whether START_HEIGHT was set, so an explicit 0 is told from the default. */
-export const START_HEIGHT_SET = env.varOrUndefined('START_HEIGHT') !== undefined;
+export const START_HEIGHT_SET =
+  env.varOrUndefined('START_HEIGHT') !== undefined;
 export const STOP_HEIGHT = +env.varOrDefault('STOP_HEIGHT', 'Infinity');
 
 //
