@@ -1003,7 +1003,7 @@ Metrics worth a dashboard:
 | `index_publish_manifest_age_seconds` | Age of this node's document. Past the TTL, subscribers see this publisher as stale |
 | `index_publish_sequence`, `index_publish_bands{index}` | What is offered |
 | `index_publish_describe_duration_seconds{index}` | Time spent hashing a band. A steady stream means bands are churning |
-| `index_subscription_total{publisher,index,transport,result}` | Outcomes: one per poll for the document (`index` empty), plus one per band fetched. `installed` and `unchanged` (a poll that found the document as it was) are healthy; see the table below for the rest |
+| `index_subscription_total{publisher,index,transport,result}` | Outcomes: one per poll for the document (`index` empty), plus one per band fetched. `installed` and `unchanged` (a poll that installed nothing new) are healthy; see the table below for the rest |
 | `index_subscription_manifest_age_seconds{publisher}` | Age of the newest document from each publisher. **The alarm that matters**: climbing past the publisher's TTL means it has gone quiet |
 | `index_subscription_sequence{publisher}` | The latest sequence seen |
 | `index_swarm_installed_bands{index}` | What is installed |

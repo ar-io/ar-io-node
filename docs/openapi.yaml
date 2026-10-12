@@ -1134,9 +1134,11 @@ paths:
                     type: object
                     description: |
                       RFC 9421 HTTP Message Signature configuration, present only when
-                      HTTPSIG is enabled. Responses are signed with the gateway's Solana
-                      key, so a signature verifies against the address registered for
-                      the gateway on chain; no separate attestation is published.
+                      HTTPSIG is enabled. Responses are signed with the observer's key
+                      when `OBSERVER_PRIVATE_KEY` or `OBSERVER_KEYPAIR_PATH` is set, so a
+                      signature verifies against the observer address registered for the
+                      gateway on chain. Otherwise they are signed with a key generated at
+                      `HTTPSIG_KEY_FILE`, which is registered nowhere.
                     properties:
                       algorithm:
                         type: string
@@ -1145,8 +1147,8 @@ paths:
                         example: 'ed25519'
                       solanaAddress:
                         type: string
-                        description: The Solana address whose key signs responses (base58)
-                        example: '34LYvMptiDvBP5sqfh1oAd6Q4qFsy4PWaZ1HTFmML7h5'
+                        description: The Solana address of the key that signs responses (base58)
+                        example: 'FJwaz3DWJ2TuDRDaBRsE7t29LDm1wB8txPHcBNoCDwkt'
                     required:
                       - algorithm
                       - solanaAddress
@@ -2646,13 +2648,16 @@ paths:
       tags: [Transactions]
       summary: Post a transaction
       description: |
-        Submits a signed L1 transaction (JSON, up to 10 MB), as an Arweave
-        node's `POST /tx` does. Envoy sends it to the trusted Arweave node
-        unless `ARWEAVE_POST_DRY_RUN=true`, in which case the gateway answers
-        it itself: with `ARWEAVE_POST_DRY_RUN_SKIP_VALIDATION=true` it accepts
-        anything, otherwise it checks the required fields and the signature
-        and answers without broadcasting. Reaching the gateway directly
-        (port 4000), it forwards to `TRUSTED_NODE_URL` itself.
+        Submits a signed L1 transaction (JSON), as an Arweave node's
+        `POST /tx` does. Envoy sends it on to Arweave nodes: the peers it
+        discovers by default, or `TRUSTED_NODE_HOST` and `FALLBACK_NODE_HOST`
+        with `ENABLE_ARWEAVE_PEER_EDS=false`. With `ARWEAVE_POST_DRY_RUN=true`
+        the gateway answers it itself: with
+        `ARWEAVE_POST_DRY_RUN_SKIP_VALIDATION=true` it accepts anything,
+        otherwise it checks the required fields and the signature, and it
+        broadcasts nothing. Reaching the gateway directly (port 4000), it
+        forwards to `TRUSTED_NODE_URL` itself. The gateway's own handler
+        accepts bodies up to 10 MB.
       requestBody:
         required: true
         content:

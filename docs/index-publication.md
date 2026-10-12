@@ -294,8 +294,8 @@ WebSeed is on and the client is within the gateway's allowance. A client
 uses the WebSeed alongside its peers from the start, not only when they
 stall: expect a good share of each band to come over HTTPS from the gateway,
 through its meter when it meters (see [Metering](#metering)). Past its
-allowance a client is answered `429` or `402`, backs off the WebSeed, and
-goes on from peers. An operator who wants strangers on peers alone sets
+allowance the gateway answers the client's WebSeed requests with `429` or
+`402`, and the client still has its peers. An operator who wants strangers on peers alone sets
 `INDEXES_TORRENT_WEBSEED=false`. Either way the client checks every piece
 against the torrent's hashes, so the WebSeed cannot slip in different bytes.
 
@@ -314,8 +314,8 @@ bands of heights: about 15 GB in 24 bands in October 2026. In qBittorrent:
    `~/arweave-l1`.
 
 Every band is added at once. qBittorrent downloads them all together unless
-torrent queueing is on (**Options → BitTorrent → Torrent Queueing**, three
-at a time by default; the official Docker image turns it on). Each band lands
+torrent queueing is on (**Options → BitTorrent → Torrent Queueing**), which
+lets only a few be active at a time. Each band lands
 in its own folder, named after its torrent (`ario:torrentName`, 16 hex
 characters), not its band id: the name comes from the files, so publishers
 of the same files agree on it. The folder's `band.json` says which heights
@@ -494,7 +494,7 @@ A `parquet-l1` band carries the Arweave base layer (L1: blocks,
 transactions, tags, owners) for one height range, in Parquet. A new gateway
 can import it instead of indexing the chain block by block, and a client can
 query it where it sits. The whole chain was 24 bands, about 15 GB, in
-October 2026; one band is added for every 5,000 heights.
+October 2026, and grows with the chain.
 
 A band is a directory of `band.json` and these files:
 
@@ -668,9 +668,12 @@ WHERE height BETWEEN 1000000 AND 1000100;
 The sidecar installs each band as `<band id>~<generation>`, and while a band
 is being replaced the old generation stays on disk beside the new one for
 the grace period (`INDEX_SWARM_SUPERSEDE_GRACE_SECONDS`, 300), so a glob over the
-directory can read some rows twice. For exact counts, read one directory per
-band id (the newest), or query the publisher's bands over HTTP from the
-signed document.
+directory can read some rows twice. So can a band and the bands it
+superseded, which have ids of their own and stay installed through the same
+grace period: a new tip beside the old one, or a finished `h` band beside
+the twenty `d` bands it replaces. For exact counts, read only the bands the
+publisher's current signed document lists (over HTTP, as above), or drop
+every band whose heights lie inside another's before querying.
 
 Tags are plaintext in a band, so `tag_name = 'App-Name'` is a string
 comparison, where `core.db` needs two joins through its hash dictionaries.

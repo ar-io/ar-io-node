@@ -85,9 +85,10 @@ docker run -e START_HEIGHT=800000 -v $PWD/data/:/app/data ar-io-core:latest
 
 You can also run [Envoy] alongside an `ar.io` node via [Docker Compose]. Envoy
 proxies the Arweave node routes the gateway does not serve itself (such as
-`POST /tx`) to Arweave nodes: public peers it discovers through
-`ARWEAVE_PEER_DNS_RECORDS` (default `peers.arweave.xyz`), or the static
-`TRUSTED_NODE_HOST` (default `arweave.net`) when discovery is off.
+`POST /tx`) to Arweave nodes: by default, public peers it discovers through
+`ARWEAVE_PEER_DNS_RECORDS` (`peers.arweave.xyz`); with
+`ENABLE_ARWEAVE_PEER_EDS=false`, the static `TRUSTED_NODE_HOST` (default
+`arweave.net`) and `FALLBACK_NODE_HOST`.
 
 ```shell
 docker compose up --build

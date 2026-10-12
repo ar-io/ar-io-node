@@ -681,7 +681,9 @@ about 45 minutes, nearly all of it `tx_root`.
 ```
 
 With `--core-db` the result also carries `txRootChecked`, `txRootSkipped`
-and `txRootSeconds`, and with `--anchor-from`, `anchorSources`: each node
+and `txRootSeconds`; `streamedPassSeconds`, the time of the pass over the
+blocks without the `tx_root` check (`seconds` is the whole run); and with
+`--anchor-from`, `anchorSources`: each node
 asked, the height asked for, and the hash it gave or its error. Given both
 `--core-db` and `--bands-dir`, the command checks `core.db`.
 
