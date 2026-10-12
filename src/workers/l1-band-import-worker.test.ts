@@ -139,6 +139,31 @@ describe('L1BandImportWorker', () => {
     assert.equal(summary?.refused, 'no room');
   });
 
+  it('reports a failed run as failed, with its reason, when no stop interrupted it', async () => {
+    // A worker run directly, never started, is stopped too: its failure is
+    // still a failure, not a shutdown.
+    const seen: Array<{ level: string; message: string; reason?: string }> = [];
+    const record = (info: (typeof seen)[number]) => seen.push(info);
+    log.on('data', record);
+    try {
+      await worker(async () => ({
+        code: 1,
+        tail: 'info: Filling {}\ndatabase is locked\n',
+      })).runOnce();
+    } finally {
+      log.off('data', record);
+    }
+    assert.ok(
+      seen.some(
+        (info) =>
+          info.message.startsWith('Fill failed') &&
+          info.reason === 'database is locked',
+      ),
+      JSON.stringify(seen),
+    );
+    assert.ok(!seen.some((info) => info.message.includes('shutdown')));
+  });
+
   it('survives a command that could not start', async () => {
     const summary = await worker(async () => {
       throw new Error('spawn ENOENT');
@@ -169,11 +194,24 @@ describe('L1BandImportWorker', () => {
         ),
       );
     });
-    subject.start();
-    await started;
-    await subject.stop();
+    const seen: Array<{ message: string }> = [];
+    const record = (info: (typeof seen)[number]) => seen.push(info);
+    log.on('data', record);
+    try {
+      subject.start();
+      await started;
+      await subject.stop();
+    } finally {
+      log.off('data', record);
+    }
     assert.equal(killed, 'SIGTERM');
     assert.equal(runs, 1);
+    // A run the stop cut short is a shutdown, not a failure.
+    assert.ok(
+      seen.some((info) => info.message.startsWith('Fill interrupted')),
+      JSON.stringify(seen),
+    );
+    assert.ok(!seen.some((info) => info.message.startsWith('Fill failed')));
   });
 });
 
