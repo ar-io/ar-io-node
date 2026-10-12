@@ -17,15 +17,6 @@ export interface GatewayPeerEntry {
   status?: string;
 }
 
-/**
- * Build the `gateways` map of `GET /ar-io/peers` from the peer manager's
- * formatted peers.
- *
- * The original three fields, plus what the registry says about each peer,
- * so a consumer (the index-swarm sidecar among them) can use the registry
- * read this gateway already makes instead of making its own. A registry
- * field is omitted, not nulled, when the peer manager has no value for it.
- */
 /** This node's own registry entry, as `/ar-io/peers` reports it under `self`. */
 export interface SelfEntry {
   url: string;
@@ -58,6 +49,15 @@ export function buildSelfEntry(
   };
 }
 
+/**
+ * Build the `gateways` map of `GET /ar-io/peers` from the peer manager's
+ * formatted peers.
+ *
+ * The original three fields, plus what the registry says about each peer,
+ * so a consumer (the index-swarm sidecar among them) can use the registry
+ * read this gateway already makes instead of making its own. A registry
+ * field is omitted, not nulled, when the peer manager has no value for it.
+ */
 export function buildGatewayPeers(
   formattedPeers: Record<string, FormattedPeer>,
 ): Record<string, GatewayPeerEntry> {

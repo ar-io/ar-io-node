@@ -19,8 +19,9 @@
  *
  * The trade: the view is as fresh as the gateway's last refresh (an hour at
  * most), and it lists the gateways the gateway itself would use, which
- * excludes the gateway's own wallet and, by default, gateways that are
- * leaving. Neither is something a subscriber should subscribe to anyway.
+ * by default excludes gateways that are leaving. The gateway's own wallet
+ * is never one of its peers; the peer list reports it apart, as `self`,
+ * which is how a fleet node subscribes to its own fleet's publication.
  */
 import { Logger } from 'winston';
 

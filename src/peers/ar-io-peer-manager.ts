@@ -455,16 +455,16 @@ export class ArIOPeerManager implements WithFormattedPeers {
     return Object.values(this.peers);
   }
 
-  /**
-   * Get peers formatted as host:port keys with weights for specified categories
-   * @param categories - Array of weight categories to include
-   * @returns Record of host:port to peer info with weights
-   */
   /** This node's own registry entry, when its wallet is registered. */
   getSelfRecord(): (PeerRegistryRecord & { url: string }) | undefined {
     return this.self;
   }
 
+  /**
+   * Get peers formatted as host:port keys with weights for specified categories
+   * @param categories - Array of weight categories to include
+   * @returns Record of host:port to peer info with weights
+   */
   getFormattedPeers(
     categories: WeightCategory[],
   ): Record<string, FormattedPeer> {
