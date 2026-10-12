@@ -194,11 +194,24 @@ describe('L1BandImportWorker', () => {
         ),
       );
     });
-    subject.start();
-    await started;
-    await subject.stop();
+    const seen: Array<{ message: string }> = [];
+    const record = (info: (typeof seen)[number]) => seen.push(info);
+    log.on('data', record);
+    try {
+      subject.start();
+      await started;
+      await subject.stop();
+    } finally {
+      log.off('data', record);
+    }
     assert.equal(killed, 'SIGTERM');
     assert.equal(runs, 1);
+    // A run the stop cut short is a shutdown, not a failure.
+    assert.ok(
+      seen.some((info) => info.message.startsWith('Fill interrupted')),
+      JSON.stringify(seen),
+    );
+    assert.ok(!seen.some((info) => info.message.startsWith('Fill failed')));
   });
 });
 
