@@ -51,7 +51,7 @@ replace are under [doing it by hand](#doing-it-by-hand).
    fill its L1 history from them while it runs (`L1_BAND_IMPORT_ENABLED`).
    On a new gateway, do this before its first start: with an empty
    `core.db` it then follows the chain tip from the start, instead of
-   indexing from height 0 for weeks, and the history beneath arrives as the
+   indexing every block from height 0, and the history beneath arrives as the
    bands do. On a gateway that already runs, it fills whatever is missing
    beneath what the gateway indexed itself. See
    [`index-l1-import --fill`](cli.md#while-the-gateway-runs---fill).
@@ -133,7 +133,7 @@ A gateway can do both: pass `--subscribe` and `--publish` together.
 | `--max-disk-gib <n>` | `INDEX_SWARM_MAX_DISK_BYTES`. Works on its own, to change an existing subscriber's budget |
 | `--no-gateway` | Leaves the two gateway keys alone |
 | `--dry-run` | Shows the changes and writes nothing |
-| `--restart` | Then recreates what needs it: the gateway only when its two keys differ from what it runs with, then the sidecar (and the engine, with torrents), by service name, with the compose files the running gateway was started with |
+| `--restart` | Then recreates what needs it: the gateway only when `CDB64_ROOT_TX_INDEX_SOURCES`, `ROOT_TX_LOOKUP_ORDER` or `L1_BAND_IMPORT_ENABLED` differ from what it runs with, then the sidecar (and the engine, with torrents), by service name, with the compose files the running gateway was started with |
 | `--env-file <path>` | A file other than `.env`, relative to the gateway's directory |
 
 It is idempotent: a second run changes only what is missing, so it is also

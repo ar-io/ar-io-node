@@ -58,7 +58,7 @@ export class BlockImporter {
     /**
      * With an empty index, start at the chain's current height rather than
      * `startHeight`. For a gateway whose history comes from L1 bands
-     * filled in beneath it: walking the chain from 0 would take weeks.
+     * filled in beneath it, rather than walking the chain from height 0.
      */
     startAtTip?: boolean;
     stopHeight?: number;

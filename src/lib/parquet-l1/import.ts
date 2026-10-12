@@ -92,7 +92,8 @@ export const PROGRESS_EVERY_MS = 60_000;
 
 /**
  * Heights cleared per transaction when filling beneath a running gateway.
- * The busiest heights hold about 470 rows each, so a window is under
+ * The busiest band averages about 470 rows a height (46.6M over 100,000
+ * heights), so a window is typically under
  * 100,000 rows: a second or so of the write lock at worst. A clear that
  * finds nothing, the usual case, costs a few index probes.
  */
@@ -1389,14 +1390,16 @@ async function bandTops(
  * `bandsDir`, while the gateway runs.
  *
  * Writes only heights `stable_blocks` lacks at or below {@link fillCeiling},
- * and ranges an earlier run left unfinished. Nothing the gateway indexed
- * itself is rewritten, and nothing it is about to write is touched. Each
+ * and ranges an earlier run left unfinished. Apart from such a range,
+ * which is rewritten whole, nothing the gateway indexed itself is
+ * rewritten, and nothing it is about to write is touched. Each
  * band read is checked whole, against its digests, even when only part of
  * it is written. Stops at the first band that fails; what landed before it
  * is committed, and the ledger lets the next run carry on.
  *
  * Safe to run on a schedule: a run with nothing to fill reads the band
- * directory and `stable_blocks`'s height index, and writes nothing.
+ * directory, each band's block file, the ledger and the block height
+ * index, and writes nothing to `core.db`.
  */
 export async function runFill({
   db,

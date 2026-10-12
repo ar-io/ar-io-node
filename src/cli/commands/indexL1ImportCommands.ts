@@ -10,7 +10,9 @@
  * `parquet-l1` bands, so it starts from an index instead of walking the
  * chain block by block.
  *
- * Offline: the gateway must be stopped. The command refuses a database
+ * With `--fill`, alongside a running gateway: only the heights `core.db`
+ * lacks beneath what the gateway writes itself. Without it, offline, into
+ * a `core.db` the gateway has not run on: the command refuses a database
  * another writer holds rather than racing it.
  */
 import * as fsp from 'node:fs/promises';

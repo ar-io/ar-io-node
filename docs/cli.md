@@ -284,7 +284,8 @@ A fill writes only the heights `core.db` lacks at or below the top of
 `stable_blocks` (before the gateway's first flush, just below its lowest
 unflushed block). That is everything beneath what the block importer
 writes itself, so nothing the gateway indexed is rewritten and nothing it
-is about to write is touched. The same command covers a gateway that began
+is about to write is touched. The one exception is a range an interrupted
+import or fill left unfinished, which is cleared and written again whole. The same command covers a gateway that began
 mid-chain, a hole in the middle of what a gateway holds, and a new gateway:
 with `L1_BAND_IMPORT_ENABLED=true`, an empty `core.db` and no
 `START_HEIGHT`, the block importer starts at the chain tip and the history
@@ -308,7 +309,7 @@ its first row, and a range left unfinished is cleared and written again by
 the next run, although its blocks are already there. The gateway's worker
 runs a fill every `L1_BAND_IMPORT_INTERVAL_SECONDS` (default 600), so a run
 that stops is retried and new bands are filled as they arrive; a run with
-nothing to fill writes nothing. Its runs are counted in
+nothing to fill writes nothing to `core.db`. Its runs are counted in
 `l1_band_import_runs_total{result}` (`filled`, `idle`, `failed`), with
 `l1_band_import_rows_total` and `l1_band_import_uncovered_heights`.
 
@@ -318,7 +319,8 @@ This is for a `core.db` the gateway has not run on yet: a new gateway's,
 just migrated. The command refuses a `core.db` another writer holds rather
 than racing it, and refuses one that holds unstable (`new_*`) blocks,
 which an import would be written beneath. A gateway that has run always
-holds some: it flushes blocks to `stable_*` only once they are 18 deep.
+holds some: it moves blocks to `stable_*` only once they are at least 18
+deep.
 So for a gateway that already runs, use `--fill`.
 
 ```bash
@@ -487,9 +489,10 @@ With `--fill`:
 `ceiling` is the highest height the run could write, -1 when the gateway
 holds no blocks yet. Each of `ranges` is one band's heights that were
 missing: `heightRange` is the band's, `heights` what it wrote. `rows`
-counts every owner (`wallets`) row of the band as well, since owners carry
-no height and a band's are all written. `uncovered`
-lists heights at or below the ceiling that no installed band holds yet.
+also counts every owner (`wallets`) row of the band: owners carry no
+height, so each is written unless `core.db` already has it, and counted
+either way. `uncovered` lists the heights at or below the ceiling that
+`core.db` lacks and no installed band holds yet.
 As without `--fill`, a refused range fails the command and carries
 `reason`, with the result on stderr.
 

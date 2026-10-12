@@ -101,8 +101,9 @@ with core**).
   `L1_BAND_IMPORT_INTERVAL_SECONDS` (600) as a child process, so a crash
   in the import cannot take the gateway down. A fill writes only the
   heights `core.db` lacks below the top of `stable_blocks`, so nothing the
-  gateway indexed itself is rewritten, in short transactions with a pause
-  after each, so the gateway keeps indexing and serving. It covers a
+  gateway indexed itself is rewritten (a range an interrupted import left
+  unfinished is the exception, written again whole), in short transactions
+  with a pause after each, so the gateway keeps indexing and serving. It covers a
   gateway that began mid-chain, a hole inside what a gateway holds, and a
   new gateway: with the setting on, an empty `core.db` and no
   `START_HEIGHT`, the block importer starts at the chain tip instead of 0,

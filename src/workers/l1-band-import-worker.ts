@@ -116,8 +116,9 @@ export const spawnFill: FillRunner = (args, onLog, register) =>
  * The fill writes only heights `core.db` lacks below what the block
  * importer writes itself, in short transactions, so the gateway keeps
  * indexing and serving while it runs. A run with nothing to do reads the
- * band directory and the block height index and writes nothing, so the
- * schedule costs little once history is complete; it keeps running so a
+ * band directory, each band's block file, the ledger and the block height
+ * index, and writes nothing to `core.db`, so the schedule costs little
+ * once history is complete; it keeps running so a
  * hole that appears later, or the publisher's next tip band, is filled.
  *
  * A child process rather than a call. The import reads Parquet through
