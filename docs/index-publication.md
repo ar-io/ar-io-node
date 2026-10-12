@@ -115,7 +115,7 @@ shortened real example, with 254 of the 257 file entries removed:
 |---|---|---|
 | `version` | `1` | Schema version. A reader rejects a version it does not know. |
 | `publisher` | string | The publishing gateway's **wallet** address, as registered. |
-| `sequence` | integer ≥ 1 | Monotonic per publisher. |
+| `sequence` | integer ≥ 0 | Monotonic per publisher. |
 | `previousManifestSha256` | hex string or `null` | SHA-256 of the previous document, chaining publications into a history. |
 | `issuedAt`, `expiresAt` | ISO 8601 | When it was signed, and when to consider it stale. |
 | `indexes` | array | The indexes offered, each with a unique `name`. |
@@ -134,7 +134,7 @@ shortened real example, with 254 of the 257 file entries removed:
 
 | Field | Type | Meaning |
 |---|---|---|
-| `id` | `[A-Za-z0-9._-]{1,128}` | Unique within its index. Never `.` or `..`. |
+| `id` | `[A-Za-z0-9._-]{1,128}` | Unique within its index. Never `.`, never contains `..`, never a reserved name. A band lists at least one file. |
 | `files` | array of `{name, size, sha256}` | Every file in the band. `name` has the same pattern as `id`; `sha256` is lowercase hex. |
 | `heightRange` | `[start, end]` or `[start, null]` | Optional. Block heights covered; a `null` end is still open. |
 | `records` | integer | Optional, informational. |
@@ -294,8 +294,8 @@ WebSeed is on and the client is within the gateway's allowance. A client
 uses the WebSeed alongside its peers from the start, not only when they
 stall: expect a good share of each band to come over HTTPS from the gateway,
 through its meter when it meters (see [Metering](#metering)). Past its
-allowance a client is answered `429` or `402`, backs off the WebSeed, and
-goes on from peers. An operator who wants strangers on peers alone sets
+allowance the gateway answers the client's WebSeed requests with `429` or
+`402`, and the client still has its peers. An operator who wants strangers on peers alone sets
 `INDEXES_TORRENT_WEBSEED=false`. Either way the client checks every piece
 against the torrent's hashes, so the WebSeed cannot slip in different bytes.
 
@@ -314,8 +314,8 @@ bands of heights: about 15 GB in 24 bands in October 2026. In qBittorrent:
    `~/arweave-l1`.
 
 Every band is added at once. qBittorrent downloads them all together unless
-torrent queueing is on (**Options → BitTorrent → Torrent Queueing**, three
-at a time by default; the official Docker image turns it on). Each band lands
+torrent queueing is on (**Options → BitTorrent → Torrent Queueing**), which
+lets only a few be active at a time. Each band lands
 in its own folder, named after its torrent (`ario:torrentName`, 16 hex
 characters), not its band id: the name comes from the files, so publishers
 of the same files agree on it. The folder's `band.json` says which heights
@@ -493,7 +493,8 @@ first match.
 A `parquet-l1` band carries the Arweave base layer (L1: blocks,
 transactions, tags, owners) for one height range, in Parquet. A new gateway
 can import it instead of indexing the chain block by block, and a client can
-query it where it sits. The whole chain is 24 bands, about 15 GB.
+query it where it sits. The whole chain was 24 bands, about 15 GB, in
+October 2026, and grows with the chain.
 
 A band is a directory of `band.json` and these files:
 
@@ -508,10 +509,12 @@ A band is a directory of `band.json` and these files:
 
 `band.json` names the band's layout (`schema`: `l1-1`, `l1-2` or `l1-3`), its
 heights, and for each table and lookup file its row count and a digest of its
-rows, independent of the Parquet bytes. A band's id is a digest of its
-tables' rows; the lookup files are not part of it. Two publishers of the
-same chain therefore write bands with the same ids, and can compare them
-without exchanging files.
+rows, independent of the Parquet bytes. A band's id is
+`l1-h<from>-<to>-<publisher tag>-<digest>`: its heights, a tag of its
+publisher, and the first 12 hex digits of a digest of its tables' rows (the
+lookup files are not part of it). Two publishers of the same chain therefore
+write bands whose ids differ only in the publisher tag, with the same
+digest, and can compare them without exchanging files.
 
 `band.json` holds only what the rows determine, written one way: its
 `createdAt` is the time of the band's top block, not when it was built. Two
@@ -661,6 +664,19 @@ all. That is the better choice for repeated heavy queries:
 SELECT * FROM read_parquet('data/indexes/installed/parquet-l1/*/transactions.parquet')
 WHERE height BETWEEN 1000000 AND 1000100;
 ```
+
+The sidecar installs each band as `<band id>~<generation>`, and while a band
+is being replaced the old generation stays on disk beside the new one for
+the grace period (`INDEX_SWARM_SUPERSEDE_GRACE_SECONDS`, 300), so a glob over the
+directory can read some rows twice. So can a band and the bands it
+superseded, which have ids of their own and stay installed through the same
+grace period: a new tip beside the old one, or a finished `h` band beside
+the twenty `d` bands it replaces. For exact counts, read only the bands the
+publisher's current signed document lists (over HTTP, as above). Failing
+that, before querying, drop every band whose heights lie inside a wider
+band's, and keep only one of any bands with the same heights: two
+generations of a band, a band and the rebuild that superseded it, or two
+publishers' copies of it.
 
 Tags are plaintext in a band, so `tag_name = 'App-Name'` is a string
 comparison, where `core.db` needs two joins through its hash dictionaries.
@@ -845,4 +861,4 @@ These are what let a version 1 reader keep working as the protocol grows.
   band ids and file names. A reader rejects a document outside these bounds.
 - **Names are stable identifiers.** Index and band names become directory
   names on consumers, which is why they are restricted to a filesystem-safe
-  alphabet and can never be `.` or `..`.
+  alphabet, can never be `.` and can never contain `..`.

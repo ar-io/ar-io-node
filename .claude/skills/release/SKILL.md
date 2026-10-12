@@ -183,7 +183,9 @@ build rather than pin the older image:
 
 ```bash
 git log --oneline --first-parent <sha>..develop -- <paths from the table>
-``` `ar-io-core` is the commit being released (the head of `develop`, after
+```
+
+`ar-io-core` is the commit being released (the head of `develop`, after
 any last merges). Whatever the source, confirm every SHA is published before
 pinning it:
 
@@ -227,11 +229,12 @@ Ensure Docker is available: `docker info >/dev/null`.
 Test each profile. Between profiles, always run the `down-all` cleanup:
 
 ```bash
-docker compose --profile clickhouse --profile litestream --profile otel down
+docker compose --profile clickhouse --profile litestream --profile otel \
+  --profile index-swarm --profile index-swarm-torrent --profile index-export down
 ```
 
 Core containers expected to stay running across every profile: `envoy`, `core`,
-`redis`, `observer`. Check with:
+`redis`, `observer`, `autoheal`. Check with:
 
 ```bash
 docker ps --format '{{.Names}}'
@@ -245,6 +248,12 @@ docker ps --format '{{.Names}}'
 | clickhouse | `docker compose --profile clickhouse up -d`                           | core + `clickhouse`, `clickhouse-auto-import` | —               | 45s           |
 | litestream | `docker compose --profile litestream up -d`                           | core                        | `litestream` (may exit if no S3)  | 30s           |
 | otel       | `docker compose --profile otel up -d`                                 | core                        | `otel-collector` (may exit if no endpoint) | 30s  |
+| index-swarm | `docker compose --profile index-swarm up -d`                         | core + `index-swarm`        | —                                 | 30s           |
+| index-swarm-torrent | `docker compose --profile index-swarm --profile index-swarm-torrent up -d` | core + `index-swarm`, `index-swarm-engine` | `index-swarm-engine-init` (exits once it has written the engine's config) | 45s |
+| index-export | `docker compose --profile index-export up -d`                       | core + `index-export`       | —                                 | 30s; it refuses to start without `AR_IO_WALLET` and, for root-TX bands, `INDEX_EXPORT_HEADER_CHECK_URL` |
+
+`index-swarm`, `index-swarm-engine-init` and `index-export` run the core
+image (`CORE_IMAGE_TAG`), so they test the release image as much as core does.
 
 For the default profile: after 30s, confirm core containers are up; after
 another 15s, confirm they're **still** up (catches restart loops).
@@ -257,10 +266,12 @@ Final cleanup: run the `down-all` cleanup above.
 **On a host that runs a live gateway**, never run these from that gateway's
 compose directory: `down` there stops production. Either:
 
-- test the default and clickhouse profiles by moving the live gateway onto the
-  release image (`CORE_IMAGE_TAG` and, if it changed, `ENVOY_IMAGE_TAG` in its
-  `.env`, then recreate with its own `-f` files), and check health, logs and
-  requests through every layer; and
+- test the default and clickhouse profiles, and whichever of `index-swarm`,
+  `index-swarm-torrent` and `index-export` the gateway runs, by moving the
+  live gateway onto the release image (`CORE_IMAGE_TAG` and, if it changed,
+  `ENVOY_IMAGE_TAG` in its `.env`, then recreate those services by name with
+  its own `-f` files and profiles), and check health, logs and requests
+  through every layer; and
 - start the remaining profiles' services in an isolated project from the
   release worktree, which cannot touch the live containers:
 
@@ -352,10 +363,10 @@ gh release create r<N> \
   --notes-file <path-to-notes>
 ```
 
-Pushing the `r<N>` tag triggers another round of image builds that publish
-the `r<N>`-tagged container images. **Wait for those builds to finish**
-before moving to Phase 6 — operators pulling `r<N>` need the tagged images
-available. Poll with the same `gh api .../actions/runs` query as Phase 3 at
+Pushing the `r<N>` tag triggers `build-core` again, which publishes
+`ar-io-core:r<N>` (the other images are published only from `develop`, by
+SHA). **Wait for that build to finish** before moving to Phase 6 — operators
+pulling `r<N>` need the tagged image available. Poll with the same `gh api .../actions/runs` query as Phase 3 at
 ~2 minute intervals.
 
 ## Phase 6 — Merge to main

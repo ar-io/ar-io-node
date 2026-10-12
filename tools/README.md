@@ -171,6 +171,35 @@ File Descriptor Tracking (PID: 12345):
 - Stress test gateway configuration limits
 - Monitor resource usage during load tests
 
+### `test-data-retrieval`
+Retrieves a CSV of IDs (first column) from a gateway and reports what it
+served, optionally comparing with a reference gateway and checking each ID
+against a CDB64 index. HEAD only by default; `--bytes` and `--max-size`
+read data.
+
+**Usage:**
+```bash
+./tools/test-data-retrieval --csv ids.csv --gateway http://localhost:4000 \
+  --reference https://turbo-gateway.com --mode random --count 500 --concurrency 8
+./tools/test-data-retrieval --help   # every option
+```
+
+### `monitor-historical-dha-chunk-nodes`
+Polls the Arweave `data-N` and `tip-N` nodes on an interval and records
+whether each answers, for watching chunk-node availability over time.
+`--start-data-node`/`--end-data-node` (1-17), `--start-tip-node`/`--end-tip-node`
+(1-5), `--interval`, `--timeout`, `--output`; `--help` for the rest.
+
+### `x402-pay-test`
+Pays a gateway's x402 price end to end with a throwaway wallet (402, sign,
+retry, 200) and reports what settled on chain. **It spends real USDC on Base
+mainnet**, capped by `MAX_USDC` (default 0.05). See the header of the script
+for the wallet file it expects and why it must never be the receiving wallet.
+
+```bash
+GATEWAY=https://gateway.example ./tools/x402-pay-test [tx-id]
+```
+
 ### `generate-offset-mapping`
 Generates a static offset-to-block mapping file that maps Arweave weave byte offsets to approximate block heights. This mapping is used to optimize binary search when looking up transactions by offset, reducing the search space from the entire blockchain to a much smaller range.
 
@@ -245,6 +274,22 @@ cat data-items.csv | ./tools/queue-missing-bundles --input - \
 ```
 
 Run `./tools/queue-missing-bundles --help` for the full flag list.
+
+### CDB64 index tools
+
+Building, checking, moving and exporting CDB64 root-TX indexes by hand. Full
+usage is in [docs/cdb64-tools.md](../docs/cdb64-tools.md).
+
+| Tool | What it does |
+| --- | --- |
+| `generate-cdb64-root-tx-index` | Builds a CDB64 index from a CSV of data item ID to root transaction mappings |
+| `generate-cdb64-root-tx-index-rs` | The same, on the Rust-backed library (faster); needs `build-cdb64-napi` first |
+| `build-cdb64-napi` | Builds the Rust-backed `cdb64` native module |
+| `export-sqlite-to-cdb64` | Exports the root-TX mappings in this gateway's `data.db` straight to CDB64 |
+| `export-cdb64-root-tx-index` | Exports a CDB64 index back to CSV |
+| `verify-cdb64` | Checks that every ID in a CSV is in a CDB64 index |
+| `upload-cdb64-to-arweave` | Uploads a partitioned index's `.cdb` files to Arweave with the Turbo SDK and writes a manifest of `arweave-bundle-item` locations |
+| `download-cdb64` | Downloads a partitioned index's `.cdb` files from remote sources (HTTP, Arweave transaction, Arweave byte range) and writes a manifest of local file locations |
 
 ### `scan-bundle-offsets`
 Reads the item index and item headers of ANS-104 root bundles through a gateway's `/raw` range requests and writes the offsets and total size of every data item they contain, nested bundles included, in the CDB64 CSV format, ready for `generate-cdb64-root-tx-index-rs`. Payloads are never downloaded except where a coalesced header read spans them. Each item's header is decoded and its signature hashed to confirm the ID, and a root whose structure does not verify is recorded as failed instead of indexed; an item with an unknown signature type is skipped with a warning. Point it at a gateway you control: range reads on uncached roots are served from chunks by that gateway. Requests are limited to 10 per second by default (`--requests-per-second`, `0` for no limit), and only L1 transaction IDs should be listed.

@@ -58,6 +58,8 @@ Claude Code.
 
 ## Dev Docs
 
+[docs/INDEX.md](docs/INDEX.md) is the index of the documents in `docs/`.
+
 ### Schema (WIP)
 
 - [Bundle schema]
@@ -82,7 +84,13 @@ docker run -e START_HEIGHT=800000 -v $PWD/data/:/app/data ar-io-core:latest
 ### Envoy & AR.IO Node
 
 You can also run [Envoy] alongside an `ar.io` node via [Docker Compose]. Envoy
-will proxy routes to `arweave.net` not yet implemented in the ar.io node.
+proxies the Arweave node routes the gateway does not serve itself (such as
+`POST /tx`) to Arweave nodes: by default, public peers it discovers through
+`ARWEAVE_PEER_DNS_RECORDS` (`peers.arweave.xyz`); with
+`ENABLE_ARWEAVE_PEER_EDS=false`, the static `TRUSTED_NODE_HOST` (default
+`arweave.net`) and `FALLBACK_NODE_HOST`. With `ARWEAVE_POST_DRY_RUN=true`,
+Envoy sends `POST /tx` to the gateway instead, which answers it itself and
+broadcasts nothing.
 
 ```shell
 docker compose up --build
@@ -170,7 +178,7 @@ Place an ANS-104 bundle at the start of the queue for unbundling and indexing
 on your gateway:
 
 ```
-curl -X PUT -H "Authorization: Bearer <ADMIN_KEY>" \
+curl -X POST -H "Authorization: Bearer <ADMIN_KEY>" \
   -H "Content-Type: application/json" \
   "http://<HOST>:<PORT>/ar-io/admin/queue-tx" \
   -d '{ "id": "<ID>" }'
@@ -198,13 +206,29 @@ sources, set `CDB64_ROOT_TX_INDEX_SOURCES`. See
 
 Gateways can also share fresher indexes with each other through Index
 Sharing: the optional `index-swarm` sidecar publishes this gateway's bands,
-signed with its observer key, and subscribes to other gateways' bands, which
-the gateway loads without a restart. Bands move over the publisher's metered
-HTTP routes, and, with the optional torrent engine (compose profile
-`index-swarm-torrent`), peer to peer as well, every subscriber seeding what
-it installs. See [docs/index-swarm.md](docs/index-swarm.md) to run it,
-[docs/index-export.md](docs/index-export.md) to build bands, and
-[docs/index-publication.md](docs/index-publication.md) for the protocol.
+signed with its observer key, and subscribes to other gateways' bands. Bands
+move over the publisher's metered HTTP routes, and, with the optional torrent
+engine (compose profile `index-swarm-torrent`), peer to peer as well, every
+subscriber seeding what it installs. Peers announce to a publisher's tracker
+through its HTTPS, each index has an RSS feed of its torrents, and each
+`.torrent` names the gateway as a WebSeed, so a stock BitTorrent client can
+follow a publisher too. Two kinds of band are shared:
+
+- **Root-TX bands** (CDB64), which the gateway loads without a restart to
+  place data items in their root transactions, and to answer
+  `/ar-io/offsets/<id>`.
+- **L1 bands** (`parquet-l1`): the Arweave base layer as Parquet, with
+  lookup files. With `L1_BAND_IMPORT_ENABLED` the gateway fills its own L1
+  history from them while it runs, so a new gateway follows the chain tip
+  from the start instead of indexing from height 0. They can also be
+  queried in place with DuckDB.
+
+`tools/index-swarm-setup` sets it up and `tools/index-swarm-status` checks
+it. See [docs/index-swarm.md](docs/index-swarm.md) to run it,
+[docs/index-export.md](docs/index-export.md) to build bands,
+[docs/index-publication.md](docs/index-publication.md) for the protocol, and
+[docs/cli.md](docs/cli.md) for the `ar-io-node` CLI that builds, checks and
+imports bands.
 
 ### Webhook Emission
 
@@ -255,10 +279,10 @@ ARNS_ROOT_HOST=my-gateway.net
 This would allow you to resolve names like `my-arns-name.my-gateway.net` provided
 you correctly configured a wildcard DNS entry for your gateway.
 
-Note: ArNS data ID resolution is currently delegated to `arweave.dev`. Routing is
-handled locally, but ArNS state is not yet computed locally. Local ArNS state
-computation will be added in a future release. Also, be aware, ArNS is still using
-a test contract. Resolved names should be considered temporary.
+ArNS names resolve in the order `ARNS_RESOLVER_PRIORITY_ORDER` sets, by
+default `on-demand,gateway`: first from the AR.IO Network's Solana programs
+directly, then from a trusted gateway (`TRUSTED_ARNS_GATEWAY_URL`, default
+`https://__NAME__.turbo-gateway.com`).
 
 ### Wallet association
 

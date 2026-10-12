@@ -145,7 +145,9 @@ tags:
     description: |
       Index Sharing: the signed publication of the root-TX and L1 bands
       this gateway offers to other gateways and clients, their files by
-      name, by SHA-256 and as a WebSeed, and their torrents. See
+      name, by SHA-256 and as a WebSeed, their torrents, an RSS feed of each
+      index's torrents for BitTorrent clients to follow, and the tracker
+      peers announce to through the gateway's HTTPS. See
       [Index Sharing](https://docs.ar.io/learn/gateways/index-sharing).
 components:
   securitySchemes:
@@ -788,7 +790,12 @@ paths:
 
         Offsets resolve for any data item this node has unbundled and indexed,
         or that an installed CDB64 index covers, even when none of its bytes
-        are cached locally.
+        are cached locally. CDB64 indexes are consulted only while `cdb` is
+        in `ROOT_TX_LOOKUP_ORDER`, as it is by default.
+
+        A 200 is cached for `CACHE_DEFAULT_MAX_AGE` seconds, short because a
+        band can be replaced or withdrawn; a 404 for `CACHE_NOT_FOUND_MAX_AGE`
+        seconds with `must-revalidate`; a 500 is `no-store`.
 
         A 200 is signed with HTTP Message Signatures (when the gateway signs
         responses, the default), with `Content-Digest` binding the body, so
@@ -808,6 +815,10 @@ paths:
         '200':
           description: Offsets resolved from the local index or a local CDB64 index
           headers:
+            Cache-Control:
+              description: '`public, max-age=<CACHE_DEFAULT_MAX_AGE>`'
+              schema:
+                type: string
             X-AR-IO-Root-Transaction-Id:
               description: The root transaction ID, as in the body. Its presence makes the response signed.
               schema:
@@ -861,12 +872,22 @@ paths:
             This node cannot place the ID inside a root transaction — the ID is
             unknown to its index, or has no indexed root parent, and no local
             CDB64 index covers it.
+          headers:
+            Cache-Control:
+              description: '`public, max-age=<CACHE_NOT_FOUND_MAX_AGE>, must-revalidate`'
+              schema:
+                type: string
           content:
             text/plain:
               schema:
                 type: string
         '500':
           description: Failed to resolve offsets
+          headers:
+            Cache-Control:
+              description: '`no-store`'
+              schema:
+                type: string
           content:
             text/plain:
               schema:
@@ -878,7 +899,7 @@ paths:
       description: |
         Returns information about the AR.IO Gateway, including:
         - Gateway wallet address
-        - Process ID
+        - The AR.IO Network's Solana program IDs
         - ANS-104 filter configurations
         - Supported manifest versions
         - Gateway software release version
@@ -886,6 +907,7 @@ paths:
         - Rate limiter configuration (if enabled)
         - x402 payment protocol configuration (if enabled)
         - HTTPSIG response signing configuration (if enabled)
+        - The indexes it publishes, and their feeds (if it publishes any)
       responses:
         '200':
           description: Gateway information response
@@ -895,8 +917,25 @@ paths:
                 type: object
                 properties:
                   wallet:
-                    $ref: '#/components/schemas/Base64Url43'
-                    description: Gateway wallet address
+                    type: string
+                    description: The gateway's registered wallet (`AR_IO_WALLET`), a Solana address
+                    example: '34LYvMptiDvBP5sqfh1oAd6Q4qFsy4PWaZ1HTFmML7h5'
+                  programIds:
+                    type: object
+                    description: The AR.IO Network's Solana program IDs this gateway reads protocol state from
+                    properties:
+                      core:
+                        type: string
+                        example: '73YoECm6NKXpVRoe5f1Q9BcP5DJGPFUjnFy6AxBE5Nvh'
+                      gar:
+                        type: string
+                        example: '89fNiiwgpFSPHKuqfNUkgYTYjtAJAhyqHjXmgXeppGpf'
+                      arns:
+                        type: string
+                        example: '2yCUx5edFvUrkibYaUa2ZXWyx9kuJkS8CwyzsgHPWdZZ'
+                      ant:
+                        type: string
+                        example: '2MWexMHfMhGJwMHv9Qm9YAVCqjUFUJwDJAysW4oCUGk5'
                   ans104UnbundleFilter:
                     type: object
                     description: Configuration for ANS-104 unbundling filter
@@ -1036,17 +1075,17 @@ paths:
                             description: Pricing information for data egress
                             properties:
                               perBytePrice:
-                                type: number
-                                description: Price in USDC per byte
-                                example: 0.0000000001
+                                type: string
+                                description: Price in USDC per byte, as a decimal string (never exponent notation)
+                                example: '0.0000000001'
                               minPrice:
-                                type: number
-                                description: Minimum price in USDC per request
-                                example: 0.001
+                                type: string
+                                description: Minimum price in USDC per request, as a decimal string
+                                example: '0.001000'
                               maxPrice:
-                                type: number
-                                description: Maximum price in USDC per request
-                                example: 1.00
+                                type: string
+                                description: Maximum price in USDC per request, as a decimal string
+                                example: '1.000000'
                               currency:
                                 type: string
                                 description: Payment currency
@@ -1093,67 +1132,38 @@ paths:
                       - dataEgress
                   httpsig:
                     type: object
-                    description: RFC 9421 HTTP Message Signature configuration (only present when HTTPSIG is enabled)
+                    description: |
+                      RFC 9421 HTTP Message Signature configuration, present only when
+                      HTTPSIG is enabled. Responses are signed with the observer's key
+                      when `OBSERVER_PRIVATE_KEY` or `OBSERVER_KEYPAIR_PATH` is set, so a
+                      signature verifies against the observer address registered for the
+                      gateway on chain. Otherwise they are signed with a key generated at
+                      `HTTPSIG_KEY_FILE`, which is registered nowhere.
                     properties:
-                      enabled:
-                        type: boolean
-                        description: Whether HTTPSIG response signing is enabled
-                        example: true
                       algorithm:
                         type: string
                         description: Signature algorithm
                         enum: ['ed25519']
                         example: 'ed25519'
-                      publicKey:
-                        type: string
-                        description: Base64url-encoded 32-byte Ed25519 public key
-                        example: '1Jw2EpGba2umSMoCNEQh-QKaYA_GztxaoWTpcsyfyxk'
-                      keyId:
-                        type: string
-                        description: Self-contained key identifier (ed25519:<base64url-pubkey>)
-                        example: 'ed25519:1Jw2EpGba2umSMoCNEQh-QKaYA_GztxaoWTpcsyfyxk'
                       solanaAddress:
                         type: string
-                        description: Solana address derived from the Ed25519 public key
+                        description: The Solana address of the key that signs responses (base58)
                         example: 'FJwaz3DWJ2TuDRDaBRsE7t29LDm1wB8txPHcBNoCDwkt'
-                      attestation:
-                        type: object
-                        description: RSA-signed attestation linking the Ed25519 key to the on-chain gateway identity
-                        properties:
-                          txId:
-                            type: string
-                            description: Arweave transaction ID where attestation is permanently stored
-                            example: '4w-39da6R7eklq9d3sMhEx7tc-t4p4PZD6cTZIG3f3c'
-                          observerAddress:
-                            type: string
-                            description: Arweave address of the observer wallet that signed the attestation
-                            example: '7p90oVDWv8euAJsHHuz8tVw9OBrQdIB8qrOn5YEjiVc'
-                          payload:
-                            type: string
-                            description: Canonical JSON attestation payload
-                          signature:
-                            type: string
-                            description: RSA-PSS-SHA256 signature over the payload (base64url)
-                          rsaPublicKey:
-                            type: string
-                            description: RSA public key in SPKI DER format (base64url)
-                        required:
-                          - observerAddress
-                          - payload
-                          - signature
-                          - rsaPublicKey
                     required:
-                      - enabled
                       - algorithm
-                      - publicKey
-                      - keyId
+                      - solanaAddress
                   indexes:
                     type: object
                     description: |
                       Index artifacts this gateway publishes through its index-swarm
                       sidecar. Present only while a valid publication exists, so a
                       crawler can decide whether this gateway offers anything it
-                      wants without fetching the document.
+                      wants without fetching the document. A node that serves an
+                      operator's indexes without signing them
+                      (`INDEXES_ADVERTISE_FROM_URL`) advertises the signing node's
+                      publication here instead, while its own `/ar-io/indexes`
+                      answers 404; behind a load balancer that routes
+                      `/ar-io/indexes*` to the signing node, both answers agree.
                     properties:
                       manifestUrl:
                         type: string
@@ -1184,7 +1194,7 @@ paths:
                 required:
                   - supportedManifestVersions
                   - release
-                  - bundlers
+                  - services
   '/ar-io/indexes':
     get:
       tags: [Indexes]
@@ -1315,10 +1325,14 @@ paths:
               schema: { type: string, format: binary }
         '304':
           description: Not modified.
+        '400':
+          description: Malformed `Range` header.
         '402':
           description: Payment required (x402), when rate limited and payments are enabled.
         '404':
           description: No published file has this digest.
+        '416':
+          description: The range cannot be satisfied.
         '429':
           description: Rate limited.
         '503':
@@ -1380,9 +1394,10 @@ paths:
         The `.torrent` for a band the publication offers as a torrent, at the
         `torrentUrl` the band's signed entry names, addressed by the v1
         infohash. Not metered. When the gateway knows its public origin
-        (INDEXES_PUBLIC_URL, default `https://<ARNS_ROOT_HOST>`), the torrent
-        names its WebSeed, `<origin>/ar-io/indexes/webseed/` (BEP 19
-        `url-list`), so a stock client can finish a band no peer delivers.
+        (INDEXES_PUBLIC_URL, default `https://<ARNS_ROOT_HOST>`) and
+        `INDEXES_TORRENT_WEBSEED` is on (the default), the torrent names its
+        WebSeed, `<origin>/ar-io/indexes/webseed/` (BEP 19 `url-list`), so a
+        stock client can finish a band no peer delivers.
         That and the trackers are outside the info dictionary, so the
         infohashes are the publisher's. A client must check the info
         dictionary against the infohashes in the signed publication before
@@ -2628,6 +2643,36 @@ paths:
   # "/block/hash/{block hash}/wallet_list"
 
   # Transactions
+  '/tx':
+    post:
+      tags: [Transactions]
+      summary: Post a transaction
+      description: |
+        Submits a signed L1 transaction (JSON), as an Arweave node's
+        `POST /tx` does. Envoy sends it on to Arweave nodes: the peers it
+        discovers by default, or `TRUSTED_NODE_HOST` and `FALLBACK_NODE_HOST`
+        with `ENABLE_ARWEAVE_PEER_EDS=false`. With `ARWEAVE_POST_DRY_RUN=true`
+        the gateway answers it itself: with
+        `ARWEAVE_POST_DRY_RUN_SKIP_VALIDATION=true` it accepts anything,
+        otherwise it checks the required fields and the signature, and it
+        broadcasts nothing. Reaching the gateway directly (port 4000), it
+        forwards to `TRUSTED_NODE_URL` itself. The gateway's own handler
+        accepts bodies up to 10 MB.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: A signed Arweave transaction in its JSON form.
+              required: [id, owner, signature, last_tx]
+      responses:
+        '200':
+          description: Accepted (or, in dry-run mode, valid).
+        '400':
+          description: Missing required fields or an invalid signature (dry-run mode).
+        default:
+          description: Whatever the Arweave node answers, passed through.
   '/tx/pending':
     get:
       tags: [Transactions]
@@ -2702,6 +2747,50 @@ paths:
   # "/unconfirmed_tx/{txId}"
 
   # Chunks
+  '/chunk':
+    post:
+      tags: [Chunks]
+      summary: Post a chunk
+      description: |
+        Broadcasts a chunk of an uploaded transaction's data, with its Merkle
+        proof, to Arweave nodes, as an Arweave node's `POST /chunk` does. It
+        succeeds when at least `CHUNK_POST_MIN_SUCCESS_COUNT` nodes accept
+        it, `CHUNK_POST_MIN_PREFERRED_SUCCESS_COUNT` of them preferred nodes
+        (`PREFERRED_CHUNK_POST_NODE_URLS`). Otherwise the status is the one
+        most of the failing nodes gave: 504 for a timeout, 502 for a network
+        error, 499 when cancelled.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: The chunk and its proof, as an Arweave node takes them.
+              properties:
+                data_root: { type: string, description: base64url }
+                data_size: { type: string }
+                data_path: { type: string, description: base64url Merkle proof }
+                offset: { type: string }
+                chunk: { type: string, description: base64url chunk bytes }
+      responses:
+        '200':
+          description: Enough nodes accepted the chunk.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  successCount: { type: integer }
+                  preferredSuccessCount: { type: integer }
+                  failureCount: { type: integer }
+                  results:
+                    type: array
+                    description: One entry per node tried.
+                    items: { type: object }
+        '500':
+          description: The broadcast could not be made.
+        default:
+          description: Too few nodes accepted the chunk; the body is the same result object.
   '/chunk/{offset}':
     get:
       tags: [Chunks]
@@ -3699,6 +3788,36 @@ paths:
       responses:
         '200':
           description: Successful operation.
+        '401':
+          description: Unauthorized, API key likely incorrect.
+      security:
+        - bearerAuth: []
+  '/ar-io/admin/unblock-data':
+    put:
+      tags: [Admin]
+      summary: Unblock data.
+      description: Unblock data blocked with `PUT /ar-io/admin/block-data`, by ID or by data hash, so your AR.IO Gateway will serve it again.
+      operationId: adminUnblockData
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                id:
+                  type: string
+                  description: The transaction or data item ID to unblock.
+                hash:
+                  type: string
+                  description: The data hash to unblock.
+            example:
+              id: '3lyxgbgEvqNSvJrTX2J7CfRychUD5KClFhhVLyTPNCQ'
+      responses:
+        '200':
+          description: Unblocked (`{"message":"Content unblocked"}`).
+        '400':
+          description: Neither `id` nor `hash` given, or one is not a string.
         '401':
           description: Unauthorized, API key likely incorrect.
       security:
