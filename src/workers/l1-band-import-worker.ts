@@ -54,6 +54,27 @@ export function cliInvocation(moduleUrl = import.meta.url): string[] {
   return fromSource ? ['--import', './register.js', cli] : [cli];
 }
 
+/**
+ * The rows a `Range finished` log line reports for an imported range, or
+ * undefined for any other line.
+ */
+export function finishedRangeRows(line: string): number | undefined {
+  if (!line.startsWith('Range finished ')) return undefined;
+  try {
+    const meta = JSON.parse(line.slice('Range finished '.length)) as {
+      result?: unknown;
+      rows?: unknown;
+    };
+    return meta.result === 'imported' &&
+      typeof meta.rows === 'number' &&
+      meta.rows > 0
+      ? meta.rows
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** The result a failed run printed last on stderr, if it printed one. */
 export function parseTrailingJson(text: string): FillSummary | undefined {
   // The result is the last thing written, pretty-printed from a line that
@@ -210,6 +231,10 @@ export class L1BandImportWorker {
       const result = await this.runFill(
         this.args,
         (level, line) => {
+          // Counted as each range lands, not when the run ends: a first
+          // fill runs for hours, and the metric would read 0 throughout.
+          const rows = finishedRangeRows(line);
+          if (rows !== undefined) metrics.l1BandImportRowsTotal.inc(rows);
           if (level === 'error' || level === 'warn') {
             this.log.warn(line);
           } else if (level === 'info') {
@@ -228,9 +253,6 @@ export class L1BandImportWorker {
         metrics.l1BandImportUncoveredHeights.set(
           summary.uncovered.reduce((sum, [a, b]) => sum + (b - a + 1), 0),
         );
-      }
-      if (summary?.rows !== undefined && summary.rows > 0) {
-        metrics.l1BandImportRowsTotal.inc(summary.rows);
       }
       if (result.code !== 0) {
         metrics.l1BandImportRunsTotal.inc({ result: 'failed' });

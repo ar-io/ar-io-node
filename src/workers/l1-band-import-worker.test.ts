@@ -13,6 +13,7 @@ import { createTestLogger } from '../../test/test-logger.js';
 import {
   cliInvocation,
   FillRunner,
+  finishedRangeRows,
   L1BandImportWorker,
   parseTrailingJson,
   spawnFill,
@@ -45,6 +46,28 @@ describe('cliInvocation', () => {
       cliInvocation('file:///repo/src/workers/l1-band-import-worker.ts'),
       ['--import', './register.js', '/repo/src/cli/cli.ts'],
     );
+  });
+});
+
+describe('finishedRangeRows', () => {
+  it('reads the rows of a range the fill imported', () => {
+    assert.equal(
+      finishedRangeRows(
+        'Range finished {"heights":[0,99],"result":"imported","rows":125179,"seconds":12,"service":"ar-io-node-cli"}',
+      ),
+      125179,
+    );
+  });
+
+  it('ignores refused ranges and every other line', () => {
+    assert.equal(
+      finishedRangeRows(
+        'Range finished {"heights":[0,99],"result":"refused","seconds":1}',
+      ),
+      undefined,
+    );
+    assert.equal(finishedRangeRows('Planned a fill {"ceiling":9}'), undefined);
+    assert.equal(finishedRangeRows('Range finished not-json'), undefined);
   });
 });
 
