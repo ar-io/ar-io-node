@@ -150,7 +150,8 @@ export const optionMap = {
   },
   coreDb: {
     alias: '--core-db <path>',
-    description: "The gateway's core.db. It must be stopped. Required",
+    description:
+      "The gateway's core.db. Required. Without --fill, the gateway must be stopped and must not have run on it",
   },
   coreDbReadOnly: {
     alias: '--core-db <path>',
@@ -175,6 +176,11 @@ export const optionMap = {
   maxBands: {
     alias: '--max-bands <n>',
     description: 'Import at most this many bands, then stop',
+  },
+  fill: {
+    alias: '--fill',
+    description:
+      'Fill only the heights core.db is missing beneath what the gateway indexes itself, while the gateway runs. Short transactions with a pause after each, so the gateway keeps writing',
   },
   force: {
     alias: '--force',
@@ -216,6 +222,7 @@ export const indexBandVerifyOptions: CommanderOption[] = [
 export const indexL1ImportOptions: CommanderOption[] = [
   optionMap.bandsDir,
   optionMap.coreDb,
+  optionMap.fill,
   optionMap.importFrom,
   optionMap.importTo,
   optionMap.maxBands,

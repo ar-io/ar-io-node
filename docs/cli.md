@@ -37,8 +37,10 @@ The wrapper mounts only what a command needs:
 | any `ar.io` command | Nothing, except the file a `--wallet-file` (`-w`) names, read-only. A relative path is taken from where you ran the wrapper |
 
 It runs as your user, so what it writes is yours, and
-`data/indexes/published/<index>` (and, for `index-l1-import`, the SQLite
-directory) must be writable by you. Ctrl-C stops a
+`data/indexes/published/<index>` must be writable by you. `index-l1-import`
+is the exception: it runs as the owner of the `core.db` it writes (root, on
+a Docker install), so the files it adds beside the database match it.
+Ctrl-C stops a
 command; a build interrupted that way leaves its scratch copy in
 `data/indexes/export/.band-build-*`, which the next build removes once nothing
 has been written in it for a day (or delete it yourself).
@@ -249,16 +251,77 @@ records then passed the header check against turbo-gateway.com, 150 of 150):
 
 ## `index-l1-import`
 
-Fills this gateway's `core.db` from installed `parquet-l1` bands, so it
-starts from a published index instead of walking the chain block by block.
-See [L1 bands](index-publication.md#l1-bands) for what a band is, and
+Fills this gateway's `core.db` from installed `parquet-l1` bands, so it has
+the chain's history without walking it block by block. See
+[L1 bands](index-publication.md#l1-bands) for what a band is, and
 [subscribing](index-swarm.md#subscribing) for how one arrives.
 
-**The gateway must be stopped.** The command refuses a `core.db` another
-writer holds rather than racing it, and refuses one that still holds
-unstable (`new_*`) blocks, which an import would be written beneath. Run
-`yarn db:migrate up` first: a `core.db` that has not got the import ledger
-is refused too.
+It runs two ways:
+
+- **While the gateway runs, with `--fill`.** The usual way, and what the
+  gateway does by itself with `L1_BAND_IMPORT_ENABLED=true`.
+  `tools/index-swarm-setup --subscribe <publisher wallet> --l1` subscribes
+  to a publisher's L1 bands and sets that.
+- **With the gateway stopped.** The fastest way to load a whole chain into
+  an empty database, at the price of the gateway being down while it runs.
+
+Either way, run `yarn db:migrate up` first (the gateway's entrypoint does):
+a `core.db` without the import ledger is refused. Only one import or fill
+runs against a `core.db` at a time; a second is refused with `Another
+import or fill is running`. Through `tools/ar-io-node`, the command runs as
+whoever owns the `core.db` it writes (root, on a Docker install), so the
+files it adds beside the database match it.
+
+### While the gateway runs (`--fill`)
+
+```bash
+./tools/ar-io-node index-l1-import --fill \
+  --bands-dir data/indexes/installed/parquet-l1 \
+  --core-db data/sqlite/core.db
+```
+
+A fill writes only the heights `core.db` lacks at or below the top of
+`stable_blocks` (before the gateway's first flush, just below its lowest
+unflushed block). That is everything beneath what the block importer
+writes itself, so nothing the gateway indexed is rewritten and nothing it
+is about to write is touched. The one exception is a range an interrupted
+import or fill left unfinished, which is cleared and written again whole. The same command covers a gateway that began
+mid-chain, a hole in the middle of what a gateway holds, and a new gateway:
+with `L1_BAND_IMPORT_ENABLED=true`, an empty `core.db` and no
+`START_HEIGHT`, the block importer starts at the chain tip and the history
+beneath it arrives from the bands.
+
+It writes a batch of rows per transaction and pauses after each, so the
+gateway's own writers, which wait up to 30 seconds for the lock, get in
+between. That makes it slower than an import with the gateway stopped; in
+return the gateway indexes and serves throughout. Each band is still read
+whole and checked against its digests, even when only part of it is
+written.
+
+A band published before its range was fully mined (the publisher's tip
+band) fills only as far as the blocks it holds. Heights no installed band
+holds yet come back as `uncovered`: bands still downloading, and the
+heights between the newest band and where a new gateway began, which the
+publisher's next tip band holds, usually within a day.
+
+Interrupting a fill is safe. Each range is recorded in the ledger before
+its first row, and a range left unfinished is cleared and written again by
+the next run, although its blocks are already there. The gateway's worker
+runs a fill every `L1_BAND_IMPORT_INTERVAL_SECONDS` (default 600), so a run
+that stops is retried and new bands are filled as they arrive; a run with
+nothing to fill writes nothing to `core.db`. Its runs are counted in
+`l1_band_import_runs_total{result}` (`filled`, `idle`, `failed`), with
+`l1_band_import_rows_total` and `l1_band_import_uncovered_heights`.
+
+### With the gateway stopped
+
+This is for a `core.db` the gateway has not run on yet: a new gateway's,
+just migrated. The command refuses a `core.db` another writer holds rather
+than racing it, and refuses one that holds unstable (`new_*`) blocks,
+which an import would be written beneath. A gateway that has run always
+holds some: it moves blocks to `stable_*` only once they are at least 18
+deep.
+So for a gateway that already runs, use `--fill`.
 
 ```bash
 docker compose -f docker-compose.yaml -f docker-compose.override.yaml stop core
@@ -277,10 +340,12 @@ block importer rewinds across a gap and gives up after 18 blocks. What was
 imported before the failure is kept and recorded, so running the command
 again carries on from there.
 
-**Filling in history beneath a gateway that began mid-chain.** By default
-the run continues upward from the highest height `core.db` holds, so a
-gateway started with `START_HEIGHT` would have its index completed above
-and keep the hole underneath for ever. `--from` and `--to` fill that in:
+**Filling in history beneath a gateway that began mid-chain** is
+`--fill`'s job, with the gateway running. Stopped, the command would refuse
+such a gateway's `core.db` for its unstable blocks. `--from` and `--to`
+remain for a database with none, such as a copy whose `new_*` rows were
+cleared: by default the run continues upward from the highest height it
+holds, and these bound it instead:
 
 ```bash
 # core.db holds 1,000,000 upward; fill in everything below it
@@ -310,9 +375,10 @@ underneath.
 |---|---|
 | `--bands-dir` | A directory of bands: as the sidecar installs them (`<band id>~<generation>`), or as a publisher writes them (by band id). Of two generations of one band, the newer is read. Required |
 | `--core-db` | The gateway's `core.db`. Required |
-| `--from` | Start here instead of continuing above what `core.db` holds |
-| `--to` | Stop after the band covering this height |
-| `--max-bands` | Import at most this many bands, then stop |
+| `--fill` | Fill only what `core.db` lacks beneath what the gateway writes itself, with the gateway running |
+| `--from` | Start here instead of continuing above what `core.db` holds. With `--fill`, fill nothing below it |
+| `--to` | Stop after the band covering this height. With `--fill`, fill nothing above it |
+| `--max-bands` | Import at most this many bands, then stop. With `--fill`, at most this many ranges |
 | `--cache-mib` | SQLite page cache for the import, in MiB (default 1024) |
 
 Running it again when there is nothing to do is a no-op: each band is
@@ -400,6 +466,35 @@ no use for, each with a `reason`: `already_imported`,
 `below_what_core_db_holds`, or `above_the_requested_range` (past `--to`).
 `holes` appears only when the run leaves heights uncovered, and is the
 one field to check before starting the gateway.
+
+With `--fill`:
+
+```json
+{
+  "coreDb": "data/sqlite/core.db",
+  "bandsDir": "data/indexes/installed/parquet-l1",
+  "mode": "fill",
+  "ceiling": 2019421,
+  "filled": 1,
+  "rows": 3301442,
+  "missingTransactions": 0,
+  "uncovered": [],
+  "ranges": [
+    { "heightRange": [1900000, 1999999], "heights": [1900000, 1917899], "result": "imported", "rows": 3301442, "seconds": 1380 }
+  ],
+  "seconds": 1384.6
+}
+```
+
+`ceiling` is the highest height the run could write, -1 when the gateway
+holds no blocks yet. Each of `ranges` is one band's heights that were
+missing: `heightRange` is the band's, `heights` what it wrote. `rows`
+also counts every owner (`wallets`) row of the band: owners carry no
+height, so each is written unless `core.db` already has it, and counted
+either way. `uncovered` lists the heights at or below the ceiling that
+`core.db` lacks and no installed band holds yet.
+As without `--fill`, a refused range fails the command and carries
+`reason`, with the result on stderr.
 
 ## `index-l1-verify`
 

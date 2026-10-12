@@ -27,10 +27,11 @@
 # rename stays on one filesystem), plus for index-band-export the SQLite
 # directory read-only and the ClickHouse settings; for index-l1-* commands
 # data/indexes read-only and the SQLite directory, read-write for
-# index-l1-import (stop the gateway first) and read-only otherwise; for any
-# other command only the file a --wallet-file names, read-only. Band commands
-# never take a key. It runs as your user, so data/indexes/published/<index>,
-# and for index-l1-import the SQLite directory, must be writable by you.
+# index-l1-import and read-only otherwise; for any other command only the file
+# a --wallet-file names, read-only. Band commands never take a key. It runs as
+# your user, so data/indexes/published/<index> must be writable by you;
+# index-l1-import runs as the owner of the core.db it writes, which on a
+# Docker install is root, so the files it adds beside it match.
 # Prefer --wallet-file to --private-key: an inline key shows in `ps` and
 # `docker inspect`.
 
@@ -186,7 +187,7 @@ case "${COMMAND}" in
     ;;
   index-l1-*)
     # Bands are only read. The gateway's SQLite is written by index-l1-import
-    # (with the gateway stopped) and only read by the other commands.
+    # and only read by the other commands.
     DATA_PATH="$(setting INDEX_SWARM_DATA_PATH)"
     DATA_PATH="$(realpath -m "${DATA_PATH:-./data/indexes}")"
     if [[ -d "${DATA_PATH}" ]]; then
@@ -199,6 +200,22 @@ case "${COMMAND}" in
     if [[ -d "${SQLITE_PATH}" ]]; then
       if [[ "${COMMAND}" == "index-l1-import" ]]; then
         DOCKER_ARGS+=(-v "${SQLITE_PATH}:/app/data/sqlite")
+        # As whoever owns the database, not the caller: the gateway's own
+        # files are root's on a Docker install, and the import adds its WAL,
+        # lock and spill files beside them.
+        owner_of="${SQLITE_PATH}/core.db"
+        for i in "${!ARGS[@]}"; do
+          if [[ "${ARGS[$i]}" == "--core-db" && -n "${ARGS[$((i + 1))]:-}" ]]; then
+            owner_of="$(cd "${CALLER_DIR}" && realpath -m -- "${ARGS[$((i + 1))]}")"
+          fi
+        done
+        [[ -e "${owner_of}" ]] || owner_of="${SQLITE_PATH}"
+        owner="$(stat -c '%u:%g' "${owner_of}")"
+        for i in "${!DOCKER_ARGS[@]}"; do
+          if [[ "${DOCKER_ARGS[$i]}" == "--user" ]]; then
+            DOCKER_ARGS[$((i + 1))]="${owner}"
+          fi
+        done
       else
         DOCKER_ARGS+=(-v "${SQLITE_PATH}:/app/data/sqlite:ro")
       fi

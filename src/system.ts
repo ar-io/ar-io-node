@@ -102,6 +102,7 @@ import {
 import { Ans104DataIndexer } from './workers/ans104-data-indexer.js';
 import { Ans104Unbundler } from './workers/ans104-unbundler.js';
 import { BlockImporter } from './workers/block-importer.js';
+import { L1BandImportWorker } from './workers/l1-band-import-worker.js';
 import { BundleRepairWorker } from './workers/bundle-repair-worker.js';
 import { SymlinkCleanupWorker } from './workers/symlink-cleanup-worker.js';
 import { DataItemIndexer } from './workers/data-item-indexer.js';
@@ -558,8 +559,21 @@ export const blockImporter = new BlockImporter({
   chainIndex,
   eventEmitter,
   startHeight: config.START_HEIGHT,
+  // The history beneath comes from L1 bands, so a new gateway follows the
+  // tip from the start instead of walking the chain from 0.
+  startAtTip: config.L1_BAND_IMPORT_ENABLED && !config.START_HEIGHT_SET,
   stopHeight: config.STOP_HEIGHT,
 });
+
+export const l1BandImportWorker = config.L1_BAND_IMPORT_ENABLED
+  ? new L1BandImportWorker({
+      log,
+      coreDbPath: 'data/sqlite/core.db',
+      bandsDir: config.L1_BAND_IMPORT_BANDS_DIR,
+      intervalMs: config.L1_BAND_IMPORT_INTERVAL_SECONDS * 1000,
+      cacheMib: config.L1_BAND_IMPORT_CACHE_MIB,
+    })
+  : undefined;
 
 export const envoyEndpointHealthWorker =
   config.ARWEAVE_PEER_DNS_RECORDS.length > 0
@@ -2248,6 +2262,7 @@ export const shutdown = async (exitCode = 0) => {
     await envoyEndpointHealthWorker?.stop();
     await mempoolWatcher?.stop();
     await blockImporter.stop();
+    await l1BandImportWorker?.stop();
     await dataItemIndexer.stop();
     await txRepairWorker.stop();
     await txImporter.stop();

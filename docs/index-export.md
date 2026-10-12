@@ -257,8 +257,9 @@ ranges whose rows changed get new ids.
 `l1-3` band. As a subscriber it refuses the band, naming the layout, and
 keeps its copy. As a publisher it cannot describe the band, so the band
 goes unpublished. Upgrade subscribers first, then a publisher's
-`index-swarm` with or before its `index-export`. The gateway reads no
-`parquet-l1` band and needs nothing.
+`index-swarm` with or before its `index-export`. A gateway filling its
+history from L1 bands (`L1_BAND_IMPORT_ENABLED`) reads them with the core
+image, so upgrade it with the subscriber.
 
 ### Time budget
 

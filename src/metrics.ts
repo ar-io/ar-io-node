@@ -2354,3 +2354,33 @@ export const manifestResolutionDurationSeconds = new promClient.Histogram({
   labelNames: ['source'] as const,
   buckets: [0.0005, 0.001, 0.005, 0.025, 0.1, 0.5, 2],
 });
+
+/**
+ * Runs of the L1 band import worker (`L1_BAND_IMPORT_ENABLED`), which fills
+ * the history beneath this gateway from installed `parquet-l1` bands, by
+ * result: `filled` wrote at least one range, `idle` found nothing to write,
+ * `failed` stopped on an error (the next run carries on from the ledger).
+ */
+export const l1BandImportRunsTotal = new promClient.Counter({
+  name: 'l1_band_import_runs_total',
+  help: 'L1 band import worker runs, by result (filled, idle, failed)',
+  labelNames: ['result'] as const,
+});
+
+/** Rows the L1 band import worker has written into core.db. */
+export const l1BandImportRowsTotal = new promClient.Counter({
+  name: 'l1_band_import_rows_total',
+  help: 'Rows the L1 band import worker has written into core.db',
+});
+
+/**
+ * Heights beneath what this gateway indexes itself that it lacks and no
+ * installed band holds yet, as of the last run. Falls to 0 once the bands
+ * are installed and filled; a band still downloading, or the heights
+ * between the newest band and where the gateway began, keep it above 0
+ * until the publisher's next tip band covers them.
+ */
+export const l1BandImportUncoveredHeights = new promClient.Gauge({
+  name: 'l1_band_import_uncovered_heights',
+  help: 'Heights below the gateway that it lacks and no installed L1 band holds yet',
+});

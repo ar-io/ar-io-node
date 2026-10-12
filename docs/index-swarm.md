@@ -46,6 +46,15 @@ replace are under [doing it by hand](#doing-it-by-hand).
    what needs it, by name. Leave out `--torrent` to move bands over HTTP
    only. Run with `--dry-run` first to see the changes; `.env` is backed up
    before it is written.
+
+   Add `--l1` to take the publisher's L1 bands as well, and have the gateway
+   fill its L1 history from them while it runs (`L1_BAND_IMPORT_ENABLED`).
+   On a new gateway, do this before its first start: with an empty
+   `core.db` it then follows the chain tip from the start, instead of
+   indexing every block from height 0, and the history beneath arrives as the
+   bands do. On a gateway that already runs, it fills whatever is missing
+   beneath what the gateway indexed itself. See
+   [`index-l1-import --fill`](cli.md#while-the-gateway-runs---fill).
 3. With `--torrent`, open port 6881, TCP and UDP, to the internet if
    possible. A subscriber behind NAT still downloads from peers and seeds to
    the ones it connects to, so this is recommended, not required. The engine
@@ -119,11 +128,12 @@ A gateway can do both: pass `--subscribe` and `--publish` together.
 | `--start-height <n>`, `--header-check-url <url>` | With `--publish`: `INDEX_EXPORT_START_HEIGHT` and `INDEX_EXPORT_HEADER_CHECK_URL` |
 | `--torrent` | Generates `INDEX_SWARM_ENGINE_AUTH` (`swarm:` and 48 random hex characters; never printed) if unset. That alone turns the engine on: `INDEX_SWARM_ENGINE_URL` defaults to the compose engine |
 | `--public-host <addr>`, `--engine-port <n>` | `INDEX_SWARM_ENGINE_PUBLIC_HOST`, `INDEX_SWARM_ENGINE_PORT`. Work on their own, to move an engine that already runs (with `--restart`, the engine is recreated on the new port) |
-| `--public-url <origin>` | The gateway's public origin, such as `https://gateway.example`, for the tracker URL. Defaults to `https://<ARNS_ROOT_HOST>`. To change the feeds' origin too, set `INDEXES_PUBLIC_URL` |
+| `--public-url <origin>` | The gateway's public origin, such as `https://gateway.example`, for the tracker URL. Defaults to `INDEXES_PUBLIC_URL`, then `https://<ARNS_ROOT_HOST>`. To change the feeds' origin too, set `INDEXES_PUBLIC_URL` |
+| `--l1` | With `--subscribe`: takes the publishers' L1 bands as well (`"name": ["root-tx-index", "parquet-l1"]`) and sets `L1_BAND_IMPORT_ENABLED=true`, so the gateway fills its L1 history from them while it runs. Core picks it up when it is next created: `--restart` does that. Sets the disk budget to 100 GiB if unset, and warns if an existing one is lower |
 | `--max-disk-gib <n>` | `INDEX_SWARM_MAX_DISK_BYTES`. Works on its own, to change an existing subscriber's budget |
 | `--no-gateway` | Leaves the two gateway keys alone |
 | `--dry-run` | Shows the changes and writes nothing |
-| `--restart` | Then recreates what needs it: the gateway only when its two keys differ from what it runs with, then the sidecar (and the engine, with torrents), by service name, with the compose files the running gateway was started with |
+| `--restart` | Then recreates what needs it: the gateway only when `CDB64_ROOT_TX_INDEX_SOURCES`, `ROOT_TX_LOOKUP_ORDER` or `L1_BAND_IMPORT_ENABLED` differ from what it runs with, then the sidecar (and the engine, with torrents), by service name, with the compose files the running gateway was started with |
 | `--env-file <path>` | A file other than `.env`, relative to the gateway's directory |
 
 It is idempotent: a second run changes only what is missing, so it is also
@@ -145,7 +155,7 @@ from cron or a health script. It checks:
   bands and their size, and a warning when they fill more than 80% of
   `INDEX_SWARM_MAX_DISK_BYTES`. Then the gateway: that it reads the
   installed directory, that it has every installed **root-TX** band loaded
-  (L1 bands are never loaded by the gateway, so they are not counted), and
+  (L1 bands are not loaded as an index, so they are not counted), and
   that root-TX lookups reach the bands.
 - **Publishing:** the document served, its expiry, and how many bands seed.
 - **Building bands (index-export):** the last daily band and fold, the last
@@ -166,6 +176,15 @@ INDEX_SWARM_MAX_DISK_BYTES=53687091200   # 50 GiB
 CDB64_ROOT_TX_INDEX_SOURCES=data/indexes/installed/root-tx-index,<previous sources>
 ROOT_TX_LOOKUP_ORDER=db,cdb,gateways,graphql
 INDEX_SWARM_ENGINE_AUTH=swarm:<openssl rand -hex 24>   # only for BitTorrent
+```
+
+With `--l1`, the subscription names L1 bands as well, the budget is larger,
+and core fills its history from them:
+
+```bash
+INDEX_SWARM_SUBSCRIBE='[{"publisher":"<publisher gateway wallet>","name":["root-tx-index","parquet-l1"]}]'
+INDEX_SWARM_MAX_DISK_BYTES=107374182400   # 100 GiB
+L1_BAND_IMPORT_ENABLED=true
 ```
 
 See [pointing the gateway at installed bands](#pointing-the-gateway-at-installed-bands)
@@ -590,13 +609,15 @@ registered URL the gateway may call. And removing a publisher from
 `INDEX_SWARM_SUBSCRIBE` retires the bands it installed.
 
 **L1 bands.** A subscription takes L1 bands only when it names them:
-`"name": ["root-tx-index", "parquet-l1"]`. A subscription with no `name`
-takes every index the publisher offers except `parquet-l1`. L1 bands add
-about 15 GB and share `INDEX_SWARM_MAX_DISK_BYTES` with root-TX bands. The
-gateway does not read them: they are for
-[`index-l1-import`](cli.md#index-l1-import) and for
-[querying in place](index-publication.md#reading-installed-bands). An index
-taken off `name` has its bands retired.
+`"name": ["root-tx-index", "parquet-l1"]` (`index-swarm-setup --l1` writes
+that). A subscription with no `name` takes every index the publisher offers
+except `parquet-l1`. L1 bands add about 15 GB and share
+`INDEX_SWARM_MAX_DISK_BYTES` with root-TX bands. With
+`L1_BAND_IMPORT_ENABLED=true` the gateway fills its L1 history from them
+while it runs ([`index-l1-import --fill`](cli.md#while-the-gateway-runs---fill));
+they can also be [queried in place](index-publication.md#reading-installed-bands).
+An index taken off `name` has its bands retired; history already filled
+from them stays in `core.db`.
 
 #### Over the swarm
 
@@ -1069,9 +1090,11 @@ feature:
    `data/index-swarm-engine/` can be deleted. Remove
    `INDEX_SWARM_ENGINE_AUTH` from `.env` too: while it is set, the sidecar
    expects the compose engine and warns that it is not answering.
-2. On a subscriber, restore the previous `CDB64_ROOT_TX_INDEX_SOURCES` and
-   restart the gateway, then delete `data/indexes/installed/`. In that order,
-   so the gateway no longer holds the files open when they go.
+2. On a subscriber, restore the previous `CDB64_ROOT_TX_INDEX_SOURCES`,
+   remove `L1_BAND_IMPORT_ENABLED` if it was set, and restart the gateway,
+   then delete `data/indexes/installed/`. In that order, so the gateway no
+   longer holds the files open when they go. L1 history already filled from
+   bands stays in `core.db`.
 3. On a publisher, stop `index-export`, then delete
    `data/indexes/published/publication.json`. The gateway stops serving the
    routes and drops the `indexes` block from `/ar-io/info` on its next

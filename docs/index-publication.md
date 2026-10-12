@@ -667,8 +667,10 @@ comparison, where `core.db` needs two joins through its hash dictionaries.
 Querying in place suits scans, aggregates over a height range, and point
 lookups through the lookup files. It serves no gateway route, no GraphQL
 and no trust headers. To load the dataset into a gateway's own SQLite
-instead, use [`index-l1-import`](cli.md#index-l1-import), which needs the
-gateway stopped and leaves a `core.db` of about 120 GB.
+instead, use [`index-l1-import`](cli.md#index-l1-import): with `--fill`
+(or `L1_BAND_IMPORT_ENABLED=true`, which runs it for you) while the gateway
+runs, or faster with it stopped. The whole chain leaves a `core.db` of
+about 120 GB.
 
 ## Reference client
 

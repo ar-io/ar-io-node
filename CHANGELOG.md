@@ -9,9 +9,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 This is a **recommended release** focused on **the Arweave base layer as a
 shared, verifiable index, serving compressed and mislabelled data correctly,
 and chunk availability**. Key highlights include `parquet-l1` L1 index bands,
-which a new gateway imports with `ar-io-node index-l1-import` instead of
-indexing the chain block by block and checks with `index-l1-verify`, shared
-between gateways over the index swarm, an RSS feed per index and a WebSeed;
+shared between gateways over the index swarm, an RSS feed per index and a
+WebSeed, from which a gateway fills its L1 history while it runs
+(`tools/index-swarm-setup --l1`) instead of indexing the chain block by
+block, checked with `index-l1-verify`;
 the `index-export` service, which builds a gateway's index bands, and the
 `ar-io-node` CLI; fixes for gzip-encoded items served with a missing or wrong
 `Content-Encoding`, and for uploads of the same bytes served with each other's
@@ -92,11 +93,31 @@ with core**).
   `gateway_throttle_cooldowns_total{gateway_url}` and
   `gateway_throttle_skips_total{gateway_url}`.
 
+- **A gateway can fill its L1 history from published bands while it
+  runs** (`L1_BAND_IMPORT_ENABLED`, default `false`).
+  `tools/index-swarm-setup --subscribe <publisher> --l1` subscribes to the
+  publisher's `parquet-l1` bands and turns it on. Core then runs
+  `ar-io-node index-l1-import --fill` every
+  `L1_BAND_IMPORT_INTERVAL_SECONDS` (600) as a child process, so a crash
+  in the import cannot take the gateway down. A fill writes only the
+  heights `core.db` lacks below the top of `stable_blocks`, so nothing the
+  gateway indexed itself is rewritten (a range an interrupted import left
+  unfinished is the exception, written again whole), in short transactions
+  with a pause after each, so the gateway keeps indexing and serving. It covers a
+  gateway that began mid-chain, a hole inside what a gateway holds, and a
+  new gateway: with the setting on, an empty `core.db` and no
+  `START_HEIGHT`, the block importer starts at the chain tip instead of 0,
+  and the history beneath arrives as the bands do. Only one import or fill
+  runs against a `core.db` at a time. New metrics:
+  `l1_band_import_runs_total{result}`, `l1_band_import_rows_total` and
+  `l1_band_import_uncovered_heights`. See [docs/cli.md](docs/cli.md).
+
 - `ar-io-node index-l1-import` fills a gateway's `core.db` from installed
   `parquet-l1` bands, so a new gateway starts from a published index rather
-  than walking the chain block by block. It runs with the gateway stopped
-  and refuses a database another writer holds, one still holding unstable
-  blocks, or one that has not run the import migration. Bands land in
+  than walking the chain block by block: with `--fill` while the gateway
+  runs (above), or fastest with the gateway stopped. Stopped, it refuses a
+  database another writer holds, one still holding unstable blocks, or one
+  that has not run the import migration. Bands land in
   height order, each recorded in `parquet_l1_imports` as it commits, so a
   run that stops can be run again and carries on. A band is written to the
   ledger before its first row and completed after its last, and importing

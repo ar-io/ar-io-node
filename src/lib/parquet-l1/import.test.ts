@@ -436,6 +436,114 @@ describe('importBand', () => {
     assert.equal(count(), 2, 'still 2 after a re-import');
   });
 
+  it('online, leaves nothing a gateway could serve when a band fails part way', async () => {
+    // The rows' digest is checked at the end of each table, after its
+    // batches are committed. Offline the run stops and is redone; online a
+    // gateway serves these heights meanwhile, so what landed is cleared.
+    const lying = {
+      ...entry,
+      band: { ...entry.band, tables: { ...entry.band.tables } },
+    };
+    lying.band.tables.tags = {
+      ...lying.band.tables.tags,
+      rowDigest: 'f'.repeat(64),
+    };
+    await assert.rejects(
+      importBand(target, duck, lying, {
+        log,
+        batchRows: 5,
+        online: true,
+        heights: [FIRST, FIRST + 29],
+        ledgerKey: 'lying@fill',
+      }),
+      /do not reproduce the digest/,
+    );
+    for (const table of [
+      'stable_blocks',
+      'stable_transactions',
+      'stable_transaction_tags',
+      'stable_block_transactions',
+    ]) {
+      assert.equal(
+        target.prepare(`SELECT COUNT(*) FROM ${table}`).pluck().get(),
+        0,
+        table,
+      );
+    }
+    assert.equal(
+      target.prepare('SELECT COUNT(*) FROM parquet_l1_imports').pluck().get(),
+      0,
+      'no ledger row, so the next run tries the range afresh',
+    );
+  });
+
+  it('online, still clears the range when SQLite has already rolled the batch back', async () => {
+    // After SQLITE_FULL or an I/O error, SQLite may roll the transaction
+    // back by itself, and a ROLLBACK then throws. Neither may replace the
+    // error being handled nor skip the clear.
+    let failed = false;
+    const db = new Proxy(target, {
+      get(real, prop) {
+        if (prop === 'prepare') {
+          return (sql: string) => {
+            const statement = real.prepare(sql);
+            if (!sql.includes('INTO stable_transaction_tags')) {
+              return statement;
+            }
+            return new Proxy(statement, {
+              get(stmt, key) {
+                if (key === 'run') {
+                  return (...args: unknown[]) => {
+                    if (!failed) {
+                      failed = true;
+                      real.exec('ROLLBACK');
+                      throw Object.assign(
+                        new Error('database or disk is full'),
+                        { code: 'SQLITE_FULL' },
+                      );
+                    }
+                    return Reflect.apply(stmt.run, stmt, args);
+                  };
+                }
+                const value = Reflect.get(stmt, key, stmt);
+                return typeof value === 'function' ? value.bind(stmt) : value;
+              },
+            });
+          };
+        }
+        const value = Reflect.get(real, prop, real);
+        return typeof value === 'function' ? value.bind(real) : value;
+      },
+    });
+    await assert.rejects(
+      importBand(db, duck, entry, {
+        log,
+        batchRows: 5,
+        online: true,
+        heights: [FIRST, FIRST + 29],
+        ledgerKey: 'full@fill',
+      }),
+      /database or disk is full/,
+    );
+    assert.ok(failed);
+    for (const table of [
+      'stable_blocks',
+      'stable_transactions',
+      'stable_transaction_tags',
+      'stable_block_transactions',
+    ]) {
+      assert.equal(
+        target.prepare(`SELECT COUNT(*) FROM ${table}`).pluck().get(),
+        0,
+        table,
+      );
+    }
+    assert.equal(
+      target.prepare('SELECT COUNT(*) FROM parquet_l1_imports').pluck().get(),
+      0,
+    );
+  });
+
   it('leaves no ledger row when a band fails part way, and finishes on a re-run', async () => {
     // Commit often enough that the failure lands after some rows are
     // committed: the band is partly in, which is what makes the planner's

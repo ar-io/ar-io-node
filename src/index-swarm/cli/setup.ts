@@ -27,6 +27,11 @@ publisher or turn on torrents; it only changes what is missing.
 
   --subscribe <wallet>   Subscribe to a publisher's root-TX index, by its
                          registered gateway wallet. Repeatable.
+  --l1                   With --subscribe: take the publishers' L1 bands
+                         too, and have the gateway fill its L1 history
+                         from them while it runs. On a new gateway, it
+                         then follows the chain tip from the start instead
+                         of indexing from height 0.
   --publish              Publish this gateway's root-TX index bands, built
                          by the index-export service.
   --start-height <n>     With --publish: the lowest height to build.
@@ -88,6 +93,7 @@ async function main(): Promise<void> {
         'start-height': { type: 'string' },
         'header-check-url': { type: 'string' },
         'no-gateway': { type: 'boolean' },
+        l1: { type: 'boolean' },
         'dry-run': { type: 'boolean' },
         restart: { type: 'boolean' },
         // Not --env-file: Node 20 takes that flag for itself even after the
@@ -116,6 +122,7 @@ async function main(): Promise<void> {
     publish: values.publish === true,
     torrent: values.torrent === true,
     gateway: values['no-gateway'] !== true,
+    l1: values.l1 === true,
     ...(values['public-host'] !== undefined
       ? { publicHost: values['public-host'] as string }
       : {}),

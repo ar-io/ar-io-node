@@ -132,6 +132,53 @@ describe('planSetup', () => {
     assert.equal(p.restartCore, false, 'the gateway already reads the bands');
   });
 
+  describe('--l1', () => {
+    it('takes L1 bands as well, and has the gateway fill its history from them', () => {
+      const p = plan('', { subscribe: [TURBO], l1: true });
+      assert.deepEqual(p.errors, []);
+      assert.equal(
+        valueOf(p, 'INDEX_SWARM_SUBSCRIBE'),
+        JSON.stringify([
+          { publisher: TURBO, name: ['root-tx-index', 'parquet-l1'] },
+        ]),
+      );
+      assert.equal(valueOf(p, 'L1_BAND_IMPORT_ENABLED'), 'true');
+      assert.equal(
+        valueOf(p, 'INDEX_SWARM_MAX_DISK_BYTES'),
+        String(100 * 1024 ** 3),
+      );
+      assert.equal(p.restartCore, true);
+    });
+
+    it('adds L1 to an existing subscription, keeping what it takes', () => {
+      const once = apply('', { subscribe: [TURBO] });
+      const p = plan(once, { subscribe: [TURBO], l1: true });
+      assert.equal(
+        valueOf(p, 'INDEX_SWARM_SUBSCRIBE'),
+        JSON.stringify([
+          { publisher: TURBO, name: ['root-tx-index', 'parquet-l1'] },
+        ]),
+      );
+      assert.equal(valueOf(p, 'L1_BAND_IMPORT_ENABLED'), 'true');
+      assert.equal(p.restartCore, true);
+      // The budget was set by the first run; a short one is only warned about.
+      assert.equal(valueOf(p, 'INDEX_SWARM_MAX_DISK_BYTES'), undefined);
+      assert.ok(p.warnings.some((w) => /under 100 GiB/.test(w)));
+    });
+
+    it('is idempotent', () => {
+      const once = apply('', { subscribe: [TURBO], l1: true });
+      const again = plan(once, { subscribe: [TURBO], l1: true });
+      assert.deepEqual(again.changes, []);
+      assert.equal(again.restartCore, false);
+    });
+
+    it('needs a publisher to take the bands from', () => {
+      const p = plan('', { l1: true, publish: true });
+      assert.ok(p.errors.some((e) => /--subscribe/.test(e)));
+    });
+  });
+
   it('keeps an operator’s own sources and order, moving only what it needs', () => {
     const text = [
       'CDB64_ROOT_TX_INDEX_SOURCES=data/my-index,./data/indexes/installed/root-tx-index/',
