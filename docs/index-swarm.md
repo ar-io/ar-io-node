@@ -601,7 +601,7 @@ registered URL the gateway may call. And removing a publisher from
 **L1 bands.** A subscription takes L1 bands only when it names them:
 `"name": ["root-tx-index", "parquet-l1"]` (`index-swarm-setup --l1` writes
 that). A subscription with no `name` takes every index the publisher offers
-except `parquet-l1`. L1 bands add about 20 GB and share
+except `parquet-l1`. L1 bands add about 15 GB and share
 `INDEX_SWARM_MAX_DISK_BYTES` with root-TX bands. With
 `L1_BAND_IMPORT_ENABLED=true` the gateway fills its L1 history from them
 while it runs ([`index-l1-import --fill`](cli.md#while-the-gateway-runs---fill));

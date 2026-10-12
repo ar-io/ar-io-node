@@ -32,7 +32,7 @@ export const SUBSCRIBER_LOOKUP_ORDER = 'db,cdb,gateways,graphql';
  */
 export const DEFAULT_MAX_DISK_GIB = 50;
 /**
- * The budget with L1 bands as well: the whole chain is about 20 GiB of
+ * The budget with L1 bands as well: the whole chain is about 15 GiB of
  * them today, beside a root-TX index of the same order, and both grow.
  */
 export const DEFAULT_MAX_DISK_GIB_WITH_L1 = 100;
@@ -295,7 +295,7 @@ export function planSetup(
         DEFAULT_MAX_DISK_GIB_WITH_L1 * 1024 ** 3
     ) {
       plan.warnings.push(
-        `INDEX_SWARM_MAX_DISK_BYTES is under ${DEFAULT_MAX_DISK_GIB_WITH_L1} GiB. L1 bands are about 20 GiB today beside the root-TX index; raise it with --max-disk-gib if bands stop installing.`,
+        `INDEX_SWARM_MAX_DISK_BYTES is under ${DEFAULT_MAX_DISK_GIB_WITH_L1} GiB. L1 bands are about 15 GiB today beside a root-TX index of about 20; raise it with --max-disk-gib if bands stop installing.`,
       );
     }
 
