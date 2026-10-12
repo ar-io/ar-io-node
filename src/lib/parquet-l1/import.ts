@@ -871,6 +871,9 @@ export async function importBand(
     // `haveTo` below a band nothing can ever finish — a tip superseded
     // by a wider one is never imported again under its old id — and the
     // planner would then read the band above it as a gap, for ever.
+    forgetAttempt: db.prepare(
+      'DELETE FROM parquet_l1_imports WHERE band_id = ? AND completed_at IS NULL',
+    ),
     forgetSuperseded: db.prepare(`DELETE FROM parquet_l1_imports
       WHERE completed_at IS NULL AND height_from >= ?
         AND MIN(height_to, ?) <= ?`),
@@ -1090,6 +1093,23 @@ export async function importBand(
     sinceCommit = 0;
     if (yieldMs > 0) await sleep(yieldMs);
   };
+  // Offline the whole range goes at once. Online, a window at a time, each
+  // its own transaction: clearing a range an earlier run left half written
+  // can mean millions of rows, and one statement deleting them would hold
+  // the gateway's writers off for minutes.
+  const window = online ? Math.max(1, clearWindow) : to - from + 1;
+  const clearRange = async () => {
+    for (let low = from; low <= to; low += window) {
+      const high = Math.min(to, low + window - 1);
+      begin();
+      insert.clearLinks.run(low, high);
+      insert.clearTags.run(low, high);
+      insert.clearTxs.run(low, high);
+      insert.clearMissing.run(low, high);
+      insert.clearBlocks.run(low, high);
+      if (online) await commit();
+    }
+  };
   try {
     begin();
     // Recorded before a single row is written, so a crash leaves the band
@@ -1130,25 +1150,11 @@ export async function importBand(
     }
     insert.forgetKeptDataRoots.run();
     insert.keepDataRoots.run(from, to);
-    // Offline the whole range goes at once. Online, a window at a time, each
-    // its own transaction: clearing a range an earlier run left half
-    // written can mean millions of rows, and one statement deleting them
-    // would hold the gateway's writers off for minutes. A hole the gateway
-    // never held, the usual case online, has nothing to clear: an earlier
-    // run that wrote anything there wrote its blocks first.
-    const window = online ? Math.max(1, clearWindow) : to - from + 1;
+    // A hole the gateway never held, the usual case online, has nothing to
+    // clear: an earlier run that wrote anything there wrote its blocks first.
     const clear =
       !online || insert.anyRows.get(from, to, from, to, from, to) === 1;
-    for (let low = from; clear && low <= to; low += window) {
-      const high = Math.min(to, low + window - 1);
-      begin();
-      insert.clearLinks.run(low, high);
-      insert.clearTags.run(low, high);
-      insert.clearTxs.run(low, high);
-      insert.clearMissing.run(low, high);
-      insert.clearBlocks.run(low, high);
-      if (online) await commit();
-    }
+    if (clear) await clearRange();
     // Online, nothing is held while the first batch is read, cleared or not.
     if (online) await commit();
     for (const table of IMPORT_ORDER) {
@@ -1205,6 +1211,26 @@ export async function importBand(
     await commit();
   } catch (error) {
     if (open) db.exec('ROLLBACK');
+    open = false;
+    if (online) {
+      // Online, a gateway is serving these heights while they land. A band
+      // that fails part way, its rows' digest not matching at the end of a
+      // table say, must not leave what it wrote behind to be served: clear
+      // it and its ledger row, so the next run tries the range afresh.
+      try {
+        await clearRange();
+        begin();
+        insert.forgetAttempt.run(ledgerKey);
+        await commit();
+      } catch (cleanupError) {
+        if (open) db.exec('ROLLBACK');
+        log.error('Could not clear a range that failed to fill', {
+          id: entry.id,
+          heights: [from, to],
+          error: (cleanupError as Error).message,
+        });
+      }
+    }
     throw error;
   }
   log.info('Imported a band', {

@@ -129,7 +129,7 @@ A gateway can do both: pass `--subscribe` and `--publish` together.
 | `--torrent` | Generates `INDEX_SWARM_ENGINE_AUTH` (`swarm:` and 48 random hex characters; never printed) if unset. That alone turns the engine on: `INDEX_SWARM_ENGINE_URL` defaults to the compose engine |
 | `--public-host <addr>`, `--engine-port <n>` | `INDEX_SWARM_ENGINE_PUBLIC_HOST`, `INDEX_SWARM_ENGINE_PORT`. Work on their own, to move an engine that already runs (with `--restart`, the engine is recreated on the new port) |
 | `--public-url <origin>` | The gateway's public origin, such as `https://gateway.example`, for the tracker URL. Defaults to `INDEXES_PUBLIC_URL`, then `https://<ARNS_ROOT_HOST>`. To change the feeds' origin too, set `INDEXES_PUBLIC_URL` |
-| `--l1` | With `--subscribe`: takes the publishers' L1 bands as well (`"name": ["root-tx-index", "parquet-l1"]`) and sets `L1_BAND_IMPORT_ENABLED=true`, so the gateway fills its L1 history from them while it runs; restarts core. Sets the disk budget to 100 GiB if unset, and warns if an existing one is lower |
+| `--l1` | With `--subscribe`: takes the publishers' L1 bands as well (`"name": ["root-tx-index", "parquet-l1"]`) and sets `L1_BAND_IMPORT_ENABLED=true`, so the gateway fills its L1 history from them while it runs. Core picks it up when it is next created: `--restart` does that. Sets the disk budget to 100 GiB if unset, and warns if an existing one is lower |
 | `--max-disk-gib <n>` | `INDEX_SWARM_MAX_DISK_BYTES`. Works on its own, to change an existing subscriber's budget |
 | `--no-gateway` | Leaves the two gateway keys alone |
 | `--dry-run` | Shows the changes and writes nothing |
