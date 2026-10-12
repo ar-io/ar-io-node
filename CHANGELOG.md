@@ -4,7 +4,23 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased]
+## [Release 85] - 2026-10-12
+
+This is a **recommended release** focused on **the Arweave base layer as a
+shared, verifiable index, serving compressed and mislabelled data correctly,
+and chunk availability**. Key highlights include `parquet-l1` L1 index bands,
+which a new gateway imports with `ar-io-node index-l1-import` instead of
+indexing the chain block by block and checks with `index-l1-verify`, shared
+between gateways over the index swarm, an RSS feed per index and a WebSeed;
+the `index-export` service, which builds a gateway's index bands, and the
+`ar-io-node` CLI; fixes for gzip-encoded items served with a missing or wrong
+`Content-Encoding`, and for uploads of the same bytes served with each other's
+`Content-Type`; chunk fetches that learn which preferred nodes serve each
+gateway, ahead of the observer's offset checks, which are back and fail
+gateways by default (the default observer image moves to `8e7f4d53`); GraphQL
+pages from ClickHouse no longer cut short; and peers announcing to a
+publisher's tracker through the gateway's HTTPS (**upgrade the Envoy image
+with core**).
 
 ### Added
 
