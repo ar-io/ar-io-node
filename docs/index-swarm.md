@@ -486,7 +486,10 @@ INDEX_SWARM_SUBSCRIBE='[{"publisher":"<fleet wallet>","name":"root-tx-index","ur
 
 `url` changes only where the document and files come from. The signature is
 still checked against the registered observer key, so an internal address
-is safe. That node is a client of the publisher's meter: list its address in
+is safe. A node whose `AR_IO_WALLET` is the fleet wallet never lists that
+wallet among its peers; its sidecar finds the fleet's registry entry in the
+`self` field of the gateway's `/ar-io/peers`, which Release 85 added. On an
+older core, the subscription never resolves its publisher. That node is a client of the publisher's meter: list its address in
 `RATE_LIMITER_IPS_AND_CIDRS_ALLOWLIST` on the publishing node. It needs no
 torrent engine; between two nodes in one network, HTTP is simpler. Set
 `INDEXES_ADVERTISE_FROM_URL` on every node that does not sign (see

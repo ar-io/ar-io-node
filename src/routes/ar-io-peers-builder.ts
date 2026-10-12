@@ -26,6 +26,38 @@ export interface GatewayPeerEntry {
  * read this gateway already makes instead of making its own. A registry
  * field is omitted, not nulled, when the peer manager has no value for it.
  */
+/** This node's own registry entry, as `/ar-io/peers` reports it under `self`. */
+export interface SelfEntry {
+  url: string;
+  wallet: string;
+  observerAddress?: string;
+  operatorStake?: number;
+  status?: string;
+}
+
+/**
+ * `self` for `/ar-io/peers`: this node's own registry entry, apart from its
+ * peers, so nothing that picks peers from the list picks this node.
+ */
+export function buildSelfEntry(
+  record: SelfEntry | undefined,
+): { self: SelfEntry } | Record<string, never> {
+  if (record === undefined) return {};
+  return {
+    self: {
+      url: record.url,
+      wallet: record.wallet,
+      ...(record.observerAddress !== undefined
+        ? { observerAddress: record.observerAddress }
+        : {}),
+      ...(record.operatorStake !== undefined
+        ? { operatorStake: record.operatorStake }
+        : {}),
+      ...(record.status !== undefined ? { status: record.status } : {}),
+    },
+  };
+}
+
 export function buildGatewayPeers(
   formattedPeers: Record<string, FormattedPeer>,
 ): Record<string, GatewayPeerEntry> {
