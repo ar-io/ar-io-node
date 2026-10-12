@@ -227,6 +227,9 @@ export class L1BandImportWorker {
   /** Runs the fill once; never throws. */
   async runOnce(): Promise<FillSummary | undefined> {
     const started = Date.now();
+    // A worker that was never started is stopped too; only one stopped
+    // while this run was going was shut down under it.
+    const wasRunning = !this.stopped;
     try {
       const result = await this.runFill(
         this.args,
@@ -256,7 +259,7 @@ export class L1BandImportWorker {
       }
       if (result.code !== 0) {
         metrics.l1BandImportRunsTotal.inc({ result: 'failed' });
-        if (this.stopped) {
+        if (wasRunning && this.stopped) {
           this.log.info('Fill interrupted by shutdown; the next run redoes it');
         } else {
           this.log.error('Fill failed; the next run carries on from here', {

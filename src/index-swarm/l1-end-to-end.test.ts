@@ -159,6 +159,11 @@ describe('L1 bands, from a publisher into a subscribing gateway', () => {
     // holds a block above that it has not flushed yet.
     const db = new Sqlite(coreDb);
     try {
+      // The gateway opens core.db in WAL mode (StandaloneSqlite), so the
+      // fill never has to switch it. Left in rollback-journal mode, the
+      // fill's switch would race the writer below, and SQLite refuses
+      // that with "database is locked" whatever the busy timeout.
+      db.pragma('journal_mode = WAL');
       db.exec(`ATTACH DATABASE '${sourceDb.replace(/'/g, "''")}' AS src`);
       db.exec(`
         INSERT INTO stable_blocks SELECT * FROM src.stable_blocks
@@ -221,7 +226,7 @@ describe('L1 bands, from a publisher into a subscribing gateway', () => {
       } catch (error) {
         failures.push((error as Error).message);
       }
-    }, 5);
+    }, 1);
     let summary;
     try {
       summary = await worker.runOnce();
