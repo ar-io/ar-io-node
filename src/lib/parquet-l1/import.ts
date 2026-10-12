@@ -1093,6 +1093,21 @@ export async function importBand(
     sinceCommit = 0;
     if (yieldMs > 0) await sleep(yieldMs);
   };
+  // After some errors, SQLITE_FULL or SQLITE_IOERR say, SQLite has already
+  // rolled the transaction back itself, and a ROLLBACK then throws. Thrown
+  // from the catch below, it would replace the error being handled and skip
+  // the online clear.
+  const rollback = () => {
+    open = false;
+    try {
+      if (db.inTransaction) db.exec('ROLLBACK');
+    } catch (rollbackError) {
+      log.warn('Could not roll back', {
+        id: entry.id,
+        error: (rollbackError as Error).message,
+      });
+    }
+  };
   // Offline the whole range goes at once. Online, a window at a time, each
   // its own transaction: clearing a range an earlier run left half written
   // can mean millions of rows, and one statement deleting them would hold
@@ -1210,8 +1225,7 @@ export async function importBand(
     insert.forgetSuperseded.run(from, ceiling, to);
     await commit();
   } catch (error) {
-    if (open) db.exec('ROLLBACK');
-    open = false;
+    rollback();
     if (online) {
       // Online, a gateway is serving these heights while they land. A band
       // that fails part way, its rows' digest not matching at the end of a
@@ -1223,7 +1237,7 @@ export async function importBand(
         insert.forgetAttempt.run(ledgerKey);
         await commit();
       } catch (cleanupError) {
-        if (open) db.exec('ROLLBACK');
+        rollback();
         log.error('Could not clear a range that failed to fill', {
           id: entry.id,
           heights: [from, to],
