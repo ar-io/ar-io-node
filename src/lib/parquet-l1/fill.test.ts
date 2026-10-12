@@ -17,6 +17,7 @@ import { exportL1Band } from '../../index-export/kinds/parquet-l1/export.js';
 import { buildCoreDb } from '../../../test/parquet-l1-core-db.js';
 import { createTestLogger } from '../../../test/test-logger.js';
 import {
+  CLEAR_SQL,
   fillCeiling,
   fillLedgerKey,
   ImportableBand,
@@ -260,6 +261,31 @@ describe('fillLedgerKey', () => {
       fillLedgerKey({ band: band('a', 0, 99), heights: [50, 59] }),
       'a@50-59',
     );
+  });
+});
+
+describe('CLEAR_SQL', () => {
+  it('reaches every row through an index, never a scan of a table', () => {
+    // Online, each runs once per window of heights. A scan of the tag
+    // table there read every tag the gateway held, hundreds of times a
+    // band: the first live fill spent 252 s of 285 clearing a hole.
+    const db = new Sqlite(':memory:');
+    try {
+      db.exec(fs.readFileSync('test/core-schema.sql', 'utf8'));
+      for (const [name, sql] of Object.entries(CLEAR_SQL)) {
+        const plan = (
+          db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(1, 2) as Array<{
+            detail: string;
+          }>
+        ).map((row) => row.detail);
+        assert.ok(
+          !plan.some((step) => /^SCAN/.test(step)),
+          `${name}: ${plan.join('; ')}`,
+        );
+      }
+    } finally {
+      db.close();
+    }
   });
 });
 

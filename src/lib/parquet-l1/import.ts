@@ -99,6 +99,30 @@ export const PROGRESS_EVERY_MS = 60_000;
 export const CLEAR_WINDOW_HEIGHTS = 200;
 
 /**
+ * The statements that clear a height range before a band rewrites it, in
+ * the order they run: links and tags before the blocks and transactions
+ * they are found through. Each must reach its rows through an index —
+ * online they run once per window of heights, so a scan would read the
+ * whole table hundreds of times a band. A test holds them to that.
+ */
+export const CLEAR_SQL = {
+  links: `DELETE FROM stable_block_transactions
+    WHERE block_indep_hash IN
+      (SELECT indep_hash FROM stable_blocks WHERE height BETWEEN ? AND ?)`,
+  // By transaction, not by height: the table's key leads with the tag
+  // hashes, so a height range is a scan of every tag the gateway holds.
+  // Every tag row belongs to a transaction at its height, and tags are
+  // written after and cleared before their transactions, so this finds
+  // them all.
+  tags: `DELETE FROM stable_transaction_tags
+    WHERE transaction_id IN
+      (SELECT id FROM stable_transactions WHERE height BETWEEN ? AND ?)`,
+  transactions: 'DELETE FROM stable_transactions WHERE height BETWEEN ? AND ?',
+  missing: 'DELETE FROM missing_transactions WHERE height BETWEEN ? AND ?',
+  blocks: 'DELETE FROM stable_blocks WHERE height BETWEEN ? AND ?',
+} as const;
+
+/**
  * Rows read, and so written, per transaction when filling beneath a
  * running gateway. Core waits up to 30 s for the write lock, and a batch
  * this size holds it for well under one.
@@ -852,21 +876,21 @@ export async function importBand(
     // A band replaces its own height range. Whatever is already there came
     // from an earlier attempt at this band, a band of another grid, or a
     // fork the chain has since dropped; none of it should outlive this.
-    clearTags: db.prepare(
-      'DELETE FROM stable_transaction_tags WHERE height BETWEEN ? AND ?',
-    ),
-    clearTxs: db.prepare(
-      'DELETE FROM stable_transactions WHERE height BETWEEN ? AND ?',
-    ),
-    clearLinks: db.prepare(`DELETE FROM stable_block_transactions
-      WHERE block_indep_hash IN
-        (SELECT indep_hash FROM stable_blocks WHERE height BETWEEN ? AND ?)`),
-    clearMissing: db.prepare(
-      'DELETE FROM missing_transactions WHERE height BETWEEN ? AND ?',
-    ),
-    clearBlocks: db.prepare(
-      'DELETE FROM stable_blocks WHERE height BETWEEN ? AND ?',
-    ),
+    clearTags: db.prepare(CLEAR_SQL.tags),
+    // Whether anything at these heights needs clearing; each an index probe.
+    anyRows: db
+      .prepare(
+        `SELECT
+      EXISTS (SELECT 1 FROM stable_blocks WHERE height BETWEEN ? AND ?)
+      OR EXISTS (SELECT 1 FROM stable_transactions WHERE height BETWEEN ? AND ?)
+      OR EXISTS (SELECT 1 FROM missing_transactions WHERE height BETWEEN ? AND ?)
+      AS present`,
+      )
+      .pluck(),
+    clearTxs: db.prepare(CLEAR_SQL.transactions),
+    clearLinks: db.prepare(CLEAR_SQL.links),
+    clearMissing: db.prepare(CLEAR_SQL.missing),
+    clearBlocks: db.prepare(CLEAR_SQL.blocks),
   };
 
   // The band's own time, not when it is being imported: importing the same
@@ -1108,9 +1132,13 @@ export async function importBand(
     // Offline the whole range goes at once. Online, a window at a time, each
     // its own transaction: clearing a range an earlier run left half
     // written can mean millions of rows, and one statement deleting them
-    // would hold the gateway's writers off for minutes.
+    // would hold the gateway's writers off for minutes. A hole the gateway
+    // never held, the usual case online, has nothing to clear: an earlier
+    // run that wrote anything there wrote its blocks first.
     const window = online ? Math.max(1, clearWindow) : to - from + 1;
-    for (let low = from; low <= to; low += window) {
+    const clear =
+      !online || insert.anyRows.get(from, to, from, to, from, to) === 1;
+    for (let low = from; clear && low <= to; low += window) {
       const high = Math.min(to, low + window - 1);
       begin();
       insert.clearLinks.run(low, high);
@@ -1120,6 +1148,8 @@ export async function importBand(
       insert.clearBlocks.run(low, high);
       if (online) await commit();
     }
+    // Online, nothing is held while the first batch is read, cleared or not.
+    if (online) await commit();
     for (const table of IMPORT_ORDER) {
       readBefore = read;
       // The row count comes from the batches as they arrive, not from
