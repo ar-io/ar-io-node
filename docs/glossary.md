@@ -274,7 +274,9 @@ root-TX bands through its [Collection Source](#collection-source).
 layer (blocks, transactions, tags and owners) for one height range, in
 Parquet, with a `band.json` of per-table row counts and row digests. A new
 gateway can import it instead of indexing the chain, and a client can query
-it in place. The gateway does not read L1 bands. The whole chain is 24 bands.
+it in place. With `L1_BAND_IMPORT_ENABLED` the gateway fills its own L1
+history from installed L1 bands; otherwise it does not read them. The whole
+chain was 24 bands in October 2026.
 Its `band.json` holds only what the rows determine, dated by the top block,
 so every publisher of the same rows writes the same band and torrent; what
 is a publisher's own (the bands it replaces, when it built it) is kept

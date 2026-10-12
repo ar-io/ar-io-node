@@ -150,7 +150,8 @@ export const optionMap = {
   },
   coreDb: {
     alias: '--core-db <path>',
-    description: "The gateway's core.db. It must be stopped. Required",
+    description:
+      "The gateway's core.db. Required. Without --fill, the gateway must be stopped and must not have run on it",
   },
   coreDbReadOnly: {
     alias: '--core-db <path>',

@@ -314,9 +314,12 @@ nothing to fill writes nothing. Its runs are counted in
 
 ### With the gateway stopped
 
-The command refuses a `core.db` another writer holds rather than racing
-it, and refuses one that still holds unstable (`new_*`) blocks, which an
-import would be written beneath.
+This is for a `core.db` the gateway has not run on yet: a new gateway's,
+just migrated. The command refuses a `core.db` another writer holds rather
+than racing it, and refuses one that holds unstable (`new_*`) blocks,
+which an import would be written beneath. A gateway that has run always
+holds some: it flushes blocks to `stable_*` only once they are 18 deep.
+So for a gateway that already runs, use `--fill`.
 
 ```bash
 docker compose -f docker-compose.yaml -f docker-compose.override.yaml stop core
@@ -335,11 +338,12 @@ block importer rewinds across a gap and gives up after 18 blocks. What was
 imported before the failure is kept and recorded, so running the command
 again carries on from there.
 
-**Filling in history beneath a gateway that began mid-chain.** `--fill`
-does this with the gateway running. With it stopped, note that by default
-the run continues upward from the highest height `core.db` holds, so a
-gateway started with `START_HEIGHT` would have its index completed above
-and keep the hole underneath for ever. `--from` and `--to` fill that in:
+**Filling in history beneath a gateway that began mid-chain** is
+`--fill`'s job, with the gateway running. Stopped, the command would refuse
+such a gateway's `core.db` for its unstable blocks. `--from` and `--to`
+remain for a database with none, such as a copy whose `new_*` rows were
+cleared: by default the run continues upward from the highest height it
+holds, and these bound it instead:
 
 ```bash
 # core.db holds 1,000,000 upward; fill in everything below it
