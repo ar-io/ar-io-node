@@ -46,6 +46,15 @@ replace are under [doing it by hand](#doing-it-by-hand).
    what needs it, by name. Leave out `--torrent` to move bands over HTTP
    only. Run with `--dry-run` first to see the changes; `.env` is backed up
    before it is written.
+
+   Add `--l1` to take the publisher's L1 bands as well, and have the gateway
+   fill its L1 history from them while it runs (`L1_BAND_IMPORT_ENABLED`).
+   On a new gateway, do this before its first start: with an empty
+   `core.db` it then follows the chain tip from the start, instead of
+   indexing from height 0 for weeks, and the history beneath arrives as the
+   bands do. On a gateway that already runs, it fills whatever is missing
+   beneath what the gateway indexed itself. See
+   [`index-l1-import --fill`](cli.md#while-the-gateway-runs---fill).
 3. With `--torrent`, open port 6881, TCP and UDP, to the internet if
    possible. A subscriber behind NAT still downloads from peers and seeds to
    the ones it connects to, so this is recommended, not required. The engine
@@ -590,13 +599,15 @@ registered URL the gateway may call. And removing a publisher from
 `INDEX_SWARM_SUBSCRIBE` retires the bands it installed.
 
 **L1 bands.** A subscription takes L1 bands only when it names them:
-`"name": ["root-tx-index", "parquet-l1"]`. A subscription with no `name`
-takes every index the publisher offers except `parquet-l1`. L1 bands add
-about 15 GB and share `INDEX_SWARM_MAX_DISK_BYTES` with root-TX bands. The
-gateway does not read them: they are for
-[`index-l1-import`](cli.md#index-l1-import) and for
-[querying in place](index-publication.md#reading-installed-bands). An index
-taken off `name` has its bands retired.
+`"name": ["root-tx-index", "parquet-l1"]` (`index-swarm-setup --l1` writes
+that). A subscription with no `name` takes every index the publisher offers
+except `parquet-l1`. L1 bands add about 20 GB and share
+`INDEX_SWARM_MAX_DISK_BYTES` with root-TX bands. With
+`L1_BAND_IMPORT_ENABLED=true` the gateway fills its L1 history from them
+while it runs ([`index-l1-import --fill`](cli.md#while-the-gateway-runs---fill));
+they can also be [queried in place](index-publication.md#reading-installed-bands).
+An index taken off `name` has its bands retired; history already filled
+from them stays in `core.db`.
 
 #### Over the swarm
 

@@ -32,6 +32,7 @@ export class BlockImporter {
 
   // State
   private startHeight: number;
+  private startAtTip: boolean;
   private stopHeight: number;
   private heightPollingIntervalMs: number;
   private maxChainHeight: number;
@@ -45,6 +46,7 @@ export class BlockImporter {
     chainIndex,
     eventEmitter,
     startHeight = DEFAULT_START_HEIGHT,
+    startAtTip = false,
     stopHeight = DEFAULT_STOP_HEIGHT,
     heightPollingIntervalMs = DEFAULT_HEIGHT_POLLING_INTERVAL_MS,
   }: {
@@ -53,6 +55,12 @@ export class BlockImporter {
     chainIndex: ChainIndex;
     eventEmitter: EventEmitter;
     startHeight?: number;
+    /**
+     * With an empty index, start at the chain's current height rather than
+     * `startHeight`. For a gateway whose history comes from L1 bands
+     * filled in beneath it: walking the chain from 0 would take weeks.
+     */
+    startAtTip?: boolean;
     stopHeight?: number;
     heightPollingIntervalMs?: number;
   }) {
@@ -67,6 +75,7 @@ export class BlockImporter {
     this.heightPollingIntervalMs = heightPollingIntervalMs;
     this.shouldRun = false;
     this.startHeight = startHeight;
+    this.startAtTip = startAtTip;
     this.stopHeight = stopHeight;
   }
 
@@ -223,6 +232,15 @@ export class BlockImporter {
 
       try {
         nextHeight = await this.getNextHeight();
+        if (nextHeight === 0 && this.startAtTip) {
+          // Gap and fork checks start above the first block imported, so
+          // the start height moves with it.
+          this.startHeight = this.maxChainHeight;
+          this.log.info(
+            'Index is empty; starting at the chain tip, with history to come from L1 bands',
+            { height: this.startHeight },
+          );
+        }
         if (nextHeight === 0 && this.startHeight !== 0) {
           nextHeight = this.startHeight;
         }

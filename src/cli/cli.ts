@@ -141,7 +141,7 @@ makeCommand<IndexBandExportCLIOptions>({
 makeCommand<IndexL1ImportCLIOptions>({
   name: 'index-l1-import',
   description:
-    "Fill this gateway's core.db from installed parquet-l1 bands (the gateway must be stopped)",
+    "Fill this gateway's core.db from installed parquet-l1 bands: with the gateway stopped, or with --fill while it runs",
   options: indexL1ImportOptions,
   action: async (options) =>
     (await indexL1ImportCommands()).indexL1ImportCLICommand(options, {
@@ -159,6 +159,15 @@ makeCommand<IndexL1ImportCLIOptions>({
     'Bands are imported in height order, lowest first, and the run stops at',
     'the first that fails. What it imported is kept, so running it again',
     'carries on from there.',
+    '',
+    'With the gateway running (the gateway runs this itself when',
+    'L1_BAND_IMPORT_ENABLED=true):',
+    '  ar-io-node index-l1-import --fill \\',
+    '    --bands-dir data/indexes/installed/parquet-l1 \\',
+    '    --core-db data/sqlite/core.db',
+    '',
+    'Writes only the heights core.db is missing below what the gateway',
+    'indexes itself, so nothing it indexed is rewritten.',
     CONTRACT,
   ].join('\n'),
 );

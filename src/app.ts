@@ -94,6 +94,7 @@ if (system.clickhouseStreamer !== undefined) {
 // Allow starting without writers to support SQLite replication
 if (config.START_WRITERS) {
   system.blockImporter.start();
+  system.l1BandImportWorker?.start();
   system.txOffsetRepairWorker.start();
   system.txRepairWorker.start();
   system.bundleRepairWorker.start();

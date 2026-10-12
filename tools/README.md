@@ -11,6 +11,7 @@ Set up Index Sharing (the `index-swarm` sidecar, optionally over BitTorrent) and
 ```bash
 ./tools/index-swarm-setup --subscribe <publisher wallet> --torrent --dry-run
 ./tools/index-swarm-setup --subscribe <publisher wallet> --torrent --restart
+./tools/index-swarm-setup --subscribe <publisher wallet> --l1 --torrent --restart   # L1 bands too, filled into core.db
 ./tools/index-swarm-setup --publish --torrent --public-host <public IP> --restart
 ./tools/index-swarm-status
 ```
@@ -25,6 +26,7 @@ The gateway's command-line tool, in the style of the `ar.io` CLI from `@ar.io/sd
   --gateway-url http://core:4000 --input - < records.csv
 ./tools/ar-io-node index-band-verify --band-dir data/indexes/published/root-tx-index/<band> --gateway-url http://core:4000
 ./tools/ar-io-node index-l1-verify --bands-dir data/indexes/installed/parquet-l1
+./tools/ar-io-node index-l1-import --fill --bands-dir data/indexes/installed/parquet-l1 --core-db data/sqlite/core.db   # while the gateway runs
 ./tools/ar-io-node index-l1-import --bands-dir data/indexes/installed/parquet-l1 --core-db data/sqlite/core.db   # with the gateway stopped
 ./tools/ar-io-node get-gateway --address <wallet>
 ```

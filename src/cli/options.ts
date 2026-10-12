@@ -176,6 +176,11 @@ export const optionMap = {
     alias: '--max-bands <n>',
     description: 'Import at most this many bands, then stop',
   },
+  fill: {
+    alias: '--fill',
+    description:
+      'Fill only the heights core.db is missing beneath what the gateway indexes itself, while the gateway runs. Short transactions with a pause after each, so the gateway keeps writing',
+  },
   force: {
     alias: '--force',
     description: 'Replace --output if it exists',
@@ -216,6 +221,7 @@ export const indexBandVerifyOptions: CommanderOption[] = [
 export const indexL1ImportOptions: CommanderOption[] = [
   optionMap.bandsDir,
   optionMap.coreDb,
+  optionMap.fill,
   optionMap.importFrom,
   optionMap.importTo,
   optionMap.maxBands,

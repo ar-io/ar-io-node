@@ -17,7 +17,10 @@ import { GENERATION_SEPARATOR } from '../../index-swarm/subscriber.js';
 import { LEDGER_MIGRATION } from '../../lib/parquet-l1/import.js';
 import { buildCoreDb } from '../../../test/parquet-l1-core-db.js';
 import { createTestLogger } from '../../../test/test-logger.js';
-import { indexL1ImportCLICommand } from './indexL1ImportCommands.js';
+import {
+  indexL1ImportCLICommand,
+  takeImportLock,
+} from './indexL1ImportCommands.js';
 
 const log = createTestLogger({ suite: 'index-l1-import' });
 const FIRST = 1_900_000;
@@ -106,6 +109,75 @@ describe('indexL1ImportCLICommand', () => {
     } finally {
       db.close();
     }
+  });
+
+  it('--fill fills beneath a gateway that holds the top of the chain, and answers in the documented shape', async () => {
+    // The gateway began at FIRST + 10 and indexed up from there itself.
+    const db = new Sqlite(coreDb);
+    try {
+      const source = path.join(dir, 'source.db').replace(/'/g, "''");
+      db.exec(`ATTACH DATABASE '${source}' AS src`);
+      db.exec(`
+        INSERT INTO stable_blocks SELECT * FROM src.stable_blocks
+          WHERE height >= ${FIRST + 10};
+        INSERT INTO stable_transactions SELECT * FROM src.stable_transactions
+          WHERE height >= ${FIRST + 10};
+      `);
+      db.exec('DETACH DATABASE src');
+    } finally {
+      db.close();
+    }
+    const result = (await indexL1ImportCLICommand(
+      { bandsDir, coreDb, fill: true },
+      { log },
+    )) as Record<string, unknown>;
+    assert.equal(result.mode, 'fill');
+    assert.equal(result.ceiling, FIRST + 30);
+    assert.equal(result.filled, 1);
+    assert.ok((result.rows as number) > 0);
+    // The test's chain starts at FIRST; a real one has bands from 0.
+    assert.deepEqual(result.uncovered, [[0, FIRST - 1]]);
+    assert.deepEqual(
+      (result.ranges as Array<Record<string, unknown>>).map((r) => [
+        r.heightRange,
+        r.heights,
+        r.result,
+      ]),
+      [[[FIRST, FIRST + 19], [FIRST, FIRST + 9], 'imported']],
+    );
+    assert.deepEqual(JSON.parse(JSON.stringify(result)), result);
+  });
+
+  it('refuses to run while another import or fill holds the database', async () => {
+    const held = takeImportLock(coreDb);
+    try {
+      for (const fill of [false, true]) {
+        await assert.rejects(
+          indexL1ImportCLICommand({ bandsDir, coreDb, fill }, { log }),
+          /Another import or fill is running/,
+        );
+      }
+    } finally {
+      held.close();
+    }
+    // Released with the process that held it, or here with its handle.
+    const result = (await indexL1ImportCLICommand(
+      { bandsDir, coreDb },
+      { log },
+    )) as Record<string, unknown>;
+    assert.equal(result.imported, 1);
+  });
+
+  it('clears the spill directory a killed run left behind', async () => {
+    const stale = path.join(dir, '.duckdb-import-killed');
+    await fsp.mkdir(stale);
+    await fsp.writeFile(path.join(stale, 'spill.tmp'), 'x');
+    await indexL1ImportCLICommand({ bandsDir, coreDb }, { log });
+    assert.equal(fs.existsSync(stale), false);
+    assert.deepEqual(
+      (await fsp.readdir(dir)).filter((n) => n.startsWith('.duckdb-import')),
+      [],
+    );
   });
 
   it('does nothing the second time', async () => {

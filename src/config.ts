@@ -1677,7 +1677,41 @@ export const START_WRITERS =
 
 // Indexing range
 export const START_HEIGHT = +env.varOrDefault('START_HEIGHT', '0');
+/** Whether START_HEIGHT was set, so an explicit 0 is told from the default. */
+export const START_HEIGHT_SET = env.varOrUndefined('START_HEIGHT') !== undefined;
 export const STOP_HEIGHT = +env.varOrDefault('STOP_HEIGHT', 'Infinity');
+
+//
+// L1 band import
+//
+
+/**
+ * Fill the L1 history beneath this gateway from installed `parquet-l1`
+ * bands (subscribe to them with the index-swarm sidecar), while it runs.
+ * With an empty `core.db` and no START_HEIGHT, the block importer then
+ * starts at the chain tip instead of 0, and the history beneath arrives
+ * from the bands.
+ */
+export const L1_BAND_IMPORT_ENABLED =
+  env.varOrDefault('L1_BAND_IMPORT_ENABLED', 'false') === 'true';
+
+/** Where the index-swarm sidecar installs `parquet-l1` bands. */
+export const L1_BAND_IMPORT_BANDS_DIR = env.varOrDefault(
+  'L1_BAND_IMPORT_BANDS_DIR',
+  'data/indexes/installed/parquet-l1',
+);
+
+/** Seconds between fill runs, counted from the end of the last. */
+export const L1_BAND_IMPORT_INTERVAL_SECONDS = +env.varOrDefault(
+  'L1_BAND_IMPORT_INTERVAL_SECONDS',
+  '600',
+);
+
+/** SQLite page cache for a fill run, in MiB, in a process of its own. */
+export const L1_BAND_IMPORT_CACHE_MIB = +env.varOrDefault(
+  'L1_BAND_IMPORT_CACHE_MIB',
+  '512',
+);
 
 //
 // Verification

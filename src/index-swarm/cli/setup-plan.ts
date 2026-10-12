@@ -31,6 +31,13 @@ export const SUBSCRIBER_LOOKUP_ORDER = 'db,cdb,gateways,graphql';
  * installed until its successor is, so both copies are on disk for a while.
  */
 export const DEFAULT_MAX_DISK_GIB = 50;
+/**
+ * The budget with L1 bands as well: the whole chain is about 20 GiB of
+ * them today, beside a root-TX index of the same order, and both grow.
+ */
+export const DEFAULT_MAX_DISK_GIB_WITH_L1 = 100;
+/** The index name L1 bands are published under. */
+export const L1_INDEX = 'parquet-l1';
 const TRACKER_PORT_DEFAULT = '6969';
 /** Where the gateway's Envoy forwards announces to the sidecar's tracker. */
 export const GATEWAY_ANNOUNCE_PATH = '/ar-io/indexes/announce';
@@ -54,6 +61,11 @@ export interface SetupOptions {
   maxDiskGiB?: number;
   /** Also point the gateway at the installed bands (default true). */
   gateway: boolean;
+  /**
+   * Also take the publishers' L1 bands, and have the gateway fill its L1
+   * history from them while it runs (L1_BAND_IMPORT_ENABLED).
+   */
+  l1?: boolean;
   /** When publishing: the lowest height index-export builds. */
   startHeight?: number;
   /** When publishing: the gateway index-export header-checks against. */
@@ -214,6 +226,13 @@ export function planSetup(
     });
   }
 
+  if (options.l1 === true && options.subscribe.length === 0) {
+    plan.errors.push(
+      '--l1 takes L1 bands from the publishers --subscribe names: pass --subscribe <publisher wallet> as well.',
+    );
+    return plan;
+  }
+
   // Subscribing.
   if (options.subscribe.length > 0) {
     let current: ReturnType<typeof parseSubscribe>;
@@ -228,10 +247,22 @@ export function planSetup(
     const entries: Array<Record<string, string | string[]>> = current.map(
       (entry) => ({ ...entry }),
     );
+    const l1 = options.l1 === true;
     for (const publisher of options.subscribe) {
       const existing = current.find((e) => e.publisher === publisher);
       if (existing === undefined) {
-        entries.push({ publisher, name: ROOT_TX_INDEX });
+        entries.push({
+          publisher,
+          name: l1 ? [ROOT_TX_INDEX, L1_INDEX] : ROOT_TX_INDEX,
+        });
+        continue;
+      }
+      // A subscription without a name takes every index that is not opt-in,
+      // which is the root-TX index alone; naming L1 as well keeps that.
+      const names = [existing.name ?? ROOT_TX_INDEX].flat();
+      if (l1 && !names.includes(L1_INDEX)) {
+        const entry = entries.find((e) => e.publisher === publisher);
+        if (entry !== undefined) entry.name = [...names, L1_INDEX];
       } else if (
         existing.name !== undefined &&
         ![existing.name].flat().includes(ROOT_TX_INDEX)
@@ -251,11 +282,32 @@ export function planSetup(
       options.maxDiskGiB === undefined &&
       env.get('INDEX_SWARM_MAX_DISK_BYTES') === undefined
     ) {
+      const gib = l1 ? DEFAULT_MAX_DISK_GIB_WITH_L1 : DEFAULT_MAX_DISK_GIB;
       set({
         key: 'INDEX_SWARM_MAX_DISK_BYTES',
-        value: String(DEFAULT_MAX_DISK_GIB * 1024 ** 3),
-        reason: `${DEFAULT_MAX_DISK_GIB} GiB for installed bands (change with --max-disk-gib)`,
+        value: String(gib * 1024 ** 3),
+        reason: `${gib} GiB for installed bands (change with --max-disk-gib)`,
       });
+    } else if (
+      l1 &&
+      options.maxDiskGiB === undefined &&
+      Number(env.get('INDEX_SWARM_MAX_DISK_BYTES')) <
+        DEFAULT_MAX_DISK_GIB_WITH_L1 * 1024 ** 3
+    ) {
+      plan.warnings.push(
+        `INDEX_SWARM_MAX_DISK_BYTES is under ${DEFAULT_MAX_DISK_GIB_WITH_L1} GiB. L1 bands are about 20 GiB today beside the root-TX index; raise it with --max-disk-gib if bands stop installing.`,
+      );
+    }
+
+    if (l1) {
+      const before = plan.changes.length;
+      set({
+        key: 'L1_BAND_IMPORT_ENABLED',
+        value: 'true',
+        reason:
+          'the gateway fills its L1 history from the installed bands while it runs',
+      });
+      if (plan.changes.length > before) plan.restartCore = true;
     }
 
     if (options.gateway) {
@@ -272,7 +324,7 @@ export function planSetup(
         value: order,
         reason: 'installed bands answer right after the local database',
       });
-      plan.restartCore = plan.changes.length > before;
+      if (plan.changes.length > before) plan.restartCore = true;
       if (
         env.get('ROOT_TX_LOOKUP_ORDER') !== undefined &&
         splitList(order).includes('hyperbeam')
