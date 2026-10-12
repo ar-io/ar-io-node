@@ -515,8 +515,8 @@ before importing a byte, or without ever importing.
 ./tools/ar-io-node index-l1-verify --bands-dir data/indexes/installed/parquet-l1
 ```
 
-It reads the Parquet in height windows, so the whole chain (24 bands)
-never has to fit in memory. The block checks take about half a minute per
+It reads the Parquet in height windows, so the whole chain (24 bands in
+October 2026) never has to fit in memory. The block checks take about half a minute per
 500,000 blocks; with every block's `tx_root` and every band's lookups
 checked, the whole chain from a `--bands-dir` took about an hour on one
 host (2026-10-11). A set of bands that overlaps, or leaves a
@@ -680,9 +680,15 @@ about 45 minutes, nearly all of it `tx_root`.
 }
 ```
 
+With `--core-db` the result also carries `txRootChecked`, `txRootSkipped`
+and `txRootSeconds`, and with `--anchor-from`, `anchorSources`: each node
+asked, the height asked for, and the hash it gave or its error. Given both
+`--core-db` and `--bands-dir`, the command checks `core.db`.
+
 With `--bands-dir` the result names the directory (`bandsDir`) and the
-number of `bands` instead of a `core.db`, and carries no anchor fields. It
-adds `txRootChecked` and `txRootSkipped`, and `lookupsChecked` and
+number of `bands` instead of a `core.db`, and carries no anchor fields
+(`--anchor-*` are ignored). It has `txRootChecked` and `txRootSkipped`, and
+`lookupsChecked` and
 `lookupsSkipped` (bands whose lookups were checked, and bands of a layout
 without them). Its `checks` include `lookups`, whose failures name the
 band's first height and, in `found`, the band and the file.
@@ -799,7 +805,7 @@ script or an agent can drive it without parsing prose.
 | --- | --- | --- |
 | Exit code | `0` | `1` (`130` when interrupted with Ctrl-C) |
 | stdout | Exactly one JSON value, the command's result, written in full before the process exits | Empty |
-| stderr | Log lines (`info:`, `warn:`) only | Log lines, then either one line of error text, or (for a band refused by the header check, or a failed verify) the result as JSON |
+| stderr | Log lines (`info:`, `warn:`) only | Log lines, then either one line of error text, or the result as JSON: for a band refused by the header check, a band or range `index-l1-import` refused, a failed `index-l1-verify` or a failed `index-l1-audit` |
 
 - **Read stdout, branch on the exit code.** Never parse stderr for success;
   log lines may change.
@@ -816,8 +822,10 @@ script or an agent can drive it without parsing prose.
 - **Paths:** pass the `dir` a build reports straight back as `--band-dir`;
   see [Paths](#paths).
 - **No network** except range reads of root transactions from
-  `--gateway-url` during the header check, and `index-band-export`'s reads
-  from the ClickHouse it is given. Band commands make no Solana RPC calls.
+  `--gateway-url` during the header check, `index-band-export`'s reads
+  from the ClickHouse it is given, `index-l1-verify --anchor-from`'s block
+  hash fetches (`/block/height/<n>`), and `index-l1-audit --data-from`'s
+  transaction data fetches. Band commands make no Solana RPC calls.
 
 ### `index-band-build` result
 

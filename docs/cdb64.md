@@ -82,6 +82,17 @@ path or offsets. If no source is actionable, the saved fallback is returned
 CDB64 values never carry `dataSize` or the item's content type, so CDB64 hits
 terminate with the `offsets` (or `path`) reason rather than `complete_offsets`.
 
+### Answering `/ar-io/offsets`
+
+`GET /ar-io/offsets/:id` tells a peer or client where an item sits in its
+root transaction without a retrieval. It asks the local index, then CDB64
+sources on local disk only, such as bands installed by Index Sharing; remote
+sources are never fetched for it, and it needs `cdb` in
+`ROOT_TX_LOOKUP_ORDER` (it is in the default). An answer from a CDB64 index
+carries no `dataSize` or `contentType`. Answers are counted in
+`offsets_lookup_total{source}` (`db`, `cdb64`, or `none` for a 404). The
+route is in [the OpenAPI spec](openapi.yaml).
+
 ### Item size
 
 An offset tells the gateway where a data item starts, but not where it ends.
@@ -313,7 +324,7 @@ and that HTTP sources answer `Range` requests. Raise
 `CDB64_REMOTE_REQUEST_TIMEOUT_MS`, or add `gateways` to
 `CDB64_REMOTE_RETRIEVAL_ORDER`.
 
-**`Manifest contains file locations` for an Arweave source.** A manifest
+**`Arweave manifest contains N partition(s) with file locations` for an Arweave source.** A manifest
 fetched from Arweave cannot name local files. Use `arweave-id`,
 `arweave-byte-range` or `http` locations for every partition.
 

@@ -39,6 +39,8 @@ System_Boundary(ar-io, "AR.IO Gateway"){
 BiRel(user, envoy, "User sends data, chain, or GraphQL request to Envoy", "HTTPS" )
 BiRel(envoy, arweave, "Chain API requests get data directly from the Blockweave", "HTTP")
 BiRel(envoy, core, "GraphQL API and Data API requests are forwarded to the core service")
+Rel(peers, envoy, "Fetch published bands, .torrent files, WebSeed and RSS feeds; announce to the tracker", "HTTPS")
+Rel(envoy, sidecar, "Forwards tracker announces", "/ar-io/indexes/announce")
 
 
 Rel(core, index, "Indexes and stores chain and bundle data")
@@ -48,7 +50,8 @@ Rel(core, contiguous, "Saves contiguous data")
 
 Rel(core, redis, "Caches chain data and ArNS resolutions")
 Rel(core, clickhouse, "Stable history: Parquet export, loaded by clickhouse-auto-import. Optional: streams the unstable head. Queried for GraphQL")
-Rel(core, indexes, "Serves published indexes and loads installed ones", "read only")
+Rel(core, indexes, "Serves published indexes, .torrent files, WebSeed and feeds; loads installed root-TX bands", "read only")
+Rel(core, index, "Optional: fills core.db's L1 history from installed L1 bands while it runs", "index-l1-import --fill")
 
 Rel(sidecar, indexes, "Writes its signed publication; verifies others' signatures and band digests, installs their bands")
 Rel(exporter, index, "Reads core.db for L1 bands, and bundles.db for root-TX bands without ClickHouse", "read only")

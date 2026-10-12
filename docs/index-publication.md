@@ -115,7 +115,7 @@ shortened real example, with 254 of the 257 file entries removed:
 |---|---|---|
 | `version` | `1` | Schema version. A reader rejects a version it does not know. |
 | `publisher` | string | The publishing gateway's **wallet** address, as registered. |
-| `sequence` | integer ≥ 1 | Monotonic per publisher. |
+| `sequence` | integer ≥ 0 | Monotonic per publisher. |
 | `previousManifestSha256` | hex string or `null` | SHA-256 of the previous document, chaining publications into a history. |
 | `issuedAt`, `expiresAt` | ISO 8601 | When it was signed, and when to consider it stale. |
 | `indexes` | array | The indexes offered, each with a unique `name`. |
@@ -134,7 +134,7 @@ shortened real example, with 254 of the 257 file entries removed:
 
 | Field | Type | Meaning |
 |---|---|---|
-| `id` | `[A-Za-z0-9._-]{1,128}` | Unique within its index. Never `.` or `..`. |
+| `id` | `[A-Za-z0-9._-]{1,128}` | Unique within its index. Never `.`, never contains `..`, never a reserved name. A band lists at least one file. |
 | `files` | array of `{name, size, sha256}` | Every file in the band. `name` has the same pattern as `id`; `sha256` is lowercase hex. |
 | `heightRange` | `[start, end]` or `[start, null]` | Optional. Block heights covered; a `null` end is still open. |
 | `records` | integer | Optional, informational. |
@@ -493,7 +493,8 @@ first match.
 A `parquet-l1` band carries the Arweave base layer (L1: blocks,
 transactions, tags, owners) for one height range, in Parquet. A new gateway
 can import it instead of indexing the chain block by block, and a client can
-query it where it sits. The whole chain is 24 bands, about 15 GB.
+query it where it sits. The whole chain was 24 bands, about 15 GB, in
+October 2026; one band is added for every 5,000 heights.
 
 A band is a directory of `band.json` and these files:
 
@@ -508,10 +509,12 @@ A band is a directory of `band.json` and these files:
 
 `band.json` names the band's layout (`schema`: `l1-1`, `l1-2` or `l1-3`), its
 heights, and for each table and lookup file its row count and a digest of its
-rows, independent of the Parquet bytes. A band's id is a digest of its
-tables' rows; the lookup files are not part of it. Two publishers of the
-same chain therefore write bands with the same ids, and can compare them
-without exchanging files.
+rows, independent of the Parquet bytes. A band's id is
+`l1-h<from>-<to>-<publisher tag>-<digest>`: its heights, a tag of its
+publisher, and the first 12 hex digits of a digest of its tables' rows (the
+lookup files are not part of it). Two publishers of the same chain therefore
+write bands whose ids differ only in the publisher tag, with the same
+digest, and can compare them without exchanging files.
 
 `band.json` holds only what the rows determine, written one way: its
 `createdAt` is the time of the band's top block, not when it was built. Two
@@ -661,6 +664,13 @@ all. That is the better choice for repeated heavy queries:
 SELECT * FROM read_parquet('data/indexes/installed/parquet-l1/*/transactions.parquet')
 WHERE height BETWEEN 1000000 AND 1000100;
 ```
+
+The sidecar installs each band as `<band id>~<generation>`, and while a band
+is being replaced the old generation stays on disk beside the new one for
+the grace period (`INDEX_SWARM_SUPERSEDE_GRACE_SECONDS`, 300), so a glob over the
+directory can read some rows twice. For exact counts, read one directory per
+band id (the newest), or query the publisher's bands over HTTP from the
+signed document.
 
 Tags are plaintext in a band, so `tag_name = 'App-Name'` is a string
 comparison, where `core.db` needs two joins through its hash dictionaries.
@@ -845,4 +855,4 @@ These are what let a version 1 reader keep working as the protocol grows.
   band ids and file names. A reader rejects a document outside these bounds.
 - **Names are stable identifiers.** Index and band names become directory
   names on consumers, which is why they are restricted to a filesystem-safe
-  alphabet and can never be `.` or `..`.
+  alphabet, can never be `.` and can never contain `..`.

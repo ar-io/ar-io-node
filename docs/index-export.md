@@ -39,7 +39,7 @@ flowchart LR
 - [Where records come from](#where-records-come-from)
 - [Checks before publishing](#checks-before-publishing)
 - [Running it](#running-it)
-- [L1 bands](#l1-bands)
+- [L1 bands](#l1-bands-2)
 - [Adopting existing bands](#adopting-existing-bands)
 - [Building a band by hand](#building-a-band-by-hand)
 - [Known limits](#known-limits)
@@ -78,9 +78,11 @@ once.
 | `d` | A whole 5,000-height sub-range | Once the sub-range is below the top. Never rebuilt | About 35 MB |
 | tip | The one incomplete sub-range | Each run the top has moved. Supersedes the tips before it | Up to 35 MB |
 
-Only the tip is rebuilt, so a subscriber downloads at most about 35 MB a
-day. The top is one below the stable top, so the block above every band's
-last block is there to anchor it. The whole chain is 24 bands.
+Only the tip is rebuilt, so on most days a subscriber downloads at most
+about 35 MB. The exception is the day a 100,000-height range completes: its
+`h` band replaces the twenty `d` bands beneath it, and is several hundred MB.
+The top is one below the stable top, so the block above every band's last
+block is there to anchor it. The whole chain was 24 bands in October 2026.
 
 ## Where records come from
 
@@ -149,6 +151,11 @@ disagree for a range, a raw node's `/block/height/<h>` settles one block.
 It needs a core image that includes it (Release 85 or later). Set
 `INDEX_EXPORT_IMAGE_TAG` if core runs an older one. Use the gateway's own
 compose `-f` files with every command below.
+
+The service refuses to start without `AR_IO_WALLET` (band ids are made
+unique to the publishing gateway) and, when it builds root-TX bands,
+without `INDEX_EXPORT_HEADER_CHECK_URL` (it has no default).
+`tools/index-swarm-setup --publish` sets the second.
 
 ```bash
 # Once, without publishing: the plan, rows, time and peak disk per band and

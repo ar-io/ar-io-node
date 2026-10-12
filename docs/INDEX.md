@@ -18,7 +18,7 @@ Fast, offline lookups for data item to root transaction mappings.
 
 | Document | Description |
 |----------|-------------|
-| [CDB64 Root-TX Index](cdb64.md) | How the gateway uses CDB64 indexes: lookup order, configuration, sources, watching, troubleshooting |
+| [CDB64 Root-TX Index](cdb64.md) | How the gateway uses CDB64 indexes: lookup order, `/ar-io/offsets` answers, configuration, sources, watching, troubleshooting |
 | [CDB64 Tools Reference](cdb64-tools.md) | CLI tools for creating indexes |
 | [CDB64 Format Specification](cdb64-format.md) | Technical file format details |
 
@@ -28,9 +28,9 @@ Gateways publish signed index bands and subscribe to each other's.
 
 | Document | Description |
 |----------|-------------|
-| [Index Sharing: the `index-swarm` sidecar](index-swarm.md) | Publishing and subscribing over HTTP and BitTorrent: setup and status scripts, lookup order, running behind nginx, the torrent engine, metrics |
+| [Index Sharing: the `index-swarm` sidecar](index-swarm.md) | Publishing and subscribing over HTTP and BitTorrent: setup and status scripts (`--l1` to fill L1 history from bands), the tracker through the gateway's HTTPS, RSS feeds and WebSeeds, lookup order, running behind nginx, the torrent engine, metrics |
 | [Index export](index-export.md) | Building root-TX and L1 bands with the `index-export` service: checks, running it, L1 layouts and lookup files, adoption, alerting |
-| [Index Sharing: the publication protocol](index-publication.md) | Discovering, verifying and reading bands without the sidecar: the signed document, byte routes, L1 bands, lookup files, querying over HTTP, a reference client |
+| [Index Sharing: the publication protocol](index-publication.md) | Discovering, verifying and reading bands without the sidecar: the signed document, byte routes, following an index in a BitTorrent client through its RSS feed, L1 bands, lookup files, querying over HTTP, a reference client |
 
 ### Rate Limiting & Payments
 
@@ -69,7 +69,7 @@ Gateways publish signed index bands and subscribe to each other's.
 | Document | Description |
 |----------|-------------|
 | [Deployment Topologies](deployment-topologies.md) | Proxy edge, shared ClickHouse, partitioning, and app-split topologies |
-| [The `ar-io-node` CLI](cli.md) | The gateway's command-line tool: building, checking and exporting index bands (`index-band-build`, `index-band-verify`, `index-band-export`), bootstrapping an L1 index from published bands and checking it against the chain (`index-l1-import`, `index-l1-verify`, `index-l1-audit`), and every `ar.io` CLI command, run in the core image through `tools/ar-io-node` |
+| [The `ar-io-node` CLI](cli.md) | The gateway's command-line tool: building, checking and exporting index bands (`index-band-build`, `index-band-verify`, `index-band-export`), filling an L1 index from published bands, while the gateway runs (`--fill`) or into a new database, and checking it against the chain (`index-l1-import`, `index-l1-verify`, `index-l1-audit`), and every `ar.io` CLI command, run in the core image through `tools/ar-io-node` |
 
 ## Reference
 

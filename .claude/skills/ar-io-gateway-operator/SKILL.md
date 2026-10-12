@@ -41,7 +41,7 @@ client → (optional edge: nginx/CDN) → envoy :3000 → core :4000 → respons
                                                               ↘ webhook fan-out → optional sidecars
 ```
 
-Every served data response carries trust headers (`X-AR-IO-Verified`, `X-AR-IO-Trusted`, `X-AR-IO-Stable`, `X-AR-IO-Hops`, plus `X-Arweave-*` tag passthrough). Those headers are what HTTPSig signs — see `src/middleware/httpsig.ts` `TRIGGER_HEADERS`. Endpoints with no trust trigger (`/ar-io/info`, `/ar-io/healthcheck`, `/graphql` errors) are deliberately not signed.
+Every served data response carries trust headers (`X-AR-IO-Verified`, `X-AR-IO-Trusted`, `X-AR-IO-Stable`, `X-AR-IO-Hops`, plus `X-Arweave-*` tag passthrough). Those headers are what HTTPSig signs — see `src/lib/httpsig.ts` `TRIGGER_HEADERS`. Endpoints with no trust trigger (`/ar-io/info`, `/ar-io/healthcheck`, `/graphql` errors) are deliberately not signed.
 
 ### Data retrieval — composite source with fallback chain
 
@@ -59,7 +59,7 @@ Two write paths run side-by-side:
 
 **1. SQLite primary indexer (always on)** — `BlockImporter` worker imports blocks one at a time into `new_blocks`/`new_transactions` (the unstable head, ~last 18 blocks), and a separate process promotes them to `stable_blocks`/`stable_transactions` once they're past the reorg horizon. ANS-104 bundle unbundling is gated by `ANS104_UNBUNDLE_FILTER` (often narrow). Database access is in a worker thread (`StandaloneSqlite`) — never call SQLite synchronously from the main thread.
 
-**2. ClickHouse pipeline (optional, `--profile clickhouse`)** — Stable rows are exported to parquet then imported by `clickhouse-auto-import` (hourly cycles) into `staging_*` and finally `transactions`. **Streaming pipeline** (PR #699 / `clickhouse-streaming-unstable-head` branch) mirrors the unstable-head SQLite writes directly into ClickHouse `new_blocks` / `new_transactions` so GraphQL can query the head without waiting for the parquet round-trip. Activated by `CLICKHOUSE_STREAMING_ENABLED=true`. Reorgs trigger bounded `ALTER TABLE ... DELETE WHERE` on the `new_*` tables.
+**2. ClickHouse pipeline (optional, `--profile clickhouse`)** — Stable rows are exported to parquet then imported by `clickhouse-auto-import` (hourly cycles) into `staging_*` and finally `transactions`. **Streaming pipeline** (#699, in releases since r79) mirrors the unstable-head SQLite writes directly into ClickHouse `new_blocks` / `new_transactions` so GraphQL can query the head without waiting for the parquet round-trip. Activated by `CLICKHOUSE_STREAMING_ENABLED=true`. Reorgs trigger bounded `ALTER TABLE ... DELETE WHERE` on the `new_*` tables.
 
 ### GraphQL routing
 
@@ -109,9 +109,9 @@ Pipeline diagnostic: a single `curl -sf .../ar-io/__gateway_metrics | grep -E 'q
 
 ### ArNS resolution
 
-`CompositeArNSResolver` walks resolvers in order: `TrustedGatewayArNSResolver` (asks `TRUSTED_ARNS_GATEWAY_URL`, default `https://__NAME__.turbo-gateway.com`), then `OnDemandArNSResolver` (queries the on-chain `ario-arns` and `ario-ant` programs directly via `SOLANA_RPC_URL`). The base name set is paginated into an in-memory `ArNSNamesCache` at boot and refreshed on a debounce. Resolved IDs may be Arweave TXs (route to data path) or, on the streaming-head branch, IPFS CIDs (route to `/ipfs/<cid>` via the Kubo sidecar). Unknown names log `Unable to resolve name against all resolvers` — that's normal user-error traffic, not a service failure.
+`CompositeArNSResolver` walks resolvers in the order `ARNS_RESOLVER_PRIORITY_ORDER` sets, default `on-demand,gateway`: `OnDemandArNSResolver` (queries the on-chain `ario-arns` and `ario-ant` programs directly via `SOLANA_RPC_URL`), then `TrustedGatewayArNSResolver` (asks `TRUSTED_ARNS_GATEWAY_URL`, default `https://__NAME__.turbo-gateway.com`). The base name set is paginated into an in-memory `ArNSNamesCache` at boot and refreshed on a debounce. Resolved IDs are Arweave transaction or data item IDs, served through the data path. Unknown names log `Unable to resolve name against all resolvers` — that's normal user-error traffic, not a service failure.
 
-`/<name>` and `/<name>/<path>` requests carry `X-ArNS-*` trust headers in the response. Manifest path resolution still uses `StreamingManifestPathResolver`; the "from index" path is not implemented yet (logs warn `not implemented` then falls back to data-side resolution, which works).
+`/<name>` and `/<name>/<path>` requests carry `X-ArNS-*` trust headers in the response. Manifest path resolution uses `StreamingManifestPathResolver`: `resolveFromIndex` answers from an in-process cache of earlier resolutions and, for a manifest's root, from the stored resolution index; anything else is resolved by streaming the manifest (`resolveFromData`).
 
 ### Network identity, observer, and incentives
 
@@ -136,7 +136,7 @@ Observer service knobs:
 Network onboarding (operator side, only needed once):
 - `npm install -g @ar.io/sdk` — provides the `ar.io` CLI binary. Use `ar.io get-gateway --address <pubkey>` to read state, `ar.io join-network ...` to register.
 - The CLI accepts the operator key as either `--wallet-file <path>` (JSON) or `--private-key '<base58>'` (Phantom export — `bs58.decode` runs in-process).
-- Every Solana command needs `-t solana` and the four program IDs (`--core-program-id` / `--gar-program-id` / `--arns-program-id` / `--ant-program-id`) plus `--rpc-url`. As of `@ar.io/sdk@^4.0.0-solana.22` the bundled "mainnet" constants are still placeholders, so passing `--mainnet` alone resolves to non-existent addresses — always pass the explicit program IDs the network team publishes for whichever environment you're targeting (mainnet, staging-devnet, local devnet).
+- Every Solana command needs `-t solana` and the four program IDs (`--core-program-id` / `--gar-program-id` / `--arns-program-id` / `--ant-program-id`) plus `--rpc-url`. Pass the explicit program IDs the network team publishes for the environment you are targeting (mainnet, staging-devnet, local devnet) rather than relying on the SDK's bundled constants; the gateway's own `/ar-io/info` `programIds` shows what a running gateway uses. The gateway carries `@ar.io/sdk` `^4.5.0`.
 - Register via the CLI or the gateways.ar.io portal: operator wallet, observer wallet, FQDN, Properties Tx ID, label, stake (`--operator-stake 20000` in whole ARIO — the CLI converts to mARIO internally via `requiredMARIOFromOptions` → `new ARIOToken(...).toMARIO()`).
 - Gateway must be reachable at the registered FQDN with valid TLS, AND configured for the same `programIds` set you joined with. The usual cause of a "I joined but nothing's working" report is a gateway whose `.env` still pins the old network's program IDs.
 - Optional delegated staking — operators can accept delegations with a configurable reward share. `--min-delegated-stake` is mARIO directly (no ARIO→mARIO conversion); `--operator-stake` is the only stake-input flag that takes whole ARIO.
@@ -180,7 +180,7 @@ Webhook events fired: `data-cached`, `tx-indexed`, `ans104-data-item-indexed`. `
 docker compose --profile clickhouse up -d
 ```
 
-The `--profile clickhouse` flag matters: without it, ClickHouse and the auto-import container stay down and the streaming pipeline goes silent. Other profiles (`grafana`, `bundler`, `litestream`, `ao`, `hb`) gate their own services.
+The `--profile clickhouse` flag matters: without it, ClickHouse and the auto-import container stay down and the streaming pipeline goes silent. The other profiles are `litestream`, `otel`, `index-swarm`, `index-swarm-torrent` and `index-export`. Grafana, the bundler and HyperBEAM are separate compose files (`docker-compose.grafana.yaml`, `docker-compose.bundler.yaml`, `docker-compose.hb.yaml`), each passed with its own `-f`.
 
 Wait for ready:
 ```bash
@@ -194,7 +194,7 @@ docker compose --profile clickhouse build core clickhouse-auto-import
 docker compose --profile clickhouse up -d --force-recreate core clickhouse-auto-import
 ```
 
-`--force-recreate` is required — without it, compose sees the same image *name* (`:latest`) and skips recreation even though the image *digest* changed. Confirm with `docker inspect <container> --format '{{.Image}}'` — the SHA must differ from before.
+`--force-recreate` is required — without it, compose sees the same image *name and tag* and skips recreation even though the image *digest* changed. Confirm with `docker inspect <container> --format '{{.Image}}'` — the SHA must differ from before.
 
 ### Disk pressure recovery (in order of safety)
 
@@ -214,10 +214,15 @@ Avoid `docker volume prune -af` without listing first (`docker volume ls -f dang
 ADMIN=$(grep '^ADMIN_API_KEY=' .env | cut -d= -f2-)
 TX=<arweave-tx-or-ipfs-cid>
 
-# Block (the gateway has PUT only — there is no DELETE handler today)
+# Block
 curl -sf -X PUT "http://localhost:4000/ar-io/admin/block-data" \
   -H "Authorization: Bearer $ADMIN" -H 'Content-Type: application/json' \
-  -d "{\"id\":\"$TX\",\"hash\":\"$TX\",\"source\":\"manual\",\"notes\":\"...\"}"
+  -d "{\"id\":\"$TX\",\"source\":\"manual\",\"notes\":\"...\"}"
+
+# Unblock, by id or by data hash (PUT, not DELETE)
+curl -sf -X PUT "http://localhost:4000/ar-io/admin/unblock-data" \
+  -H "Authorization: Bearer $ADMIN" -H 'Content-Type: application/json' \
+  -d "{\"id\":\"$TX\"}"
 ```
 
 If a moderation sidecar is present (and wired via `WEBHOOK_TARGET_SERVERS`), prefer routing the block through it — depending on the sidecar's config, it may also bust an edge cache after blocking.
@@ -235,10 +240,10 @@ Don't draw conclusions from `/ar-io/info` or `/ar-io/healthcheck` benchmarks —
 ## Pitfalls (apply to any deployment)
 
 1. **`clickhouse-auto-import` logs `Failed to connect to core port 4000 after 0 ms`** — the script's connection state goes stale when core is recreated mid-cycle, and auto-import sleeps 1 h between cycles, so the bad state lingers. Recreating just the auto-import container clears it; manual `curl http://core:4000/...` from inside the container will succeed even while the script is failing.
-2. **Streaming tables empty (`new_blocks` / `new_transactions = 0`) despite `CLICKHOUSE_STREAMING_ENABLED=true`** — running the published `:latest` core image instead of a local build. The streaming columns/tables are populated only by the dev-branch code. Rebuild + force-recreate.
+2. **Streaming tables empty (`new_blocks` / `new_transactions = 0`) despite `CLICKHOUSE_STREAMING_ENABLED=true`** — check the core image is r79 or later (`docker inspect <core> --format '{{.Config.Image}}'`) and that core was recreated after the setting changed; then check core's logs for `ClickHouseStreamer` errors.
 3. **Webhook error flood (`getaddrinfo ENOTFOUND <sidecar-host>`)** — a configured sidecar isn't running. Bring it up. Don't strip the target unless intentionally retiring the sidecar — those targets are how moderation and provenance subsystems work.
 4. **Bundle unbundling looks idle (low matched count)** — `ANS104_UNBUNDLE_FILTER` is intentionally narrow on most operator configs (e.g., one App-Name + one owner). Confirm via `/ar-io/info`. Not a bug.
-5. **Gateway has no `DELETE /ar-io/admin/block-data` handler** — only PUT. Sidecars that send DELETE (e.g. an unblock action) will see failures. Document but don't try to "fix" by changing the sidecar — the gateway is the side that needs the route.
+5. **Unblocking is `PUT /ar-io/admin/unblock-data`, not `DELETE /ar-io/admin/block-data`** — there is no DELETE handler. A sidecar that sends DELETE to unblock will see failures; point it at `unblock-data` (body `{"id": ...}` or `{"hash": ...}`).
 6. **`/ar-io/info` and `/ar-io/healthcheck` are unsigned** — they carry no trust-trigger headers, so HTTPSig signing skips them. Use `/raw/<id>` against a cached tx for HTTPSig benchmarks.
 7. **`docker logs <core> | tail` can dump megabytes of binary** — the streaming pipeline sometimes logs cert chains as raw byte arrays. Filter with `grep -viE '"buffer":|raw bytes|^[\[0-9, ]+$'`.
 8. **Five-edit dance for adding a database method** — SQL statement, worker impl in `StandaloneSqlite`, queue wrapper in main DB class, case in worker message handler, interface in `types.d.ts`. Skip any one and you get silent failures.
@@ -259,7 +264,7 @@ Don't draw conclusions from `/ar-io/info` or `/ar-io/healthcheck` benchmarks —
 | 5xx from gateway | `docker logs --tail 50 <core-container>` (filtered), then envoy logs |
 | Indexer falling behind | SQLite `MAX(height)` per `block_importer` log, peer health, `/data` free space |
 | ClickHouse stale | `docker compose --profile clickhouse logs --tail 50 clickhouse-auto-import`; verify curl-to-core works from inside the container |
-| Streaming table stuck at 0 | image SHA — almost always the published `:latest` rather than local build |
+| Streaming table stuck at 0 | core image older than r79, or core not recreated after `CLICKHOUSE_STREAMING_ENABLED` changed |
 | Admin API 401/404 | `ADMIN_API_KEY` mismatch with `.env` |
 | Webhook silent | `WEBHOOK_TARGET_SERVERS` in gateway `.env`; sidecars must be on the same docker network and reachable by service name |
 | `/data` filling | `du -h -d 1 /data \| sort -hr` — usually the `contiguous` cache |

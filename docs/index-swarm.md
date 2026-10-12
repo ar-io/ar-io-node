@@ -656,7 +656,7 @@ copy without the engine being touched.
 Peers are not metered, so a band the swarm can bring still starts after the
 publisher's HTTP meter has answered `402` or `429`.
 
-At most four torrent downloads run at once (`INDEX_SWARM_DOWNLOAD_CONCURRENCY`);
+At most four torrent downloads run at once (a fixed limit; `INDEX_SWARM_DOWNLOAD_CONCURRENCY` sets how many of one band's files are fetched over HTTP in parallel);
 a band past that waits for a later poll. A download in progress is kept in
 `state.json`, so a restart picks it up where the engine left it. An engine
 error, the engine losing the torrent, or
@@ -1003,7 +1003,7 @@ Metrics worth a dashboard:
 | `index_publish_manifest_age_seconds` | Age of this node's document. Past the TTL, subscribers see this publisher as stale |
 | `index_publish_sequence`, `index_publish_bands{index}` | What is offered |
 | `index_publish_describe_duration_seconds{index}` | Time spent hashing a band. A steady stream means bands are churning |
-| `index_subscription_total{publisher,index,transport,result}` | Outcomes: one per poll for the document (`index` empty), plus one per band fetched. `installed` is healthy; see the table below for the rest |
+| `index_subscription_total{publisher,index,transport,result}` | Outcomes: one per poll for the document (`index` empty), plus one per band fetched. `installed` and `unchanged` (a poll that found the document as it was) are healthy; see the table below for the rest |
 | `index_subscription_manifest_age_seconds{publisher}` | Age of the newest document from each publisher. **The alarm that matters**: climbing past the publisher's TTL means it has gone quiet |
 | `index_subscription_sequence{publisher}` | The latest sequence seen |
 | `index_swarm_installed_bands{index}` | What is installed |
@@ -1018,7 +1018,8 @@ On the gateway, at `/ar-io/__gateway_metrics`:
 
 | Metric | Read it as |
 |---|---|
-| `indexes_requests_total{route,status}` | Requests to the index routes (`publication`, `file`, `blob`, `torrent`, `webseed`) by status. On a publisher, `402` and `429` are the meter at work |
+| `indexes_requests_total{route,status}` | Requests to the index routes (`publication`, `file`, `blob`, `torrent`, `webseed`, `feed`) by status. On a publisher, `402` and `429` are the meter at work |
+| `offsets_lookup_total{source}` | `GET /ar-io/offsets/:id` answers by source: `db` (the local index), `cdb64` (installed bands and other local CDB64), or `none` for a 404 |
 | `indexes_bytes_served_total{route}` | Bytes served by the index routes |
 | `root_tx_lookup_total{source="cdb64",status}` | How often installed bands answered a lookup |
 
