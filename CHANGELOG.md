@@ -386,6 +386,18 @@ with core**).
 
 ### Fixed
 
+- **JSON data was served as `application/json; charset=utf-8`.** Express
+  appended the charset to every JSON, JavaScript and text type, so a client
+  that compares the type exactly, such as Zora's metadata check, rejected
+  JSON from every ar.io gateway. A JSON type is now sent exactly as it was
+  uploaded, as arweave.net sends it; RFC 8259 defines no charset for JSON,
+  and `fetch`, XHR and JSON modules read it as UTF-8 in Chromium, Firefox
+  and WebKit. One visible difference: Safari shows non-ASCII text in a JSON
+  document opened directly in a tab as mojibake, as it does on arweave.net.
+  Text and JavaScript types keep the charset, since without it browsers
+  decode UTF-8 text documents as windows-1252. Edge caches keep the old
+  header on responses they already hold until those expire or are purged.
+
 - **A fleet node could not subscribe to its own fleet's index publication.**
   The fleet recipe in `docs/index-swarm.md` subscribes a non-signing node to
   the fleet wallet, which is that node's own `AR_IO_WALLET` (it must be, for
