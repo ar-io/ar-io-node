@@ -28,6 +28,19 @@ export const DATA_DIR = 'data/indexes';
 export const EXPORT_KINDS = ['root-tx-index', 'parquet-l1'] as const;
 export type ExportKind = (typeof EXPORT_KINDS)[number];
 
+/**
+ * How root-TX bands cut the chain: `legacy` (h, a weekly-folded r, a daily
+ * d) or `grid` (the parquet-l1 grid, frozen after a settle lag; see
+ * `kinds/root-tx/planner-grid.ts`).
+ */
+export const ROOT_TX_LAYOUTS = ['legacy', 'grid'] as const;
+export type RootTxLayout = (typeof ROOT_TX_LAYOUTS)[number];
+
+/** Grid layout defaults: about 7 days of blocks, a weekly re-settle. */
+export const DEFAULT_SETTLE_BLOCKS = 5040;
+export const DEFAULT_RESETTLE_INTERVAL_HOURS = 168;
+export const DEFAULT_RESETTLE_MAX_CHANGED = 20_000;
+
 export interface ExportConfig {
   /** The indexes to build. */
   kinds: ExportKind[];
@@ -43,6 +56,25 @@ export interface ExportConfig {
   runAtMinute: number;
   /** Span at which the recent band is frozen. */
   recentMaxBlocks: number;
+  /** How root-TX bands cut the chain; `legacy` when unset. */
+  rootTxLayout?: RootTxLayout;
+  /**
+   * Grid layout: blocks a 5,000-height range waits below the stable top
+   * before it is frozen ({@link DEFAULT_SETTLE_BLOCKS} when unset).
+   */
+  settleBlocks?: number;
+  /**
+   * Grid layout: how often each frozen band is re-settled; 0 never
+   * automatically, only with `--resettle` ({@link DEFAULT_RESETTLE_INTERVAL_HOURS}
+   * hours when unset).
+   */
+  resettleIntervalMs?: number;
+  /**
+   * Grid layout: the most entries a re-settle may relocate in one band, each
+   * header-checked; a band with more is rejected
+   * ({@link DEFAULT_RESETTLE_MAX_CHANGED} when unset).
+   */
+  resettleMaxChanged?: number;
   /** Lowest height to build; required to bootstrap. */
   startHeight?: number;
   /**
@@ -71,7 +103,7 @@ const value = (env: Env, name: string): string | undefined => {
 function integer(
   env: Env,
   name: string,
-  { min, fallback }: { min: number; fallback?: number },
+  { min, max, fallback }: { min: number; max?: number; fallback?: number },
 ): number | undefined {
   const raw = value(env, name);
   if (raw === undefined) return fallback;
@@ -80,7 +112,21 @@ function integer(
   }
   const number = Number(raw);
   if (number < min) throw new Error(`${name} must be at least ${min}: ${raw}`);
+  if (max !== undefined && number > max) {
+    throw new Error(`${name} must be at most ${max}: ${raw}`);
+  }
   return number;
+}
+
+/** `INDEX_EXPORT_ROOT_TX_LAYOUT`, exactly `legacy` (the default) or `grid`. */
+function rootTxLayout(env: Env): RootTxLayout {
+  const raw = value(env, 'INDEX_EXPORT_ROOT_TX_LAYOUT') ?? 'legacy';
+  if (!(ROOT_TX_LAYOUTS as readonly string[]).includes(raw)) {
+    throw new Error(
+      `INDEX_EXPORT_ROOT_TX_LAYOUT must be ${ROOT_TX_LAYOUTS.join(' or ')}: ${raw}`,
+    );
+  }
+  return raw as RootTxLayout;
 }
 
 /** `HH:MM` as minutes after midnight. */
@@ -94,10 +140,10 @@ export function parseRunAt(raw: string): number {
 
 /**
  * Reads the service's settings. Refuses: no `AR_IO_WALLET`; an unknown
- * index in `INDEX_EXPORT_KINDS`; and, when building root-TX bands, no
- * `INDEX_EXPORT_HEADER_CHECK_URL` (there is no safe default: a gateway that
- * has to fetch the roots itself times out and takes load for it), or
- * anything {@link resolveSourceConfigs} refuses.
+ * index in `INDEX_EXPORT_KINDS`, or root-TX layout; and, when building
+ * root-TX bands, no `INDEX_EXPORT_HEADER_CHECK_URL` (there is no safe
+ * default: a gateway that has to fetch the roots itself times out and takes
+ * load for it), or anything {@link resolveSourceConfigs} refuses.
  */
 export function parseExportConfig(env: Env, dataDir = DATA_DIR): ExportConfig {
   const publisher = value(env, 'AR_IO_WALLET');
@@ -171,6 +217,27 @@ export function parseExportConfig(env: Env, dataDir = DATA_DIR): ExportConfig {
       min: 1000,
       fallback: 100_000,
     }) as number,
+    rootTxLayout: rootTxLayout(env),
+    settleBlocks: integer(env, 'INDEX_EXPORT_ROOT_TX_SETTLE_BLOCKS', {
+      min: 0,
+      fallback: DEFAULT_SETTLE_BLOCKS,
+    }) as number,
+    resettleIntervalMs:
+      (integer(env, 'INDEX_EXPORT_ROOT_TX_RESETTLE_INTERVAL_HOURS', {
+        min: 0,
+        // A century: far past any schedule, and well inside a safe integer
+        // of milliseconds.
+        max: 876_000,
+        fallback: DEFAULT_RESETTLE_INTERVAL_HOURS,
+      }) as number) * 3600_000,
+    resettleMaxChanged: integer(
+      env,
+      'INDEX_EXPORT_ROOT_TX_RESETTLE_MAX_CHANGED',
+      {
+        min: 0,
+        fallback: DEFAULT_RESETTLE_MAX_CHANGED,
+      },
+    ) as number,
     ...(startHeight !== undefined ? { startHeight } : {}),
     ...(l1RunBudgetMinutes !== undefined
       ? { l1RunBudgetMs: l1RunBudgetMinutes * 60_000 }

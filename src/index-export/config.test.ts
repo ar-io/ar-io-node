@@ -33,6 +33,31 @@ describe('parseExportConfig', () => {
       ['sqlite'],
       'SQLite without CLICKHOUSE_URL',
     );
+    assert.equal(config.rootTxLayout, 'legacy');
+    assert.equal(config.settleBlocks, 5040);
+    assert.equal(config.resettleIntervalMs, 168 * 3600_000);
+    assert.equal(config.resettleMaxChanged, 20_000);
+  });
+
+  it('reads the grid layout settings, 0 turning automatic re-settles off', () => {
+    const config = parseExportConfig({
+      ...BASE,
+      INDEX_EXPORT_ROOT_TX_LAYOUT: 'grid',
+      INDEX_EXPORT_ROOT_TX_SETTLE_BLOCKS: '7200',
+      INDEX_EXPORT_ROOT_TX_RESETTLE_INTERVAL_HOURS: '0',
+      INDEX_EXPORT_ROOT_TX_RESETTLE_MAX_CHANGED: '500',
+    });
+    assert.equal(config.rootTxLayout, 'grid');
+    assert.equal(config.settleBlocks, 7200);
+    assert.equal(config.resettleIntervalMs, 0);
+    assert.equal(config.resettleMaxChanged, 500);
+    assert.equal(
+      parseExportConfig({
+        ...BASE,
+        INDEX_EXPORT_ROOT_TX_RESETTLE_INTERVAL_HOURS: '24',
+      }).resettleIntervalMs,
+      24 * 3600_000,
+    );
   });
 
   it('reads every setting', () => {
@@ -92,6 +117,13 @@ describe('parseExportConfig', () => {
       ['INDEX_EXPORT_METRICS_PORT', 'abc', /whole number/],
       ['INDEX_EXPORT_L1_RUN_BUDGET_MINUTES', '0', /at least 1/],
       ['INDEX_EXPORT_RUN_AT_UTC', '4am', /HH:MM/],
+      ['INDEX_EXPORT_ROOT_TX_LAYOUT', 'Grid', /must be legacy or grid: Grid/],
+      ['INDEX_EXPORT_ROOT_TX_LAYOUT', 'l1', /must be legacy or grid/],
+      ['INDEX_EXPORT_ROOT_TX_SETTLE_BLOCKS', '5k', /whole number/],
+      ['INDEX_EXPORT_ROOT_TX_SETTLE_BLOCKS', '-1', /whole number/],
+      ['INDEX_EXPORT_ROOT_TX_RESETTLE_INTERVAL_HOURS', '1.5', /whole number/],
+      ['INDEX_EXPORT_ROOT_TX_RESETTLE_INTERVAL_HOURS', '9999999', /at most/],
+      ['INDEX_EXPORT_ROOT_TX_RESETTLE_MAX_CHANGED', 'all', /whole number/],
     ] as const) {
       assert.throws(
         () => parseExportConfig({ ...BASE, [name]: value }),
