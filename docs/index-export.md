@@ -122,6 +122,50 @@ cannot build L1 bands, and its runs say so (`incomplete`, not retried).
 Only transactions a block lists are written, with their own tags. A row a
 fork left in `core.db` is counted (`strayTransactions`) and never published.
 
+### Overlay files
+
+A `csv` source (`{"type":"csv","name":"bundler","path":"/overlay"}`) reads
+every file in its directory named `<from>-<to>.csv`, where `from` and `to`
+are block heights (`from` ≤ `to`, both included), for example
+`2010000-2014999.csv`:
+
+- **Coverage.** A file vouches for exactly its heights. Rows outside them
+  are left out (counted as `outside_coverage`), and files may not overlap:
+  a run reading two that do fails naming both.
+- **Writing.** Write a file under another name (`*.tmp`, `*.partial` or a
+  dot-file, which are ignored) and rename it into place; replace one the
+  same way.
+- **Plain text only.** A gzipped file (`*.csv.gz`) does not match the name
+  and is ignored.
+- **Columns**, comma-separated, unquoted, one row per line:
+
+  ```text
+  data_item_id,root_tx_id,path,root_data_item_offset,root_data_offset,data_item_size,height
+  ```
+
+  | Column | Value |
+  |---|---|
+  | `data_item_id`, `root_tx_id` | 43-character base64url ids; required |
+  | `path` | Empty: nested paths are not supported, and a row with one fails the read |
+  | `root_data_item_offset` | Where the item (its header) starts in the root transaction's data, in bytes |
+  | `root_data_offset` | Where the item's payload starts in the root transaction's data, in bytes |
+  | `data_item_size` | The whole item, header and payload, in bytes |
+  | `height` | The root transaction's block height; required in an overlay (a row without one is left out, `no_height`) |
+
+  The offsets and size are non-negative integers, or empty for a row with
+  its root only. Give both offsets or neither; the header between them
+  must be 1 byte to 1 MiB, or the build drops the row.
+- **Header line** optional: a file whose first line starts with
+  `data_item_id` (after a byte-order mark, if any) skips it.
+- A malformed row (an id that isn't 43 base64url characters, a number that
+  isn't a whole number, fewer than two columns) fails the source's read,
+  naming the file and line, and so the run unless the source is
+  `"optional": true`. Give each id once per file.
+
+`ar-io-node index-band-export --output <from>-<to>.csv` writes this format,
+with a header line. A peer's files (`"rank": 0`) take the same names and
+columns.
+
 ## Checks before publishing
 
 ### Root-TX bands
@@ -272,20 +316,31 @@ since (ClickHouse TTL) stay.
 | Unchanged | The same content, or the same entries | Nothing published; the band keeps its id. Not due again for an interval |
 | Published | Entries were added or relocated, and the checks passed | The same range under a new id, superseding the old band |
 | Rejected | A wrong header; an entry would be lost; more relocated entries than `INDEX_EXPORT_ROOT_TX_RESETTLE_MAX_CHANGED` (20,000); an entry relocated to a root without offsets; conflicts over 1% | The old band stays. Not tried again for an interval, or until `--once --resettle` |
-| Couldn't check | A relocated entry could not be read, or the usual check fell short | The old band stays, and the next run tries again |
+| Couldn't check | A relocated entry could not be read, or under 80% of the checked entries passed | The old band stays, and the next run tries again |
 
 The safety rules:
 
 - **Nothing is lost.** The rebuilt band is compared with the published one,
   entry by entry: an id the old band holds and the new one doesn't fails
   the band.
-- **Every relocation is checked.** An entry whose root, offsets or size
-  changed is header-checked, each one (`resettle-changed`); all of them
-  must read back right, whatever share of the rest did. Added entries are
-  checked by a sample of 150 (`resettle-added`), with the usual samples.
-- **Any wrong header fails the band.** A read that fails in transport
-  counts against the 80% pass ratio as for any band.
-- The usual conflict cap and merge rules apply.
+- **Only the delta is header-checked.** The entries the band already held
+  were checked when it was first published, and their roots may since be
+  unseeded, so they are not read again. The checked set is:
+  - every relocated entry (one whose root, offsets or size changed), each
+    one, stratum `resettle-changed`;
+  - a sample of 150 of the added entries, stratum `resettle-added`;
+  - the build's usual `repaired` and `overlay-changed` sample entries that
+    are themselves added or relocated.
+- **Every relocated entry must read and verify.** One that cannot be read
+  makes the band "couldn't check", whatever share of the rest passed.
+- **The 80% pass ratio applies to the checked set only**, and a read that
+  fails in transport counts against it, as for any band.
+- **Any wrong header fails the band.**
+- An entry added without offsets cannot be checked, as in any build; a
+  re-settle that adds only such entries publishes without a check.
+- With nothing added or relocated, the re-settle is a no-op (unchanged).
+- The usual conflict cap and merge rules apply. Freezes, rolls and the tip
+  are checked as any band: the general sample of 150 and the usual strata.
 
 The report gives each re-settle's `resettle`: the old and new entry
 counts, how many were added, changed and unchanged, and the header check's
@@ -347,9 +402,10 @@ band out of `published/`, then run `--once`.
 
 - An entry indexed after its range froze joins the band at the next
   re-settle, up to a week later, not at once.
-- A 5,000-height range with no entries gets no band, so its 100,000-height
-  range never rolls: its `d` bands stay as they are. This does not happen
-  on mainnet above the earliest bundles.
+- **Known limitation: an empty 5,000-height range never rolls.** A range
+  with no entries gets no `d` band, and a roll needs all twenty, so its
+  100,000-height range never becomes an `h`: its other `d` bands stay as
+  they are. This does not happen on mainnet above the earliest bundles.
 - `INDEX_EXPORT_RECENT_MAX_BLOCKS` and the weekly fold are not used.
 
 ## L1 bands

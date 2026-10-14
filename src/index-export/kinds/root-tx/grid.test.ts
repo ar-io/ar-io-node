@@ -135,6 +135,26 @@ describe('grid band reads', () => {
       ]);
     });
 
+    it('reports which watched ids were added or changed', async () => {
+      const old = await band(
+        [entry(1, 9), entry(2, 9), entry(3, 9)],
+        [100, 199],
+      );
+      const next = await band(
+        [entry(1, 9), entry(2, 8), entry(3, 9), entry(4, 9)],
+        [100, 199],
+      );
+      const result = await diffBands(old, next, {
+        maxChanged: 10,
+        addedSampleSize: 10,
+        watch: new Set([1, 2, 4, 5].map((n) => toB64Url(id(n)))),
+      });
+      assert.deepEqual(
+        [...result.watched].sort(),
+        [toB64Url(id(2)), toB64Url(id(4))].sort(),
+      );
+    });
+
     it('finds no change between bands of the same entries', async () => {
       const records = [entry(1, 9), entry(2, 9), entry(200, 9)];
       const result = await diff(

@@ -240,6 +240,8 @@ export interface BandDiff {
   changedEntries: BandSampleEntry[];
   /** A uniform sample of the added ids with offsets ({@link RESETTLE_ADDED_TAG}). */
   addedSample: BandSampleEntry[];
+  /** The ids of `watch` (base64url) the new band added or changed. */
+  watched: Set<string>;
 }
 
 const SAMPLE_IDS = 20;
@@ -294,7 +296,8 @@ const filesByPrefix = (manifest: Cdb64Manifest, dir: string) =>
  * Compares two bands entry by entry, one partition at a time, so memory is
  * bounded by the old band's largest partition. Raw values are compared, so
  * a root, offsets or size that changed is a change, and an id either band
- * holds alone is added or removed.
+ * holds alone is added or removed. `watch` names ids (base64url) to report
+ * in `watched` when they are added or changed.
  */
 export async function diffBands(
   old: { dir: string; manifest: Cdb64Manifest },
@@ -302,8 +305,14 @@ export async function diffBands(
   {
     maxChanged,
     addedSampleSize,
+    watch = new Set(),
     random = Math.random,
-  }: { maxChanged: number; addedSampleSize: number; random?: () => number },
+  }: {
+    maxChanged: number;
+    addedSampleSize: number;
+    watch?: ReadonlySet<string>;
+    random?: () => number;
+  },
 ): Promise<BandDiff> {
   const diff: BandDiff = {
     oldEntries: 0,
@@ -317,6 +326,12 @@ export async function diffBands(
     unverifiableSample: [],
     changedEntries: [],
     addedSample: [],
+    watched: new Set(),
+  };
+  const noteWatched = (key: Buffer) => {
+    if (watch.size === 0) return;
+    const id = toB64Url(key);
+    if (watch.has(id)) diff.watched.add(id);
   };
   const added = new Reservoir<BandSampleEntry>(addedSampleSize, random);
   const oldFiles = filesByPrefix(old.manifest, old.dir);
@@ -341,6 +356,7 @@ export async function diffBands(
         const was = before.get(k);
         if (was === undefined) {
           diff.added += 1;
+          noteWatched(key);
           const entry = sampleEntry(key, value, RESETTLE_ADDED_TAG);
           if (entry !== undefined) added.offer(entry);
           continue;
@@ -351,6 +367,7 @@ export async function diffBands(
           continue;
         }
         diff.changed += 1;
+        noteWatched(key);
         const entry = sampleEntry(key, value, RESETTLE_CHANGED_TAG);
         if (entry === undefined) {
           diff.unverifiable += 1;

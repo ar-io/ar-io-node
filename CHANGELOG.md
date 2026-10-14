@@ -22,9 +22,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     `INDEX_EXPORT_ROOT_TX_RESETTLE_INTERVAL_HOURS` (168; 0 for never, or
     `--once --resettle` to force one): rebuilt from their own entries and
     the sources, and replaced only when entries were added or relocated. A
-    re-settle never loses an entry, header-checks every relocated entry (at
-    most `INDEX_EXPORT_ROOT_TX_RESETTLE_MAX_CHANGED`, 20,000, a band) and a
-    sample of the added, and leaves the band as it is on any wrong header.
+    re-settle never loses an entry and header-checks only what it changes:
+    every relocated entry (at most
+    `INDEX_EXPORT_ROOT_TX_RESETTLE_MAX_CHANGED`, 20,000, a band), each of
+    which must read and verify, and a sample of the added, so entries whose
+    roots are no longer seeded don't block it. Any wrong header leaves the
+    band as it is.
     Each is reported with its counts and counted in
     `index_export_resettles_total` and `index_export_resettle_entries`.
   - Grid bands built by hand with `index-band-build` (`h-`, `d-` and
@@ -35,6 +38,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - A `--once --dry-run` lists the plan in the report (`plan`).
   - `tools/index-swarm-status` takes the tip as the daily band once there
     is one.
+  - `docs/index-export.md` documents the overlay files a `csv` source reads
+    (names, columns, header).
 
 ## [Release 85] - 2026-10-14
 

@@ -9,7 +9,7 @@ import { strict as assert } from 'node:assert';
 import crypto from 'node:crypto';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
-import { describe, it } from 'node:test';
+import { afterEach, describe, it } from 'node:test';
 
 import {
   DAY,
@@ -22,6 +22,7 @@ import { fromB64Url, toB64Url } from '../lib/encoding.js';
 import { BandRecord, buildBand } from '../lib/index-band/build.js';
 import { bandEntries, readBandManifest } from '../lib/index-band/read.js';
 import type { ExportConfig } from './config.js';
+import type { StepOutcome } from './kinds/root-tx/kind.js';
 import { CsvOverlaySource } from './kinds/root-tx/sources/csv.js';
 import type { RecordSource } from './kinds/root-tx/sources/rows.js';
 import { runResult } from './service.js';
@@ -46,6 +47,11 @@ async function entryIds(band: { dir: string }): Promise<Set<string>> {
 
 describe('ExportService, grid layout', () => {
   const ctx = useExportService();
+  // A test may make some roots unreadable; the fixture keeps one reader.
+  const readRoots = ctx.roots;
+  afterEach(() => {
+    ctx.roots = readRoots;
+  });
 
   const grid = (more: Partial<ExportConfig> = {}): Partial<ExportConfig> => ({
     rootTxLayout: 'grid',
@@ -492,6 +498,44 @@ describe('ExportService, grid layout', () => {
   });
 
   describe('re-settle', () => {
+    /** 40 items indexed late, at heights d [105000, 109999] froze without. */
+    const LATE = Array.from({ length: 40 }, (_, k) => 2300 + k);
+    const lateHeight = (i: number) => 105_500 + (i % 40);
+    const addLate = (
+      change: (i: number, r: BandRecord) => BandRecord = (_, r) => r,
+    ) => {
+      for (const i of LATE)
+        ctx.records[i] = change(i, record(i, lateHeight(i)));
+    };
+    /** Roots read like a 503 for these heights; the rest read as before. */
+    const unreadable = (heights: (height: number) => boolean) => {
+      const roots = new Set(
+        Array.from({ length: 120_000 }, (_, h) => h)
+          .filter(heights)
+          .map((h) => toB64Url(rootAt(h))),
+      );
+      const before = ctx.roots;
+      ctx.roots = () => {
+        const { openRoot, close } = before();
+        return {
+          openRoot: (rootTxId: string): ByteRangeSource =>
+            roots.has(rootTxId)
+              ? ({
+                  read: async () => {
+                    throw new Error('Request failed with status code 503');
+                  },
+                  close: async () => undefined,
+                } as unknown as ByteRangeSource)
+              : openRoot(rootTxId),
+          close,
+        };
+      };
+    };
+    const step105 = (report: { steps: StepOutcome[] }) =>
+      report.steps.find(
+        (s) => s.grid === 'resettle' && s.heightRange[0] === 105_000,
+      );
+
     it('leaves a band whose entries are unchanged in place: same id, nothing published', async () => {
       gridRecords();
       await ctx.service(grid()).runOnce();
@@ -518,9 +562,7 @@ describe('ExportService, grid layout', () => {
       gridRecords();
       await ctx.service(grid()).runOnce();
       const old = await find('d-h105000-');
-      // 40 items indexed late, at heights the d band froze without them.
-      for (let i = 2300; i < 2340; i++)
-        ctx.records[i] = record(i, 105_500 + (i % 40));
+      addLate();
       ctx.now += DAY;
       const report = await ctx.service(grid()).runOnce({ resettle: true });
       const step = report.steps.find(
@@ -539,10 +581,9 @@ describe('ExportService, grid layout', () => {
           header: undefined,
         },
       );
-      assert.deepEqual(step?.resettle?.header?.byTag['resettle-added'], {
-        checked: 40,
-        ok: 40,
-        wrong: 0,
+      // Only the delta: the band's 300 old entries are not read again.
+      assert.deepEqual(step?.resettle?.header?.byTag, {
+        'resettle-added': { checked: 40, ok: 40, wrong: 0 },
       });
       assert.deepEqual(step?.band?.supersedes, [old.id]);
       const now = await find('d-h105000-');
@@ -573,12 +614,91 @@ describe('ExportService, grid layout', () => {
       assert.equal(step?.result, 'published');
       assert.equal(step?.resettle?.changed, 5);
       assert.equal(step?.resettle?.added, 0);
-      assert.deepEqual(step?.resettle?.header?.byTag['resettle-changed'], {
-        checked: 5,
-        ok: 5,
-        wrong: 0,
+      // Every relocated entry, in its own stratum, and nothing else.
+      assert.deepEqual(step?.resettle?.header?.byTag, {
+        'resettle-changed': { checked: 5, ok: 5, wrong: 0 },
       });
       assert.ok(!ids(await live()).includes(old.id));
+    });
+
+    it('checks only the delta, so roots of the entries it keeps that no longer read do not block it', async () => {
+      gridRecords();
+      await ctx.service(grid()).runOnce();
+      const old = await find('d-h105000-');
+      addLate();
+      // Every root of the band's 300 old entries is now unseeded.
+      unreadable((h) => h >= 105_000 && h < 105_300);
+      ctx.now += DAY;
+      const report = await ctx.service(grid()).runOnce({ resettle: true });
+      const step = step105(report);
+      assert.equal(step?.result, 'published');
+      assert.deepEqual(step?.resettle?.header, {
+        checked: 40,
+        ok: 40,
+        wrong: 0,
+        errors: 0,
+        byTag: { 'resettle-added': { checked: 40, ok: 40, wrong: 0 } },
+      });
+      assert.notEqual((await find('d-h105000-')).id, old.id);
+    });
+
+    it('cannot check a band when too few of the added entries read', async () => {
+      gridRecords();
+      await ctx.service(grid()).runOnce();
+      const old = await find('d-h105000-');
+      addLate();
+      // 30 of the 40 added entries' roots fail to read: 25%, under 80%.
+      unreadable((h) => h >= 105_500 && h < 105_530);
+      ctx.now += DAY;
+      const report = await ctx.service(grid()).runOnce({ resettle: true });
+      const step = step105(report);
+      assert.equal(step?.result, 'couldnt_check');
+      assert.equal(step?.reason, 'gate');
+      assert.match(step?.details?.[0] ?? '', /10 of 40 checked entries passed/);
+      assert.equal((await find('d-h105000-')).id, old.id);
+    });
+
+    it('fails a band when an added entry has a wrong header', async () => {
+      gridRecords();
+      await ctx.service(grid()).runOnce();
+      const old = await find('d-h105000-');
+      // Three of the 40 late rows carry another item's offsets.
+      addLate((i, r) =>
+        i < 2303
+          ? {
+              ...r,
+              rootOffset: ctx.items[i + 100].rootDataItemOffset,
+              rootDataOffset: ctx.items[i + 100].rootDataOffset,
+            }
+          : r,
+      );
+      ctx.now += DAY;
+      const report = await ctx.service(grid()).runOnce({ resettle: true });
+      const step = step105(report);
+      assert.equal(step?.result, 'rejected');
+      assert.equal(step?.reason, 'wrong_header');
+      assert.deepEqual(step?.resettle?.header?.byTag['resettle-added'], {
+        checked: 40,
+        ok: 37,
+        wrong: 3,
+      });
+      assert.equal((await find('d-h105000-')).id, old.id);
+    });
+
+    it('publishes entries added without offsets, which no check can read', async () => {
+      gridRecords();
+      await ctx.service(grid()).runOnce();
+      const old = await find('d-h105000-');
+      addLate(
+        (_, { rootOffset, rootDataOffset, size, ...rootOnly }) => rootOnly,
+      );
+      ctx.now += DAY;
+      const report = await ctx.service(grid()).runOnce({ resettle: true });
+      const step = step105(report);
+      assert.equal(step?.result, 'published');
+      assert.equal(step?.resettle?.added, 40);
+      assert.equal(step?.resettle?.header, undefined, 'nothing to read');
+      assert.notEqual((await find('d-h105000-')).id, old.id);
     });
 
     it('fails a band when a relocated entry has a wrong header, and keeps the old band', async () => {

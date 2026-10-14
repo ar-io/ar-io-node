@@ -58,8 +58,8 @@ export const CONFLICT_CAP = 0.01;
 /** Header-check samples: general, and per tag. */
 export const SAMPLE_SIZE = 150;
 export const SAMPLE_SIZES = { [REPAIRED_TAG]: 50, [OVERLAY_CHANGED_TAG]: 200 };
-// A re-settle checks, besides those, every entry it relocates and
-// SAMPLE_SIZE of those it adds (see `grid.ts`).
+// A re-settle checks only its delta instead: every entry it relocates,
+// SAMPLE_SIZE of those it adds, and the tagged sample entries among either.
 
 export type StepResult =
   | 'published'
@@ -261,6 +261,12 @@ export async function buildStepBand(
       gate = { result, reason, ...(details !== undefined ? { details } : {}) };
       return { publish: false, reasons: [reason, ...(details ?? [])] };
     };
+    const publishIfHeld = async (): Promise<PublishDecision> =>
+      ctx.stillHeld !== undefined && !(await ctx.stillHeld())
+        ? decline('couldnt_check', 'lock_lost', [
+            'another run took the lock while this one stalled',
+          ])
+        : { publish: true };
 
     if (
       step.replaces !== undefined &&
@@ -273,13 +279,20 @@ export async function buildStepBand(
     }
     // A re-settle replaces a published band only to add or relocate
     // entries, and never loses one.
-    let resettleEntries: BandSampleEntry[] = [];
+    let delta: BandSampleEntry[] | undefined;
     if (step.grid === 'resettle' && step.fold !== undefined) {
       const maxChanged = ctx.resettleMaxChanged ?? DEFAULT_RESETTLE_MAX_CHANGED;
+      // The build's own strata (repaired, overlay-changed), kept for the
+      // entries among them the re-settle adds or relocates.
+      const tagged = staged.sample.filter((entry) => entry.tag !== undefined);
       const diff = await diffBands(
         { dir: step.fold.dir, manifest: step.fold.manifest },
         { dir: staged.dir, manifest: await readBandManifest(staged.dir) },
-        { maxChanged, addedSampleSize: SAMPLE_SIZE },
+        {
+          maxChanged,
+          addedSampleSize: SAMPLE_SIZE,
+          watch: new Set(tagged.map((entry) => entry.id)),
+        },
       );
       resettle = {
         band: step.fold.id,
@@ -309,7 +322,18 @@ export async function buildStepBand(
           ...diff.unverifiableSample,
         ]);
       }
-      resettleEntries = [...diff.changedEntries, ...diff.addedSample];
+      // The entries the band already held were checked when it was first
+      // published, and their roots may since be hard to read: only what
+      // changes is checked. A relocated entry keeps its own stratum.
+      delta = [
+        ...new Map(
+          [
+            ...diff.addedSample,
+            ...tagged.filter((entry) => diff.watched.has(entry.id)),
+            ...diff.changedEntries,
+          ].map((entry) => [entry.id, entry]),
+        ).values(),
+      ];
     }
     // Only a band at the tip waits for enough entries: a closed band left
     // out would leave its heights uncovered for good.
@@ -343,20 +367,16 @@ export async function buildStepBand(
         `none of its ${staged.records} entries has offsets to check`,
       ]);
     }
-    // A re-settle's own strata replace an entry's place in the usual ones.
-    const entries =
-      resettleEntries.length === 0
-        ? staged.sample
-        : [
-            ...new Map(
-              [...staged.sample, ...resettleEntries].map((entry) => [
-                entry.id,
-                entry,
-              ]),
-            ).values(),
-          ];
+    if (delta !== undefined && delta.length === 0) {
+      // It adds only entries without offsets, which no check can read, as
+      // for the root-only entries of any build.
+      log.info('Re-settle adds only entries without offsets: none to check', {
+        added: resettle?.added,
+      });
+      return publishIfHeld();
+    }
     const check = await checkBandHeaders({
-      entries,
+      entries: delta ?? staged.sample,
       totalRecords: staged.records,
       openRoot: ctx.openRoot,
       minRecords: 0,
@@ -416,12 +436,7 @@ export async function buildStepBand(
       ok: check.ok,
       byTag: check.byTag,
     });
-    if (ctx.stillHeld !== undefined && !(await ctx.stillHeld())) {
-      return decline('couldnt_check', 'lock_lost', [
-        'another run took the lock while this one stalled',
-      ]);
-    }
-    return { publish: true };
+    return publishIfHeld();
   };
 
   let band: BuiltBand;
