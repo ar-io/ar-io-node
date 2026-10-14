@@ -28,9 +28,38 @@ import {
   undeclaredTaggedEncoding,
   dataEtag,
   wouldReturn304,
+  byteRangeHeader,
 } from './http-utils.js';
 
 describe('http-utils', () => {
+  describe('byteRangeHeader', () => {
+    it('passes a bytes range through', () => {
+      assert.equal(byteRangeHeader('bytes=0-99'), 'bytes=0-99');
+      assert.equal(byteRangeHeader('bytes=0-1,5-6'), 'bytes=0-1,5-6');
+    });
+
+    it('returns undefined without a header', () => {
+      assert.equal(byteRangeHeader(undefined), undefined);
+    });
+
+    it('normalizes the unit case', () => {
+      assert.equal(byteRangeHeader('BYTES=0-99'), 'bytes=0-99');
+      assert.equal(byteRangeHeader('Bytes=-500'), 'bytes=-500');
+    });
+
+    it('ignores a unit it does not understand', () => {
+      assert.equal(byteRangeHeader('items=0-5'), undefined);
+      assert.equal(byteRangeHeader('bytesx=0-5'), undefined);
+    });
+
+    it('leaves a header without a unit for the parser to reject', () => {
+      assert.equal(
+        byteRangeHeader('invalid-range-header'),
+        'invalid-range-header',
+      );
+    });
+  });
+
   describe('generateBoundary', () => {
     it('should generate 50 character boundaries', () => {
       const boundary = generateBoundary();

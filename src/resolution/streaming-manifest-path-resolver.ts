@@ -15,9 +15,16 @@ import {
   ManifestResolutionStore,
 } from '../types.js';
 
+// The store only ever holds resolutions from trusted bytes (see
+// resolveFromData), so entries loaded from it are trusted too.
+type CachedResolution = {
+  resolution: ManifestResolution;
+  trusted: boolean;
+};
+
 export class StreamingManifestPathResolver implements ManifestPathResolver {
   private log: winston.Logger;
-  private cache: LRUCache<string, ManifestResolution>;
+  private cache: LRUCache<string, CachedResolution>;
   private store: ManifestResolutionStore | undefined;
 
   constructor({
@@ -33,7 +40,7 @@ export class StreamingManifestPathResolver implements ManifestPathResolver {
     // A manifest transaction is immutable, so a resolved
     // (manifest id, path) -> data id mapping is valid forever — no TTL needed.
     // Bounded by `max` to cap memory and blunt path-scan cache pressure.
-    this.cache = new LRUCache<string, ManifestResolution>({ max: cacheSize });
+    this.cache = new LRUCache<string, CachedResolution>({ max: cacheSize });
     this.store = store;
   }
 
@@ -59,13 +66,44 @@ export class StreamingManifestPathResolver implements ManifestPathResolver {
   }
 
   // Cache the immutable resolution (positive or negative) and return it.
+  // `trusted` records whether the bytes it came from were trusted; see
+  // resolveFromTrustedCache.
   private remember(
     id: string,
     path: string | undefined,
     resolution: ManifestResolution,
+    trusted: boolean,
   ): ManifestResolution {
-    this.cache.set(this.cacheKey(id, path), resolution);
+    this.cache.set(this.cacheKey(id, path), { resolution, trusted });
     return resolution;
+  }
+
+  /**
+   * Resolve a manifest path from the in-memory cache alone, using only
+   * resolutions that came from trusted bytes.
+   *
+   * For a manifest the index does not know, this is what spares each request
+   * a fetch and parse of the manifest body: resolveFromData caches every
+   * resolution, but without this nothing read it back unless the index had
+   * flagged the id as a manifest. Untrusted resolutions are skipped so a peer
+   * that lied about a manifest still spoils only its own response, as before
+   * the cache existed, rather than every request until eviction. No store
+   * lookup: callers use this for ids not known to be manifests, so a store
+   * query here would cost every plain data request.
+   *
+   * @param id - Manifest transaction id.
+   * @param path - Requested sub-path, or undefined for the manifest root.
+   * @returns The cached resolution, or undefined when there is no trusted one.
+   */
+  resolveFromTrustedCache(
+    id: string,
+    path: string | undefined,
+  ): ManifestResolution | undefined {
+    const cached = this.cache.get(this.cacheKey(id, path));
+    if (cached === undefined || !cached.trusted) {
+      return undefined;
+    }
+    return { ...cached.resolution, id };
   }
 
   async resolveFromIndex(
@@ -74,7 +112,7 @@ export class StreamingManifestPathResolver implements ManifestPathResolver {
   ): Promise<ManifestResolution> {
     // In-memory cache covers any (manifest, path) — including sub-paths and
     // negatives — but only within the current process lifetime.
-    const cached = this.cache.get(this.cacheKey(id, path));
+    const cached = this.cache.get(this.cacheKey(id, path))?.resolution;
     if (cached !== undefined) {
       this.log.debug('Resolved manifest path from cache', {
         id,
@@ -96,20 +134,30 @@ export class StreamingManifestPathResolver implements ManifestPathResolver {
       try {
         const row = await this.store.getManifestResolution(id);
         if (row?.indexId !== undefined) {
-          return this.remember(id, path, {
+          return this.remember(
             id,
-            resolvedId: row.indexId,
-            complete: true,
-            resolutionType: 'index',
-          });
+            path,
+            {
+              id,
+              resolvedId: row.indexId,
+              complete: true,
+              resolutionType: 'index',
+            },
+            true,
+          );
         }
         if (row?.fallbackId !== undefined) {
-          return this.remember(id, path, {
+          return this.remember(
             id,
-            resolvedId: row.fallbackId,
-            complete: true,
-            resolutionType: 'fallback',
-          });
+            path,
+            {
+              id,
+              resolvedId: row.fallbackId,
+              complete: true,
+              resolutionType: 'fallback',
+            },
+            true,
+          );
         }
       } catch (error: any) {
         // A store failure must never break serving — fall through to data.
@@ -145,12 +193,17 @@ export class StreamingManifestPathResolver implements ManifestPathResolver {
       resolvedId,
       resolutionType,
     });
-    const resolution = this.remember(id, path, {
+    const resolution = this.remember(
       id,
-      resolvedId,
-      complete: true,
-      resolutionType,
-    });
+      path,
+      {
+        id,
+        resolvedId,
+        complete: true,
+        resolutionType,
+      },
+      data.trusted,
+    );
 
     // Persist the manifest root's index/fallback id so future requests — and
     // future process lifetimes — can serve it without fetching the body. Only
@@ -169,7 +222,9 @@ export class StreamingManifestPathResolver implements ManifestPathResolver {
     //
     // The in-memory cache above is deliberately not gated: it is bounded,
     // evicted under pressure and gone on restart, so it stays as close to the
-    // pre-cache behaviour of re-resolving per request as a cache can.
+    // pre-cache behaviour of re-resolving per request as a cache can. It does
+    // record the trust, so resolveFromTrustedCache can skip untrusted entries
+    // for manifests the index does not know.
     if (
       this.store !== undefined &&
       data.trusted &&

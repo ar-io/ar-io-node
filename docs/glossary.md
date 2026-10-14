@@ -348,7 +348,10 @@ of the file. A proxy cache zone in front breaks them.
 
 <a id="repr-digest"></a> **Repr-Digest** — The RFC 9530 header carrying the
 SHA-256 of a whole file. Index band responses send it even on a `206`, and
-HTTPSIG covers it, so a signed range read is bound to the whole file.
+HTTPSIG covers it, so a signed range read is bound to the whole file. Data
+routes send it in place of `Content-Digest` on every response to a range
+request (`206`, `416`, `400`), since `Content-Digest` covers only the bytes
+sent.
 
 <a id="webseed"></a> **WebSeed** — An HTTP URL (BEP 19) that serves the same
 bytes as the swarm, so a download completes even with no peers. On a gateway

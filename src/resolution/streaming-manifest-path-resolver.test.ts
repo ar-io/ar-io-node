@@ -147,6 +147,122 @@ describe('StreamingManifestPathResolver', () => {
     });
   });
 
+  describe('resolveFromTrustedCache', () => {
+    it('returns undefined before anything is resolved', () => {
+      const resolver = new StreamingManifestPathResolver({ log });
+      assert.equal(
+        resolver.resolveFromTrustedCache('manifest-id', undefined),
+        undefined,
+      );
+    });
+
+    it('returns a resolution that came from trusted bytes', async () => {
+      const resolver = new StreamingManifestPathResolver({ log });
+      await resolver.resolveFromData(
+        makeData(exampleManifestStreamV010()),
+        'manifest-id',
+        undefined,
+      );
+
+      const cached = resolver.resolveFromTrustedCache('manifest-id', undefined);
+      assert.equal(cached?.complete, true);
+      assert.equal(cached?.resolvedId, INDEX_ID);
+      assert.equal(cached?.resolutionType, 'index');
+      assert.equal(cached?.id, 'manifest-id');
+    });
+
+    it('returns trusted negative resolutions too', async () => {
+      const resolver = new StreamingManifestPathResolver({ log });
+      await resolver.resolveFromData(
+        makeData(exampleManifestStreamV010()),
+        'manifest-id',
+        'no/such/path',
+      );
+
+      const cached = resolver.resolveFromTrustedCache(
+        'manifest-id',
+        'no/such/path',
+      );
+      assert.equal(cached?.complete, true);
+      assert.equal(cached?.resolvedId, undefined);
+    });
+
+    it('skips a resolution that came from untrusted bytes', async () => {
+      const resolver = new StreamingManifestPathResolver({ log });
+      await resolver.resolveFromData(
+        makeData(exampleManifestStreamV010(), { trusted: false }),
+        'manifest-id',
+        undefined,
+      );
+
+      assert.equal(
+        resolver.resolveFromTrustedCache('manifest-id', undefined),
+        undefined,
+      );
+      // resolveFromIndex still serves it, as it did before.
+      const cached = await resolver.resolveFromIndex('manifest-id', undefined);
+      assert.equal(cached.resolvedId, INDEX_ID);
+    });
+
+    it('a trusted resolution replaces an untrusted one', async () => {
+      const resolver = new StreamingManifestPathResolver({ log });
+      await resolver.resolveFromData(
+        makeData(exampleManifestStreamV010(), { trusted: false }),
+        'manifest-id',
+        undefined,
+      );
+      await resolver.resolveFromData(
+        makeData(exampleManifestStreamV010()),
+        'manifest-id',
+        undefined,
+      );
+
+      assert.equal(
+        resolver.resolveFromTrustedCache('manifest-id', undefined)?.resolvedId,
+        INDEX_ID,
+      );
+    });
+
+    it('treats resolutions loaded from the store as trusted', async () => {
+      const store = new FakeStore();
+      store.rows.set('m1', { indexId: INDEX_ID });
+      const resolver = new StreamingManifestPathResolver({ log, store });
+      await resolver.resolveFromIndex('m1', undefined);
+
+      assert.equal(
+        resolver.resolveFromTrustedCache('m1', undefined)?.resolvedId,
+        INDEX_ID,
+      );
+    });
+
+    it('does not query the store', () => {
+      const store = new FakeStore();
+      store.rows.set('m1', { indexId: INDEX_ID });
+      const resolver = new StreamingManifestPathResolver({ log, store });
+
+      assert.equal(
+        resolver.resolveFromTrustedCache('m1', undefined),
+        undefined,
+      );
+      assert.equal(store.getCalls, 0);
+    });
+
+    it('normalizes trailing slashes like resolveFromIndex', async () => {
+      const resolver = new StreamingManifestPathResolver({ log });
+      await resolver.resolveFromData(
+        makeData(exampleManifestStreamV010()),
+        'manifest-id',
+        'css/mobile.css',
+      );
+
+      assert.equal(
+        resolver.resolveFromTrustedCache('manifest-id', 'css/mobile.css/')
+          ?.resolvedId,
+        MOBILE_CSS_ID,
+      );
+    });
+  });
+
   describe('persistent resolution store', () => {
     it('serves the root index from the store on a cold cache', async () => {
       const store = new FakeStore();

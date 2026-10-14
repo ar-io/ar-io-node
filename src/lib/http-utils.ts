@@ -456,6 +456,35 @@ export function calculateRangeResponseSize(
 }
 
 /**
+ * The Range header a data route should act on, or undefined to serve the
+ * whole representation.
+ *
+ * Range units are case-insensitive (RFC 9110 section 14.1), and an origin
+ * server MUST ignore a Range header whose unit it does not understand
+ * (section 14.2), so `BYTES=0-99` is a byte range and `items=0-5` is no
+ * range at all. A header without a unit is passed through for the parser to
+ * reject as malformed.
+ *
+ * @param rangeHeader - The request's Range header, if any.
+ * @returns The header with its unit normalized to `bytes`, or undefined.
+ */
+export function byteRangeHeader(
+  rangeHeader: string | undefined,
+): string | undefined {
+  if (rangeHeader === undefined) {
+    return undefined;
+  }
+  const index = rangeHeader.indexOf('=');
+  if (index === -1) {
+    return rangeHeader;
+  }
+  if (rangeHeader.slice(0, index).trim().toLowerCase() !== 'bytes') {
+    return undefined;
+  }
+  return `bytes=${rangeHeader.slice(index + 1)}`;
+}
+
+/**
  * The entity tag for a data response, without quotes.
  *
  * The content digest, except when the request was routed through an ArNS
