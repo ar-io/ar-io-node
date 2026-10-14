@@ -48,6 +48,45 @@ const MAX_EMISSION_QUEUE_SIZE = 100;
 const EMISSION_QUEUE_CONCURRENCY = 5;
 
 // WebhookEmitter class
+
+/**
+ * A target URL safe to log. WEBHOOK_TARGET_SERVERS can carry a secret (the
+ * content scanner's `?token=`, since the emitter can't send headers) or
+ * userinfo; neither may reach the logs. Keeps scheme, host, port, path and
+ * the query parameter NAMES, so a failure still says which endpoint failed.
+ * A query segment with no `=` may itself be the secret, so it is redacted
+ * whole, and the fragment is dropped. The path is kept, so a secret placed
+ * in the path (as Slack- and Discord-style webhook URLs do) is logged: put
+ * credentials in the query or userinfo.
+ */
+export function redactUrl(url: string): string {
+  try {
+    const u = new URL(url);
+    if (u.username !== '' || u.password !== '') {
+      u.username = 'redacted';
+      u.password = '';
+    }
+    u.hash = '';
+    if (u.search.length > 1) {
+      u.search = u.search
+        .slice(1)
+        .split('&')
+        .filter((segment) => segment !== '')
+        .map((segment) => {
+          const index = segment.indexOf('=');
+          return index === -1
+            ? '<redacted>'
+            : `${segment.slice(0, index)}=<redacted>`;
+        })
+        .join('&');
+    }
+    return u.toString().replace(/%3Credacted%3E/g, '<redacted>');
+  } catch {
+    // Not a parseable URL: log nothing that might be part of it.
+    return '<unparseable url>';
+  }
+}
+
 export class WebhookEmitter {
   private log: winston.Logger;
   private eventEmitter: EventEmitter;
@@ -239,7 +278,7 @@ export class WebhookEmitter {
   ): Promise<void> {
     const { targetServer, eventWrapper } = details;
     this.log.debug(
-      `Emitting webhook to ${targetServer} for ${eventWrapper.event}`,
+      `Emitting webhook to ${redactUrl(targetServer)} for ${eventWrapper.event}`,
     );
 
     try {
@@ -268,14 +307,14 @@ export class WebhookEmitter {
       // sufficient for delivery-failure debugging.
       if (axios.isAxiosError(error)) {
         this.log.error('Failed to emit webhook', {
-          targetServer,
+          targetServer: redactUrl(targetServer),
           status: error.response?.status,
           code: error.code,
           message: error.message,
         });
       } else {
         this.log.error('Unexpected error while emitting webhook', {
-          targetServer,
+          targetServer: redactUrl(targetServer),
           message: (error as Error)?.message,
           stack: (error as Error)?.stack,
         });
