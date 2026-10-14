@@ -53,7 +53,9 @@ import {
   handleIfNoneMatch,
   hasContentEncodingMagic,
   honouredContentEncoding,
+  matchesContentEncodingMagic,
   parseNonNegativeInt,
+  taggedContentEncoding,
   dataEtag,
   wouldReturn304,
 } from '../../lib/http-utils.js';
@@ -541,6 +543,10 @@ export const sendsDataStream = (
  * no upstream is waited on; an uncached one declares the coding unchecked. If
  * that cached peek fails, it falls back to the declared coding rather than
  * failing a response that never needed the bytes, unless the client aborted.
+ *
+ * When neither the index nor the upstream supplied a coding, the item's own
+ * `Content-Encoding` tag is used, on positive evidence only: see
+ * {@link resolveTaggedContentEncoding}.
  */
 export const resolveServedContentEncoding = async ({
   data,
@@ -549,6 +555,7 @@ export const resolveServedContentEncoding = async ({
   log,
   signal,
   sendsStream,
+  tags,
 }: {
   data: ContiguousData;
   dataAttributes: ContiguousDataAttributes | undefined;
@@ -557,10 +564,22 @@ export const resolveServedContentEncoding = async ({
   signal?: AbortSignal;
   /** From {@link sendsDataStream}. */
   sendsStream: boolean;
+  /** The item's tags, from {@link awaitItemHeaders}. */
+  tags?: { name: string; value: string }[];
 }): Promise<string | undefined> => {
   const declared = honouredContentEncoding(
     dataAttributes?.contentEncoding ?? data.sourceContentEncoding,
   );
+  if (declared === undefined) {
+    return resolveTaggedContentEncoding({
+      data,
+      id,
+      log,
+      signal,
+      sendsStream,
+      tags,
+    });
+  }
   if (
     declared === undefined ||
     !hasContentEncodingMagic(declared) ||
@@ -603,6 +622,87 @@ export const resolveServedContentEncoding = async ({
     {
       id,
       encoding: declared,
+      verified: data.verified,
+      trusted: data.trusted,
+      cached: data.cached,
+    },
+  );
+  return undefined;
+};
+
+/**
+ * The coding an item's `Content-Encoding` tag names, served only when its
+ * bytes prove it.
+ *
+ * Bytes cached from an upstream that sent neither `Content-Encoding` nor the
+ * item's tags are stored with no coding recorded, and a cache hit reports
+ * none, so before this an item tagged `gzip` lost its header for as long as
+ * it stayed cached, while the gateway still sent
+ * `X-Arweave-Tag-Content-Encoding: gzip`. The tag is still only the
+ * uploader's claim, and the bytes may have been decoded upstream (the
+ * pre-#964 poison), so the coding is declared only for gzip and zstd, whose
+ * magic can be checked, and only when the body's first bytes carry the whole
+ * magic. A coding without magic, a short body, a body that does not match,
+ * an uncached HEAD/Range/304 response (which reads no bytes), or a failed
+ * cached peek all mean no header, as before. Nothing is recorded: this
+ * decides one response.
+ */
+const resolveTaggedContentEncoding = async ({
+  data,
+  id,
+  log,
+  signal,
+  sendsStream,
+  tags,
+}: {
+  data: ContiguousData;
+  id: string;
+  log: Logger;
+  signal?: AbortSignal;
+  sendsStream: boolean;
+  tags?: { name: string; value: string }[];
+}): Promise<string | undefined> => {
+  const tagged = taggedContentEncoding(tags);
+  if (
+    tagged === undefined ||
+    !hasContentEncodingMagic(tagged) ||
+    (!sendsStream && !data.cached)
+  ) {
+    return undefined;
+  }
+  let head: Buffer;
+  try {
+    const peeked = await peekLeadingBytes(
+      data.stream,
+      contentEncodingMagicLength(tagged),
+      config.STREAM_STALL_TIMEOUT_MS,
+      signal,
+    );
+    head = peeked.head;
+    data.stream = peeked.stream;
+  } catch (error: any) {
+    if (sendsStream || signal?.aborted === true) {
+      throw error;
+    }
+    log.debug('Could not check the body against its Content-Encoding tag', {
+      id,
+      encoding: tagged,
+      message: error?.message,
+    });
+    return undefined;
+  }
+  if (matchesContentEncodingMagic(head, tagged)) {
+    return tagged;
+  }
+  metrics.servedContentEncodingDroppedTotal.inc({
+    encoding: tagged,
+    verified: String(data.verified),
+  });
+  log.warn(
+    'Body does not match its Content-Encoding tag; serving without the header',
+    {
+      id,
+      encoding: tagged,
       verified: data.verified,
       trusted: data.trusted,
       cached: data.cached,
@@ -1446,6 +1546,7 @@ export const createRawDataHandler = ({
             log,
             signal: req.signal,
             sendsStream: sendsDataStream(req, res, data, dataAttributes),
+            tags: itemHeaders?.tags,
           });
 
           // Check if the request includes a Range header
@@ -1814,6 +1915,7 @@ const sendManifestResponse = async ({
         log,
         signal: req.signal,
         sendsStream: sendsDataStream(req, res, data, dataAttributes),
+        tags: itemHeaders?.tags,
       });
 
       // Check if the request includes a Range header
@@ -2277,6 +2379,7 @@ export const createDataHandler = ({
           log,
           signal: req.signal,
           sendsStream: sendsDataStream(req, res, data, dataAttributes),
+          tags: itemHeaders?.tags,
         });
 
         // Check if the request includes a Range header
