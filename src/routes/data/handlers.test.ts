@@ -448,6 +448,245 @@ describe('Data routes', () => {
         assert.equal(res.headers['content-encoding'], undefined);
         assert.deepEqual(res.body, body);
       });
+
+      describe("the item's Content-Encoding tag on a hit with no recorded coding", () => {
+        const gzipTag = [{ name: 'Content-Encoding', value: 'gzip' }];
+        const serveTagged = ({
+          bytes,
+          cached = true,
+          tags = gzipTag,
+          viaResolver = false,
+          contentEncoding,
+        }: {
+          bytes: Buffer;
+          cached?: boolean;
+          tags?: { name: string; value: string }[];
+          viaResolver?: boolean;
+          contentEncoding?: string;
+        }) => {
+          if (contentEncoding !== undefined) {
+            dataAttributesSource = {
+              getDataAttributes: () =>
+                Promise.resolve({ contentEncoding } as any),
+            };
+          }
+          dataSource = {
+            getData: (params?: any) =>
+              Promise.resolve({
+                stream: Readable.from(
+                  params?.region !== undefined
+                    ? bytes.subarray(
+                        params.region.offset,
+                        params.region.offset + params.region.size,
+                      )
+                    : bytes,
+                ),
+                size: bytes.length,
+                verified: false,
+                trusted: true,
+                cached,
+                ...(viaResolver ? {} : { upstreamTags: tags }),
+              }),
+          };
+          const dataItemMetaResolver = viaResolver
+            ? ({
+                resolveFromLocal: () => Promise.resolve({ tags }),
+                resolve: () => Promise.resolve(undefined),
+              } as any)
+            : undefined;
+          app.get(
+            '/:id',
+            createDataHandler({
+              log,
+              dataAttributesSource,
+              dataSource,
+              dataBlockListValidator,
+              manifestPathResolver,
+              dataItemMetaResolver,
+            }),
+          );
+        };
+
+        it('declares the tagged gzip coding when the cached bytes carry its magic', async () => {
+          serveTagged({ bytes: gzipped });
+
+          const res = await get();
+
+          assert.equal(res.headers['content-encoding'], 'gzip');
+          assert.equal(res.headers['content-length'], String(gzipped.length));
+          // Decoded by the client: fails if the header does not fit the bytes.
+          assert.deepEqual(res.body, body);
+        });
+
+        it('takes the tag from the local item-header resolver, as on a real cache hit', async () => {
+          serveTagged({ bytes: gzipped, viaResolver: true });
+
+          const res = await get();
+
+          assert.equal(res.headers['content-encoding'], 'gzip');
+          assert.deepEqual(res.body, body);
+        });
+
+        it('declares it on a cached HEAD', async () => {
+          serveTagged({ bytes: gzipped });
+
+          const res = await request(app).head('/not-a-real-id').expect(200);
+
+          assert.equal(res.headers['content-encoding'], 'gzip');
+        });
+
+        it('declares it on a cached range response, whose body is a slice of the stored bytes', async () => {
+          serveTagged({ bytes: gzipped });
+
+          const res = await request(app)
+            .get('/not-a-real-id')
+            .set('Range', 'bytes=0-9')
+            .buffer(true)
+            .parse(bufferBody)
+            .expect(206);
+
+          assert.equal(res.headers['content-encoding'], 'gzip');
+          assert.equal(
+            res.headers['content-range'],
+            `bytes 0-9/${gzipped.length}`,
+          );
+        });
+
+        it('declares it on an uncached GET, which reads the bytes it sends', async () => {
+          serveTagged({ bytes: gzipped, cached: false });
+
+          const res = await get();
+
+          assert.equal(res.headers['content-encoding'], 'gzip');
+          assert.deepEqual(res.body, body);
+        });
+
+        it('sends no header when the bytes do not carry the magic (decoded upstream)', async () => {
+          serveTagged({ bytes: body });
+
+          const res = await get();
+
+          assert.equal(res.headers['content-encoding'], undefined);
+          assert.deepEqual(res.body, body);
+        });
+
+        it('sends no header for a body shorter than the magic', async () => {
+          serveTagged({ bytes: Buffer.from([0x1f]) });
+
+          const res = await get();
+
+          assert.equal(res.headers['content-encoding'], undefined);
+        });
+
+        it('sends no header for a tagged coding without magic (br)', async () => {
+          serveTagged({
+            bytes: gzipped,
+            tags: [{ name: 'Content-Encoding', value: 'br' }],
+          });
+
+          const res = await get();
+
+          assert.equal(res.headers['content-encoding'], undefined);
+        });
+
+        it('sends no header on an uncached HEAD, which reads no bytes', async () => {
+          serveTagged({ bytes: gzipped, cached: false });
+
+          const res = await request(app).head('/not-a-real-id').expect(200);
+
+          assert.equal(res.headers['content-encoding'], undefined);
+        });
+
+        it('sends no header without a Content-Encoding tag', async () => {
+          serveTagged({
+            bytes: gzipped,
+            tags: [{ name: 'Content-Type', value: 'application/wasm' }],
+          });
+
+          const res = await get();
+
+          assert.equal(res.headers['content-encoding'], undefined);
+        });
+
+        it('only the first Content-Encoding tag counts', async () => {
+          serveTagged({
+            bytes: gzipped,
+            tags: [
+              { name: 'Content-Encoding', value: 'br' },
+              { name: 'Content-Encoding', value: 'gzip' },
+            ],
+          });
+
+          const res = await get();
+
+          assert.equal(res.headers['content-encoding'], undefined);
+        });
+
+        it('declares a tagged zstd coding when the cached bytes carry its magic', async () => {
+          const zstdBytes = Buffer.from([0x28, 0xb5, 0x2f, 0xfd, 0x00, 0x01]);
+          serveTagged({
+            bytes: zstdBytes,
+            tags: [{ name: 'Content-Encoding', value: 'zstd' }],
+          });
+
+          const res = await request(app).head('/not-a-real-id').expect(200);
+
+          assert.equal(res.headers['content-encoding'], 'zstd');
+        });
+
+        it('sends no header, and still answers, when a cached HEAD cannot read the bytes', async () => {
+          dataSource = {
+            getData: () =>
+              Promise.resolve({
+                stream: new Readable({
+                  read() {
+                    this.destroy(new Error('disk read failed'));
+                  },
+                }),
+                size: gzipped.length,
+                verified: false,
+                trusted: true,
+                cached: true,
+                upstreamTags: gzipTag,
+              }),
+          };
+          app.get(
+            '/:id',
+            createDataHandler({
+              log,
+              dataAttributesSource,
+              dataSource,
+              dataBlockListValidator,
+              manifestPathResolver,
+            }),
+          );
+
+          const res = await request(app).head('/not-a-real-id').expect(200);
+
+          assert.equal(res.headers['content-encoding'], undefined);
+        });
+
+        it('a recorded coding the gateway does not honour is not replaced by the tag', async () => {
+          serveTagged({ bytes: gzipped, contentEncoding: 'gzip, br' });
+
+          const res = await get();
+
+          assert.equal(res.headers['content-encoding'], undefined);
+        });
+
+        it('a recorded coding still takes precedence over the tag', async () => {
+          serveTagged({
+            bytes: gzipped,
+            tags: [{ name: 'Content-Encoding', value: 'zstd' }],
+            contentEncoding: 'gzip',
+          });
+
+          const res = await get();
+
+          assert.equal(res.headers['content-encoding'], 'gzip');
+          assert.deepEqual(res.body, body);
+        });
+      });
     });
 
     it('should return 200 status code and empty data for unblocked data HEAD request', async () => {

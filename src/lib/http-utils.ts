@@ -235,6 +235,43 @@ export function contradictsContentEncoding(
 }
 
 /**
+ * True only when a body's first bytes carry the whole magic of `contentEncoding`.
+ *
+ * Stricter than {@link contradictsContentEncoding}, which lets a short or empty
+ * head and a coding without magic through: this is for a coding the gateway
+ * has no record of and would otherwise not declare, so it needs positive
+ * evidence before adding the header.
+ */
+export function matchesContentEncodingMagic(
+  head: Buffer,
+  contentEncoding: string | undefined,
+): boolean {
+  const normalized = parseContentEncoding(contentEncoding);
+  const magic =
+    normalized !== undefined
+      ? CONTENT_ENCODING_MAGIC.get(normalized)
+      : undefined;
+  return (
+    magic !== undefined &&
+    head.length >= magic.length &&
+    head.subarray(0, magic.length).equals(magic)
+  );
+}
+
+/**
+ * The honoured coding an item's own `Content-Encoding` tag names, or
+ * `undefined`. Only the first such tag counts, as when indexing (#966).
+ */
+export function taggedContentEncoding(
+  tags: { name: string; value: string }[] | undefined,
+): string | undefined {
+  const tag = tags?.find(
+    (candidate) => candidate.name.toLowerCase() === 'content-encoding',
+  );
+  return honouredContentEncoding(tag?.value);
+}
+
+/**
  * `{ sourceContentEncoding }` for an upstream `Content-Encoding` header that
  * names an encoding, or `{}` when the bytes are not encoded; for spreading into
  * a `ContiguousData` result.

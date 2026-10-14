@@ -29,9 +29,74 @@ import {
   dataEtag,
   wouldReturn304,
   byteRangeHeader,
+  matchesContentEncodingMagic,
+  taggedContentEncoding,
 } from './http-utils.js';
 
 describe('http-utils', () => {
+  describe('matchesContentEncodingMagic', () => {
+    it('needs the whole gzip or zstd magic', () => {
+      assert.equal(
+        matchesContentEncodingMagic(Buffer.from([0x1f, 0x8b, 8]), 'gzip'),
+        true,
+      );
+      assert.equal(
+        matchesContentEncodingMagic(
+          Buffer.from([0x28, 0xb5, 0x2f, 0xfd, 0]),
+          'zstd',
+        ),
+        true,
+      );
+      assert.equal(
+        matchesContentEncodingMagic(Buffer.from([0x1f]), 'gzip'),
+        false,
+      );
+      assert.equal(matchesContentEncodingMagic(Buffer.alloc(0), 'gzip'), false);
+      assert.equal(
+        matchesContentEncodingMagic(Buffer.from('{"a"'), 'gzip'),
+        false,
+      );
+    });
+
+    it('never matches a coding without magic', () => {
+      assert.equal(
+        matchesContentEncodingMagic(Buffer.from([0x1f, 0x8b]), 'br'),
+        false,
+      );
+      assert.equal(
+        matchesContentEncodingMagic(Buffer.from([0x1f, 0x8b]), undefined),
+        false,
+      );
+    });
+  });
+
+  describe('taggedContentEncoding', () => {
+    it('reads the first Content-Encoding tag, case-insensitively', () => {
+      assert.equal(
+        taggedContentEncoding([{ name: 'content-encoding', value: 'GZIP' }]),
+        'gzip',
+      );
+      assert.equal(
+        taggedContentEncoding([
+          { name: 'Content-Encoding', value: 'br' },
+          { name: 'Content-Encoding', value: 'gzip' },
+        ]),
+        'br',
+      );
+    });
+
+    it('returns undefined for no tag or a coding the gateway does not honour', () => {
+      assert.equal(taggedContentEncoding(undefined), undefined);
+      assert.equal(taggedContentEncoding([]), undefined);
+      assert.equal(
+        taggedContentEncoding([
+          { name: 'Content-Encoding', value: 'gzip, br' },
+        ]),
+        undefined,
+      );
+    });
+  });
+
   describe('byteRangeHeader', () => {
     it('passes a bytes range through', () => {
       assert.equal(byteRangeHeader('bytes=0-99'), 'bytes=0-99');
