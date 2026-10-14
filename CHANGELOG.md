@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased]
+
+### Added
+
+- **L2 index bands (`parquet-l2`)**: a new index kind for the ANS-104 data
+  items one declared selection takes (a tag name and a value prefix, with
+  an optional narrower prefix excluded: `App-Name` starting `ArDrive`, say),
+  with their tags, owners' keys, nested bundles and offsets in their root
+  transactions, as Parquet on the L1 bands' height grid. The selection is declared in each band's
+  `band.json`, bound into its id (`l2-h<from>-<to>-<publisher>-<digest>`),
+  and carried in the signed publication. The index-swarm sidecar publishes
+  them as `{"name":"ardrive-l2","kind":"parquet-l2"}`, and a subscriber that
+  names the index checks each band's files, footers, schema, row counts, id
+  and selection before installing it, refusing every band of an index whose
+  bands, or `filter`, declare different selections. Opt-in, like
+  `parquet-l1`. Nothing builds L2 bands yet. See *L2 bands* in
+  [docs/index-publication.md](docs/index-publication.md).
+
 ## [Release 85] - 2026-10-14
 
 This is a **recommended release** focused on **the Arweave base layer as a

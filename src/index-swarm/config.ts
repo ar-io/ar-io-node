@@ -38,8 +38,8 @@ export interface SubscribeConfig {
   publisher: string;
   /**
    * The index names to take. Unset: every index the publisher offers whose
-   * kind isn't opt-in (`parquet-l1` is), so a large dataset is never taken
-   * unasked.
+   * kind isn't opt-in (`parquet-l1` and `parquet-l2` are), so a large
+   * dataset is never taken unasked.
    */
   name?: string | string[];
   /** Override the URL derived from the publisher's gateway record. */
