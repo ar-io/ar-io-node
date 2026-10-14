@@ -662,10 +662,10 @@ export class StandaloneSqliteDatabaseWorker {
     // Full-claim path: caller has the complete root atom (parent_id,
     // root_transaction_id, all the offset/size fields, signature_type,
     // root_parent_offset). Used by the unbundle pipeline and by the
-    // on-demand metadata resolver. Atomic root-atom upsert; any of the
-    // tuple fields the caller leaves NULL are preserved by COALESCE in
-    // upsertNewDataItem rather than clobbered (see the contract comment
-    // in import.sql).
+    // on-demand metadata resolver. Atomic root-atom upsert: under the same
+    // root, tuple fields the caller leaves NULL are preserved by COALESCE in
+    // upsertNewDataItem; a write naming a different root replaces the whole
+    // atom, NULLs included (see the contract comment in import.sql).
     this.insertDataItemFn = this.dbs.bundles.transaction(
       (item: NormalizedDataItem, height?: number) => {
         const rows = dataItemToDbRows(item, height);
