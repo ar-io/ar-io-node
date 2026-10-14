@@ -938,6 +938,8 @@ st
         contentEncoding?: string;
         fail?: Error;
         body?: Buffer;
+        /** Clamp ranges to the body, as a root-bundle source does. */
+        clamp?: boolean;
       };
 
       // Reads the body as bytes; superagent would otherwise parse or decode it.
@@ -966,6 +968,13 @@ st
             throw source.fail;
           }
           const full = source.body ?? body;
+          if (
+            source.clamp === true &&
+            params.region !== undefined &&
+            params.region.offset >= full.length
+          ) {
+            throw new Error('Requested region offset exceeds data item size');
+          }
           const bytes =
             params.region !== undefined
               ? full.subarray(
@@ -977,7 +986,10 @@ st
           streams.push(stream);
           return {
             stream,
-            size: params.region?.size ?? full.length,
+            size:
+              source.clamp === true
+                ? bytes.length
+                : (params.region?.size ?? full.length),
             totalSize: source.totalSize,
             verified: false,
             trusted: true,
@@ -1179,6 +1191,77 @@ st
         assert.notEqual(calls[0].region, undefined);
       });
 
+      describe('when the indexed size is larger than the item', () => {
+        beforeEach(() => {
+          // 15 bytes, indexed as 20; the source reports no total size and
+          // clamps a range at the item's real end.
+          source.body = body.subarray(0, 15);
+          source.clamp = true;
+        });
+
+        it('falls back when the source returns a shorter range', async () => {
+          useDataHandler();
+
+          const res = await getRange('bytes=10-19').expect(206);
+
+          assert.equal(calls.length, 3);
+          assert.deepEqual(calls[0].region, { offset: 10, size: 10 });
+          assert.equal(calls[1].region, undefined);
+          assert.ok(streams[0].destroyed);
+          // The full-object path's answer: the range cut at the real end.
+          assert.equal(res.body.toString(), 'abcde');
+          assert.equal(res.headers['content-range'], 'bytes 10-14/15');
+          assert.equal(res.headers['content-length'], '5');
+        });
+
+        it('answers 404, not 416, for a range starting past the real end', async () => {
+          // Documented in serveUncachedRange: a failed fetch cannot be told
+          // apart from an item no source has.
+          useDataHandler();
+
+          await getRange('bytes=16-19').expect(404);
+
+          assert.equal(calls.length, 1);
+        });
+      });
+
+      it('sends the same headers as the full-object path', async () => {
+        attributes.stable = true;
+        attributes.verified = true;
+        source.contentType = 'text/plain';
+        useDataHandler();
+        const names = [
+          headerNames.trusted,
+          headerNames.hops,
+          headerNames.stable,
+          headerNames.verified,
+          headerNames.cache,
+          headerNames.dataId,
+          'content-type',
+          'cache-control',
+          'content-range',
+          'content-length',
+          'accept-ranges',
+          'x-arweave-tag-app-name',
+        ].map((name) => name.toLowerCase());
+        const pick = (headers: any) =>
+          Object.fromEntries(names.map((name) => [name, headers[name]]));
+
+        const fast = await getRange('bytes=2-5').expect(206);
+        assert.equal(calls.length, 1);
+
+        // The same item without an indexed type takes the full-object path;
+        // the source supplies the same type.
+        delete attributes.contentType;
+        calls = [];
+        const full = await getRange('bytes=2-5').expect(206);
+        assert.equal(calls.length, 2);
+        assert.equal(calls[0].region, undefined);
+
+        assert.deepEqual(pick(fast.headers), pick(full.headers));
+        assert.deepEqual(fast.body, full.body);
+      });
+
       describe('keeps the full-object path', () => {
         const assertFullFirst = () => {
           assert.ok(calls.length >= 1);
@@ -1331,7 +1414,10 @@ st
           signature: null,
         };
 
-        const useManifest = (resolutionType: 'path' | 'fallback') => {
+        const useManifest = (
+          resolutionType: 'path' | 'fallback',
+          extra: Record<string, unknown> = {},
+        ) => {
           dataAttributesSource.getDataAttributes = async (id: string) =>
             id === 'manifest-id' ? manifestAttributes : attributes;
           manifestPathResolver.resolveFromIndex = async () => ({
@@ -1353,9 +1439,41 @@ st
               dataSource,
               dataBlockListValidator,
               manifestPathResolver,
+              ...extra,
             }),
           );
         };
+
+        it('leaves no headers behind when serving fails after setting them', async () => {
+          // Tags that are not iterable make setDataHeaders throw part-way,
+          // after it has set the data headers.
+          const dataItemMetaResolver = {
+            resolveFromLocal: async () => ({ tags: { length: 1 } }),
+            resolve: async () => undefined,
+          } as any;
+          manifestPathResolver.resolveFromData = async () => ({
+            id: 'manifest-id',
+            resolvedId: undefined,
+            complete: true,
+          });
+          useManifest('fallback', { dataItemMetaResolver });
+
+          const res = await request(app)
+            .get('/manifest-id/file.txt')
+            .set('Range', 'bytes=2-5')
+            .expect(404);
+
+          assert.equal(calls[0].id, 'inner-id');
+          assert.notEqual(calls[0].region, undefined);
+          assert.ok(streams[0].destroyed);
+          assert.equal(res.headers['content-range'], undefined);
+          assert.equal(res.headers['accept-ranges'], undefined);
+          assert.equal(
+            res.headers[headerNames.dataId.toLowerCase()],
+            undefined,
+          );
+          assert.equal(res.headers[headerNames.cache.toLowerCase()], undefined);
+        });
 
         it('fetches only the range of the resolved item, once', async () => {
           useManifest('path');

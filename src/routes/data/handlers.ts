@@ -1162,11 +1162,19 @@ const uncachedRangeFastPathRange = ({
  *
  * Returns false, having sent nothing and with no stream left open, when the
  * request is not eligible (see {@link uncachedRangeFastPathRange}) or when the
- * ranged fetch shows the full-object path is needed: the source reports a
- * different size for the item, or the bytes came from the cache and their
- * Content-Encoding must be checked against the item's first bytes, which this
- * range may not include. Errors from the ranged fetch are thrown for the caller
- * to handle as it handles its own fetch failing.
+ * ranged fetch shows the full-object path is needed: the source returns a
+ * different length than requested or reports a different size for the item,
+ * or the bytes came from the cache and their Content-Encoding must be checked
+ * against the item's first bytes, which this range may not include. Errors
+ * from the ranged fetch are thrown for the caller to handle as it handles its
+ * own fetch failing.
+ *
+ * One difference remains: a range that starts past the item's real end, when
+ * the indexed size is larger than the item, fails the fetch and is answered
+ * 404, where the full-object path would answer 416. The source cascade reports
+ * every failure the same way, so this cannot be told apart from an item no
+ * source has, and retrying every failure with a full fetch would run the
+ * cascade twice for each unavailable item. It needs a wrong indexed size.
  *
  * @returns true when a response was sent (served, or refused by the rate
  *   limiter or payment check).
@@ -1254,6 +1262,24 @@ const serveUncachedRange = async ({
   };
 
   try {
+    // Not every source reports the item's size: one serving the item from its
+    // root bundle clamps a range that runs past the item's real end and says
+    // so only through a shorter size. Either way the indexed size was wrong,
+    // and the 206 head computed from it would promise bytes the body lacks.
+    const requestedSize = range.end - range.start + 1;
+    if (rangeData.size !== requestedSize) {
+      log.warn('Ranged fetch returned a different length than requested', {
+        id,
+        indexedSize: size,
+        requestedSize,
+        returnedSize: rangeData.size,
+      });
+      return fallBack('size_mismatch', {
+        indexedSize: size,
+        requestedSize,
+        returnedSize: rangeData.size,
+      });
+    }
     if (
       typeof rangeData.totalSize === 'number' &&
       rangeData.totalSize > 0 &&
@@ -2149,6 +2175,23 @@ const sendManifestResponse = async ({
         ? `public, max-age=${config.CACHE_NOT_FOUND_MAX_AGE}, must-revalidate`
         : undefined;
 
+    // Resolve item headers for the inner data item so X-Arweave-Tag-*
+    // and owner/signature headers appear on manifest-resolved responses
+    // (e.g. ArNS apex/subdomain serving a manifest). Fired once, here, and
+    // shared by both paths below, so a fast path that falls back does not
+    // resolve them twice.
+    const itemHeadersPromise = fireItemHeaderResolution(
+      resolvedId,
+      dataItemMetaResolver,
+    );
+
+    // A failure here answers "not sent", and the caller then sends its own
+    // response (a 404, or the manifest's body). The fast path may already
+    // have set headers and a status by then, so they are put back as they
+    // were rather than leaking into that response.
+    const statusBefore = res.statusCode;
+    const headersBefore = res.getHeaders();
+
     // Retrieve data based on ID resolved from manifest path or index
     try {
       // A single range of an uncached item: fetch only the range.
@@ -2166,10 +2209,7 @@ const sendManifestResponse = async ({
           paymentProcessor,
           negativeDataCache,
           dataItemMetaResolver,
-          itemHeadersPromise: fireItemHeaderResolution(
-            resolvedId,
-            dataItemMetaResolver,
-          ),
+          itemHeadersPromise,
           requireKnownType: false,
           refetchAttributes: false,
           cacheControl,
@@ -2189,8 +2229,9 @@ const sendManifestResponse = async ({
       negativeDataCache?.evict(resolvedId);
       negativeDataCache?.recordSuccess();
     } catch (error: any) {
-      // Re-throw AbortError to be handled by caller
-      if (error.name === 'AbortError') {
+      // Re-throw AbortError to be handled by caller, and anything that
+      // failed after the response started: it can no longer be replaced.
+      if (error.name === 'AbortError' || res.headersSent) {
         throw error;
       }
       log.warn('Unable to retrieve contiguous data:', {
@@ -2198,6 +2239,15 @@ const sendManifestResponse = async ({
         message: error.message,
         stack: error.stack,
       });
+      for (const name of res.getHeaderNames()) {
+        res.removeHeader(name);
+      }
+      for (const [name, value] of Object.entries(headersBefore)) {
+        if (value !== undefined) {
+          res.setHeader(name, value);
+        }
+      }
+      res.status(statusBefore);
       // Indicate response was NOT sent
       return false;
     }
@@ -2220,11 +2270,8 @@ const sendManifestResponse = async ({
       return true; // Response was sent (402 or 429)
     }
 
-    // Resolve item headers for the inner data item so X-Arweave-Tag-*
-    // and owner/signature headers appear on manifest-resolved responses
-    // (e.g. ArNS apex/subdomain serving a manifest).
     const itemHeaders = await awaitItemHeaders(
-      fireItemHeaderResolution(resolvedId, dataItemMetaResolver),
+      itemHeadersPromise,
       data?.upstreamTags,
       resolvedId,
       dataItemMetaResolver,

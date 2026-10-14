@@ -300,6 +300,31 @@ with core**).
 
 ### Changed
 
+- **A single-range GET of an uncached item fetches only the range.** The data,
+  `/raw` and manifest-resolved routes used to fetch the whole item first,
+  drop that stream and then fetch the range, so a range miss ran the
+  upstream source cascade twice, and could wait on another request's
+  download of the whole item (11-22 s to first byte measured on a live
+  gateway). Now a GET for one satisfiable byte range of an item with an
+  indexed size and no stored hash (on the data route, also a known
+  non-manifest type) makes one ranged fetch and sends the same headers.
+  HEAD, multipart, malformed and unsatisfiable ranges, cached items, and a
+  source that returns another length or item size keep the old path.
+  `uncached_range_fast_path_total{outcome}` counts `served`, `refused` and
+  each `fallback_*` reason.
+
+- **Range misses fill the cache in the background by default**:
+  `BACKGROUND_CACHE_RANGE_MAX_SIZE` defaults to 10 GiB (was 0, off) and
+  `BACKGROUND_CACHE_RANGE_CONCURRENCY` to 4 (was 1). The dropped whole-item
+  fetch above kept downloading into the cache after the range was served,
+  so it was what cached items read only by range (video, SQLite or Parquet
+  over HTTP); the background fetch now does that, and a concurrent full GET
+  shares it. A background fetch that receives no data for
+  `STREAM_STALL_TIMEOUT_MS` is abandoned so its slot is freed. Signature and
+  owner reads from a parent bundle never start one, so a GraphQL signature
+  lookup does not download the whole bundle. Set the variables to keep the
+  old values.
+
 - **`tip-5.arweave.xyz` is no longer a default preferred chunk node**, for
   GET or POST. Its port 1984 was closed from two separate networks on
   2026-10-10, it served none of 60 random offsets, and `tip-1`'s own peer

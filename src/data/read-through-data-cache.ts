@@ -14,6 +14,7 @@ import {
   CONTIGUOUS_DATA_CACHE_INDEX_UPDATE_ON_READ,
   PREFERRED_ARNS_BASE_NAMES,
   PREFERRED_ARNS_NAMES,
+  STREAM_STALL_TIMEOUT_MS,
 } from '../config.js';
 import { verificationPriorities } from '../constants.js';
 import * as events from '../events.js';
@@ -208,6 +209,8 @@ export class ReadThroughDataCache implements ContiguousDataSource {
   private pendingBackgroundCaches: Set<string> = new Set();
   private backgroundCacheRangeMaxSize: number;
   private backgroundCacheSemaphore: Semaphore;
+  /** See {@link triggerBackgroundCacheForRange}. */
+  private backgroundCacheStallTimeoutMs: number;
   /**
    * Single-flight map for foreground full-object fetches, keyed by data ID.
    *
@@ -261,6 +264,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     trustedCacheRetryRate = 0,
     backgroundCacheRangeMaxSize = 0,
     backgroundCacheRangeConcurrency = 1,
+    backgroundCacheStallTimeoutMs = STREAM_STALL_TIMEOUT_MS,
     foregroundCacheMaxSize = 0,
     foregroundCacheConcurrency = 0,
     foregroundCacheCoalesceTimeoutMs = 300000,
@@ -283,6 +287,12 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     trustedCacheRetryRate?: number;
     backgroundCacheRangeMaxSize?: number;
     backgroundCacheRangeConcurrency?: number;
+    /**
+     * How long a background range-cache fetch may go without receiving a
+     * byte before it is abandoned and its permit released. Defaults to
+     * STREAM_STALL_TIMEOUT_MS.
+     */
+    backgroundCacheStallTimeoutMs?: number;
     foregroundCacheMaxSize?: number;
     foregroundCacheConcurrency?: number;
     foregroundCacheCoalesceTimeoutMs?: number;
@@ -376,6 +386,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     this.backgroundCacheSemaphore = new Semaphore(
       backgroundCacheRangeConcurrency,
     );
+    this.backgroundCacheStallTimeoutMs = backgroundCacheStallTimeoutMs;
     this.foregroundCacheMaxSize = foregroundCacheMaxSize;
     // 0 means unbounded -- leave the semaphore unset rather than constructing
     // one with a permit count that would reject in the Semaphore constructor.
@@ -710,8 +721,8 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     // Skipping also keeps the background permit free: without this check the
     // trigger below would coalesce onto that foreground leader and hold its
     // permit for the duration -- with BACKGROUND_CACHE_RANGE_CONCURRENCY
-    // defaulting to 1, one slow foreground fetch would stall background range
-    // caching process-wide.
+    // small (4 by default), a few slow foreground fetches would stall
+    // background range caching process-wide.
     if (this.inFlightForegroundFetches.has(id)) {
       metrics.backgroundRangeCacheSkippedTotal.inc({
         reason: 'already_pending',
@@ -735,18 +746,60 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     metrics.backgroundRangeCacheTriggeredTotal.inc();
     this.log.debug('Triggered background range cache fetch', { id, dataSize });
 
-    this.getData({ id, requestAttributes })
-      .then((result) => {
-        return new Promise<void>((resolve, reject) => {
-          result.stream.on('end', () => {
-            this.log.debug('Completed background range cache fetch', { id });
-            metrics.backgroundRangeCacheCompletedTotal.inc();
-            resolve();
-          });
-          result.stream.on('error', reject);
-          result.stream.resume();
+    // A wedged upstream never ends or errors its stream, which would hold this
+    // permit forever: a few such fetches would silently switch background
+    // range caching off for the life of the process. So the fetch is abandoned
+    // once it goes this long without a byte -- before the stream arrives, or
+    // between chunks -- and the permit returns. Abandoning only detaches this
+    // reader; the foreground cache write it shares has its own stall bound.
+    const stallTimeoutMs = this.backgroundCacheStallTimeoutMs;
+    let stream: Readable | undefined;
+    let abandoned = false;
+    let stallTimer: NodeJS.Timeout | undefined;
+    let onStall: (() => void) | undefined;
+    const armStallTimer = () => {
+      if (stallTimer !== undefined) {
+        clearTimeout(stallTimer);
+      }
+      stallTimer = setTimeout(() => onStall?.(), stallTimeoutMs);
+      // Never the only thing keeping the process alive.
+      stallTimer.unref();
+    };
+    const clearStallTimer = () => {
+      if (stallTimer !== undefined) {
+        clearTimeout(stallTimer);
+        stallTimer = undefined;
+      }
+    };
+
+    new Promise<void>((resolve, reject) => {
+      onStall = () => {
+        abandoned = true;
+        const error = new Error(
+          `Background range cache fetch stalled: no data for ${stallTimeoutMs}ms`,
+        );
+        stream?.destroy(error);
+        reject(error);
+      };
+      armStallTimer();
+      this.getData({ id, requestAttributes }).then((result) => {
+        stream = result.stream;
+        if (abandoned) {
+          // Abandoned while the fetch was starting.
+          result.stream.destroy();
+          return;
+        }
+        armStallTimer();
+        result.stream.on('data', armStallTimer);
+        result.stream.on('end', () => {
+          this.log.debug('Completed background range cache fetch', { id });
+          metrics.backgroundRangeCacheCompletedTotal.inc();
+          resolve();
         });
-      })
+        result.stream.on('error', reject);
+        result.stream.resume();
+      }, reject);
+    })
       .catch((error: any) => {
         this.log.debug('Background range cache fetch failed', {
           id,
@@ -755,6 +808,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
         metrics.backgroundRangeCacheFailedTotal.inc();
       })
       .finally(() => {
+        clearStallTimer();
         this.pendingBackgroundCaches.delete(id);
         this.backgroundCacheSemaphore.release();
       });
