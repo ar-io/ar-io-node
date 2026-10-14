@@ -27,6 +27,7 @@ import * as fs from 'node:fs/promises';
 import { Request, Response, Router } from 'express';
 import rangeParser from 'range-parser';
 import { Logger } from 'winston';
+import { byteRangeHeader } from '../lib/http-utils.js';
 
 import {
   isValidIndexName,
@@ -481,8 +482,9 @@ export function createIndexesRouter({
     let start = 0;
     let end = entry.size - 1;
     let partial = false;
-    const rangeHeader = req.headers.range;
-    if (typeof rangeHeader === 'string' && entry.size > 0) {
+    // A unit other than bytes is ignored, as RFC 9110 requires.
+    const rangeHeader = byteRangeHeader(req.headers.range);
+    if (rangeHeader !== undefined && entry.size > 0) {
       const ranges = rangeParser(entry.size, rangeHeader, { combine: true });
       if (ranges === -2) {
         res.status(400).type('text').send("Malformed 'range' header");

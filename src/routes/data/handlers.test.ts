@@ -27,6 +27,7 @@ import {
 } from '../../types.js';
 import {
   createDataHandler,
+  createRawDataHandler,
   getRequestAttributes,
   matchContentTypePattern,
   shouldUsePrivateCacheControl,
@@ -1612,6 +1613,32 @@ st
             });
         });
 
+        it('ignores a unit other than bytes on the raw route', async () => {
+          const rawId = '3b9XZ2XlcuA3vCahZ81mnYYULrN9I6QnzA5pZd08Fpo';
+          app.get(
+            /^\/raw\/([a-zA-Z0-9-_]{43})$/,
+            createRawDataHandler({
+              log,
+              dataAttributesSource,
+              dataSource,
+              dataBlockListValidator,
+            }),
+          );
+
+          await request(app)
+            .get(`/raw/${rawId}`)
+            .set('Range', 'items=0-5')
+            .expect(200)
+            .then((res: any) => {
+              assert.equal(res.body.toString(), 'testing...');
+            });
+          await request(app)
+            .get(`/raw/${rawId}`)
+            .set('Range', 'BYTES=2-3')
+            .expect(206)
+            .expect('Content-Range', 'bytes 2-3/10');
+        });
+
         it('treats the bytes unit case-insensitively', async () => {
           await request(app)
             .get('/not-a-real-id')
@@ -2471,13 +2498,20 @@ st
           requestedIds = [];
           mock.method(dataSource, 'getData', (params: any) => {
             requestedIds.push(params.id);
-            const body =
+            const whole =
               params.id === 'manifest-id'
                 ? Buffer.from(manifestJson)
                 : Buffer.from('file contents');
+            const body =
+              params.region !== undefined
+                ? whole.subarray(
+                    params.region.offset,
+                    params.region.offset + params.region.size,
+                  )
+                : whole;
             return Promise.resolve({
               stream: Readable.from(body),
-              size: body.length,
+              size: whole.length,
               sourceContentType:
                 params.id === 'manifest-id'
                   ? 'application/x.arweave-manifest+json'
@@ -2527,6 +2561,31 @@ st
           assert.deepEqual(requestedIds, [resolvedId]);
           assert.equal(resolveFromIndex.mock.callCount(), 0);
           assert.equal(resolveFromData.mock.callCount(), 0);
+        });
+
+        it('applies the range-unit rules to a manifest-resolved path', async () => {
+          mock.method(manifestPathResolver, 'resolveFromTrustedCache', () => ({
+            id: 'manifest-id',
+            resolvedId,
+            complete: true,
+            resolutionType: 'path',
+          }));
+
+          await request(app)
+            .get('/manifest-id/path/to/file.txt')
+            .set('Range', 'BYTES=0-3')
+            .expect(206)
+            .expect('Content-Range', 'bytes 0-3/13')
+            .then((res: any) => {
+              assert.equal(res.text, 'file');
+            });
+          await request(app)
+            .get('/manifest-id/path/to/file.txt')
+            .set('Range', 'items=0-3')
+            .expect(200)
+            .then((res: any) => {
+              assert.equal(res.text, 'file contents');
+            });
         });
 
         it('fetches and parses the manifest when there is no trusted cached resolution', async () => {

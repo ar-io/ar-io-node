@@ -52,6 +52,11 @@ describe('http-utils', () => {
       assert.equal(byteRangeHeader('bytesx=0-5'), undefined);
     });
 
+    it('passes an empty unit through for the parser to reject', () => {
+      assert.equal(byteRangeHeader('=0-5'), '=0-5');
+      assert.equal(byteRangeHeader(' =0-5'), ' =0-5');
+    });
+
     it('leaves a header without a unit for the parser to reject', () => {
       assert.equal(
         byteRangeHeader('invalid-range-header'),
@@ -556,6 +561,20 @@ describe('http-utils', () => {
   });
 
   describe('calculateRangeResponseSize', () => {
+    it('charges a range with an ignored unit as the whole item', () => {
+      assert.equal(
+        calculateRangeResponseSize(1000, 'items=0-5', 'text/plain'),
+        1000,
+      );
+    });
+
+    it('charges an upper-case bytes range as the range', () => {
+      assert.equal(
+        calculateRangeResponseSize(1000, 'BYTES=0-499', 'text/plain'),
+        500,
+      );
+    });
+
     const contentType = 'application/octet-stream';
     const boundary = 'test-boundary-123';
 
