@@ -158,17 +158,18 @@ UPDATE SET
  *
  *   - upsertNewDataItem — used by the unbundle path and the on-demand
  *     metadata resolver, both of which know the full root atom. INSERT
- *     carries the full tuple; on conflict, every root-atom field is
- *     updated atomically (COALESCE protects against the rare partial
- *     write — see note below). Height is IFNULL'd because it lives on
- *     a different timeline than the bundling (set by chain ingestion
- *     via updateNewDataItemHeights).
+ *     carries the full tuple; on conflict, a write naming a different
+ *     root replaces every root-atom field with its own values, NULLs
+ *     included, and any other write COALESCEs them (see note below).
+ *     Height is IFNULL'd because it lives on a different timeline than
+ *     the bundling (set by chain ingestion via updateNewDataItemHeights).
  *
  * The COALESCE on the root-atom UPDATE columns is a safety net for
  * callers that don't actually have full tuple knowledge yet (e.g., a
- * partially-resolved metadata fetch). It is NOT a license to write
- * partial tuples — callers in the unbundle path are expected to
- * provide all eleven fields together.
+ * partially-resolved metadata fetch) under the SAME root. It is NOT a
+ * license to write partial tuples — callers in the unbundle path are
+ * expected to provide all eleven fields together. A different root is a
+ * different atom, so nothing from the old one is kept.
  */
 
 -- insertOptimisticDataItem
