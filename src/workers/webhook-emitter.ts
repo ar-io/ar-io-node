@@ -54,6 +54,10 @@ const EMISSION_QUEUE_CONCURRENCY = 5;
  * content scanner's `?token=`, since the emitter can't send headers) or
  * userinfo; neither may reach the logs. Keeps scheme, host, port, path and
  * the query parameter NAMES, so a failure still says which endpoint failed.
+ * A query segment with no `=` may itself be the secret, so it is redacted
+ * whole, and the fragment is dropped. The path is kept, so a secret placed
+ * in the path (as Slack- and Discord-style webhook URLs do) is logged: put
+ * credentials in the query or userinfo.
  */
 export function redactUrl(url: string): string {
   try {
@@ -62,10 +66,18 @@ export function redactUrl(url: string): string {
       u.username = 'redacted';
       u.password = '';
     }
-    const params = [...u.searchParams.keys()];
-    if (params.length > 0) {
-      u.search = params
-        .map((k) => `${encodeURIComponent(k)}=<redacted>`)
+    u.hash = '';
+    if (u.search.length > 1) {
+      u.search = u.search
+        .slice(1)
+        .split('&')
+        .filter((segment) => segment !== '')
+        .map((segment) => {
+          const index = segment.indexOf('=');
+          return index === -1
+            ? '<redacted>'
+            : `${segment.slice(0, index)}=<redacted>`;
+        })
         .join('&');
     }
     return u.toString().replace(/%3Credacted%3E/g, '<redacted>');

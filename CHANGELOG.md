@@ -4,18 +4,6 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased]
-
-### Fixed
-
-- **The webhook emitter no longer writes a target's secret to the logs.**
-  `WEBHOOK_TARGET_SERVERS` can carry a credential in the URL: the content
-  scanner's `WEBHOOK_SECRET` (v0.7.0) travels as `?token=`, since the emitter
-  can't send headers. Every failed emission (e.g. while the scanner restarts)
-  logged the full URL, token included, and the debug line did too. Logged URLs
-  now keep the scheme, host, port, path and query parameter names, with values
-  and userinfo replaced by `<redacted>`.
-
 ## [Release 85] - 2026-10-14
 
 This is a **recommended release** focused on **the Arweave base layer as a
@@ -409,6 +397,14 @@ with core**).
   Text and JavaScript types keep the charset, since without it browsers
   decode UTF-8 text documents as windows-1252. Edge caches keep the old
   header on responses they already hold until those expire or are purged.
+
+- **The webhook emitter no longer writes a target's secret to the logs.**
+  `WEBHOOK_TARGET_SERVERS` can carry a credential in the URL: the content
+  scanner's `WEBHOOK_SECRET` (v0.7.0) travels as `?token=`, since the emitter
+  can't send headers. Every failed emission (e.g. while the scanner restarts)
+  logged the full URL, token included, and the debug line did too. Logged URLs
+  now keep the scheme, host, port, path and query parameter names, with values
+  and userinfo replaced by `<redacted>`.
 
 - **A fleet node could not subscribe to its own fleet's index publication.**
   The fleet recipe in `docs/index-swarm.md` subscribes a non-signing node to

@@ -293,6 +293,32 @@ describe('WebhookEmitter', () => {
       );
     });
 
+    it('drops the fragment', () => {
+      assert.equal(
+        redactUrl('http://h/scan?token=s3cr3t#frag=s3cr3t'),
+        'http://h/scan?token=<redacted>',
+      );
+      assert.equal(
+        redactUrl('http://h/scan#access_token=s3cr3t'),
+        'http://h/scan',
+      );
+    });
+
+    it('redacts a query segment with no value whole', () => {
+      assert.equal(redactUrl('http://h/x?s3cr3t'), 'http://h/x?<redacted>');
+      assert.equal(
+        redactUrl('http://h/x?a=1&s3cr3t&b='),
+        'http://h/x?a=<redacted>&<redacted>&b=<redacted>',
+      );
+    });
+
+    it('keeps the path, which is not redacted', () => {
+      assert.equal(
+        redactUrl('https://hooks.example.com/services/T0/B0/pathsecret'),
+        'https://hooks.example.com/services/T0/B0/pathsecret',
+      );
+    });
+
     it('never echoes an unparseable value', () => {
       assert.equal(redactUrl('not a url ?token=s3cr3t'), '<unparseable url>');
     });
