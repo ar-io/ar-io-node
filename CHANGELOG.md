@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Release 85] - 2026-10-12
+## [Release 85] - 2026-10-14
 
 This is a **recommended release** focused on **the Arweave base layer as a
 shared, verifiable index, serving compressed and mislabelled data correctly,
