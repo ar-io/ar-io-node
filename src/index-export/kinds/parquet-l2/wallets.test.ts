@@ -146,6 +146,7 @@ describe('OwnerNotes and resolveOwnerKeys', () => {
         fromWalletsDb: 1,
         fromGateway: 1,
         withoutKey: 2,
+        withoutKeyBy: { unreadable: 0, wrong: 1, nowhere: 1 },
         withoutKeySample: [
           toB64Url(sha256(key(4))),
           toB64Url(sha256(key(5))),

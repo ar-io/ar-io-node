@@ -83,7 +83,9 @@ export type UnlocatedReason =
   /** Offsets that don't describe one data item. */
   | 'layout'
   /** Its parent bundle sits in two places in the root: which is unknown. */
-  | 'parent_two_places';
+  | 'parent_two_places'
+  /** Ambiguous, and its root couldn't be read to settle it (a 404). */
+  | 'unproven';
 
 /** How a located item's offsets were placed. */
 export type PlacementClass =

@@ -143,7 +143,7 @@ export const l2Rows = metric(
 export const l2Unlocated = metric(
   'gauge',
   'index_export_l2_unlocated_rows',
-  'parquet-l2: data items the latest band of a kind holds without a location, by reason (no_offsets, layout, no_parent, inconsistent, deep, ambiguous, parent_two_places).',
+  'parquet-l2: data items the latest band of a kind holds without a location, by reason (no_offsets, layout, no_parent, inconsistent, deep, ambiguous, unproven, parent_two_places).',
   ['index', 'kind', 'reason'],
 ) as promClient.Gauge<'index' | 'kind' | 'reason'>;
 
@@ -157,7 +157,7 @@ export const l2OwnersWithoutKey = metric(
 export const l2Proofs = metric(
   'counter',
   'index_export_l2_proofs_total',
-  'parquet-l2: ambiguous data items settled by reading their header from the root, by outcome: relative, absolute (located), none or both (left unlocated).',
+  'parquet-l2: ambiguous data items settled by reading their header from the root, by outcome: relative, absolute (located), none or both (left unlocated), unproven (the root a 404: left unlocated).',
   ['index', 'outcome'],
 ) as promClient.Counter<'index' | 'outcome'>;
 

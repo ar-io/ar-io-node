@@ -609,6 +609,7 @@ describe('exportL2Band, locations', () => {
         absolute: 0,
         none: 0,
         both: 0,
+        unproven: 0,
       });
       // b1 and b2 proven absolute; b3 runs past the payload read as
       // relative, so it is absolute without a read.
@@ -618,6 +619,7 @@ describe('exportL2Band, locations', () => {
         absolute: 2,
         none: 0,
         both: 0,
+        unproven: 0,
       });
       // The same rows: the same tables and id.
       assert.deepEqual(rel.band.tables, good.band.tables);
@@ -626,6 +628,30 @@ describe('exportL2Band, locations', () => {
       assert.equal(id(abs), id(good));
     } finally {
       await done(good, rel, abs);
+    }
+  });
+
+  it('counts a row placePayload repaired as repaired, whatever another copy of it says', async () => {
+    // b1 sits before its bundle's payload starts: relative offsets under a
+    // root_parent_offset of 0, repaired without a read.
+    const [b1] = relative();
+    const alone = await exportBand([b1], n1());
+    // The same item held twice at its height (two block positions of its
+    // own), once as the unbundler writes it today: one row, still repaired.
+    const twice = await exportBand([b1, sourceRow(r3, 'b1')], n1());
+    try {
+      for (const result of [alone, twice]) {
+        assert.equal(result.band.checks?.located, 1);
+        assert.equal(result.band.checks?.repaired, 1);
+        assert.equal(result.stats.placedBy.repaired, 1);
+        // Placed without a header read (the one read is its owner's key).
+        assert.equal(result.stats.proofs.relative, 0);
+        assert.equal(result.stats.reads, 1);
+      }
+      assert.deepEqual(twice.band.tables, alone.band.tables);
+      assert.equal(twice.stats.rows.distinct, 1);
+    } finally {
+      await done(alone, twice);
     }
   });
 
@@ -769,26 +795,73 @@ describe('exportL2Band, locations', () => {
     );
   });
 
-  it('stops a band whose reads the gateway cannot serve, rather than writing it unlocated', async () => {
+  it('writes an ambiguous item unproven, and an owner keyless, when the gateway has no such root', async () => {
     const l1 = path.join(dir, 'published', 'parquet-l1');
     await writeL1Band(l1, 100_000, 199_999, [r3]);
-    await assert.rejects(
-      exportL2Band({
-        selection: ARDRIVE,
-        from: 100_000,
-        to: 104_999,
-        source: new MemoryL2Source(relative(), n1()),
-        l1Bands: await deriveL1Bands(l1, PUBLISHER),
-        // A gateway without the root: every read fails in transport.
-        reads: new GatewayReads(gatewayOf([]).openRoot, {
-          maxReads: 100,
-          retryDelayMs: 1,
+    // No such root (a 404): b2 and b3 can't be proven, and a1's owner key
+    // can't be read; the band builds.
+    const gateway = gatewayOf([]);
+    const reads = new GatewayReads(gateway.openRoot, {
+      maxReads: 100,
+      retryDelayMs: 1,
+    });
+    const result = await exportL2Band({
+      selection: ARDRIVE,
+      from: 100_000,
+      to: 104_999,
+      source: new MemoryL2Source([...relative(), sourceRow(r3, 'a1')], n1()),
+      l1Bands: await deriveL1Bands(l1, PUBLISHER),
+      reads,
+      workDir: path.join(dir, 'work'),
+    });
+    try {
+      assert.deepEqual(result.band.checks?.unlocated, { unproven: 2 });
+      // b1 is repaired without a read, a1 is in the root itself.
+      assert.equal(result.band.checks?.located, 2);
+      assert.equal(result.stats.proofs.unproven, 2);
+      assert.equal(result.band.checks?.ownersWithoutKey, 1);
+      assert.deepEqual(result.stats.owners.withoutKeyBy, {
+        unreadable: 1,
+        wrong: 0,
+        nowhere: 0,
+      });
+      assert.equal(result.band.tables.wallets.rows, 0);
+      // The root asked for once; every later read answered from memory.
+      assert.equal(gateway.reads, 1);
+      assert.equal(result.stats.reads, 1);
+      assert.equal(result.stats.readsNotFound, 1);
+      assert.ok(result.stats.readsNotFoundRemembered >= 2);
+    } finally {
+      await fs.rm(result.staging, { recursive: true, force: true });
+    }
+  });
+
+  it('stops a band whose reads fail in transport, rather than writing it unlocated', async () => {
+    const l1 = path.join(dir, 'published', 'parquet-l1');
+    await writeL1Band(l1, 100_000, 199_999, [r3]);
+    for (const failing of [503, 429]) {
+      const gateway = gatewayOf([r3], { failing });
+      await assert.rejects(
+        exportL2Band({
+          selection: ARDRIVE,
+          from: 100_000,
+          to: 104_999,
+          source: new MemoryL2Source(relative(), n1()),
+          l1Bands: await deriveL1Bands(l1, PUBLISHER),
+          reads: new GatewayReads(gateway.openRoot, {
+            maxReads: 100,
+            retryDelayMs: 1,
+          }),
+          workDir: path.join(dir, 'work'),
         }),
-        workDir: path.join(dir, 'work'),
-      }),
-      (error: unknown) =>
-        error instanceof L2UnavailableError && error.reason === 'gateway',
-    );
+        (error: unknown) =>
+          error instanceof L2UnavailableError &&
+          error.reason === 'gateway' &&
+          new RegExp(`status code ${failing}`).test(error.message),
+      );
+      // The first read tried three times before the band stopped.
+      assert.ok(gateway.reads >= 3);
+    }
     await assert.rejects(
       exportL2Band({
         selection: ARDRIVE,
@@ -800,7 +873,7 @@ describe('exportL2Band, locations', () => {
         workDir: path.join(dir, 'work'),
       }),
       (error: unknown) =>
-        error instanceof L2CheckError && error.reason === 'read_budget',
+        error instanceof L2UnavailableError && error.reason === 'read_budget',
     );
   });
 });

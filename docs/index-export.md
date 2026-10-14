@@ -557,8 +557,11 @@ changes: bands of another selection in its directory stop the run
   `owner` only for keys of at most 64 bytes, so not an RSA modulus); the
   gateway's `bundles.db` `wallets` table, read-only
   (`INDEX_EXPORT_L2_WALLETS_DB`); the root, read through the header-check
-  gateway at a located item's owner offset. An owner with none is left out
-  of `wallets` and counted (`ownersWithoutKey`); the band still builds.
+  gateway at a located item's owner offset (`owner_size` bytes, 512 for
+  an Arweave key), up to three places an owner. An owner with none is left
+  out of `wallets` and counted (`ownersWithoutKey`, and by why in
+  `stats.owners.withoutKeyBy`: `unreadable`, `wrong`, `nowhere`); the
+  band still builds.
 - **`content_type` and `content_encoding`**: the first `Content-Type` /
   `Content-Encoding` tag by position, names compared without case, as an L1
   band takes them; null without one, an empty value kept empty.
@@ -588,12 +591,14 @@ all set, or all null. The rules, in order:
    readings possible) are settled by their bytes: the header is read from
    the root at both candidate starts and decoded, and the reading whose
    header is the item's (its id, its length) is kept. Neither or both:
-   unlocated (`ambiguous`). Each item is read on its own (two items of one
-   bundle can have been indexed by different code), at most 8 reads at a
-   time and `INDEX_EXPORT_L2_MAX_READS` (200,000) reads, proofs and keys
-   together, a band (past it the band is refused, `read_budget`). A header
-   is read as the header check reads it: one whose tag count field is
-   malformed still proves its reading (`stats.malformedTags`).
+   unlocated (`ambiguous`); a root the gateway has no copy of: unlocated
+   (`unproven`). Each item is read on its own (two items of one bundle can
+   have been indexed by different code): `data_offset - offset` bytes, its
+   header, at each candidate start, at most 8 reads at a time and
+   `INDEX_EXPORT_L2_MAX_READS` (200,000) reads, proofs and keys together,
+   a band (past it the band waits, `couldnt_check`, `read_budget`). A
+   header is read as the header check reads it: one whose tag count field
+   is malformed still proves its reading (`stats.malformedTags`).
 
 Offsets are written parent-relative whichever way the index holds them, so
 an item held with absolute offsets and the same item held with relative
@@ -601,9 +606,32 @@ ones give the same row and the same digest. `parents` lists every located
 nested bundle between a held item and its root (placed by `placePayload`
 alone, never by reading its header).
 
-A read the gateway cannot serve, after two retries, stops the band
-(`couldnt_check`, `gateway`): whether an item is located, or an owner keyed,
-never depends on the network.
+What the gateway answers decides a read:
+
+- **404, no such root**: the root is unreadable for the rest of the build,
+  asked about once (its other reads wait for that answer, then are
+  answered without a request). An ambiguous item there is `unproven`, an
+  owner whose key could only be read there is without a key (`unreadable`
+  in `stats.owners.withoutKeyBy`), and the band builds. About half the
+  roots of 2023 heights are served by no node any more.
+- **416, or a range cut short**: those offsets run past the root, a
+  definite no.
+- **A timeout, a 5xx, a 429, a connection that failed**: tried twice more,
+  then the band stops (`couldnt_check`, `gateway`) and waits for the next
+  run, so a slow gateway never unlocates an item or drops a key.
+
+Each band's report gives the requests it made (`stats.reads`, against
+`INDEX_EXPORT_L2_MAX_READS`), how many were answered 404
+(`readsNotFound`), how many reads of such roots were answered without a
+request (`readsNotFoundRemembered`), and how many ran past their root
+(`readsOutOfRange`). Bytes are not cached: every proof and key reads its
+own offsets. `stats.placedBy` gives the located rows by how they were
+placed; a row any copy of which `placePayload` repaired counts as
+`repaired`.
+
+The header check of a band's sample is unchanged: a read that fails, a
+404 included, counts against its 80% pass ratio, so a band whose located
+rows mostly sit in roots no node serves waits (`couldnt_check`, `gate`).
 
 ### Distinct rows
 
@@ -697,6 +725,11 @@ re-settled band), it must:
   (`dropped_items`, with a sample);
 - **unlocate nothing**: every (id, root) they located it locates
   (`unlocated_rows`);
+- **drop no key**: every owner they hold a key for it holds one for
+  (`dropped_wallets`);
+- an item located now and not before (say, a root that answered 404 then
+  and serves its bytes now), or an owner keyed now, is an improvement: a
+  sample of 150 such items is header-checked (`newly-located`);
 - **relocate under a check**: every row they located elsewhere is
   header-checked, at most `INDEX_EXPORT_ROOT_TX_RESETTLE_MAX_CHANGED`
   (`too_many_changed`).

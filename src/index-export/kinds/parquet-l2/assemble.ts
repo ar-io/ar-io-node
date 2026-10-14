@@ -87,16 +87,33 @@ export interface AssembledWindow {
   rootIsItem: number;
   faults: RowFaults;
   /** Ambiguous items, by how their header reads settled them. */
-  proofs: { relative: number; absolute: number; none: number; both: number };
+  proofs: L2Proofs;
 }
 
-/** Reads a header from a root: whether the bytes at `rootOffset` are item `id`'s. */
+/**
+ * Ambiguous items, by how their header reads settled them: located as
+ * `relative` or `absolute`; left unlocated when `none` or `both` readings
+ * are the item's header, or `unproven` when the root couldn't be read (a
+ * 404).
+ */
+export interface L2Proofs {
+  relative: number;
+  absolute: number;
+  none: number;
+  both: number;
+  unproven: number;
+}
+
+/**
+ * Reads a header from a root: whether the bytes at `rootOffset` are item
+ * `id`'s, or `unreadable` when the gateway has no such root.
+ */
 export type HeaderProbe = (
   rootTxId: Buffer,
   rootOffset: number,
   headerBytes: number,
   id: Buffer,
-) => Promise<boolean>;
+) => Promise<boolean | 'unreadable'>;
 
 const hex = (bytes: Buffer) => bytes.toString('hex');
 const key = (id: Buffer, root: Buffer) => `${hex(id)}:${hex(root)}`;
@@ -236,7 +253,13 @@ export async function assembleWindow(
 ): Promise<AssembledWindow> {
   const bundles = new Bundles(window.ancestors);
   const faults: RowFaults = { noRoot: [], badRow: [], notSelected: [] };
-  const proofs = { relative: 0, absolute: 0, none: 0, both: 0 };
+  const proofs: L2Proofs = {
+    relative: 0,
+    absolute: 0,
+    none: 0,
+    both: 0,
+    unproven: 0,
+  };
   const items: AssembledItem[] = [];
   const parents = new Map<string, AssembledParent>();
   let rootIsItem = 0;
@@ -326,11 +349,22 @@ export async function assembleWindow(
               probe(root, candidate.rootOffset, ambiguous.headerBytes, row.id),
             ),
           );
-          const matched = ambiguous.candidates.filter((_, i) => matches[i]);
+          // The root unreadable (a 404): neither reading can be told.
+          if (matches.includes('unreadable')) {
+            proofs.unproven += 1;
+            settle({
+              located: false,
+              reason: 'unproven',
+              normalised: ambiguous.normalised,
+            });
+            return;
+          }
+          const read = matches as boolean[];
+          const matched = ambiguous.candidates.filter((_, i) => read[i]);
           if (matched.length === 1) proofs[matched[0].reading] += 1;
           else if (matched.length === 0) proofs.none += 1;
           else proofs.both += 1;
-          settle(resolveAmbiguous(ambiguous, matches));
+          settle(resolveAmbiguous(ambiguous, read));
         })(),
       );
     } else {

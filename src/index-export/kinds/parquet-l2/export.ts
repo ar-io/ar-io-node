@@ -65,7 +65,12 @@ import type {
   PlacementClass,
   UnlocatedReason,
 } from '../root-tx/sources/item-location.js';
-import { AssembledItem, assembleWindow, keyCandidate } from './assemble.js';
+import {
+  AssembledItem,
+  assembleWindow,
+  keyCandidate,
+  L2Proofs,
+} from './assemble.js';
 import {
   GatewayReads,
   ReadBudgetError,
@@ -142,14 +147,26 @@ export interface L2BandStats {
   /** Items whose root sits at another height of the band than the source filed them under. */
   movedHeight: number;
   /** Ambiguous items, by how their header reads came out. */
-  proofs: { relative: number; absolute: number; none: number; both: number };
-  /** Reads from the gateway, proofs and keys. */
+  proofs: L2Proofs;
+  /** Requests to the gateway, proofs and keys (against INDEX_EXPORT_L2_MAX_READS). */
   reads: number;
+  /** Requests answered 404, and reads of those roots answered without asking. */
+  readsNotFound: number;
+  readsNotFoundRemembered: number;
+  /** Requests that ran past their root. */
+  readsOutOfRange: number;
   /** Ambiguous items proven by a header whose tag count field is wrong. */
   malformedTags: number;
   owners: OwnerKeyStats;
   /** data_items rows: written by the windows, distinct, kept. */
   rows: { written: number; distinct: number; kept: number };
+  /**
+   * Located rows by how they were placed, one class each: `proven` (by a
+   * header read), `repaired` (relative offsets under a root_parent_offset of
+   * 0), `absolute`, `deep`, `nested`, `top`; a row some copy of which was
+   * proven or repaired counts there.
+   */
+  placedBy: Record<PlacementClass, number>;
 }
 
 export interface L2ExportResult {
@@ -331,14 +348,29 @@ interface Counts {
   proven: number;
 }
 
-/** A data_items row of a window, with what the checks count of it. */
+/**
+ * A data_items row of a window, with what the checks count of it: of every
+ * copy of it the source holds (an item filed twice at one height is one
+ * row), how each was placed, so a row any copy of which placePayload
+ * repaired counts as repaired whatever another copy said.
+ */
 interface WindowRow {
   values: unknown[];
   item: AssembledItem;
   reason?: UnlocatedReason;
-  placement?: PlacementClass;
+  placements: Set<PlacementClass>;
   normalised: boolean;
 }
+
+/** Located rows by how they were placed, one class each, in this order. */
+const PLACEMENT_ORDER: PlacementClass[] = [
+  'proven',
+  'repaired',
+  'absolute',
+  'deep',
+  'nested',
+  'top',
+];
 
 const minOf = <T extends string>(a: T | undefined, b: T | undefined) =>
   a === undefined ? b : b === undefined ? a : a < b ? a : b;
@@ -414,7 +446,7 @@ export async function exportL2Band({
   } catch (error) {
     await fs.rm(staging, { recursive: true, force: true });
     if (error instanceof ReadBudgetError) {
-      throw new L2CheckError('read_budget', error.message);
+      throw new L2UnavailableError('read_budget', error.message);
     }
     if (error instanceof ReadUnavailableError) {
       throw new L2UnavailableError(
@@ -495,12 +527,20 @@ async function build(
       proven: 0,
     };
     const rows = { written: 0, distinct: 0, kept: 0 };
+    const placedBy: Record<PlacementClass, number> = {
+      top: 0,
+      nested: 0,
+      repaired: 0,
+      absolute: 0,
+      deep: 0,
+      proven: 0,
+    };
     const stats = {
       windows: 0,
       sourceRows: 0,
       rootIsItem: 0,
       movedHeight: 0,
-      proofs: { relative: 0, absolute: 0, none: 0, both: 0 },
+      proofs: { relative: 0, absolute: 0, none: 0, both: 0, unproven: 0 },
     };
     let rejectedKeys = 0;
     const roots = {
@@ -513,7 +553,11 @@ async function build(
     };
     const general = new Reservoir<BandSampleEntry>(L2_SAMPLE_SIZE, Math.random);
     const strata = new Map<string, Reservoir<BandSampleEntry>>();
-    const offerSample = (item: AssembledItem) => {
+    const offerSample = (
+      item: AssembledItem,
+      placements: Set<PlacementClass>,
+      normalised: boolean,
+    ) => {
       const l = item.location;
       if (l === null) return;
       const entry = (tag?: string): BandSampleEntry => ({
@@ -525,12 +569,8 @@ async function build(
       });
       general.offer(entry());
       const tags = [
-        ...(item.placement !== undefined &&
-        item.placement !== 'top' &&
-        item.placement !== 'nested'
-          ? [item.placement]
-          : []),
-        ...(item.normalised ? ['normalised'] : []),
+        ...[...placements].filter((p) => p !== 'top' && p !== 'nested'),
+        ...(normalised ? ['normalised'] : []),
       ];
       for (const tag of tags) {
         let reservoir = strata.get(tag);
@@ -561,17 +601,16 @@ async function build(
             values,
             item,
             ...(item.unlocated !== undefined ? { reason: item.unlocated } : {}),
-            ...(item.placement !== undefined
-              ? { placement: item.placement }
-              : {}),
+            placements: new Set(
+              item.placement !== undefined ? [item.placement] : [],
+            ),
             normalised: item.normalised,
           });
           continue;
         }
         const reason = minOf(held.reason, item.unlocated);
-        const placement = minOf(held.placement, item.placement);
         if (reason !== undefined) held.reason = reason;
-        if (placement !== undefined) held.placement = placement;
+        if (item.placement !== undefined) held.placements.add(item.placement);
         held.normalised ||= item.normalised;
       }
       rows.distinct += distinct.size;
@@ -676,9 +715,11 @@ async function build(
         if (row.values[AT.offset] !== null) {
           counts.located += 1;
           if (row.normalised) counts.normalised += 1;
-          if (row.placement === 'repaired') counts.repaired += 1;
-          if (row.placement === 'proven') counts.proven += 1;
-          offerSample(row.item);
+          if (row.placements.has('repaired')) counts.repaired += 1;
+          if (row.placements.has('proven')) counts.proven += 1;
+          const placement = PLACEMENT_ORDER.find((p) => row.placements.has(p));
+          if (placement !== undefined) placedBy[placement] += 1;
+          offerSample(row.item, row.placements, row.normalised);
         } else {
           const reason = row.reason ?? 'no_offsets';
           counts.unlocated[reason] = (counts.unlocated[reason] ?? 0) + 1;
@@ -748,7 +789,13 @@ async function build(
         );
       }
       stats.rootIsItem += assembled.rootIsItem;
-      for (const k of ['relative', 'absolute', 'none', 'both'] as const) {
+      for (const k of [
+        'relative',
+        'absolute',
+        'none',
+        'both',
+        'unproven',
+      ] as const) {
         stats.proofs[k] += assembled.proofs[k];
       }
 
@@ -940,9 +987,13 @@ async function build(
         roots: resolver.via,
         ...stats,
         reads: reads.reads,
+        readsNotFound: reads.notFound,
+        readsNotFoundRemembered: reads.notFoundRemembered,
+        readsOutOfRange: reads.outOfRange,
         malformedTags: reads.malformedTags,
         owners: { ...keyStats, rejectedKeys },
         rows,
+        placedBy,
       },
     };
   } finally {

@@ -317,29 +317,44 @@ export class MemoryL2Source implements L2ItemSource {
   async close(): Promise<void> {}
 }
 
-/** A gateway serving the roots' bytes; any other root is a 404. */
-export function gatewayOf(roots: FixtureRoot[]) {
+/**
+ * A gateway serving the roots' bytes, counting requests; any other root is
+ * answered `missing` (404, by default), and every read `failing` when set
+ * (503, say, or 429).
+ */
+export function gatewayOf(
+  roots: FixtureRoot[],
+  { missing = 404, failing }: { missing?: number; failing?: number } = {},
+) {
   const byId = new Map(roots.map((root) => [toB64Url(root.id), root.bytes]));
-  return {
+  const fail = (status: number) =>
+    ({
+      read: async () => {
+        gateway.reads += 1;
+        throw Object.assign(
+          new Error(`Request failed with status code ${status}`),
+          { response: { status } },
+        );
+      },
+      close: async () => undefined,
+    }) as unknown as ByteRangeSource;
+  const gateway = {
     reads: 0,
     openRoot(rootTxId: string): ByteRangeSource {
+      if (failing !== undefined) return fail(failing);
       const bytes = byId.get(rootTxId);
-      if (bytes === undefined) {
-        return {
-          read: async () => {
-            throw Object.assign(
-              new Error('Request failed with status code 404'),
-              {
-                response: { status: 404 },
-              },
-            );
-          },
-          close: async () => undefined,
-        } as unknown as ByteRangeSource;
-      }
-      return new BufferByteRangeSource(bytes);
+      if (bytes === undefined) return fail(missing);
+      const source = new BufferByteRangeSource(bytes);
+      return {
+        read: async (offset: number, size: number) => {
+          gateway.reads += 1;
+          return source.read(offset, size);
+        },
+        close: async () => undefined,
+      } as unknown as ByteRangeSource;
     },
   };
+  return gateway;
 }
 
 /**

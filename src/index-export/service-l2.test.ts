@@ -17,9 +17,11 @@ import {
   gatewayOf,
   MemoryL2Source,
   PUBLISHER,
+  signers,
   sourceRow,
   writeL1Band,
 } from '../../test/parquet-l2-fixture.js';
+import { toB64Url } from '../lib/encoding.js';
 import { createTestLogger } from '../../test/test-logger.js';
 import { readPublisherFacts } from '../lib/parquet-l1/layout.js';
 import type { ExportConfig } from './config.js';
@@ -299,6 +301,9 @@ describe('ExportService, parquet-l2', () => {
     const a1 = rows.get('a1')!;
     const moved = {
       ...a1,
+      // Its key held by the source, so the wallets row stays whatever the
+      // moved offsets read.
+      owner: roots[0].items.get('a1')!.item.rawOwner,
       offset: a1.offset! + 1,
       dataOffset: a1.dataOffset! + 1,
       signatureOffset: a1.signatureOffset! + 1,
@@ -392,5 +397,227 @@ describe('ExportService, parquet-l2', () => {
       'ardrive-l2',
     );
     assert.match(state.retry?.reason ?? '', /left by the time budget/);
+  });
+});
+
+describe('ExportService, parquet-l2 roots the network no longer serves', () => {
+  let dir: string;
+  let now: number;
+  /** Nested items whose offsets need a header read to settle. */
+  let nested: FixtureRoot;
+  /** Ten plain items, always readable. */
+  let plain: FixtureRoot;
+  /** One item of an owner nobody else's rows key. */
+  let lone: FixtureRoot;
+  let source: MemoryL2Source;
+  /** Roots the gateway answers 404 for. */
+  let gone: Set<string>;
+
+  before(async () => {
+    nested = await buildRoot(
+      'gone-nested',
+      [
+        {
+          name: 'n1',
+          tags: [],
+          nested: [
+            {
+              name: 'b1',
+              tags: [tag('App-Name', 'ArDrive-App')],
+              data: 'x'.repeat(1000),
+            },
+            { name: 'b2', tags: [tag('App-Name', 'ArDrive-App')] },
+            {
+              name: 'b3',
+              tags: [tag('App-Name', 'ArDrive-App')],
+              data: 'y'.repeat(3000),
+            },
+          ],
+        },
+      ],
+      100_500,
+      1,
+    );
+    plain = await buildRoot(
+      'gone-plain',
+      Array.from({ length: 10 }, (_, i) => ({
+        name: `p${i}`,
+        tags: [tag('App-Name', 'ArDrive-App')],
+      })),
+      100_600,
+      0,
+    );
+    lone = await buildRoot(
+      'gone-lone',
+      [
+        {
+          name: 'l1',
+          signer: signers.two,
+          tags: [tag('App-Name', 'ArDrive-Web')],
+        },
+      ],
+      100_700,
+      0,
+    );
+  });
+
+  beforeEach(async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), 'index-export-l2-gone-'));
+    now = Date.parse('2026-10-14T04:00:00Z');
+    gone = new Set();
+    const rows = [
+      // Relative offsets under a root_parent_offset of 0: b1 is repaired
+      // without a read, b2 and b3 need one.
+      ...['b1', 'b2', 'b3'].map((name) =>
+        sourceRow(nested, name, { rootParentOffset: 0 }),
+      ),
+      ...[...plain.items.keys()].map((name) => sourceRow(plain, name)),
+      sourceRow(lone, 'l1'),
+    ];
+    source = new MemoryL2Source(rows, [sourceRow(nested, 'n1')]);
+    source.top = 110_200;
+    await writeL1Band(
+      path.join(dir, 'published', 'parquet-l1'),
+      100_000,
+      199_999,
+      [nested, plain, lone],
+    );
+  });
+
+  const indexDir = () => path.join(dir, 'published', 'ardrive-l2');
+  const run = async (options: RunOptions = {}) => {
+    const fixture = gatewayOf([nested, plain, lone]);
+    const service = new ExportService({
+      config: {
+        kinds: ['parquet-l2'],
+        coreDbPath: path.join(dir, 'core.db'),
+        l1PublishDir: path.join(dir, 'published', 'parquet-l1'),
+        publisher: PUBLISHER,
+        sources: [],
+        sourceEnv: {},
+        runAtMinute: 240,
+        recentMaxBlocks: 1000,
+        startHeight: 100_000,
+        headerCheckUrl: 'http://gateway.test',
+        headerCheckTimeoutMs: 1000,
+        metricsPort: 0,
+        publishDir: path.join(dir, 'published', 'root-tx-index'),
+        workDir: path.join(dir, 'export'),
+        l2Indexes: [
+          { name: 'ardrive-l2', selection: ARDRIVE, publishDir: indexDir() },
+        ],
+        l2SettleBlocks: 100,
+        resettleIntervalMs: 0,
+        l2MaxReads: 1000,
+      },
+      log,
+      now: () => now,
+      openSources: async () => [],
+      openRoots: () => ({
+        openRoot: (root: string) =>
+          gone.has(root)
+            ? gatewayOf([]).openRoot(root)
+            : fixture.openRoot(root),
+        close: () => undefined,
+      }),
+      openL2Source: async () => source,
+      diskSpace: async () => ({ free: 1e13, total: 1e14 }),
+      headerCheck: { retryDelayMs: 1 },
+    });
+    const report = await service.runOnce(options);
+    return report.l2?.[0]?.steps ?? [];
+  };
+  const d1 = (steps: Awaited<ReturnType<typeof run>>) =>
+    steps.find((s) => s.heightRange[0] === 100_000) as NonNullable<
+      Awaited<ReturnType<typeof run>>[number]
+    >;
+  const live = () => deriveL2Bands(indexDir(), PUBLISHER, ARDRIVE);
+
+  it('builds a band over a root that is gone, its ambiguous items unproven, and locates them once it is back', async () => {
+    gone.add(toB64Url(nested.id));
+    const first = d1(await run());
+    assert.deepEqual([first.result, first.reason], ['published', 'new']);
+    assert.deepEqual(first.checks?.unlocated, { unproven: 2 });
+    assert.equal(first.stats?.proofs.unproven, 2);
+    // The repaired b1's header can't be read either: an error against the
+    // sample's pass ratio, never a wrong header.
+    assert.equal(first.header?.wrong, 0);
+    assert.ok((first.header?.errors ?? 0) >= 1);
+    const [band] = await live();
+
+    gone.clear();
+    const back = d1(await run({ resettle: true }));
+    assert.deepEqual([back.result, back.reason], ['published', 'replaces']);
+    assert.equal(back.compare?.newlyLocated, 2);
+    assert.equal(back.header?.byTag['newly-located']?.ok, 2);
+    assert.deepEqual(back.checks?.unlocated, {});
+    assert.deepEqual(back.supersedes, [band.id]);
+
+    // Gone again: a re-settle would unlocate them, and is refused.
+    gone.add(toB64Url(nested.id));
+    const again = d1(await run({ resettle: true }));
+    assert.deepEqual(
+      [again.result, again.reason],
+      ['rejected', 'unlocated_rows'],
+    );
+    assert.equal(again.compare?.unlocated, 2);
+    assert.equal((await live())[0].id, back.id);
+  });
+
+  it("keeps an owner's key: a re-settle that can no longer read it is refused", async () => {
+    const first = d1(await run());
+    assert.equal(first.result, 'published');
+    assert.equal(first.rows?.wallets, 2);
+    gone.add(toB64Url(lone.id));
+    const without = d1(await run({ resettle: true }));
+    assert.deepEqual(
+      [without.result, without.reason],
+      ['rejected', 'dropped_wallets'],
+    );
+    assert.equal(without.compare?.walletsMissing, 1);
+    assert.equal(without.stats?.owners.withoutKeyBy.unreadable, 1);
+  });
+
+  it('stops a band, published or not, when the gateway fails in transport', async () => {
+    const fixture = gatewayOf([], { failing: 503 });
+    gone = new Set([toB64Url(nested.id)]);
+    // Every root 503: the proofs can't be read, and nothing publishes.
+    const failing = await new ExportService({
+      config: {
+        kinds: ['parquet-l2'],
+        coreDbPath: path.join(dir, 'core.db'),
+        l1PublishDir: path.join(dir, 'published', 'parquet-l1'),
+        publisher: PUBLISHER,
+        sources: [],
+        sourceEnv: {},
+        runAtMinute: 240,
+        recentMaxBlocks: 1000,
+        startHeight: 100_000,
+        headerCheckUrl: 'http://gateway.test',
+        headerCheckTimeoutMs: 1000,
+        metricsPort: 0,
+        publishDir: path.join(dir, 'published', 'root-tx-index'),
+        workDir: path.join(dir, 'export'),
+        l2Indexes: [
+          { name: 'ardrive-l2', selection: ARDRIVE, publishDir: indexDir() },
+        ],
+        l2SettleBlocks: 100,
+        resettleIntervalMs: 0,
+        l2MaxReads: 1000,
+      },
+      log,
+      now: () => now,
+      openSources: async () => [],
+      openRoots: () => ({ openRoot: fixture.openRoot, close: () => undefined }),
+      openL2Source: async () => source,
+      diskSpace: async () => ({ free: 1e13, total: 1e14 }),
+      headerCheck: { retryDelayMs: 1 },
+    }).runOnce();
+    const step = d1(failing.l2?.[0]?.steps ?? []);
+    assert.deepEqual([step.result, step.reason], ['couldnt_check', 'gateway']);
+    assert.equal(
+      (await live()).some((band) => band.from === 100_000),
+      false,
+    );
   });
 });

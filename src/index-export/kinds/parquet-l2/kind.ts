@@ -110,7 +110,7 @@ export interface L2Outcome {
   checks?: Record<string, unknown>;
   stats?: L2BandStats;
   /** Against the bands it replaces. */
-  compare?: Omit<L2Compare, 'relocatedEntries'>;
+  compare?: Omit<L2Compare, 'relocatedEntries' | 'newlyLocatedEntries'>;
   header?: {
     checked: number;
     ok: number;
@@ -142,6 +142,7 @@ const UNLOCATED_REASONS: UnlocatedReason[] = [
   'inconsistent',
   'deep',
   'ambiguous',
+  'unproven',
   'parent_two_places',
 ];
 
@@ -287,26 +288,6 @@ async function decide(
   header?: L2Outcome['header'];
 }> {
   const same = step.replaces.find((band) => band.id === id);
-  if (
-    same === undefined &&
-    !ctx.dryRun &&
-    (await fs.stat(path.join(ctx.index.publishDir, id)).then(
-      () => true,
-      () => false,
-    ))
-  ) {
-    // A band of this id that the step doesn't replace is one another band
-    // supersedes, not yet swept: publishing over it would leave a gap.
-    return {
-      decision: {
-        result: 'rejected',
-        reason: 'id_taken',
-        details: [
-          `${id} is already in ${ctx.index.publishDir}, superseded or not this step's to replace; move it away`,
-        ],
-      },
-    };
-  }
   if (same !== undefined) {
     if (step.settles && !ctx.dryRun) {
       if (ctx.stillHeld !== undefined && !(await ctx.stillHeld())) {
@@ -338,8 +319,9 @@ async function decide(
       { inMemory: true },
     );
   }
-  const { relocatedEntries, ...reported } = compare ?? {
+  const { relocatedEntries, newlyLocatedEntries, ...reported } = compare ?? {
     relocatedEntries: [] as BandSampleEntry[],
+    newlyLocatedEntries: [] as BandSampleEntry[],
   };
   const withCompare = (decision: Decision) => ({
     decision,
@@ -368,6 +350,16 @@ async function decide(
         ],
       });
     }
+    if (compare.walletsMissing > 0) {
+      return withCompare({
+        result: 'rejected',
+        reason: 'dropped_wallets',
+        details: [
+          `${compare.walletsMissing} owners' keys of the bands it replaces are missing from it`,
+          ...compare.walletsMissingSample,
+        ],
+      });
+    }
     if (compare.relocated > ctx.resettleMaxChanged) {
       return withCompare({
         result: 'rejected',
@@ -381,10 +373,9 @@ async function decide(
 
   const entries = [
     ...new Map(
-      [...built.sample, ...relocatedEntries].map((entry) => [
-        `${entry.id}:${entry.rootTxId}:${entry.rootOffset}`,
-        entry,
-      ]),
+      [...built.sample, ...newlyLocatedEntries, ...relocatedEntries].map(
+        (entry) => [`${entry.id}:${entry.rootTxId}:${entry.rootOffset}`, entry],
+      ),
     ).values(),
   ];
   let header: L2Outcome['header'];
@@ -473,6 +464,22 @@ async function decide(
     ...(header !== undefined ? { header } : {}),
   });
   if (ctx.dryRun) return done({ result: 'dry_run', reason: 'dry_run' });
+  if (
+    await fs.stat(path.join(ctx.index.publishDir, id)).then(
+      () => true,
+      () => false,
+    )
+  ) {
+    // A band of this id that the step doesn't replace is one another band
+    // supersedes, not yet swept: publishing over it would leave a gap.
+    return done({
+      result: 'rejected',
+      reason: 'id_taken',
+      details: [
+        `${id} is already in ${ctx.index.publishDir}, superseded or not this step's to replace; move it away`,
+      ],
+    });
+  }
   if (ctx.stillHeld !== undefined && !(await ctx.stillHeld())) {
     return done(lockLost());
   }

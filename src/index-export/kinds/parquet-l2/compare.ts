@@ -7,9 +7,12 @@
 
 /**
  * How a rebuilt `parquet-l2` band differs from the bands it would replace,
- * read from their `data_items` tables: a band that replaces others never
- * loses an item, nor the location of an item in a root, and every item it
- * relocates is header-checked before it publishes.
+ * read from their `data_items` and `wallets` tables: a band that replaces
+ * others never loses an item, the location of an item in a root, or an
+ * owner's key; every item it relocates is header-checked before it
+ * publishes, and a sample of those it locates for the first time. Locating
+ * an item, or keying an owner, the old bands couldn't is an improvement,
+ * and allowed.
  */
 import * as path from 'node:path';
 import type { Database } from 'duckdb-async';
@@ -20,6 +23,9 @@ import { PARQUET_L2_TABLES } from '../../../lib/parquet-l2/layout.js';
 
 /** The header-check stratum of every row a replacement relocates. */
 export const L2_RELOCATED_TAG = 'relocated';
+/** The header-check stratum of rows located now and not before, sampled. */
+export const L2_NEWLY_LOCATED_TAG = 'newly-located';
+export const NEWLY_LOCATED_SAMPLE = 150;
 
 const SAMPLE = 20;
 
@@ -38,11 +44,18 @@ export interface L2Compare {
   relocated: number;
   /** Every relocated row, up to the cap, for the header check. */
   relocatedEntries: BandSampleEntry[];
+  /** (id, root) pairs the old bands held unlocated and the new one locates. */
+  newlyLocated: number;
+  /** A sample of them, for the header check. */
+  newlyLocatedEntries: BandSampleEntry[];
+  /** Owners whose key the old bands hold and the new one doesn't: never allowed. */
+  walletsMissing: number;
+  walletsMissingSample: string[];
 }
 
-const file = (dir: string) =>
+const file = (dir: string, table = 'data_items') =>
   `'${path
-    .join(dir, PARQUET_L2_TABLES.find((t) => t.name === 'data_items')!.file)
+    .join(dir, PARQUET_L2_TABLES.find((t) => t.name === table)!.file)
     .replace(/'/g, "''")}'`;
 
 const LOCATION = [
@@ -65,14 +78,31 @@ async function count(duck: Database, sql: string): Promise<number> {
   return Number(row?.n ?? 0);
 }
 
-/** Compares a new band's items with those of the bands it replaces. */
+interface LocatedRow {
+  id: Buffer;
+  root_transaction_id: Buffer;
+  root_parent_offset: bigint | number;
+  offset: bigint | number;
+  data_offset: bigint | number;
+}
+
+/** A located row as the header check reads it. */
+const entry = (row: LocatedRow, tag: string): BandSampleEntry => ({
+  id: toB64Url(Buffer.from(row.id)),
+  rootTxId: toB64Url(Buffer.from(row.root_transaction_id)),
+  rootOffset: Number(row.root_parent_offset) + Number(row.offset),
+  rootDataOffset: Number(row.root_parent_offset) + Number(row.data_offset),
+  tag,
+});
+
+/** Compares a new band's items and keys with those of the bands it replaces. */
 export async function compareL2Bands(
   duck: Database,
   oldDirs: string[],
   newDir: string,
   maxRelocated: number,
 ): Promise<L2Compare> {
-  const old = `read_parquet([${oldDirs.map(file).join(', ')}])`;
+  const old = `read_parquet([${oldDirs.map((dir) => file(dir)).join(', ')}])`;
   const next = `read_parquet(${file(newDir)})`;
   await duck.exec(`
     CREATE OR REPLACE TEMP VIEW o AS SELECT * FROM ${old};
@@ -92,6 +122,18 @@ export async function compareL2Bands(
         AND p.root_transaction_id = n.root_transaction_id AND p."offset" IS NOT NULL)
       AND NOT EXISTS (SELECT 1 FROM o p WHERE p.id = n.id
         AND p.root_transaction_id = n.root_transaction_id AND ${sameLocation})`;
+  const newlyLocatedSql = `
+    SELECT n.id, n.root_transaction_id, n.root_parent_offset, n."offset", n.data_offset
+    FROM n
+    WHERE n."offset" IS NOT NULL
+      AND EXISTS (SELECT 1 FROM o p WHERE p.id = n.id
+        AND p.root_transaction_id = n.root_transaction_id)
+      AND NOT EXISTS (SELECT 1 FROM o p WHERE p.id = n.id
+        AND p.root_transaction_id = n.root_transaction_id AND p."offset" IS NOT NULL)`;
+  const walletsMissingSql = `
+    SELECT DISTINCT o.address AS id
+    FROM read_parquet([${oldDirs.map((dir) => file(dir, 'wallets')).join(', ')}]) o
+    ANTI JOIN read_parquet(${file(newDir, 'wallets')}) n ON n.address = o.address`;
   const ids = async (sql: string) =>
     (
       (await duck.all(`${sql} ORDER BY 1 LIMIT ${SAMPLE}`)) as Array<{
@@ -112,24 +154,28 @@ export async function compareL2Bands(
     unlocatedSample: [],
     relocated: await count(duck, relocatedSql),
     relocatedEntries: [],
+    newlyLocated: await count(duck, newlyLocatedSql),
+    newlyLocatedEntries: [],
+    walletsMissing: await count(duck, walletsMissingSql),
+    walletsMissingSample: [],
   };
+  if (compare.walletsMissing > 0) {
+    compare.walletsMissingSample = await ids(walletsMissingSql);
+  }
   if (compare.missing > 0) compare.missingSample = await ids(missingSql);
   if (compare.unlocated > 0) compare.unlocatedSample = await ids(unlocatedSql);
   if (compare.relocated > 0 && compare.relocated <= maxRelocated) {
-    const rows = (await duck.all(relocatedSql)) as Array<{
-      id: Buffer;
-      root_transaction_id: Buffer;
-      root_parent_offset: bigint | number;
-      offset: bigint | number;
-      data_offset: bigint | number;
-    }>;
-    compare.relocatedEntries = rows.map((row) => ({
-      id: toB64Url(Buffer.from(row.id)),
-      rootTxId: toB64Url(Buffer.from(row.root_transaction_id)),
-      rootOffset: Number(row.root_parent_offset) + Number(row.offset),
-      rootDataOffset: Number(row.root_parent_offset) + Number(row.data_offset),
-      tag: L2_RELOCATED_TAG,
-    }));
+    const rows = (await duck.all(relocatedSql)) as LocatedRow[];
+    compare.relocatedEntries = rows.map((row) => entry(row, L2_RELOCATED_TAG));
+  }
+  if (compare.newlyLocated > 0) {
+    // A spread of them, the same each time for the same rows.
+    const rows = (await duck.all(
+      `${newlyLocatedSql} ORDER BY hash(n.id, n.root_transaction_id) LIMIT ${NEWLY_LOCATED_SAMPLE}`,
+    )) as LocatedRow[];
+    compare.newlyLocatedEntries = rows.map((row) =>
+      entry(row, L2_NEWLY_LOCATED_TAG),
+    );
   }
   return compare;
 }

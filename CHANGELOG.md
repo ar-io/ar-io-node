@@ -56,6 +56,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     order, with no sort of the band. DuckDB runs within
     `INDEX_EXPORT_L2_DUCKDB_MEMORY` (2GB) and `INDEX_EXPORT_L2_DUCKDB_THREADS`
     (2), spilling at most `INDEX_EXPORT_L2_DUCKDB_SPILL_MAX_GB` (256).
+  - A root the gateway answers 404 for is unreadable for the build, asked
+    about once: its ambiguous items are written unlocated (`unproven`) and
+    an owner whose key could only be read there without a key, rather than
+    stop the band; timeouts, 5xx and 429 still stop it, to be retried. A
+    re-settle may locate such items, or key such owners, later; it never
+    drops a key (`dropped_wallets`).
 - **Root-TX bands on the L1 grid, with a settle lag
   (`INDEX_EXPORT_ROOT_TX_LAYOUT=grid`)**: `index-export` cuts root-TX bands
   at the same heights as `parquet-l1` bands, so every publisher's bands line

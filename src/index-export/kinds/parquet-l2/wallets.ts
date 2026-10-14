@@ -55,6 +55,12 @@ export interface OwnerKeyStats {
   fromGateway: number;
   /** Owners left out of `wallets`: no key whose hash is their address. */
   withoutKey: number;
+  /**
+   * Why: a place to read it was `unreadable` (its root a 404); every place
+   * read held something `wrong` (another key, or past the root); or there
+   * was `nowhere` to read it (no located item of theirs).
+   */
+  withoutKeyBy: { unreadable: number; wrong: number; nowhere: number };
   withoutKeySample: string[];
   /** Keys a source held that don't hash to their address: ignored. */
   rejectedKeys: number;
@@ -188,6 +194,7 @@ export async function resolveOwnerKeys(
     fromWalletsDb: 0,
     fromGateway: 0,
     withoutKey: 0,
+    withoutKeyBy: { unreadable: 0, wrong: 0, nowhere: 0 },
     withoutKeySample: [],
   };
   let found: unknown[][] = [];
@@ -234,16 +241,25 @@ export async function resolveOwnerKeys(
       found.push([address, fromDb]);
       return;
     }
+    let unreadable = false;
     for (const place of places) {
       if (reads === undefined) break;
       const bytes = await reads.read(place.rootTxId, place.offset, place.size);
-      if (bytes !== undefined && sha256(bytes).equals(address)) {
+      if (bytes === 'not_found') {
+        // The root is gone for this run: try the owner's next place.
+        unreadable = true;
+        continue;
+      }
+      if (bytes !== 'out_of_range' && sha256(bytes).equals(address)) {
         stats.fromGateway += 1;
         found.push([address, Buffer.from(bytes)]);
         return;
       }
     }
     stats.withoutKey += 1;
+    stats.withoutKeyBy[
+      unreadable ? 'unreadable' : places.length > 0 ? 'wrong' : 'nowhere'
+    ] += 1;
     if (stats.withoutKeySample.length < SAMPLE) {
       stats.withoutKeySample.push(toB64Url(address));
     }
