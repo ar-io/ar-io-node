@@ -619,6 +619,50 @@ describe('Data routes', () => {
           assert.equal(res.headers['content-encoding'], undefined);
         });
 
+        it('declares a tagged zstd coding when the cached bytes carry its magic', async () => {
+          const zstdBytes = Buffer.from([0x28, 0xb5, 0x2f, 0xfd, 0x00, 0x01]);
+          serveTagged({
+            bytes: zstdBytes,
+            tags: [{ name: 'Content-Encoding', value: 'zstd' }],
+          });
+
+          const res = await request(app).head('/not-a-real-id').expect(200);
+
+          assert.equal(res.headers['content-encoding'], 'zstd');
+        });
+
+        it('sends no header, and still answers, when a cached HEAD cannot read the bytes', async () => {
+          dataSource = {
+            getData: () =>
+              Promise.resolve({
+                stream: new Readable({
+                  read() {
+                    this.destroy(new Error('disk read failed'));
+                  },
+                }),
+                size: gzipped.length,
+                verified: false,
+                trusted: true,
+                cached: true,
+                upstreamTags: gzipTag,
+              }),
+          };
+          app.get(
+            '/:id',
+            createDataHandler({
+              log,
+              dataAttributesSource,
+              dataSource,
+              dataBlockListValidator,
+              manifestPathResolver,
+            }),
+          );
+
+          const res = await request(app).head('/not-a-real-id').expect(200);
+
+          assert.equal(res.headers['content-encoding'], undefined);
+        });
+
         it('a recorded coding still takes precedence over the tag', async () => {
           serveTagged({
             bytes: gzipped,

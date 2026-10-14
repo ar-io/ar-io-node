@@ -1147,8 +1147,8 @@ export const upstreamDecodedBodyRejectedTotal = new promClient.Counter({
 
 export const servedContentEncodingDroppedTotal = new promClient.Counter({
   name: 'served_content_encoding_dropped_total',
-  help: 'Count of data responses served without the Content-Encoding their item names, because the body does not start with that coding\'s magic bytes: an item tagged with a coding it does not use, or (verified="false") possibly a copy decoded upstream that should be purged.',
-  labelNames: ['encoding', 'verified'] as const,
+  help: 'Count of data responses served without the Content-Encoding their item names, because the body does not start with that coding\'s magic bytes: an item tagged with a coding it does not use, or (verified="false") possibly a copy decoded upstream that should be purged. source="recorded" is a coding the index or upstream recorded; source="tag" is the item\'s own tag, consulted when nothing recorded one.',
+  labelNames: ['encoding', 'verified', 'source'] as const,
 });
 
 // Time from an outbound gateway request needing a socket (Agent.addRequest) to a

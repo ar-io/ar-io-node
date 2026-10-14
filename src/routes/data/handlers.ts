@@ -580,11 +580,7 @@ export const resolveServedContentEncoding = async ({
       tags,
     });
   }
-  if (
-    declared === undefined ||
-    !hasContentEncodingMagic(declared) ||
-    (!sendsStream && !data.cached)
-  ) {
+  if (!hasContentEncodingMagic(declared) || (!sendsStream && !data.cached)) {
     return declared;
   }
   let head: Buffer;
@@ -616,6 +612,7 @@ export const resolveServedContentEncoding = async ({
   metrics.servedContentEncodingDroppedTotal.inc({
     encoding: declared,
     verified: String(data.verified),
+    source: 'recorded',
   });
   log.warn(
     'Body does not match its Content-Encoding; serving without the header',
@@ -644,8 +641,14 @@ export const resolveServedContentEncoding = async ({
  * magic can be checked, and only when the body's first bytes carry the whole
  * magic. A coding without magic, a short body, a body that does not match,
  * an uncached HEAD/Range/304 response (which reads no bytes), or a failed
- * cached peek all mean no header, as before. Nothing is recorded: this
- * decides one response.
+ * cached peek all mean no header, as before. This gateway records nothing,
+ * so every hit decides again; a downstream gateway that trusts this one may
+ * record the header it receives, as it would any trusted upstream's, which
+ * the magic check bounds to bytes that really are gzip or zstd.
+ *
+ * The tags come from the item-header resolver, which exists only with
+ * ARWEAVE_TAG_RESPONSE_HEADERS_ENABLED (the default); without it there are no
+ * tags on a hit and this declares nothing.
  */
 const resolveTaggedContentEncoding = async ({
   data,
@@ -697,6 +700,7 @@ const resolveTaggedContentEncoding = async ({
   metrics.servedContentEncodingDroppedTotal.inc({
     encoding: tagged,
     verified: String(data.verified),
+    source: 'tag',
   });
   log.warn(
     'Body does not match its Content-Encoding tag; serving without the header',
