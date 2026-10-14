@@ -1507,6 +1507,15 @@ export interface ManifestPathResolver {
     id: string,
     path: string | undefined,
   ): Promise<ManifestResolution>;
+
+  /**
+   * A cached resolution that came from trusted bytes, without fetching
+   * anything; undefined when there is none.
+   */
+  resolveFromTrustedCache(
+    id: string,
+    path: string | undefined,
+  ): ManifestResolution | undefined;
 }
 
 /**

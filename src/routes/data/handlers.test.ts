@@ -27,6 +27,7 @@ import {
 } from '../../types.js';
 import {
   createDataHandler,
+  createRawDataHandler,
   getRequestAttributes,
   matchContentTypePattern,
   shouldUsePrivateCacheControl,
@@ -107,6 +108,7 @@ describe('Data routes', () => {
             resolvedId: 'not-a-real-id',
             complete: false,
           }),
+        resolveFromTrustedCache: () => undefined,
       };
     });
 
@@ -1698,6 +1700,188 @@ st
         });
       });
 
+      describe('digest headers on partial responses', () => {
+        const hash = '4ROTs2lTPAKbr8Y41WrjHu-2q-7S-m-yTuO7fAUzZI4';
+        const formatted =
+          'sha-256=:4ROTs2lTPAKbr8Y41WrjHu+2q+7S+m+yTuO7fAUzZI4=:';
+        const testData = Buffer.from('test data');
+
+        beforeEach(() => {
+          app.get(
+            '/:id',
+            createDataHandler({
+              log,
+              dataAttributesSource,
+              dataSource,
+              dataBlockListValidator,
+              manifestPathResolver,
+            }),
+          );
+          dataAttributesSource.getDataAttributes = async () => ({
+            hash,
+            size: testData.length,
+            contentType: 'text/plain',
+            isManifest: false,
+            stable: true,
+            verified: true,
+            signature: null,
+            offset: 0,
+          });
+          dataSource.getData = async (params?: any) => {
+            const bytes =
+              params?.region !== undefined
+                ? testData.subarray(
+                    params.region.offset,
+                    params.region.offset + params.region.size,
+                  )
+                : testData;
+            return {
+              stream: Readable.from(bytes),
+              size: testData.length,
+              sourceContentType: 'text/plain',
+              verified: true,
+              cached: true,
+              trusted: true,
+            };
+          };
+        });
+
+        it('sends Repr-Digest, not Content-Digest, on a cached single-range 206', async () => {
+          await request(app)
+            .get('/test-id')
+            .set('Range', 'bytes=0-3')
+            .expect(206)
+            .then((res: any) => {
+              assert.equal(res.text, 'test');
+              assert.equal(res.headers['content-digest'], undefined);
+              assert.equal(res.headers['repr-digest'], formatted);
+              assert.equal(res.headers['etag'], `"${hash}"`);
+              assert.equal(res.headers['x-ar-io-digest'], hash);
+            });
+        });
+
+        it('sends Repr-Digest, not Content-Digest, on a HEAD range response', async () => {
+          await request(app)
+            .head('/test-id')
+            .set('Range', 'bytes=0-3')
+            .expect(206)
+            .then((res: any) => {
+              assert.equal(res.headers['content-digest'], undefined);
+              assert.equal(res.headers['repr-digest'], formatted);
+            });
+        });
+
+        it('sends Repr-Digest, not Content-Digest, on a multipart 206', async () => {
+          await request(app)
+            .get('/test-id')
+            .set('Range', 'bytes=0-1,5-6')
+            .expect(206)
+            .then((res: any) => {
+              assert.match(
+                res.headers['content-type'],
+                /^multipart\/byteranges/,
+              );
+              assert.equal(res.headers['content-digest'], undefined);
+              assert.equal(res.headers['repr-digest'], formatted);
+            });
+        });
+
+        it('sends no Content-Digest on a 416', async () => {
+          await request(app)
+            .get('/test-id')
+            .set('Range', 'bytes=100-200')
+            .expect(416)
+            .then((res: any) => {
+              assert.equal(res.headers['content-digest'], undefined);
+              assert.equal(res.headers['repr-digest'], formatted);
+            });
+        });
+
+        it('sends no Content-Digest on a 400 for a malformed range', async () => {
+          await request(app)
+            .get('/test-id')
+            .set('Range', 'invalid-range-header')
+            .expect(400)
+            .then((res: any) => {
+              assert.equal(res.headers['content-digest'], undefined);
+            });
+        });
+
+        it('keeps Content-Digest, and sends no Repr-Digest, on a full 200', async () => {
+          await request(app)
+            .get('/test-id')
+            .expect(200)
+            .then((res: any) => {
+              assert.equal(res.text, 'test data');
+              assert.equal(res.headers['content-digest'], formatted);
+              assert.equal(res.headers['repr-digest'], undefined);
+            });
+        });
+      });
+
+      describe('range units', () => {
+        beforeEach(() => {
+          app.get(
+            '/:id',
+            createDataHandler({
+              log,
+              dataAttributesSource,
+              dataSource,
+              dataBlockListValidator,
+              manifestPathResolver,
+            }),
+          );
+        });
+
+        it('ignores a Range header with a unit other than bytes', async () => {
+          await request(app)
+            .get('/not-a-real-id')
+            .set('Range', 'items=0-5')
+            .expect(200)
+            .then((res: any) => {
+              assert.equal(res.body.toString(), 'testing...');
+              assert.equal(res.headers['content-range'], undefined);
+            });
+        });
+
+        it('ignores a unit other than bytes on the raw route', async () => {
+          const rawId = '3b9XZ2XlcuA3vCahZ81mnYYULrN9I6QnzA5pZd08Fpo';
+          app.get(
+            /^\/raw\/([a-zA-Z0-9-_]{43})$/,
+            createRawDataHandler({
+              log,
+              dataAttributesSource,
+              dataSource,
+              dataBlockListValidator,
+            }),
+          );
+
+          await request(app)
+            .get(`/raw/${rawId}`)
+            .set('Range', 'items=0-5')
+            .expect(200)
+            .then((res: any) => {
+              assert.equal(res.body.toString(), 'testing...');
+            });
+          await request(app)
+            .get(`/raw/${rawId}`)
+            .set('Range', 'BYTES=2-3')
+            .expect(206)
+            .expect('Content-Range', 'bytes 2-3/10');
+        });
+
+        it('treats the bytes unit case-insensitively', async () => {
+          await request(app)
+            .get('/not-a-real-id')
+            .set('Range', 'BYTES=2-3')
+            .expect(206)
+            .expect('Content-Range', 'bytes 2-3/10')
+            .then((res: any) => {
+              assert.equal(res.body.toString(), 'st');
+            });
+        });
+      });
+
       describe('X-AR-IO-Root-Transaction-Id', () => {
         it("shouldn't return root transaction id for transactions", async () => {
           app.get(
@@ -2529,6 +2713,131 @@ st
               assert.equal(res.headers['x-ar-io-trusted'], 'true');
               assert.equal(res.body.toString(), 'st');
             });
+        });
+      });
+
+      describe('manifests the index does not know', () => {
+        const resolvedId = 'resolved-manifest-path-id';
+        const manifestJson = JSON.stringify({
+          manifest: 'arweave/paths',
+          version: '0.1.0',
+          paths: { 'path/to/file.txt': { id: resolvedId } },
+        });
+        let requestedIds: string[];
+
+        beforeEach(() => {
+          requestedIds = [];
+          mock.method(dataSource, 'getData', (params: any) => {
+            requestedIds.push(params.id);
+            const whole =
+              params.id === 'manifest-id'
+                ? Buffer.from(manifestJson)
+                : Buffer.from('file contents');
+            const body =
+              params.region !== undefined
+                ? whole.subarray(
+                    params.region.offset,
+                    params.region.offset + params.region.size,
+                  )
+                : whole;
+            return Promise.resolve({
+              stream: Readable.from(body),
+              size: whole.length,
+              sourceContentType:
+                params.id === 'manifest-id'
+                  ? 'application/x.arweave-manifest+json'
+                  : 'text/plain',
+              verified: false,
+              cached: true,
+              trusted: true,
+              requestAttributes: { origin: 'node-url', hops: 0, clientIps: [] },
+            });
+          });
+          app.get(
+            '/:id/*',
+            createDataHandler({
+              log,
+              dataAttributesSource,
+              dataSource,
+              dataBlockListValidator,
+              manifestPathResolver,
+            }),
+          );
+        });
+
+        it('serves a trusted cached resolution without fetching the manifest', async () => {
+          mock.method(manifestPathResolver, 'resolveFromTrustedCache', () => ({
+            id: 'manifest-id',
+            resolvedId,
+            complete: true,
+            resolutionType: 'path',
+          }));
+          const resolveFromIndex = mock.method(
+            manifestPathResolver,
+            'resolveFromIndex',
+          );
+          const resolveFromData = mock.method(
+            manifestPathResolver,
+            'resolveFromData',
+          );
+
+          await request(app)
+            .get('/manifest-id/path/to/file.txt')
+            .expect(200)
+            .then((res: any) => {
+              assert.equal(res.text, 'file contents');
+              assert.equal(res.headers['x-ar-io-data-id'], resolvedId);
+            });
+
+          assert.deepEqual(requestedIds, [resolvedId]);
+          assert.equal(resolveFromIndex.mock.callCount(), 0);
+          assert.equal(resolveFromData.mock.callCount(), 0);
+        });
+
+        it('applies the range-unit rules to a manifest-resolved path', async () => {
+          mock.method(manifestPathResolver, 'resolveFromTrustedCache', () => ({
+            id: 'manifest-id',
+            resolvedId,
+            complete: true,
+            resolutionType: 'path',
+          }));
+
+          await request(app)
+            .get('/manifest-id/path/to/file.txt')
+            .set('Range', 'BYTES=0-3')
+            .expect(206)
+            .expect('Content-Range', 'bytes 0-3/13')
+            .then((res: any) => {
+              assert.equal(res.text, 'file');
+            });
+          await request(app)
+            .get('/manifest-id/path/to/file.txt')
+            .set('Range', 'items=0-3')
+            .expect(200)
+            .then((res: any) => {
+              assert.equal(res.text, 'file contents');
+            });
+        });
+
+        it('fetches and parses the manifest when there is no trusted cached resolution', async () => {
+          mock.method(manifestPathResolver, 'resolveFromData', () =>
+            Promise.resolve({
+              id: 'manifest-id',
+              resolvedId,
+              complete: true,
+              resolutionType: 'path',
+            }),
+          );
+
+          await request(app)
+            .get('/manifest-id/path/to/file.txt')
+            .expect(200)
+            .then((res: any) => {
+              assert.equal(res.text, 'file contents');
+              assert.equal(res.headers['x-ar-io-data-id'], resolvedId);
+            });
+
+          assert.deepEqual(requestedIds, ['manifest-id', resolvedId]);
         });
       });
 
@@ -3606,6 +3915,7 @@ st
               resolvedId: 'not-a-real-id',
               complete: false,
             }),
+          resolveFromTrustedCache: () => undefined,
         };
       });
 
@@ -3886,6 +4196,7 @@ st
               complete: true,
               resolutionType,
             }),
+          resolveFromTrustedCache: () => undefined,
         };
       };
 

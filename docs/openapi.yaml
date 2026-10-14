@@ -1865,6 +1865,15 @@ paths:
               schema:
                 type: string
                 example: bytes 0-1023/146515
+            Repr-Digest:
+              schema:
+                type: string
+              description: |-
+                RFC 9530 SHA-256 of the whole item, sent when the gateway can
+                stand behind it (cached data or HEAD). A range response
+                carries this instead of `Content-Digest`, which would cover
+                only the bytes sent. Covered by the HTTPSIG signature.
+              example: 'sha-256=:4ROTs2lTPAKbr8Y41WrjHu+2q+7S+m+yTuO7fAUzZI4=:'
             Content-Type:
               schema:
                 type: string
@@ -1881,11 +1890,6 @@ paths:
               schema:
                 type: string
                 example: '4ROTs2lTPAKbr8Y41WrjHu-2q-7S-m-yTuO7fAUzZI4'
-            Content-Digest:
-              schema:
-                type: string
-                description: RFC 9530 compliant digest header with SHA-256
-                example: 'sha-256=:4ROTs2lTPAKbr8Y41WrjHu+2q+7S+m+yTuO7fAUzZI4=:'
             ETag:
               description: |-
                 The content digest (base64url SHA-256), quoted. On a response
@@ -2230,6 +2234,15 @@ paths:
               schema:
                 type: string
                 example: bytes 0-1023/146515
+            Repr-Digest:
+              schema:
+                type: string
+              description: |-
+                RFC 9530 SHA-256 of the whole item, sent when the gateway can
+                stand behind it (cached data or HEAD). A range response
+                carries this instead of `Content-Digest`, which would cover
+                only the bytes sent. Covered by the HTTPSIG signature.
+              example: 'sha-256=:4ROTs2lTPAKbr8Y41WrjHu+2q+7S+m+yTuO7fAUzZI4=:'
             Content-Type:
               schema:
                 type: string
@@ -2246,11 +2259,6 @@ paths:
               schema:
                 type: string
                 example: '4ROTs2lTPAKbr8Y41WrjHu-2q-7S-m-yTuO7fAUzZI4'
-            Content-Digest:
-              schema:
-                type: string
-                description: RFC 9530 compliant digest header with SHA-256
-                example: 'sha-256=:4ROTs2lTPAKbr8Y41WrjHu+2q+7S+m+yTuO7fAUzZI4=:'
             ETag:
               schema:
                 type: string

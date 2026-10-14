@@ -199,6 +199,26 @@ describe('/ar-io/indexes routes', () => {
       assert.equal(res.headers['content-digest'], undefined);
     });
 
+    it('ignores a range with a unit other than bytes', async () => {
+      const file = partitionFile();
+      const res = await request(app)
+        .get(`/ar-io/indexes/root-tx-index/band-a/${file.name}`)
+        .set('Range', 'items=0-5')
+        .expect(200);
+
+      assert.equal(res.headers['content-length'], String(file.size));
+      assert.equal(res.headers['content-range'], undefined);
+    });
+
+    it('matches the bytes unit case-insensitively', async () => {
+      const file = partitionFile();
+      await request(app)
+        .get(`/ar-io/indexes/root-tx-index/band-a/${file.name}`)
+        .set('Range', 'BYTES=0-99')
+        .expect(206)
+        .expect('Content-Range', `bytes 0-99/${file.size}`);
+    });
+
     it('rejects an unsatisfiable range with 416', async () => {
       const file = partitionFile();
       await request(app)

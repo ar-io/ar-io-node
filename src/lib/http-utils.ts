@@ -470,12 +470,13 @@ export function calculateRangeResponseSize(
   contentType: string,
   boundary?: string,
 ): number {
-  // No range header - full content
-  if (rangeHeader === undefined) {
+  // No range, or one whose unit is ignored (see byteRangeHeader) - full content
+  const byteRange = byteRangeHeader(rangeHeader);
+  if (byteRange === undefined) {
     return dataSize;
   }
 
-  const ranges = rangeParser(dataSize, rangeHeader);
+  const ranges = rangeParser(dataSize, byteRange);
 
   // Malformed or unsatisfiable range - charge for full content
   if (ranges === -1 || ranges === -2 || ranges.type !== 'bytes') {
@@ -490,6 +491,37 @@ export function calculateRangeResponseSize(
   // Multiple ranges: calculate total including boundaries and headers
   const actualBoundary = boundary ?? generateBoundary();
   return calculateMultipartSize(ranges, dataSize, contentType, actualBoundary);
+}
+
+/**
+ * The Range header a data route should act on, or undefined to serve the
+ * whole representation.
+ *
+ * Range units are case-insensitive (RFC 9110 section 14.1), and an origin
+ * server MUST ignore a Range header whose unit it does not understand
+ * (section 14.2), so `BYTES=0-99` is a byte range and `items=0-5` is no
+ * range at all. A header without a unit (`0-5`, `=0-5`) is passed through
+ * for the parser to reject as malformed.
+ *
+ * @param rangeHeader - The request's Range header, if any.
+ * @returns The header with its unit normalized to `bytes`, or undefined.
+ */
+export function byteRangeHeader(
+  rangeHeader: string | undefined,
+): string | undefined {
+  if (rangeHeader === undefined) {
+    return undefined;
+  }
+  const index = rangeHeader.indexOf('=');
+  const unit = index === -1 ? '' : rangeHeader.slice(0, index).trim();
+  // No unit at all is malformed, not an unknown unit: the parser rejects it.
+  if (unit === '') {
+    return rangeHeader;
+  }
+  if (unit.toLowerCase() !== 'bytes') {
+    return undefined;
+  }
+  return `bytes=${rangeHeader.slice(index + 1)}`;
 }
 
 /**
