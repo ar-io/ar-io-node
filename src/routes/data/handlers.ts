@@ -55,6 +55,7 @@ import {
   hasContentEncodingMagic,
   honouredContentEncoding,
   matchesContentEncodingMagic,
+  parseContentEncoding,
   parseNonNegativeInt,
   taggedContentEncoding,
   dataEtag,
@@ -589,10 +590,15 @@ export const resolveServedContentEncoding = async ({
   /** The item's tags, from {@link awaitItemHeaders}. */
   tags?: { name: string; value: string }[];
 }): Promise<string | undefined> => {
-  const declared = honouredContentEncoding(
-    dataAttributes?.contentEncoding ?? data.sourceContentEncoding,
-  );
+  const recorded =
+    dataAttributes?.contentEncoding ?? data.sourceContentEncoding;
+  const declared = honouredContentEncoding(recorded);
   if (declared === undefined) {
+    // Only when nothing was recorded: a recorded coding the gateway does not
+    // name (a stacked `gzip, br`, say) is still served without the header.
+    if (parseContentEncoding(recorded) !== undefined) {
+      return undefined;
+    }
     return resolveTaggedContentEncoding({
       data,
       id,

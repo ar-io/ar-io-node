@@ -665,6 +665,14 @@ describe('Data routes', () => {
           assert.equal(res.headers['content-encoding'], undefined);
         });
 
+        it('a recorded coding the gateway does not honour is not replaced by the tag', async () => {
+          serveTagged({ bytes: gzipped, contentEncoding: 'gzip, br' });
+
+          const res = await get();
+
+          assert.equal(res.headers['content-encoding'], undefined);
+        });
+
         it('a recorded coding still takes precedence over the tag', async () => {
           serveTagged({
             bytes: gzipped,
