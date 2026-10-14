@@ -1031,6 +1031,361 @@ interface HandleRangeRequestArgs {
   parentSpan?: Span;
 }
 
+/**
+ * Writes the status and headers of a single-range 206 and, when the response
+ * needs no body (a matching If-None-Match, or HEAD), ends it.
+ *
+ * Shared by {@link handleRangeRequest} and {@link serveUncachedRange} so a
+ * 206 looks the same whichever path fetched its bytes. The caller has already
+ * set the data headers and moved any whole-object digest to Repr-Digest.
+ *
+ * @returns true when the response was ended and no body should be sent.
+ */
+const writeSingleRangeHead = ({
+  req,
+  res,
+  range,
+  totalSize,
+  contentType,
+}: {
+  req: Request;
+  res: Response;
+  range: rangeParser.Range;
+  /** The whole item's size, for Content-Range. */
+  totalSize: number;
+  contentType: string;
+}): boolean => {
+  const { start, end } = range;
+  res.status(206); // Partial Content
+  res.setHeader('Content-Range', `bytes ${start}-${end}/${totalSize}`);
+  res.setHeader('Accept-Ranges', 'bytes');
+  setDataContentType(res, contentType);
+  res.setHeader('Content-Length', (end - start + 1).toString());
+
+  // Handle If-None-Match for both HEAD and GET requests
+  if (handleIfNoneMatch(req, res)) {
+    res.end();
+    return true;
+  }
+
+  if (req.method === REQUEST_METHOD_HEAD) {
+    res.end();
+    return true;
+  }
+
+  return false;
+};
+
+/**
+ * Why a ranged GET could not take the {@link serveUncachedRange} fast path.
+ * Only the outcomes found after the ranged fetch are counted; the up-front
+ * eligibility checks are free and not worth a metric each.
+ */
+type UncachedRangeFallbackReason = 'size_mismatch' | 'cached_encoding_check';
+
+/**
+ * The single byte range a request may be served through
+ * {@link serveUncachedRange}, or undefined to take the full-object path.
+ *
+ * Eligible requests are GETs with a Range header naming exactly one
+ * satisfiable byte range of an item whose size is known and that has no
+ * stored hash. A stored hash means a local copy, or at least an ETag, may
+ * exist: such requests keep the full-object path, which is already fast for a
+ * cache hit and is what answers a matching If-None-Match with 304. HEAD,
+ * malformed, unsatisfiable and multipart requests keep it too, so their
+ * responses do not change.
+ *
+ * With `requireKnownType`, the item's content type must also be indexed and
+ * not a manifest: the data handler resolves a manifest path against an item of
+ * unknown type once its bytes arrive, which a ranged fetch cannot do.
+ */
+const uncachedRangeFastPathRange = ({
+  req,
+  dataAttributes,
+  requireKnownType,
+}: {
+  req: Request;
+  dataAttributes: ContiguousDataAttributes | undefined;
+  requireKnownType: boolean;
+}): { range: rangeParser.Range; size: number } | undefined => {
+  if (req.method !== 'GET') {
+    return undefined;
+  }
+  const rangeHeader = byteRangeHeader(req.headers.range);
+  if (rangeHeader === undefined) {
+    return undefined;
+  }
+  if (
+    dataAttributes === undefined ||
+    !Number.isSafeInteger(dataAttributes.size) ||
+    dataAttributes.size <= 0 ||
+    dataAttributes.hash !== undefined
+  ) {
+    return undefined;
+  }
+  if (
+    requireKnownType &&
+    (dataAttributes.contentType === undefined ||
+      dataAttributes.contentType === MANIFEST_CONTENT_TYPE ||
+      dataAttributes.isManifest)
+  ) {
+    return undefined;
+  }
+  const ranges = rangeParser(dataAttributes.size, rangeHeader);
+  if (
+    ranges === -1 ||
+    ranges === -2 ||
+    ranges.type !== 'bytes' ||
+    ranges.length !== 1
+  ) {
+    return undefined;
+  }
+  return { range: ranges[0], size: dataAttributes.size };
+};
+
+/**
+ * Serves a single-range GET of an uncached item with one ranged fetch.
+ *
+ * The full-object path first fetches the whole item, then discards that
+ * stream and fetches the range. On a cache miss that runs the upstream source
+ * cascade twice, and the first fetch can also park the request behind another
+ * request's in-flight download of the whole item, so a range of a large item
+ * waited on the whole download. Here only the range is fetched. The cache is
+ * filled separately: a ranged miss starts a background fetch of the whole item
+ * (see BACKGROUND_CACHE_RANGE_MAX_SIZE), which a concurrent full GET of the
+ * same item shares.
+ *
+ * The response is the one the full-object path sends for the same request:
+ * the same rate-limit or payment charge (the range's size), item headers,
+ * Content-Encoding, data headers and 206 headers. The data headers describe
+ * the fetch that supplied the bytes, as they do on that path.
+ *
+ * Returns false, having sent nothing and with no stream left open, when the
+ * request is not eligible (see {@link uncachedRangeFastPathRange}) or when the
+ * ranged fetch shows the full-object path is needed: the source reports a
+ * different size for the item, or the bytes came from the cache and their
+ * Content-Encoding must be checked against the item's first bytes, which this
+ * range may not include. Errors from the ranged fetch are thrown for the caller
+ * to handle as it handles its own fetch failing.
+ *
+ * @returns true when a response was sent (served, or refused by the rate
+ *   limiter or payment check).
+ */
+const serveUncachedRange = async ({
+  log,
+  req,
+  res,
+  dataSource,
+  dataAttributesSource,
+  id,
+  dataAttributes,
+  requestAttributes,
+  rateLimiter,
+  paymentProcessor,
+  negativeDataCache,
+  dataItemMetaResolver,
+  itemHeadersPromise,
+  requireKnownType,
+  refetchAttributes,
+  cacheControl,
+  parentSpan,
+}: {
+  log: Logger;
+  req: Request;
+  res: Response;
+  dataSource: ContiguousDataSource;
+  dataAttributesSource: DataAttributesSource;
+  id: string;
+  dataAttributes: ContiguousDataAttributes | undefined;
+  requestAttributes: RequestAttributes;
+  rateLimiter?: RateLimiter;
+  paymentProcessor?: PaymentProcessor;
+  negativeDataCache?: NegativeDataCache;
+  dataItemMetaResolver?: TxMetadataResolver;
+  /** From {@link fireItemHeaderResolution}. */
+  itemHeadersPromise: Promise<ResolvedItemHeaders | undefined>;
+  /** See {@link uncachedRangeFastPathRange}. */
+  requireKnownType: boolean;
+  /** Re-read the attributes after the fetch, as the caller's own path does. */
+  refetchAttributes: boolean;
+  /** A Cache-Control to send in place of the data headers' own. */
+  cacheControl?: string;
+  parentSpan?: Span;
+}): Promise<boolean> => {
+  const eligible = uncachedRangeFastPathRange({
+    req,
+    dataAttributes,
+    requireKnownType,
+  });
+  if (eligible === undefined) {
+    return false;
+  }
+  const { range, size } = eligible;
+
+  parentSpan?.addEvent('Fetching uncached range');
+  const fetchStartTime = Date.now();
+  const rangeData = await dataSource.getData({
+    id,
+    requestAttributes,
+    region: { offset: range.start, size: range.end - range.start + 1 },
+    parentSpan,
+    signal: req.signal,
+  });
+  parentSpan?.setAttributes({
+    'data.range_fast_path': true,
+    'data.retrieval.duration_ms': Date.now() - fetchStartTime,
+    'data.cached': rangeData.cached,
+    'data.trusted': rangeData.trusted,
+    'cache.status': rangeData.cached ? 'HIT' : 'MISS',
+  });
+  negativeDataCache?.evict(id);
+  negativeDataCache?.recordSuccess();
+
+  const fallBack = (reason: UncachedRangeFallbackReason, details: object) => {
+    rangeData.stream.destroy();
+    metrics.uncachedRangeFastPathTotal.inc({ outcome: `fallback_${reason}` });
+    parentSpan?.addEvent('Uncached range fast path fell back', { reason });
+    log.debug('Uncached range fast path fell back to a full fetch', {
+      id,
+      reason,
+      ...details,
+    });
+    return false;
+  };
+
+  try {
+    if (
+      typeof rangeData.totalSize === 'number' &&
+      rangeData.totalSize > 0 &&
+      rangeData.totalSize !== size
+    ) {
+      // The range was cut against the indexed size; a source that disagrees
+      // may be right, and the full-object path cuts against its size.
+      log.warn('Ranged fetch reported a different item size than indexed', {
+        id,
+        indexedSize: size,
+        reportedSize: rangeData.totalSize,
+      });
+      return fallBack('size_mismatch', {
+        indexedSize: size,
+        reportedSize: rangeData.totalSize,
+      });
+    }
+
+    let attributes = dataAttributes;
+    if (refetchAttributes) {
+      // Picks up offsets the fetch discovered, as the full-object path does.
+      try {
+        const updatedAttributes =
+          await dataAttributesSource.getDataAttributes(id);
+        if (updatedAttributes) {
+          attributes = updatedAttributes;
+        }
+      } catch (error: any) {
+        log.debug('Failed to re-fetch data attributes after getData:', {
+          dataId: id,
+          message: error.message,
+        });
+      }
+    }
+
+    // The item as the full-object path would describe it: this fetch's
+    // provenance (trust, hops, upstream type, encoding and tags) and the whole
+    // item's size, which Content-Range, the cache directive and the
+    // rate-limit charge are computed from.
+    const data: ContiguousData = { ...rangeData, size };
+
+    // On a cache hit the full-object path checks a coding with magic bytes
+    // against the item's first bytes; this range may not start there, and a
+    // cache hit is fast on that path anyway.
+    if (
+      data.cached &&
+      hasContentEncodingMagic(
+        honouredContentEncoding(
+          attributes?.contentEncoding ?? data.sourceContentEncoding,
+        ),
+      )
+    ) {
+      return fallBack('cached_encoding_check', {});
+    }
+
+    const allowed = await handleDataRateLimitingAndPayment({
+      req,
+      res,
+      id,
+      data,
+      dataAttributes: attributes,
+      requestAttributes,
+      rateLimiter,
+      paymentProcessor,
+      parentSpan,
+      log,
+    });
+    if (!allowed) {
+      metrics.uncachedRangeFastPathTotal.inc({ outcome: 'refused' });
+      return true;
+    }
+
+    const itemHeaders = await awaitItemHeaders(
+      itemHeadersPromise,
+      data.upstreamTags,
+      id,
+      dataItemMetaResolver,
+    );
+
+    if (cacheControl !== undefined) {
+      res.setHeader('Cache-Control', cacheControl);
+    }
+
+    // A Range response does not send the item's first bytes, so an uncached
+    // item's coding is declared unchecked, as on the full-object path; the
+    // cached case that would peek fell back above.
+    const contentEncoding = await resolveServedContentEncoding({
+      data,
+      dataAttributes: attributes,
+      id,
+      log,
+      signal: req.signal,
+      sendsStream: false,
+    });
+
+    setDataHeaders({
+      req,
+      res,
+      dataAttributes: attributes,
+      data,
+      id,
+      itemHeaders,
+      contentEncoding,
+    });
+    // The response does not carry the whole object.
+    useReprDigest(res);
+
+    metrics.uncachedRangeFastPathTotal.inc({ outcome: 'served' });
+    if (
+      writeSingleRangeHead({
+        req,
+        res,
+        range,
+        totalSize: size,
+        contentType:
+          attributes?.contentType ??
+          data.sourceContentType ??
+          DEFAULT_CONTENT_TYPE,
+      })
+    ) {
+      rangeData.stream.destroy();
+      return true;
+    }
+
+    pipeStreamToResponse(data.stream, res, log, id);
+    return true;
+  } catch (error) {
+    rangeData.stream.destroy();
+    throw error;
+  }
+};
+
 const handleRangeRequest = async ({
   log,
   dataSource,
@@ -1089,24 +1444,18 @@ const handleRangeRequest = async ({
     useReprDigest(res);
 
     if (isSingleRange) {
-      const totalSize = data.size;
       const start = ranges[0].start;
       const end = ranges[0].end;
 
-      res.status(206); // Partial Content
-      res.setHeader('Content-Range', `bytes ${start}-${end}/${totalSize}`);
-      res.setHeader('Accept-Ranges', 'bytes');
-      setDataContentType(res, contentType);
-      res.setHeader('Content-Length', (end - start + 1).toString());
-
-      // Handle If-None-Match for both HEAD and GET requests
-      if (handleIfNoneMatch(req, res)) {
-        res.end();
-        return;
-      }
-
-      if (req.method === REQUEST_METHOD_HEAD) {
-        res.end();
+      if (
+        writeSingleRangeHead({
+          req,
+          res,
+          range: ranges[0],
+          totalSize: data.size,
+          contentType,
+        })
+      ) {
         return;
       }
 
@@ -1403,6 +1752,31 @@ export const createRawDataHandler = ({
         span.addEvent('Starting data retrieval');
         const dataStartTime = Date.now();
         try {
+          // A single range of an uncached item: fetch only the range.
+          if (
+            await serveUncachedRange({
+              log,
+              req,
+              res,
+              dataSource,
+              dataAttributesSource,
+              id,
+              dataAttributes,
+              requestAttributes,
+              rateLimiter,
+              paymentProcessor,
+              negativeDataCache,
+              dataItemMetaResolver,
+              itemHeadersPromise: tagsPromise,
+              requireKnownType: false,
+              refetchAttributes: true,
+              parentSpan: span,
+            })
+          ) {
+            span.setAttribute('http.status_code', res.statusCode);
+            return;
+          }
+
           data = await dataSource.getData({
             id,
             requestAttributes,
@@ -1764,8 +2138,48 @@ const sendManifestResponse = async ({
       }
     }
 
+    // URL→data-id mapping is mutable for fallback resolutions: a future
+    // manifest revision can add the missing path, changing what this URL
+    // resolves to. Override any ArNS-set ANT TTL with a short, must-revalidate
+    // directive so upstream proxies don't pin stale fallback content. Do NOT
+    // remove without understanding upstream-cache poisoning implications —
+    // see PE-9072.
+    const cacheControl =
+      resolutionType === 'fallback'
+        ? `public, max-age=${config.CACHE_NOT_FOUND_MAX_AGE}, must-revalidate`
+        : undefined;
+
     // Retrieve data based on ID resolved from manifest path or index
     try {
+      // A single range of an uncached item: fetch only the range.
+      if (
+        await serveUncachedRange({
+          log,
+          req,
+          res,
+          dataSource,
+          dataAttributesSource,
+          id: resolvedId,
+          dataAttributes,
+          requestAttributes,
+          rateLimiter,
+          paymentProcessor,
+          negativeDataCache,
+          dataItemMetaResolver,
+          itemHeadersPromise: fireItemHeaderResolution(
+            resolvedId,
+            dataItemMetaResolver,
+          ),
+          requireKnownType: false,
+          refetchAttributes: false,
+          cacheControl,
+          parentSpan,
+        })
+      ) {
+        // Indicate response was sent
+        return true;
+      }
+
       data = await dataSource.getData({
         id: resolvedId,
         requestAttributes,
@@ -1816,17 +2230,8 @@ const sendManifestResponse = async ({
       dataItemMetaResolver,
     );
 
-    // URL→data-id mapping is mutable for fallback resolutions: a future
-    // manifest revision can add the missing path, changing what this URL
-    // resolves to. Override any ArNS-set ANT TTL with a short, must-revalidate
-    // directive so upstream proxies don't pin stale fallback content. Do NOT
-    // remove without understanding upstream-cache poisoning implications —
-    // see PE-9072.
-    if (resolutionType === 'fallback') {
-      res.setHeader(
-        'Cache-Control',
-        `public, max-age=${config.CACHE_NOT_FOUND_MAX_AGE}, must-revalidate`,
-      );
+    if (cacheControl !== undefined) {
+      res.setHeader('Cache-Control', cacheControl);
     }
 
     // Set headers and stream data
@@ -2158,6 +2563,32 @@ export const createDataHandler = ({
         span.addEvent('Starting data retrieval');
         const dataStartTime = Date.now();
         try {
+          // A single range of an uncached item whose type rules out a
+          // manifest: fetch only the range.
+          if (
+            await serveUncachedRange({
+              log,
+              req,
+              res,
+              dataSource,
+              dataAttributesSource,
+              id,
+              dataAttributes,
+              requestAttributes,
+              rateLimiter,
+              paymentProcessor,
+              negativeDataCache,
+              dataItemMetaResolver,
+              itemHeadersPromise: tagsPromise,
+              requireKnownType: true,
+              refetchAttributes: true,
+              parentSpan: span,
+            })
+          ) {
+            span.setAttribute('http.status_code', res.statusCode);
+            return;
+          }
+
           data = await dataSource.getData({
             id,
             requestAttributes,

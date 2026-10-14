@@ -167,6 +167,11 @@ type GetDataArgs = {
    * (PE-9099). Also forwarded upstream.
    */
   acceptContentType?: (contentType: string | undefined) => boolean;
+  /**
+   * For a ranged miss, whether to start a background fetch of the whole item
+   * (see `triggerBackgroundCacheForRange`). Defaults to true.
+   */
+  backgroundCacheOnRangeMiss?: boolean;
 };
 
 export class ReadThroughDataCache implements ContiguousDataSource {
@@ -945,6 +950,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
       parentSpan,
       signal,
       acceptContentType,
+      backgroundCacheOnRangeMiss = true,
     }: GetDataArgs,
     coalesceAttemptsRemaining: number,
   ): Promise<ContiguousData> {
@@ -1280,6 +1286,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
               parentSpan: span,
               signal,
               acceptContentType,
+              backgroundCacheOnRangeMiss,
             },
             nextAttempts,
           );
@@ -1878,7 +1885,11 @@ export class ReadThroughDataCache implements ContiguousDataSource {
           });
         }
 
-        if (region !== undefined && data.size > 0) {
+        if (
+          region !== undefined &&
+          data.size > 0 &&
+          backgroundCacheOnRangeMiss
+        ) {
           this.triggerBackgroundCacheForRange(
             id,
             attributes?.size ?? data.totalSize,

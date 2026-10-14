@@ -172,6 +172,9 @@ export abstract class AttributeFetchers {
         // attribute store. With the predicate the cache/gateway layer
         // throws and the source chain falls through to chunks.
         acceptContentType: isAcceptableBundleContentType,
+        // A signature or owner is all this needs from the bundle; filling the
+        // cache with the whole bundle for it is not worth the download.
+        backgroundCacheOnRangeMiss: false,
       });
       const { stream } = data;
       span.setAttributes({
