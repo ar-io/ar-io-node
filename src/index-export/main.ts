@@ -17,7 +17,11 @@
  *                        layout the report also lists the plan
  *     --keep <dir>       a dry run that keeps its bands in <dir>
  *     --to <height>      read no higher, to compare runs at a fixed height
- *     --resettle         grid layout: re-settle every frozen band, due or not
+ *     --resettle         grid layout and parquet-l2: re-settle every frozen
+ *                        band, due or not
+ *     --range <from>-<to>
+ *                        parquet-l2, with --dry-run or --keep: build only
+ *                        this band (on the grid) of each L2 index, nothing else
  *   main.js --adopt <band> --as h|r|d [--top <height>]
  *                        record an existing band as this service's (grid
  *                        layout: also --as tip)
@@ -32,6 +36,7 @@ import { gatewayRootSource } from '../lib/index-band/verify.js';
 import { release } from '../version.js';
 import { ExportConfig, parseExportConfig } from './config.js';
 import { INDEX_NAME } from './kinds/root-tx/kind.js';
+import { openL2Source } from './kinds/parquet-l2/config.js';
 import { openSource } from './kinds/root-tx/sources/config.js';
 import { ExportLock } from './lock.js';
 import log from './log.js';
@@ -40,11 +45,20 @@ import { ExportService, reportForOutput, runResult } from './service.js';
 import { updateIndexState } from './state.js';
 
 const USAGE =
-  'Usage: main.js [--once [--dry-run | --keep <dir>] [--to <height>] [--resettle]] | [--adopt <band-id> --as h|r|d|tip [--top <height>]]';
+  'Usage: main.js [--once [--dry-run | --keep <dir>] [--to <height>] [--resettle] [--range <from>-<to>]] | [--adopt <band-id> --as h|r|d|tip [--top <height>]]';
 
 const height = (value: string, flag: string): number => {
   if (!/^\d+$/.test(value)) throw new Error(`${flag} must be a block height`);
   return Number(value);
+};
+
+/** `--range <from>-<to>`, two block heights. */
+const heightRange = (value: string): [number, number] => {
+  const match = /^(\d+)-(\d+)$/.exec(value);
+  if (match === null) {
+    throw new Error(`--range must be <from>-<to>, two block heights: ${value}`);
+  }
+  return [Number(match[1]), Number(match[2])];
 };
 
 /**
@@ -136,6 +150,7 @@ async function main(): Promise<void> {
       keep: { type: 'string' },
       to: { type: 'string' },
       resettle: { type: 'boolean' },
+      range: { type: 'string' },
       adopt: { type: 'string' },
       as: { type: 'string' },
       top: { type: 'string' },
@@ -147,18 +162,28 @@ async function main(): Promise<void> {
     (values['dry-run'] === true ||
       values.keep !== undefined ||
       values.to !== undefined ||
-      values.resettle === true)
+      values.resettle === true ||
+      values.range !== undefined)
   ) {
     throw new Error(
-      `--dry-run, --keep, --to and --resettle go with --once. ${USAGE}`,
+      `--dry-run, --keep, --to, --resettle and --range go with --once. ${USAGE}`,
     );
   }
 
   const config = parseExportConfig(process.env);
-  if (values.resettle === true && config.rootTxLayout !== 'grid') {
+  const l2 = config.kinds.includes('parquet-l2');
+  if (values.resettle === true && config.rootTxLayout !== 'grid' && !l2) {
     throw new Error(
-      '--resettle is for the grid layout (INDEX_EXPORT_ROOT_TX_LAYOUT=grid)',
+      '--resettle is for the grid layout (INDEX_EXPORT_ROOT_TX_LAYOUT=grid) and parquet-l2',
     );
+  }
+  if (values.range !== undefined) {
+    if (!l2) throw new Error('--range is for parquet-l2 (INDEX_EXPORT_KINDS)');
+    if (values['dry-run'] !== true && values.keep === undefined) {
+      throw new Error(
+        '--range goes with --dry-run or --keep: it never publishes',
+      );
+    }
   }
   if (values.adopt !== undefined) {
     await adopt(config, values.adopt, values.as, values.top);
@@ -179,6 +204,15 @@ async function main(): Promise<void> {
       ),
     openRoots: () =>
       gatewayRootSource(config.headerCheckUrl, config.headerCheckTimeoutMs),
+    ...(config.l2Source !== undefined
+      ? {
+          openL2Source: async () =>
+            openL2Source(
+              config.l2Source as NonNullable<typeof config.l2Source>,
+              config.sourceEnv,
+            ),
+        }
+      : {}),
   });
 
   // /healthz in either mode: a long --once run under the compose healthcheck
@@ -222,6 +256,9 @@ async function main(): Promise<void> {
         ? { toHeight: height(values.to, '--to') }
         : {}),
       ...(values.resettle === true ? { resettle: true } : {}),
+      ...(values.range !== undefined
+        ? { l2Range: heightRange(values.range) }
+        : {}),
       force: true,
     });
     // Wait for the write: stdout to a pipe is asynchronous, and exiting
@@ -246,6 +283,9 @@ async function main(): Promise<void> {
     release,
     publisher: config.publisher,
     sources: config.sources.map((s) => s.config.name),
+    ...(config.l2Indexes !== undefined
+      ? { l2Indexes: config.l2Indexes.map((index) => index.name) }
+      : {}),
     headerCheckUrl: config.headerCheckUrl,
   });
   service.start();

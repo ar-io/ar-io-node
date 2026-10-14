@@ -4,14 +4,18 @@ The `index-export` service builds the bands a gateway publishes through
 [Index Sharing](index-swarm.md). It runs the core image in the compose
 profile `index-export`, reads this gateway's own index, and writes finished
 bands under `data/indexes/published/<index>/`. The `index-swarm` sidecar
-then signs and offers whatever it finds there. It builds two kinds of band:
+then signs and offers whatever it finds there. It builds three kinds of
+band:
 
 - **root-TX bands** (`cdb64-root-tx`), from ClickHouse or `bundles.db`;
-- **L1 bands** (`parquet-l1`), from `core.db`.
+- **L1 bands** (`parquet-l1`), from `core.db`;
+- **L2 bands** (`parquet-l2`), the data items one selection takes, from
+  ClickHouse, placed on the chain by the L1 bands.
 
 `INDEX_EXPORT_KINDS` chooses which (default `root-tx-index`; add
-`parquet-l1` for L1 bands). For the format of each band and how a reader
-uses it, see [index-publication.md](index-publication.md).
+`parquet-l1` for L1 bands, `parquet-l2` for L2 bands). For the format of
+each band and how a reader uses it, see
+[index-publication.md](index-publication.md).
 
 ```mermaid
 flowchart LR
@@ -41,6 +45,7 @@ flowchart LR
 - [Running it](#running-it)
 - [Grid layout](#grid-layout)
 - [L1 bands](#l1-bands-2)
+- [L2 bands](#l2-bands)
 - [Adopting existing bands](#adopting-existing-bands)
 - [Building a band by hand](#building-a-band-by-hand)
 - [Known limits](#known-limits)
@@ -503,6 +508,214 @@ Each index keeps its own outcome, retry and last run, in `state.json` and in
 the metrics (`index` label). A failing L1 band neither retries nor marks
 root-TX bands, or the reverse.
 
+## L2 bands
+
+An L2 band (`parquet-l2`, layout `l2-1` in
+[index-publication.md](index-publication.md#l2-bands)) holds the ANS-104
+data items of one height range that a **selection** takes: those with a tag
+named exactly `name` whose value starts with `valuePrefix` and not with
+`excludeValuePrefix`, compared as bytes. Each selection is its own index,
+published under `published/<name>/`:
+
+```bash
+INDEX_EXPORT_KINDS=root-tx-index,parquet-l1,parquet-l2
+INDEX_EXPORT_L2_INDEXES='[{"name":"ardrive-l2","selection":{"kind":"ans104-data-items","tag":{"name":"App-Name","valuePrefix":"ArDrive","excludeValuePrefix":"ArDriver"}}}]'
+# and in INDEX_SWARM_PUBLISH: {"name":"ardrive-l2","kind":"parquet-l2"}
+```
+
+A band's selection is bound into its id, so an index's selection never
+changes: bands of another selection in its directory stop the run
+(`grid_layout`). A new selection is a new index, under a new name.
+
+### Where L2 rows come from
+
+- **Items** from ClickHouse: this gateway's (`CLICKHOUSE_*`), or a peer's
+  (`INDEX_EXPORT_L2_SOURCE`). Each window of 250 heights is read `FINAL`,
+  the selection pushed down (`arrayExists` over `tag_names`/`tag_values`,
+  on the raw bytes) and checked again on every row returned: a row the
+  selection doesn't take refuses the band (`selection_mismatch`). The
+  nested bundles above each item are read by id, level by level up to the
+  root.
+- **Positions on the chain.** An item's `height` and
+  `block_transaction_index` are its root transaction's, never its own
+  row's: from this publisher's `parquet-l1` bands when they cover the
+  band's heights (their `block_transactions`), else ClickHouse's L1 rows
+  (`is_data_item = false`), else no band (`no_l1`, retried). A root found
+  in neither, or at two positions, refuses the band (`roots`, with the
+  count and a sample). An item the index files under another height of the
+  band than its root's moves to its root's (`movedHeight` in the report).
+  `createdAt` is the time of the band's top block, from the same data.
+  Where this publisher has L1 bands, L2 bands reach no higher than they
+  do, so every band's roots are placed by them.
+- **Owners' keys**, one `wallets` row per owner, from the first that has a
+  key whose SHA-256 is the address: the item's own row (ClickHouse keeps
+  `owner` only for keys of at most 64 bytes, so not an RSA modulus); the
+  gateway's `bundles.db` `wallets` table, read-only
+  (`INDEX_EXPORT_L2_WALLETS_DB`); the root, read through the header-check
+  gateway at a located item's owner offset. An owner with none is left out
+  of `wallets` and counted (`ownersWithoutKey`); the band still builds.
+- **`content_type` and `content_encoding`**: the first `Content-Type` /
+  `Content-Encoding` tag by position, names compared without case, as an L1
+  band takes them; null without one, an empty value kept empty.
+
+### Locations
+
+An item's eight location columns are offsets into its parent bundle's
+payload plus `root_parent_offset`, where that payload starts in the root:
+all set, or all null. The rules, in order:
+
+1. Every offset and size known (else `no_offsets`).
+2. **Item-relative header offsets** moved into the payload: a
+   `signature_offset` of 2 with an `offset` other than 0 gets `offset` added
+   to it and to `owner_offset` (`normalised`).
+3. **The arithmetic of one item**: `size > 0`, `data_offset + data_size =
+   offset + size`, `signature_offset = offset + 2`, `owner_offset =
+   signature_offset + signature_size`, `data_offset ≥ owner_offset +
+   owner_size` (else `layout`).
+4. **Placement**, by the same function as root-TX bands (`placePayload`):
+   an item in the root at base 0; one level down under its bundle's
+   payload, `root_parent_offset` as held, or 0 with relative offsets
+   (`repaired`) or absolute ones; deeper only on an unbroken chain (else
+   `deep`). `inconsistent` and `no_parent` as for root-TX bands. An item
+   whose bundle the index holds at two places in the root is left
+   unlocated (`parent_two_places`).
+5. **Ambiguous items** (one level down, `root_parent_offset` 0, both
+   readings possible) are settled by their bytes: the header is read from
+   the root at both candidate starts and decoded, and the reading whose
+   header is the item's (its id, its length) is kept. Neither or both:
+   unlocated (`ambiguous`). Each item is read on its own (two items of one
+   bundle can have been indexed by different code), at most 8 reads at a
+   time and `INDEX_EXPORT_L2_MAX_READS` (200,000) reads, proofs and keys
+   together, a band (past it the band is refused, `read_budget`). A header
+   is read as the header check reads it: one whose tag count field is
+   malformed still proves its reading (`stats.malformedTags`).
+
+Offsets are written parent-relative whichever way the index holds them, so
+an item held with absolute offsets and the same item held with relative
+ones give the same row and the same digest. `parents` lists every located
+nested bundle between a held item and its root (placed by `placePayload`
+alone, never by reading its header).
+
+A read the gateway cannot serve, after two retries, stops the band
+(`couldnt_check`, `gateway`): whether an item is located, or an owner keyed,
+never depends on the network.
+
+### Distinct rows
+
+The rows are loaded into DuckDB and kept distinct, so an item the index
+holds twice at one height (two block positions of its own) is one row once
+both carry their root's. An unlocated row of an (id, root) that also has a
+located one is dropped. What is left must be one row per key of each
+table's order, or the band is refused rather than tie-broken: two unlocated
+rows of one item in one root that still differ (`unlocated_conflict`), two
+rows at one place (`conflict`), two tags at one position (`tag_conflict`),
+two places of a bundle at one offset (`parent_conflict`).
+
+### Checks before publishing
+
+Besides the rules above, before a band publishes:
+
+- every location all set or all null, and the arithmetic of every located
+  row;
+- `tag_count` equal to the item's tag rows, and no tag without an item;
+- every root at its L1 position, joined against the L1 bands themselves
+  when they gave the positions;
+- every key's SHA-256 its address (read back from the written file);
+- each table's row digest taken by reading the written file back in its
+  order, as an importer does;
+- a header check through `INDEX_EXPORT_HEADER_CHECK_URL`, as for root-TX
+  bands: 150 located rows, 50 more of each of `repaired`, `proven`,
+  `absolute`, `deep` and `normalised`. A wrong header rejects the band;
+  under 80% read leaves it for the retry. A band with no located row has
+  nothing to check.
+
+### Lifecycle
+
+L2 bands follow the [grid layout](#grid-layout) on the L1 heights, with one
+difference the layout forces: an L2 band covers a whole 100,000-height
+range, a whole 5,000-height sub-range, or a sub-range cut short at the top,
+so the heights above the frozen bands are covered by a tip band per
+sub-range rather than one tip. Every id reads `l2-h<from>-<to>-…`; which
+bands are frozen is the publisher's own fact, `settledAt` in each band's
+`.publisher.json`.
+
+| Role | Range | Built | Rebuilt |
+|---|---|---|---|
+| `h` | A whole 100,000-height range | From the source, when the whole range has settled at once (a bootstrap, a catch-up), or as a roll once its twenty `d` bands are frozen | Only by a re-settle |
+| `d` | A whole 5,000-height range | Once its top is `INDEX_EXPORT_L2_SETTLE_BLOCKS` (the root-TX settle lag, 5,040, unless set) below the source's stable top | Only by a re-settle |
+| tip | Each sub-range above the frozen bands, the top one cut short at the stable top | Each daily run, superseding the band of the same start | Daily |
+
+A run, per index: **freeze** the settled ranges, lowest first, each
+replacing the tip bands of its heights (a tip band whose rows haven't
+changed is kept under its id and only marked frozen); **roll** each range
+of twenty frozen `d` bands into its `h`; rebuild the **tip** bands; then
+**re-settle** the frozen bands due by
+`INDEX_EXPORT_ROOT_TX_RESETTLE_INTERVAL_HOURS` (or all, with `--once
+--resettle`).
+
+Every band is rebuilt from the source, not from the bands it replaces: the
+same rows give the same band, so a roll is an `h` built again and checked
+against its `d` bands, and a tip whose rows haven't changed keeps its id.
+Whatever a band replaces (a roll's `d` bands, a freeze's tip band, a
+re-settled band), it must:
+
+- **lose nothing**: every id of the bands it replaces is in it
+  (`dropped_items`, with a sample);
+- **unlocate nothing**: every (id, root) they located it locates
+  (`unlocated_rows`);
+- **relocate under a check**: every row they located elsewhere is
+  header-checked, at most `INDEX_EXPORT_ROOT_TX_RESETTLE_MAX_CHANGED`
+  (`too_many_changed`).
+
+Rows a source loses (ClickHouse TTL) therefore stop a band's replacement
+rather than leave it: the old band stays, and the run is rejected.
+
+A run stops starting freezes and re-settles after
+`INDEX_EXPORT_L2_RUN_BUDGET_MINUTES` (4 hours); the rest wait for the next
+run, 15 minutes later, and so does the tip, which would otherwise span
+every height the freezes left. A failed freeze stops the freezes; the tip
+then still covers its heights.
+
+### Running L2 exports
+
+```bash
+# One band of each L2 index, for a look or a comparison: built and checked,
+# nothing published, no state saved. --range takes a band on the grid.
+docker compose --profile index-export run --rm -T index-export \
+  --once --dry-run --range 1300000-1399999 > l2-h1300000.json
+# The same, keeping the band (under data/indexes) to compare its files.
+docker compose --profile index-export run --rm -T index-export \
+  --once --keep data/indexes/export/compare --range 1300000-1399999
+```
+
+The report lists each index under `l2`: its `plan` and, per band, the
+`id`, rows per table, the band's `checks`, where the positions came from
+(`stats.roots`), the proofs' outcomes, the owners' keys by source, the
+comparison with the bands it replaces, and the header check.
+
+| Metric | Read it as |
+|---|---|
+| `index_export_runs_total{index="<name>",kind,result,reason}` | Outcomes per role (`h`, `d`, `tip`) |
+| `index_export_l2_rows{index,kind,table}` | Rows of the latest band of a role |
+| `index_export_l2_unlocated_rows{index,kind,reason}` | Its unlocated items, by reason |
+| `index_export_l2_owners_without_key{index,kind}` | Its owners without a key |
+| `index_export_l2_proofs_total{index,outcome}` | Ambiguous items by how their headers settled them: `relative`, `absolute`, `none`, `both` |
+
+Alert on the tip:
+`index_export_last_success_timestamp_seconds{index="ardrive-l2",kind="tip"}`.
+
+### L2 limits
+
+- Only ClickHouse is read. A `bundles.db` source (`stable_data_items`, its
+  tags and `wallets`) would fit the same source interface
+  (`kinds/parquet-l2/source.ts`); it is not built yet.
+- ClickHouse keeps an item's tags without empty names and without their
+  positions; a band numbers them in order. An item with an empty-named tag
+  is written with the tags ClickHouse holds.
+- An ambiguous nested bundle is not proven, so it gets no `parents` row
+  (its items are unlocated by the chain rule anyway).
+- The top tip band changes range, so id, every run the source's top moves.
+
 ## Adopting existing bands
 
 The service refuses to bootstrap while `published/` holds bands it did not
@@ -604,6 +817,7 @@ shipped `prometheus.yml` scrapes it as the `index-export` job.
 | `index_export_last_success_timestamp_seconds{index,kind}` | The last success per role. Set again from `state.json` after a restart |
 | `index_export_run_in_progress`, `index_export_run_started_timestamp_seconds` | A run that is taking long |
 | `index_export_heartbeat_timestamp_seconds` | The loop is alive |
+| `index_export_l2_*` | L2 bands: see [Running L2 exports](#running-l2-exports) |
 
 Alert when the daily band is late:
 

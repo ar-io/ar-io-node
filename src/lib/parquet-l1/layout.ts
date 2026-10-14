@@ -449,6 +449,12 @@ export interface BandPublisherFacts {
   supersedes?: string[];
   /** When this publisher built it. */
   builtAt?: string;
+  /**
+   * Grid-built bands (`parquet-l2`): when the band was built, or confirmed,
+   * with its heights settled (the settle lag below the sources' top). A band
+   * without it is still rebuilt as its heights settle.
+   */
+  settledAt?: string;
 }
 
 /** A band's `createdAt`: its top block's timestamp, in seconds, as a date. */
@@ -536,6 +542,15 @@ export function parsePublisherFile(text: string): BandPublisherFacts {
       throw new Error(`${PUBLISHER_FILE}: builtAt must be a date`);
     }
     out.builtAt = facts.builtAt;
+  }
+  if (facts.settledAt !== undefined) {
+    if (
+      typeof facts.settledAt !== 'string' ||
+      Number.isNaN(Date.parse(facts.settledAt))
+    ) {
+      throw new Error(`${PUBLISHER_FILE}: settledAt must be a date`);
+    }
+    out.settledAt = facts.settledAt;
   }
   return out;
 }

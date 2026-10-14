@@ -973,8 +973,8 @@ services:
     # run "couldn't check", retried later.
     volumes:
       - ${INDEX_SWARM_DATA_PATH:-./data/indexes}:/app/data/indexes
-      # Read-only, for the SQLite source (gateways without ClickHouse) and
-      # L1 bands (core.db).
+      # Read-only, for the SQLite source (gateways without ClickHouse), L1
+      # bands (core.db) and L2 bands' owners' keys (bundles.db wallets).
       - ${SQLITE_DATA_PATH:-./data/sqlite}:/app/data/sqlite:ro
       # Peers' ClickHouse password files, only when INDEX_EXPORT_SOURCES names
       # a peer; otherwise nothing is mounted.
@@ -999,6 +999,13 @@ services:
       - INDEX_EXPORT_ROOT_TX_RESETTLE_MAX_CHANGED=${INDEX_EXPORT_ROOT_TX_RESETTLE_MAX_CHANGED:-20000}
       - INDEX_EXPORT_START_HEIGHT=${INDEX_EXPORT_START_HEIGHT:-}
       - INDEX_EXPORT_L1_RUN_BUDGET_MINUTES=${INDEX_EXPORT_L1_RUN_BUDGET_MINUTES:-}
+      # parquet-l2: the selections to build, and where from (see envs.md).
+      - INDEX_EXPORT_L2_INDEXES=${INDEX_EXPORT_L2_INDEXES:-}
+      - INDEX_EXPORT_L2_SOURCE=${INDEX_EXPORT_L2_SOURCE:-}
+      - INDEX_EXPORT_L2_SETTLE_BLOCKS=${INDEX_EXPORT_L2_SETTLE_BLOCKS:-}
+      - INDEX_EXPORT_L2_WALLETS_DB=${INDEX_EXPORT_L2_WALLETS_DB:-}
+      - INDEX_EXPORT_L2_MAX_READS=${INDEX_EXPORT_L2_MAX_READS:-}
+      - INDEX_EXPORT_L2_RUN_BUDGET_MINUTES=${INDEX_EXPORT_L2_RUN_BUDGET_MINUTES:-}
       - INDEX_EXPORT_HEADER_CHECK_URL=${INDEX_EXPORT_HEADER_CHECK_URL:-}
       - INDEX_EXPORT_HEADER_CHECK_TIMEOUT_MS=${INDEX_EXPORT_HEADER_CHECK_TIMEOUT_MS:-30000}
       - INDEX_EXPORT_METRICS_PORT=${INDEX_EXPORT_METRICS_PORT:-9102}

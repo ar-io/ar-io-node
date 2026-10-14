@@ -19,8 +19,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   names the index checks each band's files, footers, schema, row counts, id
   and selection before installing it, refusing every band of an index whose
   bands, or `filter`, declare different selections. Opt-in, like
-  `parquet-l1`. Nothing builds L2 bands yet. See *L2 bands* in
+  `parquet-l1`. `index-export` builds them (below). See *L2 bands* in
   [docs/index-publication.md](docs/index-publication.md).
+- **`index-export` builds L2 bands (`INDEX_EXPORT_KINDS=…,parquet-l2`)**:
+  one index per selection in `INDEX_EXPORT_L2_INDEXES` (`ardrive-l2`:
+  `App-Name` starting `ArDrive`, not `ArDriver`), published under
+  `published/<name>/`, from this gateway's ClickHouse or a peer's
+  (`INDEX_EXPORT_L2_SOURCE`), on the L1 grid with the root-TX grid's settle
+  lag (`INDEX_EXPORT_L2_SETTLE_BLOCKS`), daily tip bands and weekly
+  re-settles.
+  - Every item takes its root's height and block position from this
+    publisher's `parquet-l1` bands (else ClickHouse's L1 rows); a root found
+    in neither refuses the band.
+  - Items are located by the root-TX bands' placement rules, item-relative
+    header offsets moved into the payload, and only when their offsets
+    describe one item; absolute offsets are written parent-relative, and an
+    ambiguous item is settled by reading its header from the root through
+    `INDEX_EXPORT_HEADER_CHECK_URL`. Owners' keys come from ClickHouse,
+    `bundles.db` or the root, kept only when they hash to the address.
+  - The same rows give the same band and id whatever order they are read
+    in; rows that can't be told apart refuse the band rather than be
+    tie-broken. A band that replaces others never loses an item or a
+    location, and every relocated item is header-checked.
+  - `--once --dry-run --range <from>-<to>` builds one band of each index
+    (`--keep` keeps it). New metrics: `index_export_l2_rows`,
+    `index_export_l2_unlocated_rows`, `index_export_l2_owners_without_key`,
+    `index_export_l2_proofs_total`. See *L2 bands* in
+    [docs/index-export.md](docs/index-export.md).
+  - An ambiguous item's proof reads its header as the band header check
+    does: a header whose tag count field is malformed (see *Fixed*) still
+    proves its reading, and is counted (`stats.malformedTags`).
 - **Root-TX bands on the L1 grid, with a settle lag
   (`INDEX_EXPORT_ROOT_TX_LAYOUT=grid`)**: `index-export` cuts root-TX bands
   at the same heights as `parquet-l1` bands, so every publisher's bands line

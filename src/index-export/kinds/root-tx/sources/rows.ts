@@ -206,13 +206,23 @@ export function toBandRecord(
   return record;
 }
 
+/** Where a row's offsets start in the root, as {@link placePayload} proves it. */
+export interface PayloadPlacement {
+  /** Added to the row's offsets, they are offsets into the root's data. */
+  base: number;
+  /** The offsets were relative though `rootParentOffset` said otherwise. */
+  repaired: boolean;
+}
+
 /**
- * Where a row's offsets start in the root, or why that can't be proven.
+ * Where a row's offsets start in the root, or why that can't be proven: the
+ * rules {@link toBandRecord} describes. Shared with the `parquet-l2`
+ * exporter (`item-location.ts`), so both indexes place an item the same way.
  */
-function placePayload(
+export function placePayload(
   row: ItemRow,
   offset: number,
-): { base: number; repaired: boolean } | UnrepairedReason {
+): PayloadPlacement | UnrepairedReason {
   const rpo = row.rootParentOffset;
   if (row.parentId === undefined) return 'no_parent';
   if (!isNested(row)) {
