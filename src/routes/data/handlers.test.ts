@@ -923,6 +923,122 @@ st
       await Promise.all([get, head]);
     });
 
+    describe('Content-Type', () => {
+      // Non-ASCII, so the tests also show the bytes pass through unchanged.
+      const body = Buffer.from('{"name":"café ☕"}');
+
+      // Reads the body as bytes; superagent would otherwise parse it.
+      const raw = (res: any, callback: any) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (chunk: Buffer) => chunks.push(chunk));
+        res.on('end', () => callback(null, Buffer.concat(chunks)));
+      };
+
+      const serve = (contentType: string) => {
+        app.get(
+          '/:id',
+          createDataHandler({
+            log,
+            dataAttributesSource,
+            dataSource,
+            dataBlockListValidator,
+            manifestPathResolver,
+          }),
+        );
+        dataAttributesSource.getDataAttributes = async () => ({
+          size: body.length,
+          contentType,
+          isManifest: false,
+          stable: true,
+          verified: true,
+          signature: null,
+          offset: 0,
+        });
+        dataSource.getData = async (params?: any) => {
+          const data =
+            params?.region !== undefined
+              ? body.subarray(
+                  params.region.offset,
+                  params.region.offset + params.region.size,
+                )
+              : body;
+          return {
+            stream: Readable.from(data),
+            size: body.length,
+            verified: true,
+            cached: false,
+            trusted: true,
+          };
+        };
+      };
+
+      it('sends a JSON type exactly as uploaded, without a charset', async () => {
+        serve('application/json');
+        const get = request(app)
+          .get('/not-a-real-id')
+          .buffer(true)
+          .parse(raw)
+          .expect(200)
+          .expect('Content-Type', 'application/json')
+          .then((res: any) => {
+            assert.deepEqual(res.body, body);
+          });
+        const head = request(app)
+          .head('/not-a-real-id')
+          .expect(200)
+          .expect('Content-Type', 'application/json');
+        await Promise.all([get, head]);
+      });
+
+      it('sends a JSON range response without a charset', async () => {
+        serve('application/json');
+        await request(app)
+          .get('/not-a-real-id')
+          .set('Range', 'bytes=0-3')
+          .buffer(true)
+          .parse(raw)
+          .expect(206)
+          .expect('Content-Type', 'application/json')
+          .then((res: any) => {
+            assert.deepEqual(res.body, body.subarray(0, 4));
+          });
+      });
+
+      it('keeps a charset the uploader set on a JSON type', async () => {
+        serve('application/json; charset=utf-8');
+        await request(app)
+          .get('/not-a-real-id')
+          .buffer(true)
+          .parse(raw)
+          .expect(200)
+          .expect('Content-Type', 'application/json; charset=utf-8');
+      });
+
+      it('adds a charset to text types that have none', async () => {
+        serve('text/plain');
+        await request(app)
+          .get('/not-a-real-id')
+          .expect(200)
+          .expect('Content-Type', 'text/plain; charset=utf-8');
+      });
+
+      it('adds a charset to text/html that has none', async () => {
+        serve('text/html');
+        await request(app)
+          .get('/not-a-real-id')
+          .expect(200)
+          .expect('Content-Type', 'text/html; charset=utf-8');
+      });
+
+      it('leaves other types unchanged', async () => {
+        serve('image/png');
+        await request(app)
+          .get('/not-a-real-id')
+          .expect(200)
+          .expect('Content-Type', 'image/png');
+      });
+    });
+
     describe('Headers', () => {
       describe('X-AR-IO-Verified', () => {
         it("should return false when data isn't verified", async () => {

@@ -62,6 +62,41 @@ const DEFAULT_CONTENT_TYPE = 'application/octet-stream';
 
 const REQUEST_METHOD_HEAD = 'HEAD';
 
+// The JSON types Express's `res.contentType` appends `; charset=utf-8` to
+// (send's `mime.charsets.lookup` tests `^application\/(javascript|json)`).
+const JSON_CONTENT_TYPE_REGEX = /^application\/json/i;
+
+/**
+ * Sets Content-Type on a data response to the type the data was uploaded
+ * with.
+ *
+ * Express's `res.contentType` appends `; charset=utf-8` to text, JavaScript
+ * and JSON types. For JSON the parameter means nothing: RFC 8259 §11
+ * defines no `charset` for `application/json`, and JSON is always UTF-8.
+ * It does break clients that compare the type exactly, among them Zora's
+ * metadata check, which accepts only `application/json` or `text/plain`.
+ * So a JSON type is sent verbatim.
+ *
+ * Measured with Playwright 1.47: `fetch`, XHR and JSON modules decode it
+ * as UTF-8 in Chromium, Firefox and WebKit, and Chromium and Firefox also
+ * display it as UTF-8 when it is opened in a tab. That WebKit displayed it
+ * as windows-1252, a bug WebKit fixed on 2026-09-07 (70cd4be688, "JSON
+ * displayed with wrong encoding"); until a Safari release carries the fix,
+ * non-ASCII JSON opened directly in a Safari tab can show as mojibake.
+ *
+ * Every other type still goes through `res.contentType`. Text and
+ * JavaScript keep the parameter, because without it all three browsers
+ * decode a UTF-8 text document as windows-1252, and a value without a `/`
+ * (`json`, `html`) is still expanded to its MIME type.
+ */
+export const setDataContentType = (res: Response, contentType: string) => {
+  if (JSON_CONTENT_TYPE_REGEX.test(contentType)) {
+    res.setHeader('Content-Type', contentType);
+  } else {
+    res.contentType(contentType);
+  }
+};
+
 /**
  * Handle rate limiting and x402 payment checks for data requests.
  * Returns false if request is blocked (stream destroyed, 402/429 sent),
@@ -645,7 +680,7 @@ const setDataHeaders = ({
   }
 
   // Use the content type from the L1 or data item index if available
-  res.contentType(contentType);
+  setDataContentType(res, contentType);
 
   if (contentEncoding !== undefined) {
     res.header('Content-Encoding', contentEncoding);
@@ -1036,7 +1071,7 @@ const handleRangeRequest = async ({
       res.status(206); // Partial Content
       res.setHeader('Content-Range', `bytes ${start}-${end}/${totalSize}`);
       res.setHeader('Accept-Ranges', 'bytes');
-      res.contentType(contentType);
+      setDataContentType(res, contentType);
       res.setHeader('Content-Length', (end - start + 1).toString());
 
       // Handle If-None-Match for both HEAD and GET requests
