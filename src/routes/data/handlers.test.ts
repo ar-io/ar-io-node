@@ -1123,6 +1123,18 @@ st
         assert.ok(streams[0].destroyed);
       });
 
+      it('falls back for any bytes that came from the cache, coded or not', async () => {
+        source.cached = true;
+        useDataHandler();
+
+        await getRange('bytes=4-7').expect(206);
+
+        assert.equal(calls.length, 3);
+        assert.notEqual(calls[0].region, undefined);
+        assert.equal(calls[1].region, undefined);
+        assert.ok(streams[0].destroyed);
+      });
+
       it('falls back to the full-object path when the source reports another size', async () => {
         source.body = Buffer.from('0123456789abcdefghijKLMNO');
         source.totalSize = 25;

@@ -2004,8 +2004,9 @@ export const backgroundRangeCacheSkippedTotal = new promClient.Counter({
  * outcome: `served`, `refused` (rate limit or payment), or
  * `fallback_<reason>` when the ranged fetch showed the full-object path was
  * needed (`size_mismatch`: the source returned a different length than
- * requested, or reported a different item size than indexed; `cached_encoding_check`: cached bytes whose Content-Encoding must be
- * checked against the item's first bytes).
+ * requested, or reported a different item size than indexed; `cached`:
+ * the bytes came from the local cache, which the full-object path serves
+ * fast and checks the item's Content-Encoding on).
  */
 export const uncachedRangeFastPathTotal = new promClient.Counter({
   name: 'uncached_range_fast_path_total',

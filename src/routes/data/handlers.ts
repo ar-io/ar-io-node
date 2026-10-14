@@ -1081,7 +1081,7 @@ const writeSingleRangeHead = ({
  * Only the outcomes found after the ranged fetch are counted; the up-front
  * eligibility checks are free and not worth a metric each.
  */
-type UncachedRangeFallbackReason = 'size_mismatch' | 'cached_encoding_check';
+type UncachedRangeFallbackReason = 'size_mismatch' | 'cached';
 
 /**
  * The single byte range a request may be served through
@@ -1321,18 +1321,13 @@ const serveUncachedRange = async ({
     // rate-limit charge are computed from.
     const data: ContiguousData = { ...rangeData, size };
 
-    // On a cache hit the full-object path checks a coding with magic bytes
-    // against the item's first bytes; this range may not start there, and a
-    // cache hit is fast on that path anyway.
-    if (
-      data.cached &&
-      hasContentEncodingMagic(
-        honouredContentEncoding(
-          attributes?.contentEncoding ?? data.sourceContentEncoding,
-        ),
-      )
-    ) {
-      return fallBack('cached_encoding_check', {});
+    // Bytes that came from the local cache (a parent bundle's cached blob:
+    // the item itself has no hash) are fast on the full-object path, which
+    // also checks a coding with magic bytes, recorded or tagged, against the
+    // item's first bytes; this range may not start there. So the fast path
+    // only ever serves bytes fetched from upstream.
+    if (data.cached) {
+      return fallBack('cached', {});
     }
 
     const allowed = await handleDataRateLimitingAndPayment({
