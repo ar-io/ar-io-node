@@ -89,6 +89,9 @@ function headerCheckJson(result: HeaderCheckResult): JsonSerializable {
     ok: result.ok,
     wrong: result.wrong,
     errors: result.errors,
+    ...(result.malformedTags > 0
+      ? { malformedTags: result.malformedTags, malformed: result.malformed }
+      : {}),
   };
 }
 

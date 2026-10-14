@@ -41,6 +41,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - `docs/index-export.md` documents the overlay files a `csv` source reads
     (names, columns, header).
 
+### Fixed
+
+- **Band header check: an item with a malformed tag count is no longer a
+  wrong offset.** Some early bundlers wrote the tag bytes' length into the
+  header's tag count field too (an Arweave-signed item at height 789,458
+  says 264 for 9 tags). Its signature hashes to its id and its header ends
+  where its tag bytes say, so its location is right; the check called it
+  wrong and refused the whole band (`wrong_header`), a root-TX band or a
+  re-settle alike. Such an entry now passes and is counted separately
+  (`malformedTags` in the check's result, its strata, a re-settle's
+  report and `index-band-verify`'s output;
+  `index_export_gate_malformed_tags_total`). Every other wrong header is
+  still wrong, and a bundle scan still refuses such a header.
+
 ## [Release 85] - 2026-10-14
 
 This is a **recommended release** focused on **the Arweave base layer as a

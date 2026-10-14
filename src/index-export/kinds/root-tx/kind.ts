@@ -106,7 +106,12 @@ export interface ResettleReport {
     ok: number;
     wrong: number;
     errors: number;
-    byTag: Record<string, { checked: number; ok: number; wrong: number }>;
+    /** Entries that passed with a malformed tag count; only when some did. */
+    malformedTags?: number;
+    byTag: Record<
+      string,
+      { checked: number; ok: number; wrong: number; malformedTags?: number }
+    >;
   };
 }
 
@@ -388,6 +393,9 @@ export async function buildStepBand(
         ok: check.ok,
         wrong: check.wrong.length,
         errors: check.errors.length,
+        ...(check.malformedTags > 0
+          ? { malformedTags: check.malformedTags }
+          : {}),
         byTag: check.byTag,
       };
     }
@@ -395,6 +403,12 @@ export async function buildStepBand(
       { index: INDEX_NAME, kind: step.role },
       check.checked > 0 ? check.ok / check.checked : 0,
     );
+    if (check.malformedTags > 0) {
+      metrics.gateMalformedTags.inc(
+        { index: INDEX_NAME, kind: step.role },
+        check.malformedTags,
+      );
+    }
     for (const wrong of check.wrong) {
       metrics.gateWrong.inc({
         index: INDEX_NAME,
@@ -435,6 +449,12 @@ export async function buildStepBand(
       checked: check.checked,
       ok: check.ok,
       byTag: check.byTag,
+      ...(check.malformedTags > 0
+        ? {
+            malformedTags: check.malformedTags,
+            malformed: check.malformed.slice(0, 20),
+          }
+        : {}),
     });
     return publishIfHeld();
   };

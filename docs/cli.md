@@ -152,7 +152,11 @@ Runs the header check on a built or installed band:
 | `--read-timeout <ms>` | As for `index-band-build` (default 30000) |
 | `--sample-size <n>` | Entries to check (default 150) |
 
-It prints the result and exits 1 if the band fails.
+It prints the result and exits 1 if the band fails. An entry whose header
+has the right id and length but a tag count field that disagrees with its
+tag bytes (written so by some early bundlers) passes: the item is
+malformed, not its offsets wrong. Such entries are listed under
+`malformed`, and counted in `malformedTags`.
 
 ## `index-band-export`
 

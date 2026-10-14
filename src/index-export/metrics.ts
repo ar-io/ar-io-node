@@ -77,6 +77,13 @@ export const gateWrong = metric(
   ['index', 'kind', 'tag'],
 ) as promClient.Counter<'index' | 'kind' | 'tag'>;
 
+export const gateMalformedTags = metric(
+  'counter',
+  'index_export_gate_malformed_tags_total',
+  'Sampled headers that passed (right id, right length) though their tag count field disagrees with their tag bytes: malformed items, not wrong offsets.',
+  ['index', 'kind'],
+) as promClient.Counter<'index' | 'kind'>;
+
 export const gateHttp = metric(
   'counter',
   'index_export_gate_http_total',

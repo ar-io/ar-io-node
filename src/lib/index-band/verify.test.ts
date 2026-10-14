@@ -25,13 +25,135 @@ import {
   RootSourceFactory,
   sampleBandEntries,
 } from './verify.js';
-import { scanBundle, ScannedDataItem } from '../ans104-bundle-scan.js';
+import {
+  decodeDataItemHeader,
+  scanBundle,
+  ScannedDataItem,
+} from '../ans104-bundle-scan.js';
 import { fromB64Url } from '../encoding.js';
 import { BufferByteRangeSource } from '../../../test/buffer-byte-range-source.js';
+import {
+  malformedTagCountRoot,
+  MalformedTagCountRoot,
+} from '../../../test/malformed-tag-count-item.js';
 import { createTestLogger } from '../../../test/test-logger.js';
 
 const log = createTestLogger({ suite: 'checkBandHeaders' });
 const ROOT = 'VmFsaWRSb290VHhJZEZvclRoZUhlYWRlckNoZWNrMDE';
+
+describe('checkBandHeaders, an item with a malformed tag count', () => {
+  let fixture: MalformedTagCountRoot;
+  let openRoot: RootSourceFactory;
+
+  before(async () => {
+    fixture = await malformedTagCountRoot();
+    openRoot = () => new BufferByteRangeSource(fixture.root);
+  });
+
+  it('is the shape a bundler at 789,458 wrote', () => {
+    const { item } = fixture;
+    assert.equal(item.rootOffset, 160);
+    assert.equal(item.rootDataOffset - item.rootOffset, 1308);
+    const header = fixture.root.subarray(item.rootOffset, item.rootDataOffset);
+    assert.equal(header.readUInt16LE(0), 1);
+    assert.equal(header.readBigUInt64LE(1028), 264n);
+    assert.equal(header.readBigUInt64LE(1036), 264n);
+    // Read strictly, as a bundle scan reads it, it is refused.
+    assert.throws(
+      () => decodeDataItemHeader(header),
+      /Tag count 264 does not match 9 decoded tags/,
+    );
+    const lenient = decodeDataItemHeader(header, {
+      allowTagCountMismatch: true,
+    });
+    assert.ok(lenient.complete);
+    assert.equal(lenient.header.headerSize, 1308);
+    assert.equal(lenient.header.id, item.id);
+    assert.deepEqual(lenient.header.tagCountMismatch, {
+      declared: 264,
+      decoded: 9,
+    });
+  });
+
+  it('passes its location, counting it malformed, never wrong', async () => {
+    const { item, other } = fixture;
+    const result = await checkBandHeaders({
+      entries: [
+        {
+          id: item.id,
+          rootTxId: ROOT,
+          rootOffset: item.rootOffset,
+          rootDataOffset: item.rootDataOffset,
+          tag: 'normalised',
+        },
+        {
+          id: other.id,
+          rootTxId: ROOT,
+          rootOffset: other.rootOffset,
+          rootDataOffset: other.rootDataOffset,
+        },
+      ],
+      totalRecords: 2,
+      openRoot,
+      minRecords: 0,
+    });
+    assert.equal(result.passed, true, result.reasons.join('; '));
+    assert.equal(result.ok, 2);
+    assert.deepEqual(result.wrong, []);
+    assert.equal(result.malformedTags, 1);
+    assert.deepEqual(result.malformed, [
+      {
+        tag: 'normalised',
+        id: item.id,
+        reason: 'its tag count field says 264, its tag bytes hold 9 tags',
+      },
+    ]);
+    assert.deepEqual(result.byTag, {
+      normalised: { checked: 1, ok: 1, wrong: 0, malformedTags: 1 },
+      '': { checked: 1, ok: 1, wrong: 0 },
+    });
+  });
+
+  it('still calls it wrong under another id, or another length', async () => {
+    const { item } = fixture;
+    const result = await checkBandHeaders({
+      entries: [
+        {
+          id: fixture.other.id,
+          rootTxId: ROOT,
+          rootOffset: item.rootOffset,
+          rootDataOffset: item.rootDataOffset,
+        },
+        {
+          id: item.id,
+          rootTxId: ROOT,
+          rootOffset: item.rootOffset,
+          rootDataOffset: item.rootDataOffset + 1,
+        },
+        {
+          id: item.id,
+          rootTxId: ROOT,
+          rootOffset: item.rootOffset,
+          rootDataOffset: item.rootDataOffset - 1,
+        },
+      ],
+      totalRecords: 3,
+      openRoot,
+      minRecords: 0,
+    });
+    assert.equal(result.passed, false);
+    assert.equal(result.ok, 0);
+    assert.equal(result.malformedTags, 0);
+    assert.deepEqual(
+      result.wrong.map((w) => w.reason).sort(),
+      [
+        `header at rootOffset is item ${item.id}`,
+        'header is 1308 bytes, offsets give 1309',
+        'header runs past rootDataOffset (needs 1308 bytes, offsets give 1307)',
+      ].sort(),
+    );
+  });
+});
 
 describe('checkBandHeaders', () => {
   let items: ScannedDataItem[];

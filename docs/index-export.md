@@ -176,6 +176,14 @@ offsets were repaired and 200 the overlay changed. The check reads root
 transactions over the network, so point it at a gateway that holds them,
 not one that would have to fetch them.
 
+An entry passes when the bytes at its offset decode as a header of exactly
+the length its offsets give, ending where the header's tag bytes say, whose
+signature hashes to its id. A header whose tag count field disagrees with
+its tag bytes (some early bundlers wrote the byte length into both) is a
+malformed item at the right place: it passes, and is counted as
+`malformedTags` (`index_export_gate_malformed_tags_total`), never as
+wrong.
+
 | Outcome | What happens |
 |---|---|
 | Published | Renamed into place. The sidecar offers it at its next scan |
