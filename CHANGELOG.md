@@ -21,6 +21,52 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   bands, or `filter`, declare different selections. Opt-in, like
   `parquet-l1`. Nothing builds L2 bands yet. See *L2 bands* in
   [docs/index-publication.md](docs/index-publication.md).
+- **Root-TX bands on the L1 grid, with a settle lag
+  (`INDEX_EXPORT_ROOT_TX_LAYOUT=grid`)**: `index-export` cuts root-TX bands
+  at the same heights as `parquet-l1` bands, so every publisher's bands line
+  up whatever its start height, and subscribers stop downloading a
+  multi-GB recent band every week. A 5,000-height `d` band freezes once its
+  top is `INDEX_EXPORT_ROOT_TX_SETTLE_BLOCKS` (5,040, about 7 days) below the
+  stable top, from the sources and the tip's entries; twenty of them roll
+  into a 100,000-height `h` band; a `tip` above them is rebuilt daily,
+  superseding the previous one, and published only when it changed. The
+  default `legacy` layout is unchanged.
+  - Frozen bands are re-settled every
+    `INDEX_EXPORT_ROOT_TX_RESETTLE_INTERVAL_HOURS` (168; 0 for never, or
+    `--once --resettle` to force one): rebuilt from their own entries and
+    the sources, and replaced only when entries were added or relocated. A
+    re-settle never loses an entry and header-checks only what it changes:
+    every relocated entry (at most
+    `INDEX_EXPORT_ROOT_TX_RESETTLE_MAX_CHANGED`, 20,000, a band), each of
+    which must read and verify, and a sample of the added, so entries whose
+    roots are no longer seeded don't block it. Any wrong header leaves the
+    band as it is.
+    Each is reported with its counts and counted in
+    `index_export_resettles_total` and `index_export_resettle_entries`.
+  - Grid bands built by hand with `index-band-build` (`h-`, `d-` and
+    `tip-` ids) are taken as they are; a legacy layout's current `r` and
+    daily `d` move into the new bands and the first tip supersedes them.
+    Bands off the grid, or overlapping, stop the run before anything is
+    built (`grid_layout`). See "Grid layout" in `docs/index-export.md`.
+  - A `--once --dry-run` lists the plan in the report (`plan`).
+  - `tools/index-swarm-status` takes the tip as the daily band once there
+    is one.
+  - `docs/index-export.md` documents the overlay files a `csv` source reads
+    (names, columns, header).
+
+### Fixed
+
+- **Band header check: an item with a malformed tag count is no longer a
+  wrong offset.** Some early bundlers wrote the tag bytes' length into the
+  header's tag count field too (an Arweave-signed item at height 789,458
+  says 264 for 9 tags). Its signature hashes to its id and its header ends
+  where its tag bytes say, so its location is right; the check called it
+  wrong and refused the whole band (`wrong_header`), a root-TX band or a
+  re-settle alike. Such an entry now passes and is counted separately
+  (`malformedTags` in the check's result, its strata, a re-settle's
+  report and `index-band-verify`'s output;
+  `index_export_gate_malformed_tags_total`). Every other wrong header is
+  still wrong, and a bundle scan still refuses such a header.
 
 ## [Release 85] - 2026-10-14
 

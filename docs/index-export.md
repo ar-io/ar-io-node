@@ -39,6 +39,7 @@ flowchart LR
 - [Where records come from](#where-records-come-from)
 - [Checks before publishing](#checks-before-publishing)
 - [Running it](#running-it)
+- [Grid layout](#grid-layout)
 - [L1 bands](#l1-bands-2)
 - [Adopting existing bands](#adopting-existing-bands)
 - [Building a band by hand](#building-a-band-by-hand)
@@ -50,7 +51,10 @@ flowchart LR
 
 ### Root-TX bands
 
-Three roles, named `<role>-h<from>-<to|tip>-<publisher>-<digest>`:
+Two layouts, chosen by `INDEX_EXPORT_ROOT_TX_LAYOUT`: `legacy` (the
+default, below) and `grid` (the L1 grid with a settle lag, see
+[Grid layout](#grid-layout)). In the legacy layout there are three roles,
+named `<role>-h<from>-<to|tip>-<publisher>-<digest>`:
 
 | Role | Range | When |
 |---|---|---|
@@ -96,6 +100,16 @@ Several sources merge under one rule:
 - two sources that disagree on an item's offsets are left out, or fall back
   to the earlier entry, rather than signed.
 
+The overlay's precedence is its rank: a `csv` source is rank 1 (an overlay)
+unless it sets `"rank": 0`, and a rank-1 record beats every rank-0 record
+for its item (ClickHouse, SQLite, a peer's files) and every entry folded in
+from an earlier band, whatever the order the sources are listed in. The one
+exception is a rank-0 row above the overlay file's coverage, a re-bundle the
+overlay could not know of. Among rank-0 sources, order doesn't matter
+either: the later height wins, then an entry folded from an earlier band.
+So a bundler's validated offsets, as an overlay, win over ClickHouse when
+the two disagree.
+
 Where a peer indexer's database is not reachable, the peer can run
 `ar-io-node index-band-export` into coverage-named files that this service
 reads as a peer (`"rank": 0`). Offsets are placed only where proven: an item
@@ -108,6 +122,50 @@ cannot build L1 bands, and its runs say so (`incomplete`, not retried).
 Only transactions a block lists are written, with their own tags. A row a
 fork left in `core.db` is counted (`strayTransactions`) and never published.
 
+### Overlay files
+
+A `csv` source (`{"type":"csv","name":"bundler","path":"/overlay"}`) reads
+every file in its directory named `<from>-<to>.csv`, where `from` and `to`
+are block heights (`from` ≤ `to`, both included), for example
+`2010000-2014999.csv`:
+
+- **Coverage.** A file vouches for exactly its heights. Rows outside them
+  are left out (counted as `outside_coverage`), and files may not overlap:
+  a run reading two that do fails naming both.
+- **Writing.** Write a file under another name (`*.tmp`, `*.partial` or a
+  dot-file, which are ignored) and rename it into place; replace one the
+  same way.
+- **Plain text only.** A gzipped file (`*.csv.gz`) does not match the name
+  and is ignored.
+- **Columns**, comma-separated, unquoted, one row per line:
+
+  ```text
+  data_item_id,root_tx_id,path,root_data_item_offset,root_data_offset,data_item_size,height
+  ```
+
+  | Column | Value |
+  |---|---|
+  | `data_item_id`, `root_tx_id` | 43-character base64url ids; required |
+  | `path` | Empty: nested paths are not supported, and a row with one fails the read |
+  | `root_data_item_offset` | Where the item (its header) starts in the root transaction's data, in bytes |
+  | `root_data_offset` | Where the item's payload starts in the root transaction's data, in bytes |
+  | `data_item_size` | The whole item, header and payload, in bytes |
+  | `height` | The root transaction's block height; required in an overlay (a row without one is left out, `no_height`) |
+
+  The offsets and size are non-negative integers, or empty for a row with
+  its root only. Give both offsets or neither; the header between them
+  must be 1 byte to 1 MiB, or the build drops the row.
+- **Header line** optional: a file whose first line starts with
+  `data_item_id` (after a byte-order mark, if any) skips it.
+- A malformed row (an id that isn't 43 base64url characters, a number that
+  isn't a whole number, fewer than two columns) fails the source's read,
+  naming the file and line, and so the run unless the source is
+  `"optional": true`. Give each id once per file.
+
+`ar-io-node index-band-export --output <from>-<to>.csv` writes this format,
+with a header line. A peer's files (`"rank": 0`) take the same names and
+columns.
+
 ## Checks before publishing
 
 ### Root-TX bands
@@ -117,6 +175,14 @@ against `INDEX_EXPORT_HEADER_CHECK_URL`: 150 entries, plus up to 50 whose
 offsets were repaired and 200 the overlay changed. The check reads root
 transactions over the network, so point it at a gateway that holds them,
 not one that would have to fetch them.
+
+An entry passes when the bytes at its offset decode as a header of exactly
+the length its offsets give, ending where the header's tag bytes say, whose
+signature hashes to its id. A header whose tag count field disagrees with
+its tag bytes (some early bundlers wrote the byte length into both) is a
+malformed item at the right place: it passes, and is counted as
+`malformedTags` (`index_export_gate_malformed_tags_total`), never as
+wrong.
 
 | Outcome | What happens |
 |---|---|
@@ -166,6 +232,9 @@ docker compose --profile index-export run --rm -T index-export --once --dry-run 
 # data/indexes, so on the bands' filesystem).
 docker compose --profile index-export run --rm -T index-export \
   --once --to 2010000 --keep data/indexes/export/compare > compare.json
+# Grid layout: re-settle every frozen band now, due or not (add --dry-run
+# to see what it would change).
+docker compose --profile index-export run --rm -T index-export --once --resettle > resettle.json
 # The service. Its first run is about 5 minutes after it starts, then daily.
 docker compose --profile index-export up -d --no-deps index-export
 ```
@@ -197,6 +266,155 @@ counts as an operator's, so it retries a rejected fold.
   writes are root's. Removing one by hand takes `sudo`.
 - **Logs.** It logs by `LOG_LEVEL` and `LOG_FORMAT`, capped like the
   sidecar's by `INDEX_SWARM_LOG_MAX_SIZE` and `INDEX_SWARM_LOG_MAX_FILE`.
+
+## Grid layout
+
+`INDEX_EXPORT_ROOT_TX_LAYOUT=grid` cuts root-TX bands on the same fixed grid
+as [L1 bands](#l1-bands): 100,000-height ranges over 5,000-height
+sub-ranges, from height 0, so every publisher's bands start and end at the
+same heights whatever its start height. Unlike L1 rows, root-TX entries keep
+arriving after their block (late unbundling, retries, re-bundles), so a
+range is frozen only after a settle lag, and frozen bands are re-settled on
+an interval.
+
+| Role | Range | Built | Rebuilt |
+|---|---|---|---|
+| `h` | A whole 100,000-height range | Once its twenty `d` bands exist, from their entries alone (a roll), superseding them. A run that finds a whole range settled at once (a bootstrap, or catching up after an outage) builds it from the sources instead | Only by a re-settle |
+| `d` | A whole 5,000-height range | Once its top is `INDEX_EXPORT_ROOT_TX_SETTLE_BLOCKS` (5,040, about 7 days) below the stable top: the sources' rows for its heights, plus the tip's entries that belong there | Only by a re-settle |
+| `tip` | From above the frozen bands to the tip | Each daily run: the sources' rows above the frozen bands plus the previous tip's entries, superseding it. Published only when its content changed | Daily |
+
+A subscriber downloads the tip each day, a `d` about once a week, and an `h`
+about every 4½ months, rather than a multi-GB `r` every week.
+
+A run, in order:
+
+1. **Freeze** each range above the frozen top whose top is at or below the
+   freeze limit (the stable top less the settle lag), lowest first. One
+   that fails stops the freezes for the run; an empty range is skipped.
+2. **Roll** each 100,000-height range whose twenty `d` bands all exist.
+3. **The tip.** On a day bands freeze, the tip keeps its start and still
+   covers their heights, so no order of installing the new bands leaves a
+   subscriber a gap; it moves up over them the next run.
+4. **Re-settle** the frozen bands that are due, one at a time.
+
+**Where the tip's entries go.** Bands store no heights, so an entry of the
+tip is placed by its root's height, which the sources' rows give: every row
+under a root has its height. A freeze takes in the tip's entries whose root
+falls in its range. When the tip moves up, it leaves out an entry whose
+root is below its new start only when the frozen band of that height holds
+it. Anything else stays in the tip: an entry whose root no source gives any
+more (`unresolved`), or one the frozen band lacks because its root was
+indexed after the freeze (`carried`, until a re-settle of that band takes
+it in). No entry is dropped. `index_export_tip_unplaced_entries` counts
+both; each step's `seeds` in the report gives the numbers.
+
+### Re-settle
+
+Each frozen band is rebuilt from its own entries plus the sources' rows for
+its range `INDEX_EXPORT_ROOT_TX_RESETTLE_INTERVAL_HOURS` (168) after it was
+built or last re-settled, by the daily run after the tip, the band with the
+most entries first. `--once --resettle` re-settles every frozen band now,
+due or not, also with the interval at 0 (never automatically). A band's own
+entries are folded in at its top height, so a source's row never displaces
+one; only an overlay can relocate an entry. Rows the sources have dropped
+since (ClickHouse TTL) stay.
+
+| Outcome | When | What happens |
+|---|---|---|
+| Unchanged | The same content, or the same entries | Nothing published; the band keeps its id. Not due again for an interval |
+| Published | Entries were added or relocated, and the checks passed | The same range under a new id, superseding the old band |
+| Rejected | A wrong header; an entry would be lost; more relocated entries than `INDEX_EXPORT_ROOT_TX_RESETTLE_MAX_CHANGED` (20,000); an entry relocated to a root without offsets; conflicts over 1% | The old band stays. Not tried again for an interval, or until `--once --resettle` |
+| Couldn't check | A relocated entry could not be read, or under 80% of the checked entries passed | The old band stays, and the next run tries again |
+
+The safety rules:
+
+- **Nothing is lost.** The rebuilt band is compared with the published one,
+  entry by entry: an id the old band holds and the new one doesn't fails
+  the band.
+- **Only the delta is header-checked.** The entries the band already held
+  were checked when it was first published, and their roots may since be
+  unseeded, so they are not read again. The checked set is:
+  - every relocated entry (one whose root, offsets or size changed), each
+    one, stratum `resettle-changed`;
+  - a sample of 150 of the added entries, stratum `resettle-added`;
+  - the build's usual `repaired` and `overlay-changed` sample entries that
+    are themselves added or relocated.
+- **Every relocated entry must read and verify.** One that cannot be read
+  makes the band "couldn't check", whatever share of the rest passed.
+- **The 80% pass ratio applies to the checked set only**, and a read that
+  fails in transport counts against it, as for any band.
+- **Any wrong header fails the band.**
+- An entry added without offsets cannot be checked, as in any build; a
+  re-settle that adds only such entries publishes without a check.
+- With nothing added or relocated, the re-settle is a no-op (unchanged).
+- The usual conflict cap and merge rules apply. Freezes, rolls and the tip
+  are checked as any band: the general sample of 150 and the usual strata.
+
+The report gives each re-settle's `resettle`: the old and new entry
+counts, how many were added, changed and unchanged, and the header check's
+counts per stratum. A run that could not check a build skips the
+re-settles (listed in `plan` as `deferred`); the retry runs them.
+
+### Running the grid layout
+
+A `--once --dry-run` lists every step in `plan` (what it reads, folds,
+places and supersedes), builds and checks each it can, and publishes
+nothing. A roll that waits on `d` bands the dry run built but did not
+publish is listed with `awaits` and reported as `after_planned`. It writes
+only under `data/indexes/export/dry-run/`, removed when it ends, and takes
+no lock, so it can run beside the service and as often as needed. It needs
+the work directory on the publish directory's filesystem, as any run does.
+
+Metrics, besides the usual ones (`kind` is the role):
+
+| Metric | Read it as |
+|---|---|
+| `index_export_resettles_total{index,kind,result}` | Re-settles: `unchanged`, `rebuilt` or `failed` |
+| `index_export_resettle_entries{index,kind,change}` | The latest re-settle of a role: entries `added`, `changed` and `unchanged` |
+| `index_export_tip_unplaced_entries{index}` | Entries the tip keeps without a frozen band to hand them to. Steady near 0; a growing number means rows left the sources before their range froze |
+
+The daily band is the tip: alert on
+`index_export_last_success_timestamp_seconds{index="root-tx-index",kind="tip"}`
+rather than `kind="d"`, which succeeds about once a week.
+`tools/index-swarm-status` checks the tip once there is one.
+
+Overlay files are never pruned in this layout: a re-settle reads them.
+
+### Adopting bands into the grid layout
+
+**Grid bands built by hand** (`index-band-build --kind h|d|tip` with this
+gateway's wallet as `--publisher`, as turbo-gateway.com did from October
+2026): they are this publisher's own already, by their ids
+(`h-h<lo>-<lo+99999>-…`, `d-h<lo>-<lo+4999>-…`, `tip-h<lo>-tip-…`), and the
+service takes them as they are. Stop the script, then start the service.
+The first run rebuilds the tip from the same start, and publishes nothing
+if its content is the same. Bands of another wallet are adopted with
+`--adopt <id> --as h|d|tip` (`--top` for the tip).
+
+**A legacy layout** (`h`, `r`, `d`): switch the variable and run `--once`.
+`h` bands on the grid stay as they are, as does an `r` over a whole
+100,000-height range (a frozen one; a re-settle rebuilds it as an `h`). The
+current `r` and the daily `d` become seeds: their entries go into the new
+`d` bands at their roots' heights, and the first tip, which starts where
+the `r` did, supersedes both. Entries whose rows the sources no longer hold
+(older than ClickHouse's TTL) can't be placed, and stay in the tip.
+
+**Refused.** A band off the grid (a legacy `h` cut from an
+`INDEX_EXPORT_START_HEIGHT` that isn't a multiple of 100,000), a closed
+`tip`, or frozen bands that overlap stop the run before anything is built
+(`grid_layout`, shown as a rejection). Rebuild such a range on the grid
+with `index-band-build`, naming the old band in `--supersedes`, or move the
+band out of `published/`, then run `--once`.
+
+### Grid layout limits
+
+- An entry indexed after its range froze joins the band at the next
+  re-settle, up to a week later, not at once.
+- **Known limitation: an empty 5,000-height range never rolls.** A range
+  with no entries gets no `d` band, and a roll needs all twenty, so its
+  100,000-height range never becomes an `h`: its other `d` bands stay as
+  they are. This does not happen on mainnet above the earliest bundles.
+- `INDEX_EXPORT_RECENT_MAX_BLOCKS` and the weekly fold are not used.
 
 ## L1 bands
 
@@ -297,6 +515,9 @@ docker compose --profile index-export run --rm -T index-export \
   --adopt <band-id> --as h|r|d [--top <highest height it covers>]
 ```
 
+In the grid layout, `--as tip` too; see
+[Adopting bands into the grid layout](#adopting-bands-into-the-grid-layout).
+
 Adopt every band: the recent one as `r` (folded like the service's own;
 under `INDEX_EXPORT_RECENT_MAX_BLOCKS` in span), older ones as `h`, and a
 daily delta as `d`, so the service's first `d` supersedes it. `--top` is
@@ -361,7 +582,7 @@ there is a moment when the band is absent and subscribers retire it.
 ## Known limits
 
 - Rows indexed late at heights already frozen into a root-TX band
-  (backfills) are not exported.
+  (backfills) are not exported, except by a grid layout's re-settle.
 - An item under two roots at one height keeps whichever sorts first.
 - A whole L1 band is never rebuilt, so it waits (`incomplete`) while the
   index lacks a transaction a block lists, or an owner's key. A tip band
@@ -392,7 +613,8 @@ time() - index_export_last_success_timestamp_seconds{index="root-tx-index",kind=
 ```
 
 Add the same rule with `index="parquet-l1"` where L1 bands are built. It
-fires through a bootstrap, until the first tip band.
+fires through a bootstrap, until the first tip band. In the root-TX grid
+layout, the daily band is `kind="tip"`.
 
 `tools/index-swarm-status` also reports the export: the last daily band and
 fold, the last run, a pending retry, a recent rejection and a stale lock,

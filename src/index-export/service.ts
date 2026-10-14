@@ -7,9 +7,10 @@
 
 /**
  * The index-export service: a run builds the bands that are due (bootstrap,
- * the weekly fold, the daily delta) and publishes them for the index-swarm
- * sidecar; the loop runs one a day at a fixed UTC time, retries a run that
- * couldn't check, and ticks a heartbeat that `/healthz` reports.
+ * the weekly fold, the daily delta; or, in the grid layout, freezes, rolls,
+ * the tip and re-settles) and publishes them for the index-swarm sidecar;
+ * the loop runs one a day at a fixed UTC time, retries a run that couldn't
+ * check, and ticks a heartbeat that `/healthz` reports.
  *
  * Kind-agnostic but for the steps it runs, which root-TX supplies; a second
  * band kind brings its own planner and build step, and its own entry in the
@@ -21,7 +22,13 @@ import Sqlite from 'better-sqlite3';
 import { Logger } from 'winston';
 
 import type { RootSourceFactory } from '../lib/index-band/verify.js';
-import type { ExportConfig } from './config.js';
+import {
+  DEFAULT_RESETTLE_INTERVAL_HOURS,
+  DEFAULT_RESETTLE_MAX_CHANGED,
+  DEFAULT_SETTLE_BLOCKS,
+  ExportConfig,
+} from './config.js';
+import { frozenLookup, RootHeights } from './kinds/root-tx/grid.js';
 import {
   buildStepBand,
   INDEX_NAME,
@@ -39,6 +46,18 @@ import {
   planFold,
   PlanInput,
 } from './kinds/root-tx/planner.js';
+import {
+  classifyGridBands,
+  describeGridStep,
+  frozenTop,
+  GridLayoutError,
+  GridPlanEntry,
+  planFreezes,
+  planResettle,
+  planRolls,
+  planTip,
+  tipStart,
+} from './kinds/root-tx/planner-grid.js';
 import { l1RangeOf, PARQUET_L1_TABLE_RULES } from '../lib/parquet-l1/layout.js';
 import {
   deriveL1Bands,
@@ -63,9 +82,11 @@ import {
   Adoption,
   BandRole,
   deriveOwnBands,
+  GRID_ROLES,
   IndexState,
   indexState,
   loadState,
+  LEGACY_ROLES,
   OwnBand,
   ownBandRole,
   updateIndexState,
@@ -105,6 +126,8 @@ export interface RunOptions {
   toHeight?: number;
   /** An operator's run: retry a fold that was rejected. */
   force?: boolean;
+  /** Grid layout: re-settle every frozen band this run, due or not. */
+  resettle?: boolean;
 }
 
 export interface RunReport {
@@ -115,6 +138,8 @@ export interface RunReport {
   stableTop?: number;
   /** Set when the run couldn't start (a source, the disk, foreign bands). */
   failed?: { reason: string; message: string };
+  /** Grid layout: the root-TX steps planned, in order, built or not. */
+  plan?: GridPlanEntry[];
   steps: StepOutcome[];
   /** The `parquet-l1` bands built, in order. */
   l1Steps: L1Outcome[];
@@ -173,7 +198,8 @@ export function reportForOutput(report: RunReport): unknown {
 export function runResult(report: RunReport): string {
   if (report.locked !== undefined) return 'locked';
   if (report.failed !== undefined) {
-    return report.failed.reason === 'foreign_bands'
+    return report.failed.reason === 'foreign_bands' ||
+      report.failed.reason === 'grid_layout'
       ? 'rejected'
       : 'couldnt_check';
   }
@@ -307,6 +333,15 @@ export class ExportService {
     return path.join(this.deps.config.workDir, 'lock');
   }
 
+  private get grid(): boolean {
+    return this.deps.config.rootTxLayout === 'grid';
+  }
+
+  /** The roles this publisher's own bands can have in its layout. */
+  private get roles() {
+    return this.grid ? GRID_ROLES : LEGACY_ROLES;
+  }
+
   /** Whether the loop has ticked recently: what `/healthz` reports. */
   alive(): boolean {
     return this.now() - this.lastBeat < HEALTHY_WITHIN_MS;
@@ -336,6 +371,7 @@ export class ExportService {
         this.deps.config.publishDir,
         this.deps.config.publisher,
         state.adoptions,
+        this.roles,
       ),
     );
     if (this.deps.config.kinds.includes('parquet-l1')) {
@@ -492,6 +528,15 @@ export class ExportService {
         // `foldDue` can never drift apart.
         now: () => this.now(),
       };
+      if (this.grid) {
+        await this.runGrid(report, options, dryRun, memory, state, {
+          ...context,
+          resettleMaxChanged:
+            config.resettleMaxChanged ?? DEFAULT_RESETTLE_MAX_CHANGED,
+        });
+        if (options.keepDir !== undefined) report.keptIn = options.keepDir;
+        return memory;
+      }
       const plan = async (): Promise<PlanInput> => ({
         bands: await deriveOwnBands(
           config.publishDir,
@@ -619,6 +664,224 @@ export class ExportService {
   }
 
   /**
+   * The root-TX part of a run in the grid layout, in order: freeze the
+   * ranges that have settled (stopping at the first that fails, since the
+   * frozen top only moves up), roll each complete 100,000-height range of
+   * `d` bands into its `h`, rebuild the tip, then re-settle the frozen
+   * bands that are due, one at a time. Own bands that are off the grid or
+   * overlap stop the run before anything is built (`grid_layout`).
+   *
+   * A dry run plans and builds every step it can and publishes nothing: a
+   * roll waiting on `d` bands the dry run built is reported, not built; its
+   * staging goes, and with it the dry-run directory once empty.
+   */
+  private async runGrid(
+    ...args: Parameters<ExportService['runGridSteps']>
+  ): Promise<void> {
+    try {
+      await this.runGridSteps(...args);
+    } catch (error) {
+      if (error instanceof GridLayoutError) {
+        throw new RunFailure('grid_layout', error.message);
+      }
+      throw error;
+    }
+  }
+
+  private async runGridSteps(
+    report: RunReport,
+    options: RunOptions,
+    dryRun: boolean,
+    memory: RunMemory,
+    state: IndexState,
+    context: StepContext,
+  ): Promise<void> {
+    const { config, log } = this.deps;
+    const stableTop = report.stableTop as number;
+    const plan: GridPlanEntry[] = [];
+    report.plan = plan;
+    const live = async () =>
+      deriveOwnBands(
+        config.publishDir,
+        config.publisher,
+        state.adoptions,
+        GRID_ROLES,
+      );
+    const run = async (
+      step: BuildStep,
+      bands: OwnBand[],
+    ): Promise<StepOutcome> => {
+      // Only a tip names the bands its predecessors replaced, since every
+      // tip covers the top: a subscriber that missed one still keeps the
+      // one before. A frozen band replaces the bands of its own range or
+      // none, so another range's history must never ride along.
+      const named: BuildStep =
+        step.grid === 'tip'
+          ? {
+              ...step,
+              supersedes: [
+                ...new Set([
+                  ...(state.supersededHistory?.tip ?? []),
+                  ...step.supersedes,
+                ]),
+              ].slice(-HISTORY_KEPT * 2),
+            }
+          : step;
+      plan.push(describeGridStep(named));
+      await this.checkDisk(step, bands);
+      const outcome = await buildStepBand(named, context);
+      report.steps.push(outcome);
+      report.peakBytes += outcome.peakBytes ?? 0;
+      if (outcome.result === 'published' && step.grid === 'tip') {
+        memory.superseded.push({ role: 'tip', ids: step.supersedes });
+      }
+      // A band left in place waits an interval before the next try; one
+      // that couldn't check is tried again with the next run.
+      if (
+        step.grid === 'resettle' &&
+        step.fold !== undefined &&
+        (outcome.result === 'unchanged' || outcome.result === 'rejected')
+      ) {
+        memory.resettled = { ...memory.resettled, [step.fold.id]: report.at };
+      }
+      log.info('Band step finished', {
+        grid: step.grid,
+        kind: outcome.role,
+        heightRange: outcome.heightRange,
+        result: outcome.result,
+        reason: outcome.reason,
+        id: outcome.band?.id,
+        records: outcome.band?.records,
+        inputs: outcome.inputs,
+        seeds: outcome.seeds,
+        resettle: outcome.resettle,
+        seconds: outcome.seconds,
+        peakBytes: outcome.peakBytes,
+        details: outcome.details,
+      });
+      return outcome;
+    };
+
+    const atStart = await live();
+    const start = classifyGridBands(atStart);
+    // Only a bootstrap cuts bands that could overlap a stranger's.
+    if (start.frozen.length === 0)
+      await this.refuseForeignBands(state.adoptions);
+    if (start.seeds.length > 0) {
+      context.rootHeights = await RootHeights.of(start.seeds);
+    }
+
+    // 1. Freeze, in height order. A dry run publishes nothing, so what it
+    // built counts as frozen for the steps that follow.
+    const built: Array<[number, number]> = [];
+    for (const step of planFreezes({
+      bands: atStart,
+      stableTop,
+      settleBlocks: config.settleBlocks ?? DEFAULT_SETTLE_BLOCKS,
+      ...(config.startHeight !== undefined
+        ? { startHeight: config.startHeight }
+        : {}),
+    })) {
+      const outcome = await run(step, atStart);
+      if (
+        dryRun &&
+        (outcome.result === 'dry_run' || outcome.result === 'published')
+      ) {
+        built.push(step.heightRange as [number, number]);
+      }
+      // An empty range is skipped; anything else that failed stops the
+      // freezes, since the frozen top only moves up.
+      if (!ok(outcome)) break;
+    }
+
+    // 2. Roll complete 100,000-height ranges.
+    let bands = await live();
+    for (const { step, awaits } of planRolls(bands, built)) {
+      if (awaits.length > 0) {
+        plan.push(describeGridStep(step, { awaits }));
+        report.steps.push({
+          role: step.role,
+          heightRange: step.heightRange,
+          grid: 'roll',
+          result: 'dry_run',
+          reason: 'after_planned',
+          details: [
+            `waits for ${awaits.length} d bands this dry run built but did not publish`,
+          ],
+          inputs: {},
+          seconds: 0,
+        });
+        continue;
+      }
+      await run(step, bands);
+    }
+
+    // 3. The tip.
+    bands = await live();
+    const now = classifyGridBands(bands);
+    const frozenNow = [
+      frozenTop(now.frozen),
+      ...built.map(([, to]) => to),
+    ].filter((top): top is number => top !== undefined);
+    const tip = planTip({
+      bands,
+      stableTop,
+      from: tipStart(
+        frozenTop(start.frozen),
+        frozenNow.length > 0 ? Math.max(...frozenNow) : undefined,
+        config.startHeight,
+      ),
+    });
+    if (tip !== undefined) {
+      const lookup = frozenLookup(now.frozen, log);
+      context.frozenHolds = lookup.holds;
+      try {
+        await run(tip, bands);
+      } finally {
+        delete context.frozenHolds;
+        await lookup.close();
+      }
+    }
+
+    // 4. Re-settle, when due or forced.
+    const intervalMs =
+      config.resettleIntervalMs ?? DEFAULT_RESETTLE_INTERVAL_HOURS * 3600_000;
+    if (options.resettle === true || intervalMs > 0) {
+      bands = await live();
+      const steps = planResettle(bands, {
+        now: this.now(),
+        intervalMs,
+        force: options.resettle === true,
+        settledAt: state.resettledAt ?? {},
+      });
+      // A gateway or source that failed a build this run would fail each
+      // re-settle too, after rebuilding it: wait for the retry.
+      const blocked = report.steps.some((s) => s.result === 'couldnt_check');
+      for (const step of steps) {
+        if (blocked) {
+          plan.push(
+            describeGridStep(step, {
+              deferred: 'a build this run could not check',
+            }),
+          );
+          continue;
+        }
+        await run(step, bands);
+      }
+    }
+
+    bands = await live();
+    memory.liveIds = bands.map((band) => band.id);
+    this.recordBands(bands);
+    if (dryRun && options.keepDir === undefined) {
+      // Only when empty: a dry run beside this one may be staging there.
+      await fs
+        .rmdir(path.join(config.workDir, 'dry-run'))
+        .catch(() => undefined);
+    }
+  }
+
+  /**
    * Whether the weekly fold is due: a week after the last, by the state or
    * by the current r's own creation (a crash after a fold published left the
    * state behind). A rejected fold waits for an operator's run.
@@ -671,7 +934,7 @@ export class ExportService {
     for (const name of names) {
       if (
         name.startsWith('.') ||
-        ownBandRole(name, publisher, adoptions) !== undefined
+        ownBandRole(name, publisher, adoptions, this.roles) !== undefined
       ) {
         continue;
       }
@@ -688,7 +951,7 @@ export class ExportService {
     if (foreign.length > 0) {
       throw new RunFailure(
         'foreign_bands',
-        `${publishDir} holds bands this service didn't build (${foreign.slice(0, 5).join(', ')}${foreign.length > 5 ? ', …' : ''}); adopt them first (--adopt <id> --as h|r|d), or move them away, rather than bootstrap over them`,
+        `${publishDir} holds bands this service didn't build (${foreign.slice(0, 5).join(', ')}${foreign.length > 5 ? ', …' : ''}); adopt them first (--adopt <id> --as ${this.roles.join('|')}), or move them away, rather than bootstrap over them`,
       );
     }
   }
@@ -1109,9 +1372,10 @@ export class ExportService {
    * Refuses a step when the scratch and publish directories are on
    * different filesystems (a band is renamed into place), or when free
    * space doesn't cover it: a fold keeps the old band through the grace
-   * beside the scratch and the new band, about three times the band, and
-   * nothing may come within the margin (5% of the filesystem, at least
-   * 10 GiB), which other services on it need.
+   * beside the scratch and the new band, about three times the band (the
+   * bands folded together, for a grid roll, tip or freeze), and nothing may
+   * come within the margin (5% of the filesystem, at least 10 GiB), which
+   * other services on it need.
    */
   private async checkDisk(step: BuildStep, bands: OwnBand[]): Promise<void> {
     const { workDir, publishDir } = this.deps.config;
@@ -1122,8 +1386,17 @@ export class ExportService {
       (max, band) => Math.max(max, bandBytes(band)),
       0,
     );
+    const folded = [
+      ...(step.fold !== undefined ? [step.fold] : []),
+      ...(step.folds ?? []),
+      ...(step.seeds ?? []),
+    ];
     const need =
-      margin + 3 * (step.fold !== undefined ? bandBytes(step.fold) : largest);
+      margin +
+      3 *
+        (folded.length > 0
+          ? folded.reduce((sum, band) => sum + bandBytes(band), 0)
+          : largest);
     if (free < need) {
       throw new RunFailure(
         'disk',
@@ -1226,7 +1499,23 @@ export class ExportService {
     for (const role of memory.chainEnded ?? []) {
       state.supersededHistory = { ...state.supersededHistory, [role]: [] };
     }
-    if (report.failed?.reason === 'foreign_bands') {
+    if (memory.liveIds !== undefined) {
+      // Kept for live bands only: a rebuilt band has a new id.
+      const live = new Set(memory.liveIds);
+      const settled = Object.entries({
+        ...state.resettledAt,
+        ...memory.resettled,
+      }).filter(([id]) => live.has(id));
+      if (settled.length > 0) {
+        state.resettledAt = Object.fromEntries(settled);
+      } else {
+        delete state.resettledAt;
+      }
+    }
+    if (
+      report.failed?.reason === 'foreign_bands' ||
+      report.failed?.reason === 'grid_layout'
+    ) {
       // A refusal needs an operator: show it as a rejection.
       state.lastRejection = {
         at,
@@ -1360,6 +1649,10 @@ interface RunMemory {
   superseded: Array<{ role: BandRole; ids: string[] }>;
   /** Roles whose supersede history ends: a frozen r. */
   chainEnded?: BandRole[];
+  /** Grid layout: bands re-settled and left in place (unchanged or rejected), by id. */
+  resettled?: Record<string, string>;
+  /** Grid layout: this publisher's live band ids after the run. */
+  liveIds?: string[];
 }
 
 /** A run that couldn't start, with the reason counted in metrics. */

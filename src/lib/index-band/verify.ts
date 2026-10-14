@@ -61,10 +61,21 @@ export interface HeaderCheckResult {
   /** Entries that couldn't be checked (read failed, unknown signature type). */
   errors: Array<{ id: string; error: string; tag?: string }>;
   /**
-   * The counts per sample tag (`''` for the general sample), so a check
-   * over stratified samples can say which stratum failed.
+   * Entries that passed (counted in `ok`) though their header's tag count
+   * field disagrees with the tags its tag bytes hold: the item is
+   * malformed, its location right.
    */
-  byTag: Record<string, { checked: number; ok: number; wrong: number }>;
+  malformedTags: number;
+  malformed: Array<{ id: string; reason: string; tag?: string }>;
+  /**
+   * The counts per sample tag (`''` for the general sample), so a check
+   * over stratified samples can say which stratum failed. `malformedTags`
+   * is there only where some were.
+   */
+  byTag: Record<
+    string,
+    { checked: number; ok: number; wrong: number; malformedTags?: number }
+  >;
 }
 
 /**
@@ -78,6 +89,12 @@ export interface HeaderCheckResult {
  * unknown signature type included), the header has another length or ID, or
  * the range runs past the root (416). Only a transport failure (a timeout, a
  * 5xx, a root the gateway can't find) leaves an entry unchecked.
+ *
+ * The header's end is where its tag bytes' length field says. A tag count
+ * field that disagrees with the tags those bytes hold (an early bundler
+ * wrote the byte length into both, at height 789,458 for one) makes the item
+ * malformed, not the offsets wrong: such an entry passes, and is counted in
+ * `malformedTags`.
  *
  * The band passes when no entry is wrong, at least `minOkRatio` of the
  * checked entries pass (an unchecked entry counts against it), and the band
@@ -99,6 +116,7 @@ export async function checkBandHeaders({
 }: HeaderCheckOptions): Promise<HeaderCheckResult> {
   const wrong: HeaderCheckResult['wrong'] = [];
   const errors: HeaderCheckResult['errors'] = [];
+  const malformed: HeaderCheckResult['malformed'] = [];
   let ok = 0;
   const byTag: HeaderCheckResult['byTag'] = {};
   const stratum = (entry: BandSampleEntry) =>
@@ -159,7 +177,9 @@ export async function checkBandHeaders({
 
         let decoded: ReturnType<typeof decodeDataItemHeader>;
         try {
-          decoded = decodeDataItemHeader(bytes);
+          decoded = decodeDataItemHeader(bytes, {
+            allowTagCountMismatch: true,
+          });
         } catch (error) {
           // Bytes that don't decode as a header, an unknown signature type
           // included, are the commonest sign of a wrong offset: the first two
@@ -199,6 +219,16 @@ export async function checkBandHeaders({
         } else {
           ok += 1;
           stratum(entry).ok += 1;
+          const mismatch = decoded.header.tagCountMismatch;
+          if (mismatch !== undefined) {
+            const counts = stratum(entry);
+            counts.malformedTags = (counts.malformedTags ?? 0) + 1;
+            malformed.push({
+              ...tagOf(entry),
+              id: entry.id,
+              reason: `its tag count field says ${mismatch.declared}, its tag bytes hold ${mismatch.decoded} tags`,
+            });
+          }
         }
       }),
     ),
@@ -236,6 +266,8 @@ export async function checkBandHeaders({
     ok,
     wrong,
     errors,
+    malformedTags: malformed.length,
+    malformed,
     byTag,
   };
 }

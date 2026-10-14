@@ -27,13 +27,16 @@ export const OVERLAP_BLOCKS = 512;
 /** How often the recent band is folded. */
 export const FOLD_INTERVAL_MS = 7 * 24 * 3600 * 1000;
 
+/** What a grid layout step does (see `planner-grid.ts`). */
+export type GridStepKind = 'freeze' | 'roll' | 'tip' | 'resettle';
+
 /** One band to build. */
 export interface BuildStep {
   role: BandRole;
   /** The band's declared range; `to` null for a delta. */
   heightRange: [number, number | null];
-  /** Heights to read from the sources. */
-  read: [number, number];
+  /** Heights to read from the sources; none for a grid roll. */
+  read?: [number, number];
   /** A band whose entries are folded in, at its top height. */
   fold?: OwnBand;
   supersedes: string[];
@@ -41,6 +44,21 @@ export interface BuildStep {
   replaces?: OwnBand;
   /** A recent band that reaches the maximum span: frozen once published. */
   freezes?: boolean;
+  /** Grid layout only: what the step does. */
+  grid?: GridStepKind;
+  /** Grid roll: bands whose entries are folded in whole, each at its top. */
+  folds?: OwnBand[];
+  /**
+   * Grid freeze and tip: bands (tips, and a legacy layout's recent and
+   * delta bands) whose entries join this band where their root's height
+   * falls in its range; see `placeSeedEntries` in `kind.ts`.
+   */
+  seeds?: OwnBand[];
+  /**
+   * Grid tip: rows below this height are read only to place the seeds'
+   * entries, not built in.
+   */
+  keepFrom?: number;
 }
 
 export interface PlanInput {

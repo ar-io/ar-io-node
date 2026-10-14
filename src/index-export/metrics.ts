@@ -77,6 +77,13 @@ export const gateWrong = metric(
   ['index', 'kind', 'tag'],
 ) as promClient.Counter<'index' | 'kind' | 'tag'>;
 
+export const gateMalformedTags = metric(
+  'counter',
+  'index_export_gate_malformed_tags_total',
+  'Sampled headers that passed (right id, right length) though their tag count field disagrees with their tag bytes: malformed items, not wrong offsets.',
+  ['index', 'kind'],
+) as promClient.Counter<'index' | 'kind'>;
+
 export const gateHttp = metric(
   'counter',
   'index_export_gate_http_total',
@@ -104,6 +111,27 @@ export const overlayAge = metric(
   'Seconds since the newest file in an overlay was written.',
   ['index', 'source'],
 ) as promClient.Gauge<'index' | 'source'>;
+
+export const resettles = metric(
+  'counter',
+  'index_export_resettles_total',
+  'Grid layout: frozen bands re-settled, by role and result: unchanged (nothing published), rebuilt (a new band supersedes it) or failed (rejected, or could not check; the band stays).',
+  ['index', 'kind', 'result'],
+) as promClient.Counter<'index' | 'kind' | 'result'>;
+
+export const resettleEntries = metric(
+  'gauge',
+  'index_export_resettle_entries',
+  'Grid layout: entries the latest re-settle of a role added, changed (relocated, each header-checked) or left unchanged.',
+  ['index', 'kind', 'change'],
+) as promClient.Gauge<'index' | 'kind' | 'change'>;
+
+export const tipUnplaced = metric(
+  'gauge',
+  'index_export_tip_unplaced_entries',
+  'Grid layout: entries the latest tip kept from the previous one without a frozen band to hand them to: their root no source gave, or the frozen band of their height lacks them. A re-settle of that band takes the latter in.',
+  ['index'],
+) as promClient.Gauge<'index'>;
 
 export const heartbeat = metric(
   'gauge',
