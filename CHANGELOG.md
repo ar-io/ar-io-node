@@ -390,10 +390,10 @@ with core**).
   appended the charset to every JSON, JavaScript and text type, so a client
   that compares the type exactly, such as Zora's metadata check, rejected
   JSON from every ar.io gateway. A JSON type is now sent exactly as it was
-  uploaded, as arweave.net sends it; RFC 8259 defines no charset for JSON,
-  and `fetch`, XHR and JSON modules read it as UTF-8 in Chromium, Firefox
-  and WebKit. One visible difference: Safari shows non-ASCII text in a JSON
-  document opened directly in a tab as mojibake, as it does on arweave.net.
+  uploaded; RFC 8259 defines no charset for JSON, and `fetch`, XHR and JSON
+  modules read it as UTF-8 in Chromium, Firefox and WebKit. Until a Safari
+  release carries WebKit's 2026-09-07 fix for JSON display, non-ASCII JSON
+  opened directly in a Safari tab can show as mojibake.
   Text and JavaScript types keep the charset, since without it browsers
   decode UTF-8 text documents as windows-1252. Edge caches keep the old
   header on responses they already hold until those expire or are purged.

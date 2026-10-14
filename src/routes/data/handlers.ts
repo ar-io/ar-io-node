@@ -75,12 +75,14 @@ const JSON_CONTENT_TYPE_REGEX = /^application\/json/i;
  * defines no `charset` for `application/json`, and JSON is always UTF-8.
  * It does break clients that compare the type exactly, among them Zora's
  * metadata check, which accepts only `application/json` or `text/plain`.
- * So a JSON type is sent verbatim, as arweave.net sends it.
+ * So a JSON type is sent verbatim.
  *
- * The cost, measured with Playwright 1.47: `fetch`, XHR and JSON modules
- * decode it as UTF-8 in Chromium, Firefox and WebKit, but WebKit (Safari)
- * decodes a JSON document opened directly in a tab as windows-1252, so
- * non-ASCII text there shows as mojibake, as it does on arweave.net.
+ * Measured with Playwright 1.47: `fetch`, XHR and JSON modules decode it
+ * as UTF-8 in Chromium, Firefox and WebKit, and Chromium and Firefox also
+ * display it as UTF-8 when it is opened in a tab. That WebKit displayed it
+ * as windows-1252, a bug WebKit fixed on 2026-09-07 (70cd4be688, "JSON
+ * displayed with wrong encoding"); until a Safari release carries the fix,
+ * non-ASCII JSON opened directly in a Safari tab can show as mojibake.
  *
  * Every other type still goes through `res.contentType`. Text and
  * JavaScript keep the parameter, because without it all three browsers
