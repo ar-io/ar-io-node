@@ -52,6 +52,11 @@ export const DEFAULT_RESETTLE_INTERVAL_HOURS = 168;
 export const DEFAULT_RESETTLE_MAX_CHANGED = 20_000;
 /** `parquet-l2`: the most gateway reads (proofs, keys) one band may make. */
 export const DEFAULT_L2_MAX_READS = 200_000;
+/** `parquet-l2`: the build's DuckDB, and the items a source window holds. */
+export const DEFAULT_L2_DUCKDB_MEMORY = '2GB';
+export const DEFAULT_L2_DUCKDB_THREADS = 2;
+export const DEFAULT_L2_DUCKDB_SPILL_MAX_GB = 256;
+export const DEFAULT_L2_WINDOW_ITEMS = 50_000;
 
 export interface ExportConfig {
   /** The indexes to build. */
@@ -119,6 +124,10 @@ export interface ExportConfig {
   l2MaxReads?: number;
   /** `parquet-l2`: how long a run may keep starting frozen bands. */
   l2RunBudgetMs?: number;
+  /** `parquet-l2`: the build's DuckDB: memory, threads, spill (GB). */
+  l2Duck?: { memoryLimit: string; threads: number; spillMaxGb: number };
+  /** `parquet-l2`: the most items one source window holds before it is split. */
+  l2WindowItems?: number;
 }
 
 type Env = Record<string, string | undefined>;
@@ -155,6 +164,15 @@ function rootTxLayout(env: Env): RootTxLayout {
     );
   }
   return raw as RootTxLayout;
+}
+
+/** A DuckDB memory size: `2GB`, `512MB`, `1.5GiB`. */
+function memorySize(env: Env, name: string, fallback: string): string {
+  const raw = value(env, name) ?? fallback;
+  if (!/^\d+(\.\d+)?\s*(KB|MB|GB|TB|KiB|MiB|GiB|TiB)$/i.test(raw)) {
+    throw new Error(`${name} must be a size such as 2GB or 512MB: ${raw}`);
+  }
+  return raw;
 }
 
 /** `HH:MM` as minutes after midnight. */
@@ -313,6 +331,26 @@ export function parseExportConfig(env: Env, dataDir = DATA_DIR): ExportConfig {
           ...(l2RunBudgetMinutes !== undefined
             ? { l2RunBudgetMs: l2RunBudgetMinutes * 60_000 }
             : {}),
+          l2Duck: {
+            memoryLimit: memorySize(
+              env,
+              'INDEX_EXPORT_L2_DUCKDB_MEMORY',
+              DEFAULT_L2_DUCKDB_MEMORY,
+            ),
+            threads: integer(env, 'INDEX_EXPORT_L2_DUCKDB_THREADS', {
+              min: 1,
+              max: 64,
+              fallback: DEFAULT_L2_DUCKDB_THREADS,
+            }) as number,
+            spillMaxGb: integer(env, 'INDEX_EXPORT_L2_DUCKDB_SPILL_MAX_GB', {
+              min: 1,
+              fallback: DEFAULT_L2_DUCKDB_SPILL_MAX_GB,
+            }) as number,
+          },
+          l2WindowItems: integer(env, 'INDEX_EXPORT_L2_WINDOW_ITEMS', {
+            min: 1000,
+            fallback: DEFAULT_L2_WINDOW_ITEMS,
+          }) as number,
         }
       : {}),
   };

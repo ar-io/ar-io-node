@@ -210,6 +210,11 @@ async function main(): Promise<void> {
             openL2Source(
               config.l2Source as NonNullable<typeof config.l2Source>,
               config.sourceEnv,
+              {
+                ...(config.l2WindowItems !== undefined
+                  ? { windowItems: config.l2WindowItems }
+                  : {}),
+              },
             ),
         }
       : {}),

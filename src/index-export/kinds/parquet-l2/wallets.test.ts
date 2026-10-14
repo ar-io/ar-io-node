@@ -14,8 +14,16 @@ import Sqlite from 'better-sqlite3';
 
 import { ByteRangeSource } from '../../../lib/byte-range-source.js';
 import { toB64Url } from '../../../lib/encoding.js';
+import type { Database } from 'duckdb-async';
+import { DEFAULT_L2_DUCK_LIMITS, withL2Duck } from './export.js';
 import { GatewayReads, ReadUnavailableError } from './gateway-reads.js';
-import { KEY_CANDIDATES, openWalletsDb, OwnerKeys } from './wallets.js';
+import {
+  KEY_CANDIDATES,
+  openWalletsDb,
+  OWNER_NOTE_COLUMNS,
+  OwnerNotes,
+  resolveOwnerKeys,
+} from './wallets.js';
 
 const sha256 = (bytes: Buffer) =>
   crypto.createHash('sha256').update(bytes).digest();
@@ -50,32 +58,80 @@ function gateway(fail = false) {
 
 const at = (n: number) => ({ rootTxId: ROOT, offset: 1000 * n, size: 512 });
 
-describe('OwnerKeys', () => {
+/** Notes of several windows in a database, as a build gathers them. */
+async function withNotes<T>(
+  windows: OwnerNotes[],
+  run: (duck: Database) => Promise<T>,
+): Promise<T> {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'parquet-l2-owners-'));
+  try {
+    return await withL2Duck(dir, DEFAULT_L2_DUCK_LIMITS, async (duck) => {
+      await duck.exec(
+        `CREATE TABLE notes (${OWNER_NOTE_COLUMNS.map((c) => `"${c.name}" ${c.type}`).join(', ')})`,
+      );
+      for (const notes of windows) {
+        for (const row of notes.rows()) {
+          const [address, k, root, offset, size] = row as [
+            Buffer,
+            Buffer | null,
+            Buffer | null,
+            number | null,
+            number | null,
+          ];
+          const blob = (b: Buffer | null) =>
+            b === null ? 'NULL' : `unhex('${b.toString('hex')}')`;
+          await duck.exec(
+            `INSERT INTO notes VALUES (${blob(address)}, ${blob(k)}, ${blob(root)}, ${offset ?? 'NULL'}, ${size ?? 'NULL'})`,
+          );
+        }
+      }
+      return run(duck);
+    });
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+}
+
+describe('OwnerNotes and resolveOwnerKeys', () => {
   it("keeps the first key whose hash is the owner's address: the source's, then bundles.db's, then the root's", async () => {
     const db = new Map<string, Buffer>([
       [sha256(key(2)).toString('hex'), key(2)],
       // Under owner 3's address, a key that isn't owner 3's.
       [sha256(key(3)).toString('hex'), key(8)],
     ]);
-    const owners = new OwnerKeys({
-      get: (address) => db.get(address.toString('hex')),
-    });
-    owners.note(sha256(key(1)), key(1), at(1));
-    // A wrong key from the source, then bundles.db's right one.
-    owners.note(sha256(key(2)), key(7));
+    const first = new OwnerNotes();
+    first.note(sha256(key(1)), key(1), at(1));
+    // A wrong key from the source; bundles.db holds the right one.
+    first.note(sha256(key(2)), key(7));
     // bundles.db is wrong, the root right (at its second place).
-    owners.note(sha256(key(3)), undefined, at(5));
-    owners.note(sha256(key(3)), undefined, at(3));
+    first.note(sha256(key(3)), undefined, at(5));
     // Every place reads as something else: no key.
-    owners.note(sha256(key(4)), undefined, at(6));
+    first.note(sha256(key(4)), undefined, at(6));
     // No place to read it from at all.
-    owners.note(sha256(key(5)));
+    first.note(sha256(key(5)));
+    const second = new OwnerNotes();
+    // Another window: owner 3's second place; owner 1 without its key.
+    second.note(sha256(key(3)), undefined, at(3));
+    second.note(sha256(key(1)), undefined, at(9));
+    assert.equal(first.rejectedKeys, 1);
     const { gateway: reads, reads: count } = gateway();
-    const { keys, stats } = await owners.resolve(reads);
+    const keys = new Map<string, Buffer>();
+    const stats = await withNotes([first, second], (duck) =>
+      resolveOwnerKeys(duck, 'notes', {
+        walletsDb: {
+          get: (address: Buffer) => db.get(address.toString('hex')),
+        },
+        reads,
+        write: async (rows) => {
+          for (const [address, k] of rows as Array<[Buffer, Buffer]>) {
+            keys.set(address.toString('hex'), k);
+          }
+        },
+        batch: 1,
+      }),
+    );
     assert.deepEqual(
-      [...keys.entries()]
-        .map(([k, v]) => [Buffer.from(k, 'latin1').toString('hex'), v[0]])
-        .sort(),
+      [...keys.entries()].map(([k, v]) => [k, v[0]]).sort(),
       [
         [sha256(key(1)).toString('hex'), 1],
         [sha256(key(2)).toString('hex'), 2],
@@ -94,27 +150,36 @@ describe('OwnerKeys', () => {
           toB64Url(sha256(key(4))),
           toB64Url(sha256(key(5))),
         ].sort(),
-        rejectedKeys: 2,
       },
     );
-    // Owner 1 needed no read; owner 3 two; owner 4 one.
-    assert.equal(count(), 3);
+    // Owner 1 needed no read; owner 3 one (its places are tried in order of
+    // root and offset, so the other window's comes first); owner 4 one.
+    assert.equal(count(), 2);
   });
 
   it(`keeps at most ${KEY_CANDIDATES} places to read a key from`, async () => {
-    const owners = new OwnerKeys();
-    for (let n = 1; n <= 9; n++) owners.note(sha256(key(9)), undefined, at(n));
+    const notes = [new OwnerNotes(), new OwnerNotes()];
+    for (let n = 1; n <= 9; n++) {
+      notes[n % 2].note(sha256(key(9)), undefined, at(n));
+    }
     const { gateway: reads, reads: count } = gateway();
-    const { stats } = await owners.resolve(reads);
+    const stats = await withNotes(notes, (duck) =>
+      resolveOwnerKeys(duck, 'notes', { reads, write: async () => undefined }),
+    );
     assert.equal(stats.withoutKey, 1);
     assert.equal(count(), KEY_CANDIDATES);
   });
 
   it('stops when the gateway cannot serve a read, rather than leave the key out', async () => {
-    const owners = new OwnerKeys();
-    owners.note(sha256(key(1)), undefined, at(1));
+    const notes = new OwnerNotes();
+    notes.note(sha256(key(1)), undefined, at(1));
     await assert.rejects(
-      owners.resolve(gateway(true).gateway),
+      withNotes([notes], (duck) =>
+        resolveOwnerKeys(duck, 'notes', {
+          reads: gateway(true).gateway,
+          write: async () => undefined,
+        }),
+      ),
       ReadUnavailableError,
     );
   });

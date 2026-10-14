@@ -1522,6 +1522,7 @@ export class ExportService {
             ? { headerCheck: this.deps.headerCheck }
             : {}),
           now: () => this.now(),
+          ...(config.l2Duck !== undefined ? { limits: config.l2Duck } : {}),
         };
         const run = async (step: L2Step, bands: L2LiveBand[]) => {
           entry.plan.push(describeL2Step(step));
@@ -1693,9 +1694,9 @@ export class ExportService {
   }
 
   /**
-   * Room for one L2 band: four times this index's largest band (scratch,
-   * DuckDB's spill, the band, the band it replaces), at least 2 GiB, beyond
-   * the same margin as other bands. With `publishDir`, the scratch must be
+   * Room for one L2 band: four times this index's largest band (the build's
+   * database, about one and a half bands, the band, the band it replaces),
+   * at least 2 GiB, beyond the same margin as other bands. With `publishDir`, the scratch must be
    * on its filesystem, since a band is renamed into place.
    */
   private async checkL2Disk(

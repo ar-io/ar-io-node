@@ -344,22 +344,43 @@ describe('exportL2Band', () => {
   });
 
   it("takes a row's height and position from its root's L1 row, never its own", async () => {
-    // Filed under another height of the band: the root's, from L1, wins.
+    // Filed under a lower height of the band, in an earlier window: the
+    // root's, from L1, wins, and the row waits for its window.
     const source = new MemoryL2Source([
-      sourceRow(r2, 'c1', { height: 103_000 }),
+      sourceRow(r2, 'c1', { height: 100_100 }),
+      sourceRow(r1, 'a1'),
     ]);
-    source.windowBlocks = 1000;
+    source.windowBlocks = 250;
     const result = await exportBand(source);
     try {
-      const [row] = await tableRows(result.dir, 'data_items');
-      assert.equal(Number(row.height), 100_600);
-      assert.equal(row.block_transaction_index, 0);
+      const [a1, c1] = await tableRows(result.dir, 'data_items');
+      assert.equal(Number(a1.height), 100_500);
+      assert.equal(Number(c1.height), 100_600);
+      assert.equal(c1.block_transaction_index, 0);
       assert.equal(result.stats.movedHeight, 1);
-      const [tagRow] = await tableRows(result.dir, 'tags');
-      assert.equal(Number(tagRow.height), 100_600);
+      const tagRows = await tableRows(result.dir, 'tags');
+      assert.deepEqual(
+        tagRows.map((row) => Number(row.height)),
+        [100_500, 100_500, 100_500, 100_600],
+      );
     } finally {
       await fs.rm(result.staging, { recursive: true, force: true });
     }
+    // Filed above its root's height, whose window is written: refused.
+    const above = new MemoryL2Source([
+      sourceRow(r1, 'a1'),
+      sourceRow(r2, 'c1', { height: 103_000 }),
+    ]);
+    above.windowBlocks = 250;
+    await assert.rejects(
+      exportBand(above),
+      (error: unknown) =>
+        error instanceof L2CheckError &&
+        error.reason === 'roots' &&
+        /1 items have their root below the height the source files them under/.test(
+          error.message,
+        ),
+    );
   });
 
   it('refuses the band when a root is not in the L1 data', async () => {
@@ -372,7 +393,7 @@ describe('exportL2Band', () => {
       (error: unknown) =>
         error instanceof L2CheckError &&
         error.reason === 'roots' &&
-        /1 root transactions are not in the L1 data/.test(error.message) &&
+        /1 items have a root not in the L1 data/.test(error.message) &&
         error.details[0] === toB64Url(Buffer.alloc(32, 7)),
     );
     // Nothing left behind.

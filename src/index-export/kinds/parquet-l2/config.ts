@@ -25,7 +25,10 @@ import {
   ResolvedSource,
   SourceEnv,
 } from '../root-tx/sources/config.js';
-import { ClickHouseL2Source } from './clickhouse.js';
+import {
+  CLICKHOUSE_L2_WINDOW_BLOCKS,
+  ClickHouseL2Source,
+} from './clickhouse.js';
 
 /** One index to build. */
 export interface L2IndexConfig {
@@ -157,6 +160,8 @@ export async function openL2Source(
       username: string;
       password: string;
     }) => ClickHouseQuerier;
+    /** The most items a window holds before it is split. */
+    windowItems?: number;
   } = {},
 ): Promise<ClickHouseL2Source> {
   const clickhouse = deps.clickhouse ?? createClickHouseQuerier;
@@ -174,6 +179,8 @@ export async function openL2Source(
         username: config.user as string,
         password,
       }),
+      CLICKHOUSE_L2_WINDOW_BLOCKS,
+      deps.windowItems,
     );
   }
   return new ClickHouseL2Source(
@@ -183,5 +190,7 @@ export async function openL2Source(
       username: env.CLICKHOUSE_USER as string,
       password: env.CLICKHOUSE_PASSWORD ?? '',
     }),
+    CLICKHOUSE_L2_WINDOW_BLOCKS,
+    deps.windowItems,
   );
 }

@@ -530,20 +530,25 @@ changes: bands of another selection in its directory stop the run
 ### Where L2 rows come from
 
 - **Items** from ClickHouse: this gateway's (`CLICKHOUSE_*`), or a peer's
-  (`INDEX_EXPORT_L2_SOURCE`). Each window of 250 heights is read `FINAL`,
-  the selection pushed down (`arrayExists` over `tag_names`/`tag_values`,
-  on the raw bytes) and checked again on every row returned: a row the
-  selection doesn't take refuses the band (`selection_mismatch`). The
-  nested bundles above each item are read by id, level by level up to the
-  root.
+  (`INDEX_EXPORT_L2_SOURCE`). Each window of up to 250 heights is read
+  `FINAL`, the selection pushed down (`arrayExists` over
+  `tag_names`/`tag_values`, on the raw bytes) and checked again on every
+  row returned: a row the selection doesn't take refuses the band
+  (`selection_mismatch`). A window that holds more than
+  `INDEX_EXPORT_L2_WINDOW_ITEMS` (50,000) items is cancelled and read in
+  halves, down to a single height. The nested bundles above each item are
+  read by id, level by level up to the root.
 - **Positions on the chain.** An item's `height` and
   `block_transaction_index` are its root transaction's, never its own
   row's: from this publisher's `parquet-l1` bands when they cover the
   band's heights (their `block_transactions`), else ClickHouse's L1 rows
   (`is_data_item = false`), else no band (`no_l1`, retried). A root found
   in neither, or at two positions, refuses the band (`roots`, with the
-  count and a sample). An item the index files under another height of the
-  band than its root's moves to its root's (`movedHeight` in the report).
+  count and a sample). An item the index files under a lower height of the
+  band than its root's moves up to its root's, held until that window
+  (`movedHeight` in the report; at most 100,000 a band). One filed above
+  its root's height, whose window is written by then, refuses the band
+  (`roots`, `below`): a fork moves a root up the chain, never down.
   `createdAt` is the time of the band's top block, from the same data.
   Where this publisher has L1 bands, L2 bands reach no higher than they
   do, so every band's roots are placed by them.
@@ -602,14 +607,42 @@ never depends on the network.
 
 ### Distinct rows
 
-The rows are loaded into DuckDB and kept distinct, so an item the index
-holds twice at one height (two block positions of its own) is one row once
-both carry their root's. An unlocated row of an (id, root) that also has a
-located one is dropped. What is left must be one row per key of each
-table's order, or the band is refused rather than tie-broken: two unlocated
-rows of one item in one root that still differ (`unlocated_conflict`), two
-rows at one place (`conflict`), two tags at one position (`tag_conflict`),
-two places of a bundle at one offset (`parent_conflict`).
+Rows are kept distinct window by window: an item's height is its root's,
+so every row of a height is in one window. An item the index holds twice
+at one height (two block positions of its own) is one row once both carry
+their root's. An unlocated row of an (id, root) that also has a located one
+is dropped. What is left must be one row per key of each table's order, or
+the band is refused rather than tie-broken: two unlocated rows of one item
+in one root that still differ (`unlocated_conflict`), two rows at one place
+(`conflict`), two tags at one position (`tag_conflict`), two places of a
+bundle at one offset (`parent_conflict`).
+
+### Memory and disk
+
+A band is built in memory that follows a window, never the band (the
+largest, `h1800000`, holds 69M items and 518M tag rows):
+
+- a window's rows are sorted in its table's order and appended, with their
+  digest, to the build's own DuckDB database, a file in the staging
+  directory; `data_items` and `tags` are then written to Parquet in that
+  order, with no sort of the whole band, and read back in it to check
+  their digests and order;
+- `parents` and `wallets` are gathered in the database, kept distinct and
+  sorted there; owners' keys are resolved streaming from it;
+- DuckDB runs within `INDEX_EXPORT_L2_DUCKDB_MEMORY` (2 GB) and
+  `INDEX_EXPORT_L2_DUCKDB_THREADS` (2), spilling into the staging
+  directory, at most `INDEX_EXPORT_L2_DUCKDB_SPILL_MAX_GB` (256 GB).
+
+A synthetic band of 3,000,000 items and 21,000,000 tag rows (seven
+ArDrive-like tags each) builds in 8 minutes with DuckDB held to 512 MB, the
+process at 1.3 GB at most (`export-large.test.ts`, run with
+`INDEX_EXPORT_TEST_L2_LARGE=3000000`): about 50,000 rows a second. Its band
+is 330 MB, 110 bytes an item, and the staging directory, the database and
+the band together, 2.5 times the band. Scaled to `h1800000` (69M items,
+518M tag rows): about 3½ hours, a band of 8 GB or more (real tags run
+longer than the synthetic ones; allow 15 GB), and 20 to 40 GB of staging,
+on the publish directory's filesystem, plus DuckDB's spill for the final
+joins over distinct roots and owners, a few GB.
 
 ### Checks before publishing
 
@@ -621,8 +654,9 @@ Besides the rules above, before a band publishes:
 - every root at its L1 position, joined against the L1 bands themselves
   when they gave the positions;
 - every key's SHA-256 its address (read back from the written file);
-- each table's row digest taken by reading the written file back in its
-  order, as an importer does;
+- each table's row digest taken by reading the written file back, every
+  row after the one before it in the table's order, as an importer digests
+  it;
 - a header check through `INDEX_EXPORT_HEADER_CHECK_URL`, as for root-TX
   bands: 150 located rows, 50 more of each of `repaired`, `proven`,
   `absolute`, `deep` and `normalised`. A wrong header rejects the band;
@@ -715,6 +749,9 @@ Alert on the tip:
 - An ambiguous nested bundle is not proven, so it gets no `parents` row
   (its items are unlocated by the chain rule anyway).
 - The top tip band changes range, so id, every run the source's top moves.
+- An item ClickHouse files above its root's height refuses the band
+  (`roots`, `below`), since its root's window is written by the time it is
+  read.
 
 ## Adopting existing bands
 

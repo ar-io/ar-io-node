@@ -32,8 +32,14 @@ import type {
   RootPosition,
 } from './source.js';
 
-/** Heights per window: a window's items and their tags are held at once. */
+/** Heights per window, at most. */
 export const CLICKHOUSE_L2_WINDOW_BLOCKS = 250;
+
+/**
+ * Items per window, at most: a window's items and their tags are held at
+ * once, so a window that holds more is split, down to a single height.
+ */
+export const CLICKHOUSE_L2_WINDOW_ITEMS = 50_000;
 
 /** Ids per lookup by id, well inside a URL's limit as query parameters. */
 export const CLICKHOUSE_ID_CHUNK = 1000;
@@ -208,6 +214,7 @@ export class ClickHouseL2Source implements L2ItemSource {
     readonly name: string,
     private readonly client: ClickHouseQuerier,
     private readonly windowBlocks = CLICKHOUSE_L2_WINDOW_BLOCKS,
+    private readonly windowItems = CLICKHOUSE_L2_WINDOW_ITEMS,
   ) {}
 
   /**
@@ -235,7 +242,7 @@ export class ClickHouseL2Source implements L2ItemSource {
     }
     while (pending.length > 0) {
       const [start, end] = pending.shift() as [number, number];
-      let window: L2SourceWindow;
+      let window: L2SourceWindow | undefined;
       try {
         window = await this.window(start, end, selection);
       } catch (error) {
@@ -247,23 +254,31 @@ export class ClickHouseL2Source implements L2ItemSource {
         }
         throw error;
       }
+      // More items than a window holds: in halves, down to one height.
+      if (window === undefined) {
+        const middle = Math.floor((start + end) / 2);
+        pending.unshift([start, middle], [middle + 1, end]);
+        continue;
+      }
       yield window;
     }
   }
 
+  /** A window's items and bundles; undefined when it holds too many items to split no further. */
   private async window(
     from: number,
     to: number,
     selection: ParquetL2Selection,
-  ): Promise<L2SourceWindow> {
+  ): Promise<L2SourceWindow | undefined> {
     const { query, params } = itemsQuery(selection);
-    const items = (
-      await this.rows<RawRow>(
-        query,
-        { ...params, from, to },
-        `items at heights ${from}-${to}`,
-      )
-    ).map(toSourceRow);
+    const raw = await this.limitedRows<RawRow>(
+      query,
+      { ...params, from, to },
+      `items at heights ${from}-${to}`,
+      from < to ? this.windowItems : undefined,
+    );
+    if (raw === undefined) return undefined;
+    const items = raw.map(toSourceRow);
     const ancestors: L2SourceRow[] = [];
     const asked = new Set<string>();
     const parentsOf = (rows: L2SourceRow[]) => {
@@ -340,22 +355,41 @@ export class ClickHouseL2Source implements L2ItemSource {
     return Number(row.ts);
   }
 
+  /** A query's rows. */
   private async rows<T>(
     query: string,
     params: Record<string, unknown>,
     what: string,
   ): Promise<T[]> {
+    return (await this.limitedRows<T>(query, params, what)) as T[];
+  }
+
+  /**
+   * A query's rows; with `limit`, undefined once it returns more, the query
+   * cancelled rather than read to the end.
+   */
+  private async limitedRows<T>(
+    query: string,
+    params: Record<string, unknown>,
+    what: string,
+    limit?: number,
+  ): Promise<T[] | undefined> {
+    const cancel = new AbortController();
     try {
       const result = await this.client.query({
         query,
         format: 'JSONEachRow',
         query_params: params,
         clickhouse_settings: { ...CLICKHOUSE_EXPORT_SETTINGS },
-        abort_signal: deadline(),
+        abort_signal: AbortSignal.any([deadline(), cancel.signal]),
       });
       const rows: T[] = [];
       for await (const batch of result.stream()) {
         for (const line of batch) rows.push(parseLine<T>(line));
+        if (limit !== undefined && rows.length > limit) {
+          cancel.abort();
+          return undefined;
+        }
       }
       return rows;
     } catch (error) {

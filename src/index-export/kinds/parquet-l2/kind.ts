@@ -41,17 +41,19 @@ import {
 } from '../../../lib/parquet-l1/layout.js';
 import { l2BandId } from '../../../lib/parquet-l2/layout.js';
 import * as metrics from '../../metrics.js';
-import { withBandWriter } from '../parquet-l1/export.js';
 import type { UnlocatedReason } from '../root-tx/sources/item-location.js';
 import type { L1PublishedBand } from '../parquet-l1/kind.js';
 import { compareL2Bands, L2_RELOCATED_TAG, L2Compare } from './compare.js';
 import type { L2IndexConfig } from './config.js';
 import {
+  DEFAULT_L2_DUCK_LIMITS,
   exportL2Band,
   L2BandStats,
   L2CheckError,
+  L2DuckLimits,
   L2ExportResult,
   L2UnavailableError,
+  withL2Duck,
 } from './export.js';
 import { GatewayReads } from './gateway-reads.js';
 import type { L2Role, L2Step, L2StepKind } from './planner.js';
@@ -80,6 +82,8 @@ export interface L2StepContext {
   headerCheck?: { retries?: number; retryDelayMs?: number };
   /** Ids this band names as superseded besides the bands it replaces. */
   history?: string[];
+  /** The build's DuckDB limits ({@link DEFAULT_L2_DUCK_LIMITS} when unset). */
+  limits?: L2DuckLimits;
   now?: () => number;
 }
 
@@ -123,6 +127,8 @@ export interface L2Outcome {
   /** Where a dry run with `--keep` left the band. */
   keptAt?: string;
   bandBytes?: number;
+  /** The build's staging directory once the band was written: database and band. */
+  stagingBytes?: number;
   seconds: number;
 }
 
@@ -178,6 +184,7 @@ export async function runL2Step(
           : {}),
         reads,
         workDir: ctx.workDir,
+        ...(ctx.limits !== undefined ? { limits: ctx.limits } : {}),
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -212,6 +219,7 @@ export async function runL2Step(
       checks: built.band.checks ?? {},
       stats: built.stats,
       bandBytes: built.bandBytes,
+      stagingBytes: built.stagingBytes,
       ...(supersedes.length > 0 ? { supersedes } : {}),
     };
     const decision = await decide(step, ctx, built, id);
@@ -317,13 +325,17 @@ async function decide(
 
   let compare: L2Compare | undefined;
   if (step.replaces.length > 0) {
-    compare = await withBandWriter(built.staging, (duck) =>
-      compareL2Bands(
-        duck,
-        step.replaces.map((band) => band.dir),
-        built.dir,
-        ctx.resettleMaxChanged,
-      ),
+    compare = await withL2Duck(
+      built.staging,
+      ctx.limits ?? DEFAULT_L2_DUCK_LIMITS,
+      (duck) =>
+        compareL2Bands(
+          duck,
+          step.replaces.map((band) => band.dir),
+          built.dir,
+          ctx.resettleMaxChanged,
+        ),
+      { inMemory: true },
     );
   }
   const { relocatedEntries, ...reported } = compare ?? {

@@ -222,6 +222,12 @@ describe('parseExportConfig, parquet-l2', () => {
     assert.equal(config.l2WalletsDb, 'data/sqlite/bundles.db');
     assert.equal(config.l2MaxReads, 200_000);
     assert.equal(config.l2RunBudgetMs, undefined);
+    assert.deepEqual(config.l2Duck, {
+      memoryLimit: '2GB',
+      threads: 2,
+      spillMaxGb: 256,
+    });
+    assert.equal(config.l2WindowItems, 50_000);
     assert.deepEqual(config.sources, [], 'no root-TX sources');
     const more = parseExportConfig({
       ...L2,
@@ -230,6 +236,10 @@ describe('parseExportConfig, parquet-l2', () => {
       INDEX_EXPORT_L2_WALLETS_DB: '/app/data/sqlite/other.db',
       INDEX_EXPORT_L2_MAX_READS: '10',
       INDEX_EXPORT_L2_RUN_BUDGET_MINUTES: '30',
+      INDEX_EXPORT_L2_DUCKDB_MEMORY: '512MB',
+      INDEX_EXPORT_L2_DUCKDB_THREADS: '4',
+      INDEX_EXPORT_L2_DUCKDB_SPILL_MAX_GB: '100',
+      INDEX_EXPORT_L2_WINDOW_ITEMS: '20000',
       INDEX_EXPORT_L2_SOURCE: JSON.stringify({
         type: 'clickhouse',
         url: 'http://peer:8123',
@@ -242,6 +252,12 @@ describe('parseExportConfig, parquet-l2', () => {
     assert.equal(more.l2WalletsDb, '/app/data/sqlite/other.db');
     assert.equal(more.l2MaxReads, 10);
     assert.equal(more.l2RunBudgetMs, 30 * 60_000);
+    assert.deepEqual(more.l2Duck, {
+      memoryLimit: '512MB',
+      threads: 4,
+      spillMaxGb: 100,
+    });
+    assert.equal(more.l2WindowItems, 20_000);
     assert.equal(more.l2Source?.config.name, 'clickhouse-peer:8123');
   });
 
@@ -309,6 +325,14 @@ describe('parseExportConfig, parquet-l2', () => {
     assert.throws(
       () => parseExportConfig({ ...L2, CLICKHOUSE_URL: undefined }),
       /parquet-l2 reads ClickHouse/,
+    );
+    assert.throws(
+      () => parseExportConfig({ ...L2, INDEX_EXPORT_L2_DUCKDB_MEMORY: 'lots' }),
+      /INDEX_EXPORT_L2_DUCKDB_MEMORY must be a size such as 2GB/,
+    );
+    assert.throws(
+      () => parseExportConfig({ ...L2, INDEX_EXPORT_L2_DUCKDB_THREADS: '0' }),
+      /INDEX_EXPORT_L2_DUCKDB_THREADS must be at least 1/,
     );
     assert.throws(
       () =>

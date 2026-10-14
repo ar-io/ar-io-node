@@ -20,10 +20,15 @@
  * counted and left out of `wallets`: the band still builds. A read the
  * gateway couldn't serve stops the band instead (see `gateway-reads.ts`),
  * so whether a key is in the band never depends on the network.
+ *
+ * Each window's owners are noted ({@link OwnerNotes}) into the build's
+ * database, and resolved once from there ({@link resolveOwnerKeys}), so
+ * memory follows a window, not the band's owners.
  */
 import crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import Sqlite from 'better-sqlite3';
+import type { Database } from 'duckdb-async';
 
 import { toB64Url } from '../../../lib/encoding.js';
 import type { GatewayReads } from './gateway-reads.js';
@@ -83,24 +88,28 @@ export function openWalletsDb(
   };
 }
 
-export class OwnerKeys {
-  private readonly keys = new Map<string, Buffer>();
-  private readonly pending = new Map<string, KeyCandidate[]>();
-  private readonly stats: OwnerKeyStats = {
-    owners: 0,
-    fromSource: 0,
-    fromWalletsDb: 0,
-    fromGateway: 0,
-    withoutKey: 0,
-    withoutKeySample: [],
-    rejectedKeys: 0,
-  };
+/** The columns an owner note is stored with, in the build's database. */
+export const OWNER_NOTE_COLUMNS = [
+  { name: 'address', type: 'BLOB' },
+  { name: 'key', type: 'BLOB' },
+  { name: 'root', type: 'BLOB' },
+  { name: 'offset', type: 'UBIGINT' },
+  { name: 'size', type: 'UBIGINT' },
+];
 
-  constructor(
-    private readonly walletsDb?: {
-      get: (address: Buffer) => Buffer | undefined;
-    },
-  ) {}
+/**
+ * One window's owners: per address, a key the source holds whose hash is
+ * the address, or up to {@link KEY_CANDIDATES} places to read it from. A
+ * window's notes go to the build's database (`rows`), so memory follows a
+ * window, not the band.
+ */
+export class OwnerNotes {
+  /** Keys a source held that don't hash to their address: ignored. */
+  rejectedKeys = 0;
+  private readonly notes = new Map<
+    string,
+    { key?: Buffer; candidates: KeyCandidate[] }
+  >();
 
   /**
    * An item's owner: its address, the key its source row holds (if any),
@@ -108,74 +117,168 @@ export class OwnerKeys {
    */
   note(address: Buffer, sourceKey?: Buffer, candidate?: KeyCandidate): void {
     const k = address.toString('latin1');
-    if (this.keys.has(k)) return;
-    let candidates = this.pending.get(k);
-    const first = candidates === undefined;
-    if (first) this.stats.owners += 1;
+    let entry = this.notes.get(k);
+    if (entry === undefined) {
+      entry = { candidates: [] };
+      this.notes.set(k, entry);
+    }
+    if (entry.key !== undefined) return;
     if (sourceKey !== undefined && sourceKey.length > 0) {
       if (sha256(sourceKey).equals(address)) {
-        this.keys.set(k, sourceKey);
-        this.pending.delete(k);
-        this.stats.fromSource += 1;
+        entry.key = sourceKey;
+        entry.candidates = [];
         return;
       }
-      this.stats.rejectedKeys += 1;
+      this.rejectedKeys += 1;
     }
-    if (candidates === undefined) {
-      const fromDb = this.walletsDb?.get(address);
-      if (fromDb !== undefined) {
-        if (sha256(fromDb).equals(address)) {
-          this.keys.set(k, fromDb);
-          this.stats.fromWalletsDb += 1;
-          return;
-        }
-        this.stats.rejectedKeys += 1;
-      }
-      candidates = [];
-      this.pending.set(k, candidates);
-    }
-    if (candidate !== undefined && candidates.length < KEY_CANDIDATES) {
-      candidates.push(candidate);
+    if (candidate !== undefined && entry.candidates.length < KEY_CANDIDATES) {
+      entry.candidates.push(candidate);
     }
   }
 
-  /**
-   * Reads the keys no index held from the roots, then gives every key, by
-   * address. An owner whose candidates all read as something else (or
-   * past the root) has no key.
-   *
-   * @throws ReadUnavailableError / ReadBudgetError from the reads.
-   */
-  async resolve(
-    reads?: GatewayReads,
-  ): Promise<{ keys: Map<string, Buffer>; stats: OwnerKeyStats }> {
-    const owners = [...this.pending.keys()].sort();
-    await Promise.all(
-      owners.map(async (k) => {
-        const address = Buffer.from(k, 'latin1');
-        for (const candidate of this.pending.get(k) ?? []) {
-          if (reads === undefined) break;
-          const bytes = await reads.read(
-            candidate.rootTxId,
-            candidate.offset,
-            candidate.size,
-          );
-          if (bytes !== undefined && sha256(bytes).equals(address)) {
-            this.keys.set(k, bytes);
-            this.stats.fromGateway += 1;
-            return;
-          }
+  /** The notes as rows of {@link OWNER_NOTE_COLUMNS}. */
+  rows(): unknown[][] {
+    const rows: unknown[][] = [];
+    for (const [k, entry] of this.notes) {
+      const address = Buffer.from(k, 'latin1');
+      if (entry.key !== undefined) {
+        rows.push([address, entry.key, null, null, null]);
+      } else if (entry.candidates.length === 0) {
+        rows.push([address, null, null, null, null]);
+      } else {
+        for (const c of entry.candidates) {
+          rows.push([address, null, c.rootTxId, c.offset, c.size]);
         }
-      }),
-    );
-    for (const k of owners) {
-      if (this.keys.has(k)) continue;
-      this.stats.withoutKey += 1;
-      if (this.stats.withoutKeySample.length < SAMPLE) {
-        this.stats.withoutKeySample.push(toB64Url(Buffer.from(k, 'latin1')));
       }
     }
-    this.pending.clear();
-    return { keys: this.keys, stats: this.stats };
+    return rows;
   }
+}
+
+/**
+ * Every owner's key, from the notes in the build's database (`notes`, of
+ * {@link OWNER_NOTE_COLUMNS}): the source's where one hashed to the
+ * address, else `bundles.db`'s, else the first place in a root that reads
+ * as it. Owners are streamed from the database and resolved a few at a
+ * time, so memory doesn't follow the band's owners. Each key found is
+ * handed to `write`, in batches.
+ *
+ * @throws ReadUnavailableError / ReadBudgetError from the reads.
+ */
+export async function resolveOwnerKeys(
+  duck: Database,
+  notes: string,
+  {
+    walletsDb,
+    reads,
+    write,
+    concurrency = 32,
+    batch = 10_000,
+  }: {
+    walletsDb?: { get: (address: Buffer) => Buffer | undefined };
+    reads?: GatewayReads;
+    write: (rows: unknown[][]) => Promise<void>;
+    concurrency?: number;
+    batch?: number;
+  },
+): Promise<Omit<OwnerKeyStats, 'rejectedKeys'>> {
+  const stats: Omit<OwnerKeyStats, 'rejectedKeys'> = {
+    owners: 0,
+    fromSource: 0,
+    fromWalletsDb: 0,
+    fromGateway: 0,
+    withoutKey: 0,
+    withoutKeySample: [],
+  };
+  let found: unknown[][] = [];
+  const flush = async (force = false) => {
+    if (found.length === 0 || (!force && found.length < batch)) return;
+    const rows = found;
+    found = [];
+    await write(rows);
+  };
+
+  // The source's keys, whole.
+  const sourceKeys = await duck.stream(
+    `SELECT address, min("key") AS "key" FROM ${notes} WHERE "key" IS NOT NULL GROUP BY address`,
+  );
+  for await (const row of sourceKeys) {
+    const { address, key } = row as { address: Buffer; key: Buffer };
+    stats.owners += 1;
+    stats.fromSource += 1;
+    found.push([Buffer.from(address), Buffer.from(key)]);
+    await flush();
+  }
+
+  // The rest, each with its first places to read a key from.
+  const pending = await duck.stream(`
+    WITH keyed AS (
+      SELECT DISTINCT address FROM ${notes} WHERE "key" IS NOT NULL),
+    pending AS (
+      SELECT DISTINCT n.address FROM ${notes} n
+      ANTI JOIN keyed k ON k.address = n.address),
+    places AS (
+      SELECT address, root, "offset", size FROM (
+        SELECT DISTINCT address, root, "offset", size FROM ${notes}
+        WHERE root IS NOT NULL)
+      QUALIFY row_number() OVER (
+        PARTITION BY address ORDER BY root, "offset", size) <= ${KEY_CANDIDATES})
+    SELECT p.address, c.root, c."offset", c.size
+    FROM pending p LEFT JOIN places c ON c.address = p.address
+    ORDER BY p.address, c.root NULLS LAST, c."offset", c.size`);
+  const inFlight = new Set<Promise<void>>();
+  const resolve = async (address: Buffer, places: KeyCandidate[]) => {
+    const fromDb = walletsDb?.get(address);
+    if (fromDb !== undefined && sha256(fromDb).equals(address)) {
+      stats.fromWalletsDb += 1;
+      found.push([address, fromDb]);
+      return;
+    }
+    for (const place of places) {
+      if (reads === undefined) break;
+      const bytes = await reads.read(place.rootTxId, place.offset, place.size);
+      if (bytes !== undefined && sha256(bytes).equals(address)) {
+        stats.fromGateway += 1;
+        found.push([address, Buffer.from(bytes)]);
+        return;
+      }
+    }
+    stats.withoutKey += 1;
+    if (stats.withoutKeySample.length < SAMPLE) {
+      stats.withoutKeySample.push(toB64Url(address));
+    }
+  };
+  const start = async (address: Buffer, places: KeyCandidate[]) => {
+    stats.owners += 1;
+    const task: Promise<void> = resolve(address, places).finally(() =>
+      inFlight.delete(task),
+    );
+    inFlight.add(task);
+    if (inFlight.size >= concurrency) await Promise.race(inFlight);
+    await flush();
+  };
+  let current: { address: Buffer; places: KeyCandidate[] } | undefined;
+  for await (const row of pending) {
+    const { address, root, offset, size } = row as {
+      address: Buffer;
+      root: Buffer | null;
+      offset: bigint | number | null;
+      size: bigint | number | null;
+    };
+    if (current === undefined || !current.address.equals(address)) {
+      if (current !== undefined) await start(current.address, current.places);
+      current = { address: Buffer.from(address), places: [] };
+    }
+    if (root !== null && offset !== null && size !== null) {
+      current.places.push({
+        rootTxId: Buffer.from(root),
+        offset: Number(offset),
+        size: Number(size),
+      });
+    }
+  }
+  if (current !== undefined) await start(current.address, current.places);
+  await Promise.all(inFlight);
+  await flush(true);
+  return stats;
 }

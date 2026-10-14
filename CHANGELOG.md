@@ -49,6 +49,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - An ambiguous item's proof reads its header as the band header check
     does: a header whose tag count field is malformed (see *Fixed*) still
     proves its reading, and is counted (`stats.malformedTags`).
+  - Any band builds in memory that follows a window of the source, never
+    the band: windows of at most `INDEX_EXPORT_L2_WINDOW_ITEMS` (50,000)
+    items, rows sorted and digested a window at a time and appended to a
+    DuckDB database in the staging directory, which writes the Parquet in
+    order, with no sort of the band. DuckDB runs within
+    `INDEX_EXPORT_L2_DUCKDB_MEMORY` (2GB) and `INDEX_EXPORT_L2_DUCKDB_THREADS`
+    (2), spilling at most `INDEX_EXPORT_L2_DUCKDB_SPILL_MAX_GB` (256).
 - **Root-TX bands on the L1 grid, with a settle lag
   (`INDEX_EXPORT_ROOT_TX_LAYOUT=grid`)**: `index-export` cuts root-TX bands
   at the same heights as `parquet-l1` bands, so every publisher's bands line

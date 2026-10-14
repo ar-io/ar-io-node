@@ -244,6 +244,38 @@ describe('ClickHouseL2Source', () => {
     );
   });
 
+  it('reads a window of more items than it holds again in halves, down to one height', async () => {
+    // Ten items a height at 0-3, a hundred at 4.
+    const perHeight = (h: number) => (h === 4 ? 100 : 10);
+    const fake = new FakeClickHouse((query, params) => {
+      if (!query.includes('arrayExists')) return [];
+      const rows = [];
+      for (let h = params.from as number; h <= (params.to as number); h++) {
+        for (let i = 0; i < perHeight(h); i++) {
+          rows.push({
+            ...raw({ id_hex: hex(id(i + 1)), height: h }),
+            tag_names_hex: [],
+            tag_values_hex: [],
+          });
+        }
+      }
+      return rows;
+    });
+    const source = new ClickHouseL2Source('gw1', fake, 8, 25);
+    const windows = await collect(source.windows(0, 7, ARDRIVE));
+    assert.deepEqual(
+      windows.map((w) => [w.from, w.to, w.items.length]),
+      [
+        [0, 1, 20],
+        [2, 3, 20],
+        // One height holds more than a window: it is read whole.
+        [4, 4, 100],
+        [5, 5, 10],
+        [6, 7, 20],
+      ],
+    );
+  });
+
   it("gives every position of a root among the table's L1 rows, and a block's time", async () => {
     const fake = new FakeClickHouse((query, params) => {
       if (query.includes('NOT is_data_item')) {
