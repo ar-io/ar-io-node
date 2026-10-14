@@ -4028,6 +4028,37 @@ describe('RootParentDataSource', () => {
       );
     });
 
+    it('refuses string offsets from an index without reading a header, and still finds the item', async () => {
+      // Turbo's offsets API returns bigint columns as strings; summed with +
+      // they concatenate ("1102486" + 221 = "1102486221").
+      (dataItemRootTxIndex.getRootTx as any).mock.mockImplementation(
+        async () => ({
+          rootTxId: ROOT,
+          rootOffset: String(RIGHT.itemOffset),
+          rootDataOffset: String(RIGHT.dataOffset),
+          size: String(HEADER + SIZE),
+          dataSize: SIZE,
+        }),
+      );
+
+      await source.getData({ id: ITEM });
+
+      const parsedOffsets = (
+        ans104OffsetSource.parseDataItemHeader as any
+      ).mock.calls.map((call: any) => call.arguments[1]);
+      assert.ok(
+        parsedOffsets.every((offset: unknown) => typeof offset === 'number'),
+        `header reads at ${JSON.stringify(parsedOffsets)}`,
+      );
+      assert.ok(
+        fetchedOffsets().every(
+          (offset: unknown) =>
+            offset === undefined || typeof offset === 'number',
+        ),
+      );
+      assert.deepStrictEqual(storedItemOffsets(), [RIGHT.itemOffset]);
+    });
+
     it('counts a header that ends before the recorded payload offset as offset_mismatch', async () => {
       // The item's own header, but the stored payload offset is 10 bytes late.
       storeLocation({
