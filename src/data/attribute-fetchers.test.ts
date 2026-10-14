@@ -101,6 +101,28 @@ describe('AttributeFetcher', () => {
       assert.strictEqual(result, testBuffer.toString('base64url'));
     });
 
+    it('asks the cache not to fetch the whole parent in the background', async () => {
+      const testBuffer = Buffer.from('testData');
+      const getData = mock.method(mocks.dataSource, 'getData', async () => ({
+        stream: {
+          [Symbol.asyncIterator]: async function* () {
+            yield testBuffer;
+          },
+        },
+      }));
+
+      // fetchDataFromParent is protected; reached the way a subclass would.
+      await (attributeFetcher as any).fetchDataFromParent({
+        parentId: 'testParent',
+        offset: 100,
+        size: testBuffer.length,
+      });
+
+      const args = (getData.mock.calls[0].arguments as any[])[0];
+      assert.deepStrictEqual(args.region, { offset: 100, size: 8 });
+      assert.strictEqual(args.backgroundCacheOnRangeMiss, false);
+    });
+
     // PE-9081: input validation
     it('should throw when size is 0', async () => {
       await assert.rejects(

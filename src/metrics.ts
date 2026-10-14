@@ -1999,6 +1999,21 @@ export const backgroundRangeCacheSkippedTotal = new promClient.Counter({
   labelNames: ['reason'] as const,
 });
 
+/**
+ * Single-range GETs of uncached items answered with one ranged fetch, by
+ * outcome: `served`, `refused` (rate limit or payment), or
+ * `fallback_<reason>` when the ranged fetch showed the full-object path was
+ * needed (`size_mismatch`: the source returned a different length than
+ * requested, or reported a different item size than indexed; `cached`:
+ * the bytes came from the local cache, which the full-object path serves
+ * fast and checks the item's Content-Encoding on).
+ */
+export const uncachedRangeFastPathTotal = new promClient.Counter({
+  name: 'uncached_range_fast_path_total',
+  help: 'Single-range GETs of uncached items answered with one ranged fetch, by outcome',
+  labelNames: ['outcome'] as const,
+});
+
 //
 // Foreground (on-demand) cache write metrics
 //

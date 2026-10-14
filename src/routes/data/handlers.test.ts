@@ -7,6 +7,7 @@
 import { strict as assert } from 'node:assert';
 import { afterEach, beforeEach, describe, it, mock } from 'node:test';
 import express from 'express';
+import * as http from 'node:http';
 import { Readable } from 'node:stream';
 import { default as request } from 'supertest';
 import { gzipSync } from 'node:zlib';
@@ -923,6 +924,620 @@ st
         });
       const head = request(app).head('/not-a-real-id').expect(451);
       await Promise.all([get, head]);
+    });
+
+    describe('single range of an uncached item', () => {
+      const body = Buffer.from('0123456789abcdefghij');
+      let calls: any[];
+      let streams: Readable[];
+      let attributes: any;
+      let source: {
+        totalSize?: number;
+        cached?: boolean;
+        contentType?: string;
+        contentEncoding?: string;
+        fail?: Error;
+        body?: Buffer;
+        /** Clamp ranges to the body, as a root-bundle source does. */
+        clamp?: boolean;
+      };
+
+      // Reads the body as bytes; superagent would otherwise parse or decode it.
+      const raw = (res: any, callback: any) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (chunk: Buffer) => chunks.push(chunk));
+        res.on('end', () => callback(null, Buffer.concat(chunks)));
+      };
+
+      beforeEach(() => {
+        calls = [];
+        streams = [];
+        source = {};
+        attributes = {
+          size: body.length,
+          contentType: 'text/plain',
+          isManifest: false,
+          stable: false,
+          verified: false,
+          signature: null,
+        };
+        dataAttributesSource.getDataAttributes = async () => attributes;
+        dataSource.getData = async (params: any) => {
+          calls.push(params);
+          if (source.fail !== undefined) {
+            throw source.fail;
+          }
+          const full = source.body ?? body;
+          if (
+            source.clamp === true &&
+            params.region !== undefined &&
+            params.region.offset >= full.length
+          ) {
+            throw new Error('Requested region offset exceeds data item size');
+          }
+          const bytes =
+            params.region !== undefined
+              ? full.subarray(
+                  params.region.offset,
+                  params.region.offset + params.region.size,
+                )
+              : full;
+          const stream = Readable.from(bytes);
+          streams.push(stream);
+          return {
+            stream,
+            size:
+              source.clamp === true
+                ? bytes.length
+                : (params.region?.size ?? full.length),
+            totalSize: source.totalSize,
+            verified: false,
+            trusted: true,
+            cached: source.cached ?? false,
+            sourceContentType: source.contentType,
+            sourceContentEncoding: source.contentEncoding,
+            requestAttributes: { origin: 'node-url', hops: 2, clientIps: [] },
+            upstreamTags: [{ name: 'App-Name', value: 'range-test' }],
+          };
+        };
+      });
+
+      const useDataHandler = (extra: Record<string, unknown> = {}) => {
+        app.get(
+          '/:id',
+          createDataHandler({
+            log,
+            dataAttributesSource,
+            dataSource,
+            dataBlockListValidator,
+            manifestPathResolver,
+            ...extra,
+          }),
+        );
+      };
+
+      const getRange = (range: string) =>
+        request(app)
+          .get('/not-a-real-id')
+          .set('Range', range)
+          .buffer(true)
+          .parse(raw);
+
+      it('fetches only the range, once', async () => {
+        useDataHandler();
+
+        const res = await getRange('bytes=2-5').expect(206);
+
+        assert.equal(calls.length, 1);
+        assert.deepEqual(calls[0].region, { offset: 2, size: 4 });
+        assert.equal(res.body.toString(), '2345');
+        assert.equal(res.headers['content-range'], 'bytes 2-5/20');
+        assert.equal(res.headers['content-length'], '4');
+        assert.equal(res.headers['accept-ranges'], 'bytes');
+        assert.match(res.headers['content-type'], /^text\/plain/);
+        assert.equal(res.headers[headerNames.cache.toLowerCase()], 'MISS');
+        assert.equal(res.headers[headerNames.trusted.toLowerCase()], 'true');
+        assert.equal(res.headers[headerNames.hops.toLowerCase()], '2');
+        assert.equal(
+          res.headers[headerNames.dataId.toLowerCase()],
+          'not-a-real-id',
+        );
+        assert.equal(res.headers['x-arweave-tag-app-name'], 'range-test');
+        assert.equal(res.headers['content-digest'], undefined);
+        assert.equal(res.headers.etag, undefined);
+      });
+
+      it('serves a suffix range against the indexed size', async () => {
+        useDataHandler();
+
+        const res = await getRange('bytes=-3').expect(206);
+
+        assert.equal(calls.length, 1);
+        assert.deepEqual(calls[0].region, { offset: 17, size: 3 });
+        assert.equal(res.body.toString(), 'hij');
+        assert.equal(res.headers['content-range'], 'bytes 17-19/20');
+      });
+
+      it('accepts a reported total size that matches the index', async () => {
+        source.totalSize = body.length;
+        useDataHandler();
+
+        const res = await getRange('bytes=0-0').expect(206);
+
+        assert.equal(calls.length, 1);
+        assert.equal(res.body.toString(), '0');
+        assert.equal(res.headers['content-range'], 'bytes 0-0/20');
+      });
+
+      it("sends the item's indexed Content-Encoding", async () => {
+        attributes.contentEncoding = 'gzip';
+        useDataHandler();
+
+        // Not decoded by the client: a 206 of gzip bytes is not a gzip body.
+        const res = await new Promise<{ status?: number; headers: any }>(
+          (resolve, reject) => {
+            const server = app.listen(0, () => {
+              const { port } = server.address() as { port: number };
+              http
+                .get(
+                  {
+                    port,
+                    path: '/not-a-real-id',
+                    headers: { Range: 'bytes=4-7' },
+                  },
+                  (response) => {
+                    response.resume();
+                    response.on('end', () => {
+                      server.close();
+                      resolve({
+                        status: response.statusCode,
+                        headers: response.headers,
+                      });
+                    });
+                  },
+                )
+                .on('error', (error) => {
+                  server.close();
+                  reject(error);
+                });
+            });
+          },
+        );
+
+        assert.equal(res.status, 206);
+        assert.equal(res.headers['content-encoding'], 'gzip');
+        assert.equal(calls.length, 1);
+      });
+
+      it('falls back when the bytes are cached and their coding must be checked', async () => {
+        attributes.contentEncoding = 'gzip';
+        source.cached = true;
+        useDataHandler();
+
+        await getRange('bytes=4-7').expect(206);
+
+        // The ranged fetch, then the full-object path's two fetches.
+        assert.equal(calls.length, 3);
+        assert.notEqual(calls[0].region, undefined);
+        assert.equal(calls[1].region, undefined);
+        assert.ok(streams[0].destroyed);
+      });
+
+      it('falls back for any bytes that came from the cache, coded or not', async () => {
+        source.cached = true;
+        useDataHandler();
+
+        await getRange('bytes=4-7').expect(206);
+
+        assert.equal(calls.length, 3);
+        assert.notEqual(calls[0].region, undefined);
+        assert.equal(calls[1].region, undefined);
+        assert.ok(streams[0].destroyed);
+      });
+
+      it('falls back to the full-object path when the source reports another size', async () => {
+        source.body = Buffer.from('0123456789abcdefghijKLMNO');
+        source.totalSize = 25;
+        useDataHandler();
+
+        const res = await getRange('bytes=18-22').expect(206);
+
+        assert.equal(calls.length, 3);
+        assert.deepEqual(calls[0].region, { offset: 18, size: 2 });
+        assert.equal(calls[1].region, undefined);
+        assert.deepEqual(calls[2].region, { offset: 18, size: 5 });
+        assert.ok(streams[0].destroyed);
+        assert.equal(res.body.toString(), 'ijKLM');
+        assert.equal(res.headers['content-range'], 'bytes 18-22/25');
+      });
+
+      it('answers 404 when the ranged fetch fails', async () => {
+        source.fail = new Error('every source failed');
+        const negativeDataCache = {
+          isNegativelyCached: mock.fn(() => false),
+          evict: mock.fn(() => undefined),
+          recordSuccess: mock.fn(() => undefined),
+          recordMiss: mock.fn(() => undefined),
+        } as any;
+        useDataHandler({ negativeDataCache });
+
+        await getRange('bytes=2-5').expect(404);
+
+        assert.equal(calls.length, 1);
+        assert.notEqual(calls[0].region, undefined);
+        // The item is indexed, so a failed fetch is not a negative result.
+        assert.equal(negativeDataCache.recordMiss.mock.calls.length, 0);
+        assert.equal(negativeDataCache.evict.mock.calls.length, 0);
+      });
+
+      it('evicts the id from the negative cache when served', async () => {
+        const negativeDataCache = {
+          isNegativelyCached: mock.fn(() => false),
+          evict: mock.fn(() => undefined),
+          recordSuccess: mock.fn(() => undefined),
+          recordMiss: mock.fn(() => undefined),
+        } as any;
+        useDataHandler({ negativeDataCache });
+
+        await getRange('bytes=2-5').expect(206);
+
+        assert.equal(negativeDataCache.evict.mock.calls.length, 1);
+        assert.equal(negativeDataCache.recordSuccess.mock.calls.length, 1);
+      });
+
+      it('answers 499 when the client aborted the ranged fetch', async () => {
+        const abortError = new Error('aborted');
+        abortError.name = 'AbortError';
+        source.fail = abortError;
+        app.use((req: any, _res, next) => {
+          const controller = new AbortController();
+          controller.abort();
+          req.signal = controller.signal;
+          next();
+        });
+        useDataHandler();
+
+        await getRange('bytes=2-5').expect(499);
+
+        assert.equal(calls.length, 1);
+        assert.notEqual(calls[0].region, undefined);
+      });
+
+      describe('when the indexed size is larger than the item', () => {
+        beforeEach(() => {
+          // 15 bytes, indexed as 20; the source reports no total size and
+          // clamps a range at the item's real end.
+          source.body = body.subarray(0, 15);
+          source.clamp = true;
+        });
+
+        it('falls back when the source returns a shorter range', async () => {
+          useDataHandler();
+
+          const res = await getRange('bytes=10-19').expect(206);
+
+          assert.equal(calls.length, 3);
+          assert.deepEqual(calls[0].region, { offset: 10, size: 10 });
+          assert.equal(calls[1].region, undefined);
+          assert.ok(streams[0].destroyed);
+          // The full-object path's answer: the range cut at the real end.
+          assert.equal(res.body.toString(), 'abcde');
+          assert.equal(res.headers['content-range'], 'bytes 10-14/15');
+          assert.equal(res.headers['content-length'], '5');
+        });
+
+        it('answers 404, not 416, for a range starting past the real end', async () => {
+          // Documented in serveUncachedRange: a failed fetch cannot be told
+          // apart from an item no source has.
+          useDataHandler();
+
+          await getRange('bytes=16-19').expect(404);
+
+          assert.equal(calls.length, 1);
+        });
+      });
+
+      it('sends the same headers as the full-object path', async () => {
+        attributes.stable = true;
+        attributes.verified = true;
+        source.contentType = 'text/plain';
+        useDataHandler();
+        const names = [
+          headerNames.trusted,
+          headerNames.hops,
+          headerNames.stable,
+          headerNames.verified,
+          headerNames.cache,
+          headerNames.dataId,
+          'content-type',
+          'cache-control',
+          'content-range',
+          'content-length',
+          'accept-ranges',
+          'x-arweave-tag-app-name',
+        ].map((name) => name.toLowerCase());
+        const pick = (headers: any) =>
+          Object.fromEntries(names.map((name) => [name, headers[name]]));
+
+        const fast = await getRange('bytes=2-5').expect(206);
+        assert.equal(calls.length, 1);
+
+        // The same item without an indexed type takes the full-object path;
+        // the source supplies the same type.
+        delete attributes.contentType;
+        calls = [];
+        const full = await getRange('bytes=2-5').expect(206);
+        assert.equal(calls.length, 2);
+        assert.equal(calls[0].region, undefined);
+
+        assert.deepEqual(pick(fast.headers), pick(full.headers));
+        assert.deepEqual(fast.body, full.body);
+      });
+
+      describe('keeps the full-object path', () => {
+        const assertFullFirst = () => {
+          assert.ok(calls.length >= 1);
+          assert.equal(calls[0].region, undefined);
+        };
+
+        it('when the item is not indexed', async () => {
+          attributes = undefined;
+          useDataHandler();
+          await getRange('bytes=2-5').expect(206);
+          assertFullFirst();
+        });
+
+        it('when the indexed size is zero', async () => {
+          attributes.size = 0;
+          useDataHandler();
+          await getRange('bytes=2-5').expect(206);
+          assertFullFirst();
+        });
+
+        it('when the item has a stored hash', async () => {
+          attributes.hash = 'stored-hash';
+          useDataHandler();
+          await getRange('bytes=2-5').expect(206);
+          assertFullFirst();
+        });
+
+        it('when the content type is not indexed', async () => {
+          delete attributes.contentType;
+          useDataHandler();
+          await getRange('bytes=2-5').expect(206);
+          assertFullFirst();
+        });
+
+        it('when the item is a manifest by content type', async () => {
+          attributes.contentType = 'application/x.arweave-manifest+json';
+          manifestPathResolver.resolveFromData = async () => ({
+            id: 'not-a-real-id',
+            resolvedId: undefined,
+            complete: true,
+          });
+          useDataHandler();
+          await getRange('bytes=2-5').expect(404);
+          assertFullFirst();
+        });
+
+        it('when the item is flagged as a manifest', async () => {
+          attributes.isManifest = true;
+          manifestPathResolver.resolveFromIndex = async () => ({
+            id: 'not-a-real-id',
+            resolvedId: undefined,
+            complete: false,
+          });
+          useDataHandler();
+          await getRange('bytes=2-5').expect(206);
+          assertFullFirst();
+        });
+
+        it('for multiple ranges', async () => {
+          useDataHandler();
+          await getRange('bytes=0-1,4-5').expect(206);
+          assertFullFirst();
+        });
+
+        it('for a malformed range', async () => {
+          useDataHandler();
+          await getRange('invalid-range-header').expect(400);
+          assertFullFirst();
+        });
+
+        it('for an unsatisfiable range', async () => {
+          useDataHandler();
+          const res = await getRange('bytes=30-40').expect(416);
+          assert.equal(res.headers['content-range'], 'bytes */20');
+          assertFullFirst();
+        });
+
+        it('for HEAD', async () => {
+          useDataHandler();
+          await request(app)
+            .head('/not-a-real-id')
+            .set('Range', 'bytes=2-5')
+            .expect(206);
+          assertFullFirst();
+        });
+
+        it('without a Range header', async () => {
+          useDataHandler();
+          await request(app).get('/not-a-real-id').expect(200);
+          assert.equal(calls.length, 1);
+          assert.equal(calls[0].region, undefined);
+        });
+      });
+
+      describe('raw data route', () => {
+        const useRawHandler = () => {
+          app.get(
+            '/raw/:id',
+            (req, _res, next) => {
+              req.params[0] = req.params.id;
+              next();
+            },
+            createRawDataHandler({
+              log,
+              dataAttributesSource,
+              dataSource,
+              dataBlockListValidator,
+            }),
+          );
+        };
+
+        it('fetches only the range, once, whatever the content type', async () => {
+          attributes.contentType = 'application/x.arweave-manifest+json';
+          useRawHandler();
+
+          const res = await request(app)
+            .get('/raw/not-a-real-id')
+            .set('Range', 'bytes=2-5')
+            .buffer(true)
+            .parse(raw)
+            .expect(206);
+
+          assert.equal(calls.length, 1);
+          assert.deepEqual(calls[0].region, { offset: 2, size: 4 });
+          assert.equal(res.body.toString(), '2345');
+          assert.equal(res.headers['content-range'], 'bytes 2-5/20');
+          assert.equal(res.headers['x-arweave-tag-app-name'], 'range-test');
+        });
+
+        it('keeps the full-object path when the item has a stored hash', async () => {
+          attributes.hash = 'stored-hash';
+          useRawHandler();
+
+          await request(app)
+            .get('/raw/not-a-real-id')
+            .set('Range', 'bytes=2-5')
+            .expect(206);
+
+          assert.equal(calls[0].region, undefined);
+        });
+      });
+
+      describe('manifest-resolved item', () => {
+        const manifestAttributes = {
+          size: 100,
+          contentType: 'application/x.arweave-manifest+json',
+          isManifest: true,
+          stable: true,
+          verified: true,
+          signature: null,
+        };
+
+        const useManifest = (
+          resolutionType: 'path' | 'fallback',
+          extra: Record<string, unknown> = {},
+        ) => {
+          dataAttributesSource.getDataAttributes = async (id: string) =>
+            id === 'manifest-id' ? manifestAttributes : attributes;
+          manifestPathResolver.resolveFromIndex = async () => ({
+            id: 'manifest-id',
+            resolvedId: 'inner-id',
+            complete: true,
+            resolutionType,
+          });
+          app.get(
+            '/:id/*',
+            (_req, res, next) => {
+              // An ArNS name's long TTL, which a fallback must override.
+              res.setHeader('Cache-Control', 'public, max-age=3600');
+              next();
+            },
+            createDataHandler({
+              log,
+              dataAttributesSource,
+              dataSource,
+              dataBlockListValidator,
+              manifestPathResolver,
+              ...extra,
+            }),
+          );
+        };
+
+        it('leaves no headers behind when serving fails after setting them', async () => {
+          // Tags that are not iterable make setDataHeaders throw part-way,
+          // after it has set the data headers.
+          const dataItemMetaResolver = {
+            resolveFromLocal: async () => ({ tags: { length: 1 } }),
+            resolve: async () => undefined,
+          } as any;
+          manifestPathResolver.resolveFromData = async () => ({
+            id: 'manifest-id',
+            resolvedId: undefined,
+            complete: true,
+          });
+          useManifest('fallback', { dataItemMetaResolver });
+
+          const res = await request(app)
+            .get('/manifest-id/file.txt')
+            .set('Range', 'bytes=2-5')
+            .expect(404);
+
+          assert.equal(calls[0].id, 'inner-id');
+          assert.notEqual(calls[0].region, undefined);
+          assert.ok(streams[0].destroyed);
+          assert.equal(res.headers['content-range'], undefined);
+          assert.equal(res.headers['accept-ranges'], undefined);
+          assert.equal(
+            res.headers[headerNames.dataId.toLowerCase()],
+            undefined,
+          );
+          assert.equal(res.headers[headerNames.cache.toLowerCase()], undefined);
+        });
+
+        it('fetches only the range of the resolved item, once', async () => {
+          useManifest('path');
+
+          const res = await request(app)
+            .get('/manifest-id/file.txt')
+            .set('Range', 'bytes=2-5')
+            .buffer(true)
+            .parse(raw)
+            .expect(206);
+
+          assert.equal(calls.length, 1);
+          assert.equal(calls[0].id, 'inner-id');
+          assert.deepEqual(calls[0].region, { offset: 2, size: 4 });
+          assert.equal(res.body.toString(), '2345');
+          assert.equal(res.headers['content-range'], 'bytes 2-5/20');
+          assert.equal(
+            res.headers[headerNames.dataId.toLowerCase()],
+            'inner-id',
+          );
+          assert.equal(res.headers['cache-control'], 'public, max-age=3600');
+        });
+
+        it('sends the short fallback Cache-Control', async () => {
+          useManifest('fallback');
+
+          const res = await request(app)
+            .get('/manifest-id/file.txt')
+            .set('Range', 'bytes=2-5')
+            .buffer(true)
+            .parse(raw)
+            .expect(206);
+
+          assert.equal(calls.length, 1);
+          assert.equal(
+            res.headers['cache-control'],
+            `public, max-age=${config.CACHE_NOT_FOUND_MAX_AGE}, must-revalidate`,
+          );
+        });
+
+        it('keeps the full-object path when the resolved item has a stored hash', async () => {
+          attributes.hash = 'stored-hash';
+          useManifest('path');
+
+          await request(app)
+            .get('/manifest-id/file.txt')
+            .set('Range', 'bytes=2-5')
+            .expect(206);
+
+          assert.equal(calls[0].region, undefined);
+        });
+      });
     });
 
     describe('Content-Type', () => {

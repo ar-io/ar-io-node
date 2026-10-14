@@ -2489,6 +2489,342 @@ describe('ReadThroughDataCache', function () {
       });
     }
 
+    describe('ranged misses with background range caching', () => {
+      const payload = 'range then whole item payload';
+
+      /**
+       * An upstream that serves ranges at once and holds every full fetch
+       * until `release` is called, counting each kind.
+       */
+      function makeGatedSource() {
+        const counts = { ranged: 0, full: 0 };
+        let release!: () => void;
+        const gate = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        const dataSource: ContiguousDataSource = {
+          getData: async ({ region }) => {
+            if (region !== undefined) {
+              counts.ranged++;
+              const slice = payload.slice(
+                region.offset,
+                region.offset + region.size,
+              );
+              return {
+                stream: Readable.from([Buffer.from(slice)]),
+                size: region.size,
+                totalSize: payload.length,
+                verified: false,
+                trusted: true,
+                cached: false,
+              };
+            }
+            counts.full++;
+            await gate;
+            return {
+              stream: Readable.from([Buffer.from(payload)]),
+              size: payload.length,
+              verified: false,
+              trusted: true,
+              cached: false,
+            };
+          },
+        };
+        return { dataSource, counts, release: () => release() };
+      }
+
+      async function until(condition: () => boolean) {
+        for (let i = 0; i < 200 && !condition(); i++) {
+          await new Promise((resolve) => setTimeout(resolve, 5));
+        }
+        assert.ok(condition(), 'condition not reached');
+      }
+
+      async function drain(stream: Readable) {
+        let received = '';
+        for await (const chunk of stream) {
+          received += chunk;
+        }
+        return received;
+      }
+
+      function setup(
+        overrides: Record<string, unknown> = {},
+        source = makeGatedSource(),
+      ) {
+        const { store, counters } = makeStatefulStore();
+        const { store: attributesStore, attributes } =
+          makeStatefulAttributesStore();
+        for (const id of ['range-id', 'other-id']) {
+          attributes.set(id, {
+            size: payload.length,
+            contentType: 'text/plain',
+            isManifest: false,
+            stable: false,
+            verified: false,
+          });
+        }
+        const cache = makeCache({
+          dataSource: source.dataSource,
+          dataStore: store,
+          dataAttributesStore: attributesStore,
+          backgroundCacheRangeMaxSize: 1000,
+          backgroundCacheRangeConcurrency: 4,
+          ...overrides,
+        });
+        mock.method(metrics.backgroundRangeCacheTriggeredTotal, 'inc');
+        mock.method(metrics.backgroundRangeCacheCompletedTotal, 'inc');
+        mock.method(metrics.backgroundRangeCacheFailedTotal, 'inc');
+        mock.method(metrics.backgroundRangeCacheSkippedTotal, 'inc');
+        return { cache, counters, ...source };
+      }
+
+      it('starts one background fetch, which a concurrent full GET shares', async () => {
+        const { cache, counters, counts, release } = setup();
+
+        const ranged = await cache.getData({
+          id: 'range-id',
+          requestAttributes,
+          region: { offset: 6, size: 4 },
+        });
+        assert.equal(await drain(ranged.stream), 'then');
+        assert.equal(ranged.cached, false);
+
+        // The background fetch is now the in-flight leader for the item.
+        await until(() => counts.full === 1);
+
+        const full = cache.getData({ id: 'range-id', requestAttributes });
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        release();
+        const result = await full;
+
+        assert.equal(await drain(result.stream), payload);
+        // Served from the blob the background fetch wrote.
+        assert.equal(result.cached, true);
+        await until(
+          () =>
+            (
+              metrics.backgroundRangeCacheCompletedTotal.inc as any
+            ).mock.callCount() === 1,
+        );
+        assert.equal(counts.ranged, 1);
+        assert.equal(counts.full, 1);
+        assert.equal(counters.createWriteStream, 1);
+        assert.equal(counters.finalize, 1);
+        assert.equal(
+          (
+            metrics.backgroundRangeCacheTriggeredTotal.inc as any
+          ).mock.callCount(),
+          1,
+        );
+      });
+
+      it('starts one background fetch for concurrent ranged misses', async () => {
+        const { cache, counters, counts, release } = setup();
+
+        const results = await Promise.all(
+          [
+            { offset: 0, size: 5 },
+            { offset: 6, size: 4 },
+            { offset: 11, size: 5 },
+          ].map(async (region) => {
+            const data = await cache.getData({
+              id: 'range-id',
+              requestAttributes,
+              region,
+            });
+            return drain(data.stream);
+          }),
+        );
+        assert.deepEqual(results, ['range', 'then', 'whole']);
+
+        release();
+        await until(
+          () =>
+            (
+              metrics.backgroundRangeCacheCompletedTotal.inc as any
+            ).mock.callCount() === 1,
+        );
+
+        assert.equal(counts.ranged, 3);
+        assert.equal(counts.full, 1);
+        assert.equal(counters.finalize, 1);
+        assert.equal(
+          (
+            metrics.backgroundRangeCacheTriggeredTotal.inc as any
+          ).mock.callCount(),
+          1,
+        );
+        const pendingSkips = (
+          metrics.backgroundRangeCacheSkippedTotal.inc as any
+        ).mock.calls.filter(
+          (call: any) => call.arguments[0]?.reason === 'already_pending',
+        );
+        assert.equal(pendingSkips.length, 2);
+      });
+
+      describe('a stalled background fetch', () => {
+        const callCount = (counter: any) =>
+          (counter.inc as any).mock.callCount();
+
+        async function rangedMiss(cache: ReadThroughDataCache, id: string) {
+          const data = await cache.getData({
+            id,
+            requestAttributes,
+            region: { offset: 0, size: 5 },
+          });
+          await drain(data.stream);
+        }
+
+        it('releases its permit when the fetch never starts streaming', async () => {
+          // The gate is never released: the full fetch hangs.
+          const { cache, counts } = setup({
+            backgroundCacheRangeConcurrency: 1,
+            backgroundCacheStallTimeoutMs: 30,
+          });
+
+          await rangedMiss(cache, 'range-id');
+          await until(() => counts.full === 1);
+          await until(
+            () => callCount(metrics.backgroundRangeCacheFailedTotal) === 1,
+          );
+
+          // The only permit is free again.
+          await rangedMiss(cache, 'other-id');
+          assert.equal(
+            callCount(metrics.backgroundRangeCacheTriggeredTotal),
+            2,
+          );
+          const atCapacity = (
+            metrics.backgroundRangeCacheSkippedTotal.inc as any
+          ).mock.calls.filter(
+            (call: any) => call.arguments[0]?.reason === 'at_capacity',
+          );
+          assert.equal(atCapacity.length, 0);
+          // Let the second hung fetch stall too, so it cannot count in the
+          // next test's metrics.
+          await until(
+            () => callCount(metrics.backgroundRangeCacheFailedTotal) === 2,
+          );
+        });
+
+        it('aborts the upstream fetch it abandons', async () => {
+          let fullSignal: AbortSignal | undefined;
+          let fullStream: Readable | undefined;
+          const source = makeGatedSource();
+          const ranged = source.dataSource.getData.bind(source.dataSource);
+          source.dataSource.getData = async (args) => {
+            if (args.region !== undefined) {
+              return ranged(args);
+            }
+            source.counts.full++;
+            fullSignal = args.signal;
+            // Never sends a byte, never ends, never errors.
+            fullStream = new Readable({ read() {} });
+            return {
+              stream: fullStream,
+              size: payload.length,
+              verified: false,
+              trusted: true,
+              cached: false,
+            };
+          };
+          const { cache } = setup(
+            {
+              backgroundCacheRangeConcurrency: 1,
+              backgroundCacheStallTimeoutMs: 30,
+            },
+            source,
+          );
+
+          await rangedMiss(cache, 'range-id');
+          await until(
+            () => callCount(metrics.backgroundRangeCacheFailedTotal) === 1,
+          );
+
+          assert.notEqual(fullSignal, undefined);
+          assert.equal(fullSignal?.aborted, true);
+          fullStream?.destroy();
+        });
+
+        it('releases its permit when the stream stops between chunks', async () => {
+          let fullStream: Readable | undefined;
+          const source = makeGatedSource();
+          const ranged = source.dataSource.getData.bind(source.dataSource);
+          source.dataSource.getData = async (args) => {
+            if (args.region !== undefined) {
+              return ranged(args);
+            }
+            source.counts.full++;
+            // One chunk, then silence: never ends, never errors.
+            let sent = false;
+            fullStream = new Readable({
+              read() {
+                if (!sent) {
+                  sent = true;
+                  this.push(Buffer.from(payload.slice(0, 5)));
+                }
+              },
+            });
+            return {
+              stream: fullStream,
+              size: payload.length,
+              verified: false,
+              trusted: true,
+              cached: false,
+            };
+          };
+          const { cache } = setup(
+            {
+              backgroundCacheRangeConcurrency: 1,
+              backgroundCacheStallTimeoutMs: 30,
+            },
+            source,
+          );
+
+          await rangedMiss(cache, 'range-id');
+          await until(
+            () => callCount(metrics.backgroundRangeCacheFailedTotal) === 1,
+          );
+          assert.equal(
+            callCount(metrics.backgroundRangeCacheCompletedTotal),
+            0,
+          );
+
+          await rangedMiss(cache, 'other-id');
+          assert.equal(
+            callCount(metrics.backgroundRangeCacheTriggeredTotal),
+            2,
+          );
+          fullStream?.destroy();
+          await until(
+            () => callCount(metrics.backgroundRangeCacheFailedTotal) === 2,
+          );
+        });
+      });
+
+      it('starts none when the caller opts out', async () => {
+        const { cache, counts } = setup();
+
+        const ranged = await cache.getData({
+          id: 'range-id',
+          requestAttributes,
+          region: { offset: 0, size: 5 },
+          backgroundCacheOnRangeMiss: false,
+        });
+        assert.equal(await drain(ranged.stream), 'range');
+        await new Promise((resolve) => setTimeout(resolve, 20));
+
+        assert.equal(counts.full, 0);
+        assert.equal(
+          (
+            metrics.backgroundRangeCacheTriggeredTotal.inc as any
+          ).mock.callCount(),
+          0,
+        );
+      });
+    });
+
     it('runs one upstream fetch and one staging file for N concurrent requests', async () => {
       const { store, counters } = makeStatefulStore();
       const { store: attributesStore } = makeStatefulAttributesStore();

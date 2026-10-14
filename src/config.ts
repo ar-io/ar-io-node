@@ -3398,15 +3398,27 @@ export const TRUSTED_CACHE_RETRY_RATE = +env.varOrDefault(
   '0.0',
 );
 
-// Background caching for range request cache misses
+// Background caching for range request cache misses.
+//
+// A single-range GET of an uncached item fetches only the range (see
+// serveUncachedRange in routes/data/handlers.ts), so this background fetch is
+// what fills the cache with the whole item. Before that, the data handlers
+// fetched the whole item first and kept downloading it into the cache after
+// the range was served, for any size, so these defaults keep range-only
+// traffic (video, SQLite-over-HTTP) filling the cache: 10 GiB covers nearly
+// every item, and 4 fetches at once keep one long download from holding the
+// only permit. The foreground write guards (FOREGROUND_CACHE_MAX_SIZE and
+// FOREGROUND_CACHE_CONCURRENCY) apply to these fetches too. Signature and
+// owner reads from a parent bundle opt out (backgroundCacheOnRangeMiss), so
+// they never download a whole bundle. 0 disables.
 export const BACKGROUND_CACHE_RANGE_MAX_SIZE = env.nonNegativeIntOrDefault(
   'BACKGROUND_CACHE_RANGE_MAX_SIZE',
-  0,
+  10 * 1024 * 1024 * 1024,
 );
 
 export const BACKGROUND_CACHE_RANGE_CONCURRENCY = env.positiveIntOrDefault(
   'BACKGROUND_CACHE_RANGE_CONCURRENCY',
-  1,
+  4,
 );
 
 // Guards on the foreground (on-demand) full-item cache write path. Both
