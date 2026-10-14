@@ -750,9 +750,14 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     // permit forever: a few such fetches would silently switch background
     // range caching off for the life of the process. So the fetch is abandoned
     // once it goes this long without a byte -- before the stream arrives, or
-    // between chunks -- and the permit returns. Abandoning only detaches this
-    // reader; the foreground cache write it shares has its own stall bound.
+    // between chunks -- and the permit returns. Abandoning aborts the fetch
+    // itself, not just this reader: this call is the foreground leader, so the
+    // abort reaches the upstream request and tears down its tee, staging file
+    // and in-flight entry; any request waiting on it falls back to its own
+    // fetch. Otherwise each abandoned fetch would outlive its permit, and a
+    // wedged upstream could pile them up without bound.
     const stallTimeoutMs = this.backgroundCacheStallTimeoutMs;
+    const abortController = new AbortController();
     let stream: Readable | undefined;
     let abandoned = false;
     let stallTimer: NodeJS.Timeout | undefined;
@@ -778,11 +783,16 @@ export class ReadThroughDataCache implements ContiguousDataSource {
         const error = new Error(
           `Background range cache fetch stalled: no data for ${stallTimeoutMs}ms`,
         );
+        abortController.abort(error);
         stream?.destroy(error);
         reject(error);
       };
       armStallTimer();
-      this.getData({ id, requestAttributes }).then((result) => {
+      this.getData({
+        id,
+        requestAttributes,
+        signal: abortController.signal,
+      }).then((result) => {
         stream = result.stream;
         if (abandoned) {
           // Abandoned while the fetch was starting.

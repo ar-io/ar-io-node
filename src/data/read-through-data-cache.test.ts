@@ -2708,6 +2708,45 @@ describe('ReadThroughDataCache', function () {
           );
         });
 
+        it('aborts the upstream fetch it abandons', async () => {
+          let fullSignal: AbortSignal | undefined;
+          let fullStream: Readable | undefined;
+          const source = makeGatedSource();
+          const ranged = source.dataSource.getData.bind(source.dataSource);
+          source.dataSource.getData = async (args) => {
+            if (args.region !== undefined) {
+              return ranged(args);
+            }
+            source.counts.full++;
+            fullSignal = args.signal;
+            // Never sends a byte, never ends, never errors.
+            fullStream = new Readable({ read() {} });
+            return {
+              stream: fullStream,
+              size: payload.length,
+              verified: false,
+              trusted: true,
+              cached: false,
+            };
+          };
+          const { cache } = setup(
+            {
+              backgroundCacheRangeConcurrency: 1,
+              backgroundCacheStallTimeoutMs: 30,
+            },
+            source,
+          );
+
+          await rangedMiss(cache, 'range-id');
+          await until(
+            () => callCount(metrics.backgroundRangeCacheFailedTotal) === 1,
+          );
+
+          assert.notEqual(fullSignal, undefined);
+          assert.equal(fullSignal?.aborted, true);
+          fullStream?.destroy();
+        });
+
         it('releases its permit when the stream stops between chunks', async () => {
           let fullStream: Readable | undefined;
           const source = makeGatedSource();
