@@ -47,6 +47,7 @@ import {
 import {
   buildMultipartResponseParts,
   generateBoundary,
+  byteRangeHeader,
   calculateRangeResponseSize,
   contentEncodingMagicLength,
   contradictsContentEncoding,
@@ -138,7 +139,9 @@ export async function handleDataRateLimitingAndPayment({
 
   // Generate boundary once for multipart requests (random but consistent within request)
   const boundary =
-    req.headers.range !== undefined ? generateBoundary() : undefined;
+    byteRangeHeader(req.headers.range) !== undefined
+      ? generateBoundary()
+      : undefined;
 
   // Store boundary in request for use in handleRangeRequest
   if (boundary !== undefined) {
@@ -165,7 +168,7 @@ export async function handleDataRateLimitingAndPayment({
       ? 0
       : calculateRangeResponseSize(
           size,
-          req.headers.range,
+          byteRangeHeader(req.headers.range),
           contentType,
           boundary,
         );
@@ -271,6 +274,25 @@ const setDigestStableVerifiedHeaders = ({
 
   // Set trusted header based on data source
   res.setHeader(headerNames.trusted, data.trusted ? 'true' : 'false');
+};
+
+/**
+ * Moves the whole-object digest from Content-Digest to Repr-Digest for a
+ * response that will not carry the whole object.
+ *
+ * Content-Digest covers the content actually sent (RFC 9530 section 2), so on
+ * a 206, 416 or 400 the whole-object hash is a false claim, and a signed one,
+ * since content-digest is co-signed. Repr-Digest (section 3) describes the
+ * selected representation, which a partial response still belongs to; it is
+ * co-signed too, which is what binds a signed 206 to the file it is part of.
+ * The /ar-io/indexes route already answers ranges this way.
+ */
+const useReprDigest = (res: Response) => {
+  const digest = res.getHeader(headerNames.contentDigest);
+  if (digest !== undefined) {
+    res.removeHeader(headerNames.contentDigest);
+    res.setHeader(headerNames.reprDigest, digest);
+  }
 };
 
 /**
@@ -501,7 +523,7 @@ export const sendsDataStream = (
   dataAttributes: ContiguousDataAttributes | undefined,
 ): boolean =>
   req.method !== REQUEST_METHOD_HEAD &&
-  req.headers.range === undefined &&
+  byteRangeHeader(req.headers.range) === undefined &&
   !wouldReturn304(
     req,
     dataAttributes?.hash !== undefined
@@ -1035,6 +1057,8 @@ const handleRangeRequest = async ({
   );
 
   try {
+    // None of the responses below carries the whole object.
+    useReprDigest(res);
     const ranges = rangeParser(data.size, rangeHeader);
 
     // Malformed range header
@@ -1062,6 +1086,7 @@ const handleRangeRequest = async ({
       'application/octet-stream';
 
     setDigestStableVerifiedHeaders({ req, res, dataAttributes, data });
+    useReprDigest(res);
 
     if (isSingleRange) {
       const totalSize = data.size;
@@ -1449,7 +1474,7 @@ export const createRawDataHandler = ({
           });
 
           // Check if the request includes a Range header
-          const rangeHeader = req.headers.range;
+          const rangeHeader = byteRangeHeader(req.headers.range);
           if (rangeHeader !== undefined) {
             span.addEvent('Handling range request');
             span.setAttribute('data.request.range_request', true);
@@ -1817,7 +1842,7 @@ const sendManifestResponse = async ({
       });
 
       // Check if the request includes a Range header
-      const rangeHeader = req.headers.range;
+      const rangeHeader = byteRangeHeader(req.headers.range);
       if (rangeHeader !== undefined) {
         // Range requests create new streams so the original is no longer
         // needed
@@ -2061,11 +2086,22 @@ export const createDataHandler = ({
         }
 
         // Attempt manifest path resolution from the index (without data parsing)
-        if (dataAttributes?.isManifest) {
+        // A manifest the index does not know is resolved from its body below,
+        // and that resolution is cached; when it came from trusted bytes, use
+        // it rather than fetching and parsing the body again.
+        const trustedCachedResolution =
+          dataAttributes?.isManifest === true
+            ? undefined
+            : manifestPathResolver.resolveFromTrustedCache(id, manifestPath);
+        if (
+          dataAttributes?.isManifest === true ||
+          trustedCachedResolution !== undefined
+        ) {
           span.addEvent('Resolving manifest path from index');
           const manifestStartTime = Date.now();
           const manifestResolution =
-            await manifestPathResolver.resolveFromIndex(id, manifestPath);
+            trustedCachedResolution ??
+            (await manifestPathResolver.resolveFromIndex(id, manifestPath));
           const manifestDuration = Date.now() - manifestStartTime;
           span.setAttribute(
             'manifest.resolution_duration_ms',
@@ -2280,7 +2316,7 @@ export const createDataHandler = ({
         });
 
         // Check if the request includes a Range header
-        const rangeHeader = req.headers.range;
+        const rangeHeader = byteRangeHeader(req.headers.range);
         if (rangeHeader !== undefined && data !== undefined) {
           span.addEvent('Handling range request');
           span.setAttribute('data.range_request', true);

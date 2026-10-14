@@ -398,6 +398,24 @@ with core**).
   decode UTF-8 text documents as windows-1252. Edge caches keep the old
   header on responses they already hold until those expire or are purged.
 
+- **A cached range response claimed the whole item's digest.** A `206`,
+  and the `416` or `400` answer to a range request, carried `Content-Digest`
+  set to the SHA-256 of the whole item, a signed claim its body fails, since
+  `Content-Digest` covers only the bytes sent (RFC 9530). These responses
+  now carry `Repr-Digest`, the digest of the whole item, which HTTPSIG also
+  covers, as the `/ar-io/indexes` routes already did. Full responses keep
+  `Content-Digest`.
+
+- **A Range header with an unknown unit was refused.** `items=0-5` got a
+  `416`; RFC 9110 requires an origin server to ignore it and send the whole
+  item, which it now does. The `bytes` unit is matched case-insensitively.
+
+- **A manifest the index does not know was parsed on every request.** Its
+  path resolutions were cached but never read back, so each request fetched
+  and parsed the manifest again (66 ms on average on one gateway, up to 2 s).
+  A resolution from trusted bytes is now reused; one from an untrusted
+  source still decides only its own response.
+
 - **A fleet node could not subscribe to its own fleet's index publication.**
   The fleet recipe in `docs/index-swarm.md` subscribes a non-signing node to
   the fleet wallet, which is that node's own `AR_IO_WALLET` (it must be, for
