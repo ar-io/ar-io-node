@@ -398,14 +398,6 @@ with core**).
   decode UTF-8 text documents as windows-1252. Edge caches keep the old
   header on responses they already hold until those expire or are purged.
 
-- **The webhook emitter no longer writes a target's secret to the logs.**
-  `WEBHOOK_TARGET_SERVERS` can carry a credential in the URL: the content
-  scanner's `WEBHOOK_SECRET` (v0.7.0) travels as `?token=`, since the emitter
-  can't send headers. Every failed emission (e.g. while the scanner restarts)
-  logged the full URL, token included, and the debug line did too. Logged URLs
-  now keep the scheme, host, port, path and query parameter names, with values
-  and userinfo replaced by `<redacted>`.
-
 - **A fleet node could not subscribe to its own fleet's index publication.**
   The fleet recipe in `docs/index-swarm.md` subscribes a non-signing node to
   the fleet wallet, which is that node's own `AR_IO_WALLET` (it must be, for
@@ -488,6 +480,14 @@ with core**).
   same resolution; the 304 and payment predictions use the same tag. `/raw`,
   `/{id}` and the index routes keep the plain digest. Treat the `ETag` as
   opaque and read the digest from `X-AR-IO-Digest`.
+
+- **The webhook emitter no longer writes a target's secret to the logs.**
+  `WEBHOOK_TARGET_SERVERS` can carry a credential in the URL: the content
+  scanner's `WEBHOOK_SECRET` (v0.7.0) travels as `?token=`, since the emitter
+  can't send headers. Every failed emission (e.g. while the scanner restarts)
+  logged the full URL, token included, and the debug line did too. Logged URLs
+  now keep the scheme, host, port, path and query parameter names, with values
+  and userinfo replaced by `<redacted>`.
 
 - **The observer no longer uses a gateway as its own reference.** The
   observed gateway was never excluded from reference lookups, so observing
