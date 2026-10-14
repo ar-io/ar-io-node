@@ -3222,6 +3222,83 @@ describe('StandaloneSqliteDatabase', () => {
       assert.equal(row.owner_size, 32);
       assert.equal(row.signature_type, 1);
     });
+
+    const readAtom = (id: string) =>
+      bundlesDb
+        .prepare(
+          `SELECT parent_id, root_transaction_id, data_offset,
+                  root_parent_offset, "offset", size,
+                  signature_offset, signature_size,
+                  owner_offset, owner_size, signature_type
+           FROM new_data_items WHERE id = @id`,
+        )
+        .get({ id: fromB64Url(id) }) as Record<string, number | Buffer | null>;
+
+    it('replaces the whole root atom when a write names a different root (#937)', async () => {
+      // A second copy of the item in ANOTHER bundle, written without header
+      // offsets (a partial write). Pre-fix, COALESCE kept the first copy's
+      // offset/size/signature/owner offsets under the second copy's root:
+      // a header offset that frames nothing there, served as verified.
+      const id = 'Issue937RootChangeIssue937RootChangeAAAAAAA';
+      const otherRootTxId = '4444444444444444444444444444444444444444444';
+      const otherParentId = '5555555555555555555555555555555555555555555';
+      await db.saveDataItem({
+        ...bundleBackfillItem,
+        id,
+      } as unknown as NormalizedDataItem);
+      await db.saveDataItem({
+        ...bundleBackfillItem,
+        id,
+        root_tx_id: otherRootTxId,
+        parent_id: otherParentId,
+        data_offset: 900,
+        offset: null,
+        size: null,
+        root_parent_offset: null,
+        signature_offset: null,
+        signature_size: null,
+        owner_offset: null,
+        owner_size: null,
+        signature_type: null,
+      } as unknown as NormalizedDataItem);
+
+      const row = readAtom(id);
+      assert.deepEqual(row.root_transaction_id, fromB64Url(otherRootTxId));
+      assert.deepEqual(row.parent_id, fromB64Url(otherParentId));
+      assert.equal(row.data_offset, 900);
+      // Nothing from the first root survives under the second.
+      assert.equal(row.offset, null);
+      assert.equal(row.size, null);
+      assert.equal(row.root_parent_offset, null);
+      assert.equal(row.signature_offset, null);
+      assert.equal(row.signature_size, null);
+      assert.equal(row.owner_offset, null);
+      assert.equal(row.owner_size, null);
+      assert.equal(row.signature_type, null);
+    });
+
+    it('keeps the stored atom when a partial write names the SAME root', async () => {
+      const id = 'Issue937SameRootIssue937SameRootAAAAAAAAAAA';
+      await db.saveDataItem({
+        ...bundleBackfillItem,
+        id,
+      } as unknown as NormalizedDataItem);
+      await db.saveDataItem({
+        ...bundleBackfillItem,
+        id,
+        offset: null,
+        size: null,
+        signature_offset: null,
+        owner_offset: null,
+      } as unknown as NormalizedDataItem);
+
+      const row = readAtom(id);
+      assert.deepEqual(row.root_transaction_id, fromB64Url(bundleRootTxId));
+      assert.equal(row.offset, 200);
+      assert.equal(row.size, 1234);
+      assert.equal(row.signature_offset, 60);
+      assert.equal(row.owner_offset, 50);
+    });
   });
 
   describe('optimistic tag rows superseded by the unbundle write', () => {

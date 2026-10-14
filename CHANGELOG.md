@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased]
+
+### Fixed
+
+- **A write naming a different root no longer keeps the old root's offsets
+  (#937 hardening).** `upsertNewDataItem` merged the root atom field by field,
+  so a write for the same data item under another bundle that omitted the
+  header offsets kept the previous root's `offset`, `size`, `signature_offset`
+  and `owner_offset`: a header offset that frames nothing in the new bundle,
+  which the read path then served. A write whose root differs from the stored
+  one now replaces every root-atom field with its own values, NULLs included;
+  same-root partial writes still keep what is known. 161 such rows were found
+  in turbo-gateway.com's ClickHouse (heights 1.30M–1.74M).
+
 ## [Release 85] - 2026-10-14
 
 This is a **recommended release** focused on **the Arweave base layer as a
