@@ -657,6 +657,16 @@ with core**).
   `_rebased`, and their payload verification under
   `data_item_signature_verification_total{source="rebased_location"}`.
 
+- **A gzip item could lose its `Content-Encoding` while cached.** When the
+  upstream that supplied an item sent neither the header nor the item's
+  tags, nothing recorded the coding, and every later cache hit served the
+  gzip bytes without `Content-Encoding` while still sending
+  `X-Arweave-Tag-Content-Encoding: gzip`, so browsers failed to load them.
+  The item's own `Content-Encoding` tag is now declared when nothing else
+  names a coding, for gzip and zstd only and only when the body starts with
+  the coding's magic bytes, so a copy decoded upstream is still served
+  without it. Edge caches keep affected responses until they are purged.
+
 ### Documentation
 
 - **Index Sharing docs are split by reader, and CDB64 has one operator
