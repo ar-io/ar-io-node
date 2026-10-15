@@ -63,9 +63,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     re-settle may locate such items, or key such owners, later; it never
     drops a key (`dropped_wallets`).
   - The header check reads its sample from a pool ten times as large, as
-    root-TX bands do, passing over rows whose root is gone; `band.json`
-    `checks` gives `sampled`, `poolSize`, `unreadable` and
-    `unreadableShare`.
+    root-TX bands do, passing over rows whose root is gone; what it read
+    (`sampled`, `poolSize`, `unreadable`, `unreadableShare`) goes in the
+    publisher's `.publisher.json`, never `band.json`, which holds only what
+    the rows and the selection determine.
+  - Re-settles are gated on a fingerprint of the rows each band's
+    sub-ranges read (and the `bundles.db` keys of its owners), as root-TX
+    grid bands are: `--resettle` gates, `--resettle=full` rebuilds. A band
+    built with 404s is rebuilt every
+    `INDEX_EXPORT_L2_RECHECK_UNREADABLE_EVERY` (4) gated re-settles.
 - **Root-TX bands on the L1 grid, with a settle lag
   (`INDEX_EXPORT_ROOT_TX_LAYOUT=grid`)**: `index-export` cuts root-TX bands
   at the same heights as `parquet-l1` bands, so every publisher's bands line

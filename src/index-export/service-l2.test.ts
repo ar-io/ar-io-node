@@ -9,6 +9,8 @@ import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { before, beforeEach, describe, it } from 'node:test';
+import Sqlite from 'better-sqlite3';
+import crypto from 'node:crypto';
 
 import {
   ARDRIVE,
@@ -343,6 +345,83 @@ describe('ExportService, parquet-l2', () => {
     assert.deepEqual(await live(), []);
   });
 
+  it('gates re-settles on the fingerprint: same rows are not rebuilt, changed or unrecorded ones are', async () => {
+    await run();
+    const stateFile = path.join(dir, 'export', 'state.json');
+    const gated = (result: Awaited<ReturnType<typeof run>>) =>
+      result.steps
+        .filter((s) => s.step === 'resettle')
+        .map((s) => [s.heightRange[0], s.result, s.reason, s.gate?.verdict])
+        .sort((a, b) => (a[0] as number) - (b[0] as number));
+
+    const same = await run({ resettle: 'gate' });
+    assert.deepEqual(gated(same), [
+      [100_000, 'unchanged', 'same_sources', 'same_sources'],
+      [105_000, 'unchanged', 'same_sources', 'same_sources'],
+    ]);
+    // Not rebuilt: nothing read or written.
+    assert.ok(
+      same.steps.every((s) => s.stats === undefined || s.step !== 'resettle'),
+    );
+
+    // A row added to d1's heights: d1 rebuilt, d2 not.
+    source.items.push(rows.get('a2')!);
+    const changed = await run({ resettle: 'gate' });
+    assert.deepEqual(gated(changed), [
+      [100_000, 'published', 'replaces', 'changed'],
+      [105_000, 'unchanged', 'same_sources', 'same_sources'],
+    ]);
+    assert.deepEqual(gated(await run({ resettle: 'gate' })), [
+      [100_000, 'unchanged', 'same_sources', 'same_sources'],
+      [105_000, 'unchanged', 'same_sources', 'same_sources'],
+    ]);
+
+    // No fingerprint recorded (state lost): each rebuilt once.
+    const saved = JSON.parse(await fs.readFile(stateFile, 'utf8'));
+    delete saved.indexes['ardrive-l2'].fingerprints;
+    await fs.writeFile(stateFile, JSON.stringify(saved));
+    assert.deepEqual(gated(await run({ resettle: 'gate' })), [
+      [100_000, 'unchanged', 'same_id', 'unrecorded'],
+      [105_000, 'unchanged', 'same_id', 'unrecorded'],
+    ]);
+    // `full` rebuilds whatever the fingerprints say.
+    assert.deepEqual(
+      gated(await run({ resettle: 'full' })).map((g) => g.slice(0, 3)),
+      [
+        [100_000, 'unchanged', 'same_id'],
+        [105_000, 'unchanged', 'same_id'],
+      ],
+    );
+  });
+
+  it("gates on the owners' keys bundles.db holds too", async () => {
+    const db = path.join(dir, 'bundles.db');
+    const sqlite = new Sqlite(db);
+    sqlite.exec(
+      'CREATE TABLE wallets (address BLOB PRIMARY KEY, public_modulus BLOB)',
+    );
+    const key = roots[0].items.get('a1')!.item.rawOwner;
+    const address = crypto.createHash('sha256').update(key).digest();
+    sqlite.prepare('INSERT INTO wallets VALUES (?, ?)').run(address, key);
+    sqlite.close();
+    await run({}, { l2WalletsDb: db });
+    const same = await run({ resettle: 'gate' }, { l2WalletsDb: db });
+    assert.ok(
+      same.steps
+        .filter((s) => s.step === 'resettle')
+        .every((s) => s.gate?.verdict === 'same_sources'),
+    );
+    const again = new Sqlite(db);
+    again.prepare('DELETE FROM wallets').run();
+    again.close();
+    const changed = await run({ resettle: 'gate' }, { l2WalletsDb: db });
+    assert.ok(
+      changed.steps
+        .filter((s) => s.step === 'resettle')
+        .every((s) => s.gate?.verdict === 'changed'),
+    );
+  });
+
   it('stops, before building, on bands of another selection or off the grid', async () => {
     await run();
     const other = await run(
@@ -537,7 +616,9 @@ describe('ExportService, parquet-l2 roots the network no longer serves', () => {
     gone.add(toB64Url(nested.id));
     const first = d1(await run());
     assert.deepEqual([first.result, first.reason], ['published', 'new']);
-    assert.deepEqual(first.checks?.unlocated, { unproven: 2 });
+    // In band.json an unproven item is an unresolved ambiguous one: the
+    // same row. The 404s are the publisher's own.
+    assert.deepEqual(first.checks?.unlocated, { ambiguous: 2 });
     assert.equal(first.stats?.proofs.unproven, 2);
     // The repaired b1's header can't be read either: passed over in the
     // sample, out of its pass ratio, and never a wrong header.
@@ -546,10 +627,8 @@ describe('ExportService, parquet-l2 roots the network no longer serves', () => {
     assert.equal(first.header?.unreadable, 1);
     assert.equal(first.header?.ok, 11);
     assert.equal(first.header?.poolSize, 12);
-    assert.equal(first.checks?.sampled, 11);
-    assert.equal(first.checks?.unreadable, 1);
-    assert.equal(first.checks?.poolSize, 12);
-    assert.equal(first.checks?.unreadableShare, Number((1 / 12).toFixed(3)));
+    assert.equal(first.header?.unreadableShare, Number((1 / 12).toFixed(3)));
+    assert.equal(first.checks?.sampled, undefined);
     const [band] = await live();
 
     gone.clear();
@@ -571,7 +650,7 @@ describe('ExportService, parquet-l2 roots the network no longer serves', () => {
     assert.equal((await live())[0].id, back.id);
   });
 
-  it('verifies a band most of whose roots are gone among those that answer, and writes what it read in band.json', async () => {
+  it('verifies a band most of whose roots are gone among those that answer', async () => {
     // The nested root and the lone item's root gone: 2 of the 13 located
     // rows' roots. Then the plain root too: nothing left to verify.
     gone.add(toB64Url(nested.id));
@@ -585,7 +664,37 @@ describe('ExportService, parquet-l2 roots the network no longer serves', () => {
     const none = d1(await run({ dryRun: true }));
     assert.deepEqual([none.result, none.reason], ['couldnt_check', 'gate']);
     assert.equal(none.header?.ok, 0);
-    assert.equal(none.checks?.unreadableShare, 1);
+    assert.equal(none.header?.unreadableShare, 1);
+  });
+
+  it('rebuilds a band built with 404s on every fourth gated re-settle, so roots served again get in', async () => {
+    gone.add(toB64Url(nested.id));
+    const first = d1(await run());
+    assert.equal(first.result, 'published');
+    const [band] = await live();
+    assert.deepEqual(band.facts.unreadable, { proofs: 2, keys: 0 });
+    gone.clear();
+    for (let pass = 1; pass <= 3; pass++) {
+      const skipped = d1(await run({ resettle: 'gate' }));
+      assert.deepEqual(
+        [skipped.result, skipped.gate?.verdict],
+        ['unchanged', 'same_sources'],
+        `pass ${pass}`,
+      );
+    }
+    const fourth = d1(await run({ resettle: 'gate' }));
+    assert.deepEqual(
+      [fourth.result, fourth.gate?.verdict],
+      ['published', 'recheck_unreadable'],
+    );
+    assert.deepEqual(fourth.checks?.unlocated, {});
+    const [rebuilt] = await live();
+    assert.deepEqual(rebuilt.facts.unreadable, { proofs: 0, keys: 0 });
+    // Nothing unreadable now: gated re-settles skip it for good.
+    for (let pass = 1; pass <= 4; pass++) {
+      const skipped = d1(await run({ resettle: 'gate' }));
+      assert.equal(skipped.gate?.verdict, 'same_sources');
+    }
   });
 
   it("keeps an owner's key: a re-settle that can no longer read it is refused", async () => {

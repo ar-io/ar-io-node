@@ -94,5 +94,23 @@ export interface L2ItemSource {
   ): Promise<RootPosition[]>;
   /** The time of the block at `height`, in seconds, when the source knows it. */
   blockTime?(height: number): Promise<number | undefined>;
+  /** Where the source reads (a URL and user), for a fingerprint's identity. */
+  readonly identity?: string;
+  /**
+   * A digest of every row the windows of `[from, to]` read: the selected
+   * items, the bundles above them, the L1 rows of their roots. Equal
+   * digests mean the same rows. Absent: the exporter digests the windows.
+   */
+  fingerprint?(
+    from: number,
+    to: number,
+    selection: ParquetL2Selection,
+  ): Promise<string>;
+  /** The distinct owner addresses of the selected items of `[from, to]`. */
+  owners?(
+    from: number,
+    to: number,
+    selection: ParquetL2Selection,
+  ): AsyncIterable<Buffer>;
   close(): Promise<void>;
 }

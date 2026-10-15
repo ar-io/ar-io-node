@@ -815,7 +815,8 @@ describe('exportL2Band, locations', () => {
       workDir: path.join(dir, 'work'),
     });
     try {
-      assert.deepEqual(result.band.checks?.unlocated, { unproven: 2 });
+      // In band.json an unproven item is an unresolved ambiguous one.
+      assert.deepEqual(result.band.checks?.unlocated, { ambiguous: 2 });
       // b1 is repaired without a read, a1 is in the root itself.
       assert.equal(result.band.checks?.located, 2);
       assert.equal(result.stats.proofs.unproven, 2);

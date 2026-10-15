@@ -95,6 +95,77 @@ export function itemsQuery(selection: ParquetL2Selection): {
   };
 }
 
+/**
+ * A digest of every row a window's queries read, over the heights: the
+ * selected items (every column the item query reads, `inserted_at`
+ * included), every nested bundle row (a superset of the bundles above
+ * them), and the L1 rows of their roots. Read without `FINAL`, as the
+ * root-TX fingerprint is, so a row added, changed, merged away or expired
+ * changes it; summed as well as XORed, so two identical rows don't cancel.
+ */
+export function fingerprintQuery(selection: ParquetL2Selection): {
+  query: string;
+  params: Record<string, string>;
+} {
+  const { condition, params } = selectionClickHouse(selection);
+  const range = 'height >= {from:UInt32} AND height <= {to:UInt32}';
+  return {
+    query: `
+  SELECT
+    count() AS rows,
+    toString(groupBitXor(h)) AS xor,
+    toString(sumWithOverflow(h)) AS sum
+  FROM (
+    SELECT cityHash64(
+      'item', id, parent_id, root_transaction_id, height,
+      block_transaction_index, inserted_at, "offset", "size", data_offset,
+      owner_offset, owner_size, signature_offset, signature_size,
+      signature_type, root_parent_offset, data_size, owner_address, owner,
+      target, anchor, tags
+    ) AS h
+    FROM transactions
+    WHERE ${range} AND is_data_item AND ${condition}
+    UNION ALL
+    SELECT cityHash64(
+      'bundle', id, parent_id, root_transaction_id, height,
+      block_transaction_index, inserted_at, "offset", "size", data_offset,
+      root_parent_offset, data_size
+    ) AS h
+    FROM transactions
+    WHERE ${range} AND is_data_item
+      AND id IN (
+        SELECT parent_id FROM transactions
+        WHERE ${range} AND is_data_item AND parent_id != root_transaction_id)
+    UNION ALL
+    SELECT cityHash64(
+      'root', id, height, block_transaction_index, inserted_at
+    ) AS h
+    FROM transactions
+    WHERE ${range} AND NOT is_data_item
+      AND id IN (
+        SELECT root_transaction_id FROM transactions
+        WHERE ${range} AND is_data_item AND ${condition})
+  )`,
+    params,
+  };
+}
+
+/** The distinct owners of the selected items of some heights. */
+export function ownersQuery(selection: ParquetL2Selection): {
+  query: string;
+  params: Record<string, string>;
+} {
+  const { condition, params } = selectionClickHouse(selection);
+  return {
+    query: `
+  SELECT DISTINCT hex(owner_address) AS owner_hex
+  FROM transactions
+  WHERE height >= {from:UInt32} AND height <= {to:UInt32}
+    AND is_data_item AND ${condition}`,
+    params,
+  };
+}
+
 /** Data item rows by id, within a window's heights. */
 export const ROWS_BY_ID_QUERY = `
   SELECT ${ROW_COLUMNS}
@@ -215,7 +286,47 @@ export class ClickHouseL2Source implements L2ItemSource {
     private readonly client: ClickHouseQuerier,
     private readonly windowBlocks = CLICKHOUSE_L2_WINDOW_BLOCKS,
     private readonly windowItems = CLICKHOUSE_L2_WINDOW_ITEMS,
+    /** Where the table is (URL and user): another place is another source. */
+    private readonly where = '',
   ) {}
+
+  get identity(): string {
+    return `clickhouse ${this.where}`.trim();
+  }
+
+  async fingerprint(
+    from: number,
+    to: number,
+    selection: ParquetL2Selection,
+  ): Promise<string> {
+    const { query, params } = fingerprintQuery(selection);
+    const rows = await this.rows<{
+      rows: number | string;
+      xor: string;
+      sum: string;
+    }>(query, { ...params, from, to }, `fingerprint of heights ${from}-${to}`);
+    const [row] = rows;
+    if (rows.length !== 1 || row.xor === undefined || row.sum === undefined) {
+      throw new Error(
+        `ClickHouse source ${this.name}, fingerprint of heights ${from}-${to}: expected one row of rows, xor and sum`,
+      );
+    }
+    return `rows ${Number(row.rows)} xor ${row.xor} sum ${row.sum}`;
+  }
+
+  async *owners(
+    from: number,
+    to: number,
+    selection: ParquetL2Selection,
+  ): AsyncIterable<Buffer> {
+    const { query, params } = ownersQuery(selection);
+    const rows = await this.rows<{ owner_hex: string }>(
+      query,
+      { ...params, from, to },
+      `owners at heights ${from}-${to}`,
+    );
+    for (const row of rows) yield Buffer.from(row.owner_hex, 'hex');
+  }
 
   /**
    * One below the highest height in the table, or -1 when it is empty: the

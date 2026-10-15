@@ -402,6 +402,7 @@ export async function exportL2Band({
   reads,
   workDir,
   limits = DEFAULT_L2_DUCK_LIMITS,
+  random = Math.random,
 }: {
   selection: ParquetL2Selection;
   from: number;
@@ -415,6 +416,8 @@ export async function exportL2Band({
   reads: GatewayReads;
   workDir: string;
   limits?: L2DuckLimits;
+  /** Random source for the header-check sample, in [0, 1). */
+  random?: () => number;
 }): Promise<L2ExportResult> {
   const started = Date.now();
   await fs.mkdir(workDir, { recursive: true });
@@ -436,6 +439,7 @@ export async function exportL2Band({
         reads,
         scratchDir,
         bandDir,
+        random,
       });
       stagingBytes = await treeBytes(staging);
       return built;
@@ -476,6 +480,7 @@ async function build(
     reads,
     scratchDir,
     bandDir,
+    random,
   }: {
     selection: ParquetL2Selection;
     from: number;
@@ -486,6 +491,7 @@ async function build(
     reads: GatewayReads;
     scratchDir: string;
     bandDir: string;
+    random: () => number;
   },
 ): Promise<Pick<L2ExportResult, 'band' | 'stats' | 'sample'>> {
   const resolver = rootResolver(duck, l1Bands, source, from, to);
@@ -559,7 +565,7 @@ async function build(
     };
     const general = new Reservoir<BandSampleEntry>(
       L2_SAMPLE_SIZE * HEADER_CHECK_POOL_FACTOR,
-      Math.random,
+      random,
     );
     const strata = new Map<string, Reservoir<BandSampleEntry>>();
     const offerSample = (
@@ -586,7 +592,7 @@ async function build(
         if (reservoir === undefined) {
           reservoir = new Reservoir(
             L2_STRATUM_SAMPLE_SIZE * HEADER_CHECK_POOL_FACTOR,
-            Math.random,
+            random,
           );
           strata.set(tag, reservoir);
         }
@@ -972,11 +978,16 @@ async function build(
       tables: tables.tables,
       checks: {
         located: counts.located,
-        unlocated: counts.unlocated,
+        // What the rows and the source determine: an ambiguous item left
+        // unlocated because its root was gone (`unproven`) is the row an
+        // unresolved ambiguous one is, so both count as `ambiguous` here;
+        // the gateway's part is the publisher's own (`.publisher.json`).
+        unlocated: ambiguousFolded(counts.unlocated),
         normalised: counts.normalised,
         repaired: counts.repaired,
         ambiguousProven: counts.proven,
-        ambiguousUnlocated: counts.unlocated.ambiguous ?? 0,
+        ambiguousUnlocated:
+          (counts.unlocated.ambiguous ?? 0) + (counts.unlocated.unproven ?? 0),
         ownersWithoutKey: tables.ownersWithoutKey,
       },
       createdAt,
@@ -1191,6 +1202,15 @@ export async function digestTable(
     previous = values;
   }
   return { rows: digest.rows, rowDigest: digest.hex() };
+}
+
+/** Unlocated counts with `unproven` counted as `ambiguous`. */
+function ambiguousFolded(
+  unlocated: Partial<Record<UnlocatedReason, number>>,
+): Partial<Record<UnlocatedReason, number>> {
+  const { unproven, ...rest } = unlocated;
+  if (unproven === undefined || unproven === 0) return rest;
+  return { ...rest, ambiguous: (rest.ambiguous ?? 0) + unproven };
 }
 
 /** Bytes under a directory, every level. */

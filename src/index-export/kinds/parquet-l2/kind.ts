@@ -36,14 +36,11 @@ import {
   RootSourceFactory,
 } from '../../../lib/index-band/verify.js';
 import {
+  BandPublisherFacts,
   readPublisherFacts,
   writePublisherFacts,
 } from '../../../lib/parquet-l1/layout.js';
-import {
-  BAND_FILE,
-  l2BandId,
-  serializeBandFile,
-} from '../../../lib/parquet-l2/layout.js';
+import { l2BandId } from '../../../lib/parquet-l2/layout.js';
 import * as metrics from '../../metrics.js';
 import type { UnlocatedReason } from '../root-tx/sources/item-location.js';
 import type { L1PublishedBand } from '../parquet-l1/kind.js';
@@ -96,6 +93,8 @@ export interface L2StepContext {
   history?: string[];
   /** The build's DuckDB limits ({@link DEFAULT_L2_DUCK_LIMITS} when unset). */
   limits?: L2DuckLimits;
+  /** Random source for the header-check sample (tests). */
+  random?: () => number;
   now?: () => number;
 }
 
@@ -112,6 +111,8 @@ export interface L2Outcome {
   supersedes?: string[];
   /** The live bands it was built to replace. */
   replaces?: string[];
+  /** Re-settle: what the fingerprint gate found. */
+  gate?: { verdict: string; detail?: string };
   /** Rows per table. */
   rows?: Record<string, number>;
   /** Rows and row digest per table, as `band.json` gives them: what two builders compare. */
@@ -182,7 +183,6 @@ const UNLOCATED_REASONS: UnlocatedReason[] = [
   'inconsistent',
   'deep',
   'ambiguous',
-  'unproven',
   'parent_two_places',
 ];
 
@@ -226,6 +226,7 @@ export async function runL2Step(
         reads,
         workDir: ctx.workDir,
         ...(ctx.limits !== undefined ? { limits: ctx.limits } : {}),
+        ...(ctx.random !== undefined ? { random: ctx.random } : {}),
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -281,6 +282,7 @@ export async function runL2Step(
         await writePublisherFacts(built.dir, {
           ...(supersedes.length > 0 ? { supersedes } : {}),
           builtAt: new Date(ctx.now?.() ?? Date.now()).toISOString(),
+          ...ownFacts(built, outcome.header),
         });
         await fs.rename(built.dir, kept);
         outcome.keptAt = kept;
@@ -293,6 +295,7 @@ export async function runL2Step(
       ...(supersedes.length > 0 ? { supersedes } : {}),
       builtAt: at,
       ...(step.settles ? { settledAt: at } : {}),
+      ...ownFacts(built, outcome.header),
     });
     await fs.mkdir(ctx.index.publishDir, { recursive: true });
     await fs.rename(built.dir, path.join(ctx.index.publishDir, id));
@@ -426,6 +429,7 @@ async function decide(
     const check = await checkBandHeaders({
       entries,
       targets: L2_HEADER_TARGETS,
+      ...(ctx.random !== undefined ? { random: ctx.random } : {}),
       totalRecords: built.band.tables.data_items.rows,
       openRoot: ctx.openRoot,
       minRecords: 0,
@@ -461,21 +465,6 @@ async function decide(
         check.unreadable.length,
       );
     }
-    // What the band says it checked, in its band.json: not part of its id.
-    built.band = {
-      ...built.band,
-      checks: {
-        ...built.band.checks,
-        sampled: check.checked,
-        poolSize: check.poolSize,
-        unreadable: check.unreadable.length,
-        unreadableShare: Number(check.unreadableShare.toFixed(3)),
-      },
-    };
-    await fs.writeFile(
-      path.join(built.dir, BAND_FILE),
-      serializeBandFile(built.band),
-    );
     for (const wrong of check.wrong) {
       metrics.gateWrong.inc({
         index: ctx.index.name,
@@ -565,6 +554,34 @@ async function decide(
     result: 'published',
     reason: step.replaces.length > 0 ? 'replaces' : 'new',
   });
+}
+
+/**
+ * What only this build knows, for `.publisher.json`, never `band.json`
+ * (which holds only what the rows determine): what the header check of the
+ * sample read, and the reads the gateway answered 404 for.
+ */
+function ownFacts(
+  built: L2ExportResult,
+  header: L2Outcome['header'],
+): Pick<BandPublisherFacts, 'headerCheck' | 'unreadable'> {
+  return {
+    ...(header !== undefined
+      ? {
+          headerCheck: {
+            sampled: header.checked,
+            ok: header.ok,
+            poolSize: header.poolSize,
+            unreadable: header.unreadable,
+            unreadableShare: header.unreadableShare,
+          },
+        }
+      : {}),
+    unreadable: {
+      proofs: built.stats.proofs.unproven,
+      keys: built.stats.owners.withoutKeyBy.unreadable,
+    },
+  };
 }
 
 const lockLost = (): Decision => ({

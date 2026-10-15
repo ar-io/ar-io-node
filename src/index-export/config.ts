@@ -57,6 +57,8 @@ export const DEFAULT_L2_DUCKDB_MEMORY = '2GB';
 export const DEFAULT_L2_DUCKDB_THREADS = 2;
 export const DEFAULT_L2_DUCKDB_SPILL_MAX_GB = 256;
 export const DEFAULT_L2_WINDOW_ITEMS = 50_000;
+/** `parquet-l2`: every how many gated re-settles a band with 404s is rebuilt. */
+export const DEFAULT_L2_RECHECK_UNREADABLE_EVERY = 4;
 
 export interface ExportConfig {
   /** The indexes to build. */
@@ -128,6 +130,11 @@ export interface ExportConfig {
   l2Duck?: { memoryLimit: string; threads: number; spillMaxGb: number };
   /** `parquet-l2`: the most items one source window holds before it is split. */
   l2WindowItems?: number;
+  /**
+   * `parquet-l2`: a band built with reads the gateway answered 404 is
+   * rebuilt on every this many re-settles its fingerprint would skip.
+   */
+  l2RecheckUnreadableEvery?: number;
 }
 
 type Env = Record<string, string | undefined>;
@@ -347,6 +354,11 @@ export function parseExportConfig(env: Env, dataDir = DATA_DIR): ExportConfig {
               fallback: DEFAULT_L2_DUCKDB_SPILL_MAX_GB,
             }) as number,
           },
+          l2RecheckUnreadableEvery: integer(
+            env,
+            'INDEX_EXPORT_L2_RECHECK_UNREADABLE_EVERY',
+            { min: 1, fallback: DEFAULT_L2_RECHECK_UNREADABLE_EVERY },
+          ) as number,
           l2WindowItems: integer(env, 'INDEX_EXPORT_L2_WINDOW_ITEMS', {
             min: 1000,
             fallback: DEFAULT_L2_WINDOW_ITEMS,

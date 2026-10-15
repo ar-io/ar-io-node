@@ -100,6 +100,12 @@ export interface IndexState {
    * by band id; a due band whose sources still match is not rebuilt.
    */
   fingerprints?: Record<string, BandFingerprint>;
+  /**
+   * `parquet-l2`: gated re-settles a band with unreadable reads has passed
+   * since its last full rebuild, by band id (see
+   * `INDEX_EXPORT_L2_RECHECK_UNREADABLE_EVERY`).
+   */
+  unreadableRechecks?: Record<string, number>;
 }
 
 /** What the service remembers between runs, per index; the rest is derived from disk. */

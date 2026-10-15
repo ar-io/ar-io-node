@@ -310,6 +310,29 @@ export class MemoryL2Source implements L2ItemSource {
     };
   }
 
+  async *owners(
+    from: number,
+    to: number,
+    selection: ParquetL2Selection,
+  ): AsyncIterable<Buffer> {
+    const selected = selectionMatcher(selection);
+    const seen = new Set<string>();
+    for (const row of this.items) {
+      if (
+        row.height < from ||
+        row.height > to ||
+        row.ownerAddress === undefined
+      ) {
+        continue;
+      }
+      if (!selected(row.tags ?? [])) continue;
+      const k = row.ownerAddress.toString('hex');
+      if (seen.has(k)) continue;
+      seen.add(k);
+      yield row.ownerAddress;
+    }
+  }
+
   async blockTime(height: number): Promise<number | undefined> {
     return this.times.get(height) ?? 1_600_000_000 + height;
   }

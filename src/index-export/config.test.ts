@@ -228,6 +228,7 @@ describe('parseExportConfig, parquet-l2', () => {
       spillMaxGb: 256,
     });
     assert.equal(config.l2WindowItems, 50_000);
+    assert.equal(config.l2RecheckUnreadableEvery, 4);
     assert.deepEqual(config.sources, [], 'no root-TX sources');
     const more = parseExportConfig({
       ...L2,
@@ -240,6 +241,7 @@ describe('parseExportConfig, parquet-l2', () => {
       INDEX_EXPORT_L2_DUCKDB_THREADS: '4',
       INDEX_EXPORT_L2_DUCKDB_SPILL_MAX_GB: '100',
       INDEX_EXPORT_L2_WINDOW_ITEMS: '20000',
+      INDEX_EXPORT_L2_RECHECK_UNREADABLE_EVERY: '1',
       INDEX_EXPORT_L2_SOURCE: JSON.stringify({
         type: 'clickhouse',
         url: 'http://peer:8123',
@@ -258,6 +260,7 @@ describe('parseExportConfig, parquet-l2', () => {
       spillMaxGb: 100,
     });
     assert.equal(more.l2WindowItems, 20_000);
+    assert.equal(more.l2RecheckUnreadableEvery, 1);
     assert.equal(more.l2Source?.config.name, 'clickhouse-peer:8123');
   });
 

@@ -502,6 +502,19 @@ describe(
           ].sort(),
         );
         assert.equal(await ch.blockTime(1205), 1_600_001_205);
+        // The fingerprint and the owners of a sub-range.
+        const print = await ch.fingerprint(1000, 1299, ARDRIVE);
+        assert.match(print, /^rows \d+ xor \d+ sum \d+$/);
+        assert.equal(await ch.fingerprint(1000, 1299, ARDRIVE), print);
+        assert.notEqual(await ch.fingerprint(1000, 1199, ARDRIVE), print);
+        const owners: string[] = [];
+        for await (const owner of ch.owners(1000, 1299, ARDRIVE)) {
+          owners.push(owner.toString('hex'));
+        }
+        assert.deepEqual(
+          owners.sort(),
+          [...new Set(rows.map((r) => r.ownerAddress!.toString('hex')))].sort(),
+        );
         assert.equal(await ch.blockTime(1206), undefined);
         assert.equal(await ch.stableHeight(), 1204);
       } finally {

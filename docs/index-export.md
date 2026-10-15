@@ -745,10 +745,21 @@ Besides the rules above, before a band publishes:
   (404, `unreadable`, out of the pass ratio). Every relocated row is read,
   and one whose root is gone leaves the band for the retry. A wrong header
   rejects the band; under 80% of those read passing, or too few verified,
-  leaves it for the retry. `checks` in `band.json` gives what was read
-  (`sampled`), the pool (`poolSize`), the rows passed over (`unreadable`)
-  and their share of those tried (`unreadableShare`), an estimate of the
-  band's gone roots. A band with no located row has nothing to check.
+  leaves it for the retry. What the sample read depends on the sample and
+  the gateway, so it is the publisher's own: in `.publisher.json`
+  (`headerCheck`: `sampled`, `ok`, `poolSize`, `unreadable`,
+  `unreadableShare`, an estimate of the band's gone roots) and the step's
+  report, never in `band.json`. A band with no located row has nothing to
+  check.
+
+`band.json` holds only what the rows and the selection determine, so the
+same rows give the same file, the same torrent and the same swarm, and a
+rebuild of unchanged rows publishes nothing. Its `checks` are `located`,
+`unlocated` by reason, `normalised`, `repaired`, `ambiguousProven`,
+`ambiguousUnlocated` and `ownersWithoutKey` (owners of the rows without a
+`wallets` row). An ambiguous item left unlocated because its root answered
+404 counts there as `ambiguous`, the row it is; the 404s are counted in
+`.publisher.json` (`unreadable`: `proofs`, `keys`).
 
 ### Lifecycle
 
@@ -773,6 +784,22 @@ of twenty frozen `d` bands into its `h`; rebuild the **tip** bands; then
 **re-settle** the frozen bands due by
 `INDEX_EXPORT_ROOT_TX_RESETTLE_INTERVAL_HOURS` (or all, with `--once
 --resettle`).
+
+A re-settle is gated on a fingerprint, the root-TX grid's design: per
+5,000-height sub-range, one ClickHouse aggregate over every row the band's
+windows read (the selected items with every column the item query reads,
+the nested bundle rows, the L1 rows of their roots), and the `wallets`
+rows `bundles.db` holds for the band's owners (count and XOR of hashes);
+with the source's place, the selection, what places the roots and a
+version as its identity. It is recorded when a band is built from the
+source (a freeze, a roll, a re-settle), taken before the build. A due band
+whose fingerprint is unchanged is not rebuilt (`same_sources`); one that
+changed is (`changed`), and one with none recorded is rebuilt once
+(`unrecorded`). `--resettle` gates, `--resettle=full` rebuilds every one.
+The gateway is not in the fingerprint: a band built while it answered 404
+for some reads is rebuilt on every
+`INDEX_EXPORT_L2_RECHECK_UNREADABLE_EVERY` (4) re-settles the gate would
+skip (`recheck_unreadable`), so roots served again get in.
 
 Every band is rebuilt from the source, not from the bands it replaces: the
 same rows give the same band, so a roll is an `h` built again and checked

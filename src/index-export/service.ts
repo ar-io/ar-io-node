@@ -24,6 +24,7 @@ import { Logger } from 'winston';
 import type { RootSourceFactory } from '../lib/index-band/verify.js';
 import {
   DEFAULT_L2_MAX_READS,
+  DEFAULT_L2_RECHECK_UNREADABLE_EVERY,
   DEFAULT_RESETTLE_INTERVAL_HOURS,
   DEFAULT_RESETTLE_MAX_CHANGED,
   DEFAULT_SETTLE_BLOCKS,
@@ -105,6 +106,8 @@ import {
   planL2Tip,
 } from './kinds/parquet-l2/planner.js';
 import type { L2ItemSource } from './kinds/parquet-l2/source.js';
+import { fingerprintL2Band } from './kinds/parquet-l2/fingerprint.js';
+import { openWalletsDb } from './kinds/parquet-l2/wallets.js';
 import { idHeightRange as l2IdHeightRange } from '../lib/parquet-l2/layout.js';
 import { CsvOverlaySource } from './kinds/root-tx/sources/csv.js';
 import type { RecordSource } from './kinds/root-tx/sources/rows.js';
@@ -196,6 +199,10 @@ export interface L2IndexReport {
   failed?: { reason: string; message: string };
   /** The index's live band ids after the run. */
   liveIds?: string[];
+  /** What bands built from the source this run settled against, by id (for the state). */
+  fingerprints?: Record<string, BandFingerprint>;
+  /** Gated re-settles passed by bands with unreadable reads, by id (for the state). */
+  rechecks?: Record<string, number>;
 }
 
 export interface RunReport {
@@ -272,6 +279,14 @@ export function reportForOutput(report: RunReport): unknown {
         },
       };
     }),
+    // Fingerprints and recheck counts are the state's, not the report's.
+    ...(report.l2 !== undefined
+      ? {
+          l2: report.l2.map(
+            ({ fingerprints: _f, rechecks: _r, ...index }) => index,
+          ),
+        }
+      : {}),
   };
 }
 
@@ -1635,6 +1650,7 @@ export class ExportService {
       report.l2.push(entry);
       let source: L2ItemSource | undefined;
       let roots: { openRoot: RootSourceFactory; close: () => void } | undefined;
+      let closeWallets: (() => void) | undefined;
       try {
         await fs.mkdir(workDir, { recursive: true });
         if (this.deps.openL2Source === undefined) {
@@ -1695,6 +1711,26 @@ export class ExportService {
           now: () => this.now(),
           ...(config.l2Duck !== undefined ? { limits: config.l2Duck } : {}),
         };
+        // The re-settle gate: what each band settled against.
+        const walletsDb = openWalletsDb(config.l2WalletsDb);
+        closeWallets = () => walletsDb?.close();
+        const recheckEvery =
+          config.l2RecheckUnreadableEvery ??
+          DEFAULT_L2_RECHECK_UNREADABLE_EVERY;
+        const recorded = (id: string) =>
+          entry.fingerprints?.[id] ?? state.fingerprints?.[id];
+        const fingerprintOf = async (step: L2Step) =>
+          fingerprintL2Band({
+            source: source as L2ItemSource,
+            selection: index.selection,
+            from: step.heightRange[0],
+            to: step.heightRange[1],
+            l1Bands,
+            ...(config.l2WalletsDb !== undefined
+              ? { walletsDbPath: config.l2WalletsDb }
+              : {}),
+            ...(walletsDb !== undefined ? { walletsDb } : {}),
+          });
         const run = async (step: L2Step, bands: L2LiveBand[]) => {
           entry.plan.push(describeL2Step(step));
           await this.checkL2Disk(
@@ -1722,6 +1758,110 @@ export class ExportService {
           });
           entry.steps.push(outcome);
           report.peakBytes += outcome.bandBytes ?? 0;
+          return outcome;
+        };
+        /**
+         * Builds a band from the source, fingerprinting its heights first
+         * (so a row that lands meanwhile is a change next time, never one
+         * missed), and records the fingerprint under the band it leaves
+         * live. A re-settle is gated on it: not rebuilt when the source is
+         * as it was, unless forced (`--resettle=full`), or unless the band
+         * was built with reads the gateway answered 404 and this is the
+         * N-th re-settle since its last rebuild.
+         */
+        const fingerprinted = async (
+          step: L2Step,
+          bands: L2LiveBand[],
+        ): Promise<L2Outcome> => {
+          const taken = await fingerprintOf(step);
+          let gate: L2Outcome['gate'] | undefined;
+          if (step.step === 'resettle') {
+            const band = step.replaces[0];
+            const compared = compareFingerprints(
+              recorded(band.id),
+              taken.fingerprint,
+              { failed: taken.failed },
+            );
+            let verdict: string = compared.verdict;
+            let rebuild =
+              options.resettle === 'full' ||
+              (compared.verdict !== 'same_sources' &&
+                compared.verdict !== 'source_down');
+            const unreadable = Object.values(
+              band.facts.unreadable ?? {},
+            ).reduce((sum, n) => sum + n, 0);
+            if (!rebuild && unreadable > 0) {
+              const passes =
+                (entry.rechecks?.[band.id] ??
+                  state.unreadableRechecks?.[band.id] ??
+                  0) + 1;
+              if (passes >= recheckEvery) {
+                rebuild = true;
+                verdict = 'recheck_unreadable';
+              } else {
+                entry.rechecks = { ...entry.rechecks, [band.id]: passes };
+              }
+            }
+            metrics.resettleGate.inc({
+              index: index.name,
+              kind: step.role,
+              verdict,
+            });
+            gate = {
+              verdict,
+              ...(compared.detail !== undefined || options.resettle === 'full'
+                ? {
+                    detail: [
+                      compared.detail,
+                      options.resettle === 'full'
+                        ? 'rebuilt anyway: --resettle=full'
+                        : undefined,
+                      verdict === 'recheck_unreadable'
+                        ? `${unreadable} reads were 404 when built: rebuilt every ${recheckEvery} re-settles`
+                        : undefined,
+                    ]
+                      .filter((part) => part !== undefined)
+                      .join('; '),
+                  }
+                : {}),
+            };
+            if (!rebuild) {
+              entry.plan.push(describeL2Step(step));
+              const skipped: L2Outcome = {
+                index: index.name,
+                step: step.step,
+                role: step.role,
+                heightRange: step.heightRange,
+                replaces: [band.id],
+                result: 'unchanged',
+                reason: verdict,
+                gate,
+                seconds: 0,
+              };
+              entry.steps.push(skipped);
+              metrics.runs.inc({
+                index: index.name,
+                kind: step.role,
+                result: skipped.result,
+                reason: skipped.reason,
+              });
+              return skipped;
+            }
+          }
+          const outcome = await run(step, bands);
+          if (gate !== undefined) outcome.gate = gate;
+          const kept =
+            outcome.result === 'published' || outcome.result === 'unchanged'
+              ? outcome.id
+              : undefined;
+          if (kept !== undefined && Object.keys(taken.failed).length === 0) {
+            entry.fingerprints = {
+              ...entry.fingerprints,
+              [kept]: taken.fingerprint,
+            };
+            // Rebuilt: its 404s, if any, are counted afresh.
+            entry.rechecks = { ...entry.rechecks, [kept]: 0 };
+          }
           return outcome;
         };
 
@@ -1762,7 +1902,7 @@ export class ExportService {
             }
             break;
           }
-          const outcome = await run(step, bands);
+          const outcome = await fingerprinted(step, bands);
           if (
             outcome.result !== 'published' &&
             outcome.result !== 'unchanged' &&
@@ -1775,7 +1915,9 @@ export class ExportService {
 
         // 2. Roll every range of twenty frozen d bands into its h.
         bands = await live();
-        for (const step of planL2Rolls(bands)) await run(step, bands);
+        for (const step of planL2Rolls(bands)) {
+          await fingerprinted(step, bands);
+        }
 
         // 3. The tip, unless freezes are behind (the time budget, or a
         // bootstrap that failed): it would span every height they left.
@@ -1824,7 +1966,7 @@ export class ExportService {
               );
               continue;
             }
-            await run(step, bands);
+            await fingerprinted(step, bands);
           }
         }
         bands = await live();
@@ -1853,6 +1995,7 @@ export class ExportService {
         log.error('L2 export stopped', { index: index.name, ...entry.failed });
       } finally {
         roots?.close();
+        closeWallets?.();
         await source?.close().catch(() => undefined);
       }
     }
@@ -1968,11 +2111,25 @@ export class ExportService {
     }
     if (index.liveIds !== undefined) {
       const live = new Set(index.liveIds);
-      const kept = Object.entries(state.resettledAt ?? {}).filter(([id]) =>
-        live.has(id),
-      );
-      if (kept.length > 0) state.resettledAt = Object.fromEntries(kept);
+      const keep = <T>(all: Record<string, T> | undefined) => {
+        const kept = Object.entries(all ?? {}).filter(([id]) => live.has(id));
+        return kept.length > 0 ? Object.fromEntries(kept) : undefined;
+      };
+      const resettledAt = keep(state.resettledAt);
+      if (resettledAt !== undefined) state.resettledAt = resettledAt;
       else delete state.resettledAt;
+      const fingerprints = keep({
+        ...state.fingerprints,
+        ...index.fingerprints,
+      });
+      if (fingerprints !== undefined) state.fingerprints = fingerprints;
+      else delete state.fingerprints;
+      const rechecks = keep({
+        ...state.unreadableRechecks,
+        ...index.rechecks,
+      });
+      if (rechecks !== undefined) state.unreadableRechecks = rechecks;
+      else delete state.unreadableRechecks;
     }
     if (index.failed?.reason === 'grid_layout') {
       state.lastRejection = {

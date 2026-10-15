@@ -181,6 +181,7 @@ export async function openL2Source(
       }),
       CLICKHOUSE_L2_WINDOW_BLOCKS,
       deps.windowItems,
+      `${config.url} ${config.user as string}`,
     );
   }
   return new ClickHouseL2Source(
@@ -192,5 +193,6 @@ export async function openL2Source(
     }),
     CLICKHOUSE_L2_WINDOW_BLOCKS,
     deps.windowItems,
+    `${env.CLICKHOUSE_URL as string} ${env.CLICKHOUSE_USER as string}`,
   );
 }
