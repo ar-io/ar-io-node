@@ -9,6 +9,7 @@ import { Logger } from 'winston';
 import { ArtifactKind } from './types.js';
 import { Cdb64RootTxKind } from './cdb64-root-tx.js';
 import { ParquetL1Kind } from './parquet-l1.js';
+import { ParquetL2Kind } from './parquet-l2.js';
 
 /**
  * Build the set of artifact kinds this node understands.
@@ -24,6 +25,7 @@ export function createKindRegistry({
   const kinds: ArtifactKind[] = [
     new Cdb64RootTxKind({ log }),
     new ParquetL1Kind({ log }),
+    new ParquetL2Kind({ log }),
   ];
   return new Map(kinds.map((kind) => [kind.kind, kind]));
 }

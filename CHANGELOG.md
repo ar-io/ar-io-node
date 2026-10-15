@@ -8,6 +8,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **L2 index bands (`parquet-l2`)**: a new index kind for the ANS-104 data
+  items one declared selection takes (a tag name and a value prefix, with
+  an optional narrower prefix excluded: `App-Name` starting `ArDrive`, say),
+  with their tags, owners' keys, nested bundles and offsets in their root
+  transactions, as Parquet on the L1 bands' height grid. The selection is declared in each band's
+  `band.json`, bound into its id (`l2-h<from>-<to>-<publisher>-<digest>`),
+  and carried in the signed publication. The index-swarm sidecar publishes
+  them as `{"name":"ardrive-l2","kind":"parquet-l2"}`, and a subscriber that
+  names the index checks each band's files, footers, schema, row counts, id
+  and selection before installing it, refusing every band of an index whose
+  bands, or `filter`, declare different selections. Opt-in, like
+  `parquet-l1`. Nothing builds L2 bands yet. See *L2 bands* in
+  [docs/index-publication.md](docs/index-publication.md).
 - **Root-TX bands on the L1 grid, with a settle lag
   (`INDEX_EXPORT_ROOT_TX_LAYOUT=grid`)**: `index-export` cuts root-TX bands
   at the same heights as `parquet-l1` bands, so every publisher's bands line
@@ -576,6 +589,16 @@ with core**).
   `PREFERRED_CHUNK_GET_NODE_URLS` and `PREFERRED_CHUNK_POST_NODE_URLS` are
   now documented, and the documented default for
   `WEIGHTED_PEERS_TEMPERATURE_DELTA` is corrected to 2.
+
+- **Item locations from Turbo's offsets API were never usable.** Turbo
+  returns `startOffsetInRootBundle` and `rawContentLength` as JSON strings
+  (Postgres bigints) although its API documents integers, and the gateway
+  added them as-is: `"1102486" + 221` gave a data offset of `"1102486221"`.
+  The location check refused every such location, so each first-seen item
+  Turbo answered cost wasted chunk reads and two error lines before the
+  bundle was searched instead. Turbo's offsets are now read as integers, and
+  any malformed answer is refused and not cached. Item locations from any
+  index are also refused unless every offset is an integer.
 
 - **Byte-identical uploads with different `Content-Type` tags were all
   served as the first one a gateway saw.** For a data item the gateway had

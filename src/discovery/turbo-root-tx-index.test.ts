@@ -207,6 +207,147 @@ describe('TurboRootTxIndex', () => {
       assert.equal(mockAxiosInstance.get.mock.calls.length, 2);
     });
 
+    describe('offsets Turbo sends as strings', () => {
+      // Turbo stores these fields in Postgres bigint columns and returns them
+      // as JSON strings, e.g. turbo.ardrive.io for ygJ3nvdc...:
+      // "startOffsetInRootBundle":"1102486","rawContentLength":"2250".
+      const indexReturning = (responses: Record<string, any>) => {
+        const mockAxiosInstance = {
+          get: mock.fn((url: string) => {
+            const id = Object.keys(responses).find((key) =>
+              url.includes(`/tx/${key}/offsets`),
+            );
+            return id !== undefined
+              ? Promise.resolve({ status: 200, data: responses[id] })
+              : Promise.reject(new Error('Unexpected ID'));
+          }),
+          defaults: { raxConfig: {} },
+          interceptors: {
+            request: { use: mock.fn(), eject: mock.fn() },
+            response: { use: mock.fn(), eject: mock.fn() },
+          },
+        };
+        mock.method(axios, 'create', () => mockAxiosInstance);
+        const turboIndex = new TurboRootTxIndex({
+          log,
+          turboEndpoint: 'https://turbo.example.com',
+          rateLimitBurstSize: 1000,
+          rateLimitTokensPerInterval: 1000,
+          rateLimitInterval: 'second',
+        });
+        (turboIndex as any)['limiter'].content = (turboIndex as any)[
+          'limiter'
+        ].bucketSize;
+        return { turboIndex, mockAxiosInstance };
+      };
+
+      it('adds string offsets as numbers', async () => {
+        const { turboIndex } = indexReturning({
+          item: {
+            rootBundleId: 'root-bundle',
+            startOffsetInRootBundle: '1102486',
+            rawContentLength: '2250',
+            payloadContentType: 'application/json',
+            parentDataItemId: null,
+            startOffsetInParentDataItemPayload: null,
+            payloadDataStart: 221,
+            payloadContentLength: 2029,
+          },
+        });
+
+        const result = await turboIndex.getRootTx('item');
+
+        assert(result !== undefined);
+        assert.strictEqual(result.rootOffset, 1102486);
+        assert.strictEqual(result.rootDataOffset, 1102707);
+        assert.strictEqual(result.size, 2250);
+        assert.strictEqual(result.dataSize, 2029);
+      });
+
+      it('adds string offsets along a nested chain as numbers', async () => {
+        const { turboIndex } = indexReturning({
+          child: {
+            parentDataItemId: 'parent',
+            startOffsetInParentDataItemPayload: '96',
+            rawContentLength: '6205',
+            payloadContentType: 'text/plain',
+            payloadDataStart: '1085',
+            payloadContentLength: '5120',
+          },
+          parent: {
+            rootBundleId: 'root',
+            startOffsetInRootBundle: '3731704',
+            rawContentLength: '7427',
+            payloadContentType: 'application/octet-stream',
+            payloadDataStart: 1126,
+            payloadContentLength: 6301,
+          },
+        });
+
+        const result = await turboIndex.getRootTx('child');
+
+        assert(result !== undefined);
+        assert.strictEqual(result.rootOffset, 3732926);
+        assert.strictEqual(result.rootDataOffset, 3734011);
+        assert.strictEqual(result.size, 6205);
+      });
+
+      it("returns an L1 transaction's sizes as numbers", async () => {
+        const { turboIndex } = indexReturning({
+          l1: {
+            rawContentLength: '5000',
+            payloadContentType: 'text/plain',
+            payloadDataStart: '0',
+            payloadContentLength: '5000',
+          },
+        });
+
+        const result = await turboIndex.getRootTx('l1');
+
+        assert(result !== undefined);
+        assert.strictEqual(result.size, 5000);
+        assert.strictEqual(result.dataSize, 5000);
+      });
+
+      for (const [label, bad] of [
+        ['a non-numeric string', '12abc'],
+        ['a negative number', -1],
+        ['a fraction', '1.5'],
+        ['exponent notation', '1e3'],
+        ['an unsafe integer', '9007199254740993'],
+      ] as const) {
+        it(`refuses ${label}, without caching it`, async () => {
+          const cache = new LRUCache<string, any>({ max: 10 });
+          const { mockAxiosInstance } = indexReturning({
+            item: {
+              rootBundleId: 'root',
+              startOffsetInRootBundle: bad,
+              rawContentLength: '2250',
+              payloadContentType: 'application/json',
+              payloadDataStart: 221,
+              payloadContentLength: 2029,
+            },
+          });
+          const turboIndex = new TurboRootTxIndex({
+            log,
+            turboEndpoint: 'https://turbo.example.com',
+            rateLimitBurstSize: 1000,
+            rateLimitTokensPerInterval: 1000,
+            rateLimitInterval: 'second',
+            cache,
+          });
+          (turboIndex as any)['limiter'].content = (turboIndex as any)[
+            'limiter'
+          ].bucketSize;
+
+          assert.equal(await turboIndex.getRootTx('item'), undefined);
+          assert.equal(cache.size, 0);
+          await turboIndex.getRootTx('item');
+          assert.equal(mockAxiosInstance.get.mock.calls.length, 2);
+        });
+      }
+    });
+
     it('should detect L1 transaction (no parent, no root)', async () => {
       const l1TxId = 'l1-transaction-abc';
 

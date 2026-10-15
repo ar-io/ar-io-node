@@ -283,6 +283,13 @@ is a publisher's own (the bands it replaces, when it built it) is kept
 beside it in `.publisher.json`, never published.
 See [index-publication.md](index-publication.md#l1-bands).
 
+<a id="parquet-l2"></a> **L2 Band** (`parquet-l2`) — A band of the ANS-104
+data items one declared selection takes (an app's items, by a tag and a
+value prefix) for one height range of the L1 grid, in Parquet: the items,
+their tags, owners' keys, and where each sits in its root transaction. The
+selection is in its `band.json` and its id, and the same for every band of
+an index. See [index-publication.md](index-publication.md#l2-bands).
+
 <a id="layout"></a> **Layout** (`l1-1`, `l1-2`, `l1-3`) — The `schema` value in
 an [L1 band](#parquet-l1)'s `band.json`, naming its file set and rules.
 `l1-2` writes [canonical columns](#canonical-band-columns); `l1-3` adds
@@ -290,8 +297,8 @@ an [L1 band](#parquet-l1)'s `band.json`, naming its file set and rules.
 
 <a id="artifact-kind"></a><a id="index-kind"></a> **Index Kind** — The `kind`
 field of a published index, selecting the code that validates and installs
-its bands: `cdb64-root-tx` or `parquet-l1`. A reader skips a kind it does not
-implement.
+its bands: `cdb64-root-tx`, `parquet-l1` or `parquet-l2`. A reader skips a
+kind it does not implement.
 
 <a id="publication-sequence"></a> **Publication Sequence** — A monotonic
 counter per publisher, paired with the previous document's SHA-256. A
