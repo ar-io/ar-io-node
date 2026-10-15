@@ -307,6 +307,18 @@ export class RootParentDataSource implements ContiguousDataSource {
     /** Header fields the item's signature covers, when the parser returns them */
     signedFields?: DataItemSignedFields;
   } | null> {
+    // An index can supply offsets as strings (Turbo's offsets API did:
+    // Postgres bigints), and `+` on a string concatenates. Refuse anything
+    // that is not an integer before it reaches a read or a sum.
+    if (
+      !Number.isSafeInteger(itemOffset) ||
+      !Number.isSafeInteger(itemSize) ||
+      (expectedDataOffset !== undefined &&
+        !Number.isSafeInteger(expectedDataOffset))
+    ) {
+      onReject?.('offset_mismatch');
+      return null;
+    }
     let headerInfo: {
       id: string;
       headerSize: number;
@@ -437,7 +449,12 @@ export class RootParentDataSource implements ContiguousDataSource {
     // rejected without a read.
     let reason: LocationRejectionReason = 'offset_mismatch';
     const located =
-      Number.isSafeInteger(headerSize) && headerSize > 0 && dataSize >= 0
+      Number.isSafeInteger(itemOffset) &&
+      Number.isSafeInteger(dataOffset) &&
+      Number.isSafeInteger(dataSize) &&
+      Number.isSafeInteger(headerSize) &&
+      headerSize > 0 &&
+      dataSize >= 0
         ? await this.resolveItemAtOffset({
             id,
             rootTxId,

@@ -641,6 +641,16 @@ with core**).
   now documented, and the documented default for
   `WEIGHTED_PEERS_TEMPERATURE_DELTA` is corrected to 2.
 
+- **Item locations from Turbo's offsets API were never usable.** Turbo
+  returns `startOffsetInRootBundle` and `rawContentLength` as JSON strings
+  (Postgres bigints) although its API documents integers, and the gateway
+  added them as-is: `"1102486" + 221` gave a data offset of `"1102486221"`.
+  The location check refused every such location, so each first-seen item
+  Turbo answered cost wasted chunk reads and two error lines before the
+  bundle was searched instead. Turbo's offsets are now read as integers, and
+  any malformed answer is refused and not cached. Item locations from any
+  index are also refused unless every offset is an integer.
+
 - **Byte-identical uploads with different `Content-Type` tags were all
   served as the first one a gateway saw.** For a data item the gateway had
   not indexed, the content type came from
