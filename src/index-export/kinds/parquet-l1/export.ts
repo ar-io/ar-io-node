@@ -154,7 +154,11 @@ class ScratchTable {
   }
 }
 
-function encodeField(value: unknown, type: string): string {
+/**
+ * One value of a scratch row: hex for bytes and text (nothing to quote),
+ * `\N` for null. Shared with the `parquet-l2` exporter.
+ */
+export function encodeField(value: unknown, type: string): string {
   if (value === null || value === undefined) return NULL;
   if (type === 'BLOB') return Buffer.from(value as Uint8Array).toString('hex');
   if (type === 'VARCHAR')
@@ -165,7 +169,7 @@ function encodeField(value: unknown, type: string): string {
 }
 
 /** The DuckDB expression turning a scratch column back into its layout type. */
-function decodeColumn(name: string, type: string): string {
+export function decodeColumn(name: string, type: string): string {
   const column = `"${name}"`;
   if (type === 'BLOB') return `from_hex(${column}) AS ${column}`;
   if (type === 'VARCHAR') return `decode(from_hex(${column})) AS ${column}`;

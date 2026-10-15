@@ -19,8 +19,59 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   names the index checks each band's files, footers, schema, row counts, id
   and selection before installing it, refusing every band of an index whose
   bands, or `filter`, declare different selections. Opt-in, like
-  `parquet-l1`. Nothing builds L2 bands yet. See *L2 bands* in
+  `parquet-l1`. `index-export` builds them (below). See *L2 bands* in
   [docs/index-publication.md](docs/index-publication.md).
+- **`index-export` builds L2 bands (`INDEX_EXPORT_KINDS=…,parquet-l2`)**:
+  one index per selection in `INDEX_EXPORT_L2_INDEXES` (`ardrive-l2`:
+  `App-Name` starting `ArDrive`, not `ArDriver`), published under
+  `published/<name>/`, from this gateway's ClickHouse or a peer's
+  (`INDEX_EXPORT_L2_SOURCE`), on the L1 grid with the root-TX grid's settle
+  lag (`INDEX_EXPORT_L2_SETTLE_BLOCKS`), daily tip bands and weekly
+  re-settles.
+  - Every item takes its root's height and block position from this
+    publisher's `parquet-l1` bands (else ClickHouse's L1 rows); a root found
+    in neither refuses the band.
+  - Items are located by the root-TX bands' placement rules, item-relative
+    header offsets moved into the payload, and only when their offsets
+    describe one item; absolute offsets are written parent-relative, and an
+    ambiguous item is settled by reading its header from the root through
+    `INDEX_EXPORT_HEADER_CHECK_URL`. Owners' keys come from ClickHouse,
+    `bundles.db` or the root, kept only when they hash to the address.
+  - The same rows give the same band and id whatever order they are read
+    in; rows that can't be told apart refuse the band rather than be
+    tie-broken. A band that replaces others never loses an item or a
+    location, and every relocated item is header-checked.
+  - `--once --dry-run --range <from>-<to>` builds one band of each index
+    (`--keep` keeps it). New metrics: `index_export_l2_rows`,
+    `index_export_l2_unlocated_rows`, `index_export_l2_owners_without_key`,
+    `index_export_l2_proofs_total`. See *L2 bands* in
+    [docs/index-export.md](docs/index-export.md).
+  - An ambiguous item's proof reads its header as the band header check
+    does: a header whose tag count field is malformed (see *Fixed*) still
+    proves its reading, and is counted (`stats.malformedTags`).
+  - Any band builds in memory that follows a window of the source, never
+    the band: windows of at most `INDEX_EXPORT_L2_WINDOW_ITEMS` (50,000)
+    items, rows sorted and digested a window at a time and appended to a
+    DuckDB database in the staging directory, which writes the Parquet in
+    order, with no sort of the band. DuckDB runs within
+    `INDEX_EXPORT_L2_DUCKDB_MEMORY` (2GB) and `INDEX_EXPORT_L2_DUCKDB_THREADS`
+    (2), spilling at most `INDEX_EXPORT_L2_DUCKDB_SPILL_MAX_GB` (256).
+  - A root the gateway answers 404 for is unreadable for the build, asked
+    about once: its ambiguous items are written unlocated (`unproven`) and
+    an owner whose key could only be read there without a key, rather than
+    stop the band; timeouts, 5xx and 429 still stop it, to be retried. A
+    re-settle may locate such items, or key such owners, later; it never
+    drops a key (`dropped_wallets`).
+  - The header check reads its sample from a pool ten times as large, as
+    root-TX bands do, passing over rows whose root is gone; what it read
+    (`sampled`, `poolSize`, `unreadable`, `unreadableShare`) goes in the
+    publisher's `.publisher.json`, never `band.json`, which holds only what
+    the rows and the selection determine.
+  - Re-settles are gated on a fingerprint of the rows each band's
+    sub-ranges read (and the `bundles.db` keys of its owners), as root-TX
+    grid bands are: `--resettle` gates, `--resettle=full` rebuilds. A band
+    built with 404s is rebuilt every
+    `INDEX_EXPORT_L2_RECHECK_UNREADABLE_EVERY` (4) gated re-settles.
 - **Root-TX bands on the L1 grid, with a settle lag
   (`INDEX_EXPORT_ROOT_TX_LAYOUT=grid`)**: `index-export` cuts root-TX bands
   at the same heights as `parquet-l1` bands, so every publisher's bands line

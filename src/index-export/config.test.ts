@@ -158,8 +158,8 @@ describe('parseExportConfig', () => {
       /INDEX_EXPORT_HEADER_CHECK_URL is required/,
     );
     assert.throws(
-      () => parseExportConfig({ ...BASE, INDEX_EXPORT_KINDS: 'parquet-l2' }),
-      /"parquet-l2" is not one of root-tx-index, parquet-l1/,
+      () => parseExportConfig({ ...BASE, INDEX_EXPORT_KINDS: 'parquet-l3' }),
+      /"parquet-l3" is not one of root-tx-index, parquet-l1, parquet-l2/,
     );
     assert.throws(
       () => parseExportConfig({ ...BASE, INDEX_EXPORT_KINDS: ' , ' }),
@@ -177,6 +177,187 @@ describe('parseExportConfig', () => {
           CLICKHOUSE_USER: 'default',
         }),
       /may not combine clickhouse and sqlite/,
+    );
+  });
+});
+
+describe('parseExportConfig, parquet-l2', () => {
+  const L2 = {
+    ...BASE,
+    INDEX_EXPORT_KINDS: 'parquet-l2',
+    CLICKHOUSE_URL: 'http://clickhouse:8123',
+    CLICKHOUSE_USER: 'default',
+    INDEX_EXPORT_L2_INDEXES: JSON.stringify([
+      {
+        name: 'ardrive-l2',
+        selection: {
+          kind: 'ans104-data-items',
+          tag: {
+            name: 'App-Name',
+            valuePrefix: 'ArDrive',
+            excludeValuePrefix: 'ArDriver',
+          },
+        },
+      },
+    ]),
+  };
+
+  it("reads the indexes, each under its own directory, from this gateway's ClickHouse by default", () => {
+    const config = parseExportConfig(L2);
+    assert.deepEqual(config.kinds, ['parquet-l2']);
+    assert.deepEqual(
+      config.l2Indexes?.map((index) => [index.name, index.publishDir]),
+      [['ardrive-l2', 'data/indexes/published/ardrive-l2']],
+    );
+    assert.equal(
+      config.l2Indexes?.[0].selection.tag.excludeValuePrefix,
+      'ArDriver',
+    );
+    assert.deepEqual(config.l2Source?.config, {
+      type: 'clickhouse',
+      name: 'clickhouse',
+    });
+    // The root-TX settle lag, unless its own is set.
+    assert.equal(config.l2SettleBlocks, 5040);
+    assert.equal(config.l2WalletsDb, 'data/sqlite/bundles.db');
+    assert.equal(config.l2MaxReads, 200_000);
+    assert.equal(config.l2RunBudgetMs, undefined);
+    assert.deepEqual(config.l2Duck, {
+      memoryLimit: '2GB',
+      threads: 2,
+      spillMaxGb: 256,
+    });
+    assert.equal(config.l2WindowItems, 50_000);
+    assert.equal(config.l2RecheckUnreadableEvery, 4);
+    assert.deepEqual(config.sources, [], 'no root-TX sources');
+    const more = parseExportConfig({
+      ...L2,
+      INDEX_EXPORT_ROOT_TX_SETTLE_BLOCKS: '7000',
+      INDEX_EXPORT_L2_SETTLE_BLOCKS: '100',
+      INDEX_EXPORT_L2_WALLETS_DB: '/app/data/sqlite/other.db',
+      INDEX_EXPORT_L2_MAX_READS: '10',
+      INDEX_EXPORT_L2_RUN_BUDGET_MINUTES: '30',
+      INDEX_EXPORT_L2_DUCKDB_MEMORY: '512MB',
+      INDEX_EXPORT_L2_DUCKDB_THREADS: '4',
+      INDEX_EXPORT_L2_DUCKDB_SPILL_MAX_GB: '100',
+      INDEX_EXPORT_L2_WINDOW_ITEMS: '20000',
+      INDEX_EXPORT_L2_RECHECK_UNREADABLE_EVERY: '1',
+      INDEX_EXPORT_L2_SOURCE: JSON.stringify({
+        type: 'clickhouse',
+        url: 'http://peer:8123',
+        user: 'reader',
+        passwordFile: '/run/secrets/index-export/peer',
+      }),
+    });
+    assert.equal(more.l2SettleBlocks, 100);
+    assert.equal(more.settleBlocks, 7000);
+    assert.equal(more.l2WalletsDb, '/app/data/sqlite/other.db');
+    assert.equal(more.l2MaxReads, 10);
+    assert.equal(more.l2RunBudgetMs, 30 * 60_000);
+    assert.deepEqual(more.l2Duck, {
+      memoryLimit: '512MB',
+      threads: 4,
+      spillMaxGb: 100,
+    });
+    assert.equal(more.l2WindowItems, 20_000);
+    assert.equal(more.l2RecheckUnreadableEvery, 1);
+    assert.equal(more.l2Source?.config.name, 'clickhouse-peer:8123');
+  });
+
+  it('refuses indexes and sources it cannot build from', () => {
+    const indexes = (value: unknown) =>
+      parseExportConfig({
+        ...L2,
+        INDEX_EXPORT_L2_INDEXES: JSON.stringify(value),
+      });
+    const selection = {
+      kind: 'ans104-data-items',
+      tag: { name: 'App-Name', valuePrefix: 'ArDrive' },
+    };
+    assert.throws(
+      () => parseExportConfig({ ...L2, INDEX_EXPORT_L2_INDEXES: undefined }),
+      /INDEX_EXPORT_L2_INDEXES is required/,
+    );
+    assert.throws(() => indexes([]), /non-empty JSON list/);
+    assert.throws(
+      () => indexes([{ name: 'Ar Drive', selection }]),
+      /name must match/,
+    );
+    assert.throws(
+      () => indexes([{ name: 'parquet-l1', selection }]),
+      /is taken/,
+    );
+    assert.throws(
+      () =>
+        indexes([
+          { name: 'a', selection },
+          { name: 'a', selection },
+        ]),
+      /used twice/,
+    );
+    assert.throws(
+      () => indexes([{ name: 'a', selection, filter: {} }]),
+      /unknown key "filter"/,
+    );
+    assert.throws(
+      () =>
+        indexes([
+          {
+            name: 'a',
+            selection: {
+              ...selection,
+              tag: { ...selection.tag, valuePrefix: '' },
+            },
+          },
+        ]),
+      /INDEX_EXPORT_L2_INDEXES\[0\]\.selection\.tag\.valuePrefix/,
+    );
+    assert.throws(
+      () =>
+        indexes([
+          {
+            name: 'a',
+            selection: {
+              ...selection,
+              tag: { ...selection.tag, excludeValuePrefix: 'Other' },
+            },
+          },
+        ]),
+      /must extend valuePrefix/,
+    );
+    assert.throws(
+      () => parseExportConfig({ ...L2, CLICKHOUSE_URL: undefined }),
+      /parquet-l2 reads ClickHouse/,
+    );
+    assert.throws(
+      () => parseExportConfig({ ...L2, INDEX_EXPORT_L2_DUCKDB_MEMORY: 'lots' }),
+      /INDEX_EXPORT_L2_DUCKDB_MEMORY must be a size such as 2GB/,
+    );
+    assert.throws(
+      () => parseExportConfig({ ...L2, INDEX_EXPORT_L2_DUCKDB_THREADS: '0' }),
+      /INDEX_EXPORT_L2_DUCKDB_THREADS must be at least 1/,
+    );
+    assert.throws(
+      () =>
+        parseExportConfig({
+          ...L2,
+          INDEX_EXPORT_L2_SOURCE: '{"type":"sqlite"}',
+        }),
+      /one ClickHouse source/,
+    );
+    assert.throws(
+      () =>
+        parseExportConfig({
+          ...L2,
+          INDEX_EXPORT_L2_SOURCE:
+            '{"type":"clickhouse","url":"http://peer:8123"}',
+        }),
+      /INDEX_EXPORT_L2_SOURCE: a peer ClickHouse needs url, user and passwordFile/,
+    );
+    assert.throws(
+      () =>
+        parseExportConfig({ ...L2, INDEX_EXPORT_HEADER_CHECK_URL: undefined }),
+      /INDEX_EXPORT_HEADER_CHECK_URL is required/,
     );
   });
 });

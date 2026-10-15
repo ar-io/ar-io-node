@@ -368,7 +368,7 @@ describe('ExportService, grid layout: re-settle', () => {
     ctx.gw1.top = 115_200; // a d would freeze, and the tip move
     const report = await ctx.service(grid()).runOnce({
       resettle: 'full',
-      rootTxRange: [100_000, 109_999],
+      range: [100_000, 109_999],
     });
     assert.deepEqual(
       report.steps.map((s) => [s.grid, s.heightRange[0], s.result]),

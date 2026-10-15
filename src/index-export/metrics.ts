@@ -147,6 +147,34 @@ export const tipUnplaced = metric(
   ['index'],
 ) as promClient.Gauge<'index'>;
 
+export const l2Rows = metric(
+  'gauge',
+  'index_export_l2_rows',
+  'parquet-l2: rows per table of the latest band built of a kind (h, d, tip), published or not.',
+  ['index', 'kind', 'table'],
+) as promClient.Gauge<'index' | 'kind' | 'table'>;
+
+export const l2Unlocated = metric(
+  'gauge',
+  'index_export_l2_unlocated_rows',
+  'parquet-l2: data items the latest band of a kind holds without a location, by reason (no_offsets, layout, no_parent, inconsistent, deep, ambiguous, unproven, parent_two_places).',
+  ['index', 'kind', 'reason'],
+) as promClient.Gauge<'index' | 'kind' | 'reason'>;
+
+export const l2OwnersWithoutKey = metric(
+  'gauge',
+  'index_export_l2_owners_without_key',
+  'parquet-l2: owners of the latest band of a kind with no key whose SHA-256 is their address (left out of wallets).',
+  ['index', 'kind'],
+) as promClient.Gauge<'index' | 'kind'>;
+
+export const l2Proofs = metric(
+  'counter',
+  'index_export_l2_proofs_total',
+  'parquet-l2: ambiguous data items settled by reading their header from the root, by outcome: relative, absolute (located), none or both (left unlocated), unproven (the root a 404: left unlocated).',
+  ['index', 'outcome'],
+) as promClient.Counter<'index' | 'outcome'>;
+
 export const heartbeat = metric(
   'gauge',
   'index_export_heartbeat_timestamp_seconds',

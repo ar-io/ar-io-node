@@ -449,6 +449,24 @@ export interface BandPublisherFacts {
   supersedes?: string[];
   /** When this publisher built it. */
   builtAt?: string;
+  /**
+   * Grid-built bands (`parquet-l2`): when the band was built, or confirmed,
+   * with its heights settled (the settle lag below the sources' top). A band
+   * without it is still rebuilt as its heights settle.
+   */
+  settledAt?: string;
+  /**
+   * `parquet-l2`: what the header check of the band's sample read, which
+   * depends on the sample and the gateway, so is kept out of `band.json`.
+   */
+  headerCheck?: Record<string, number>;
+  /**
+   * `parquet-l2`: reads the gateway answered 404 for when the band was
+   * built: ambiguous items left `proofs` unproven, owners left without a
+   * key (`keys`). A band with any is rebuilt now and then, in case the
+   * roots are served again.
+   */
+  unreadable?: Record<string, number>;
 }
 
 /** A band's `createdAt`: its top block's timestamp, in seconds, as a date. */
@@ -536,6 +554,28 @@ export function parsePublisherFile(text: string): BandPublisherFacts {
       throw new Error(`${PUBLISHER_FILE}: builtAt must be a date`);
     }
     out.builtAt = facts.builtAt;
+  }
+  if (facts.settledAt !== undefined) {
+    if (
+      typeof facts.settledAt !== 'string' ||
+      Number.isNaN(Date.parse(facts.settledAt))
+    ) {
+      throw new Error(`${PUBLISHER_FILE}: settledAt must be a date`);
+    }
+    out.settledAt = facts.settledAt;
+  }
+  for (const key of ['headerCheck', 'unreadable'] as const) {
+    const value = facts[key];
+    if (value === undefined) continue;
+    if (
+      typeof value !== 'object' ||
+      value === null ||
+      Array.isArray(value) ||
+      !Object.values(value).every((n) => typeof n === 'number')
+    ) {
+      throw new Error(`${PUBLISHER_FILE}: ${key} must be an object of numbers`);
+    }
+    out[key] = value as Record<string, number>;
   }
   return out;
 }

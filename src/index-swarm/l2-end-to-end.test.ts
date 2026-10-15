@@ -10,8 +10,10 @@
  * real /ar-io/indexes routes, with nothing standing in for anything but the
  * chain's gateway registry.
  *
- * There is no L2 builder yet, so the band is written here, the way a builder
- * must write one: a few data items of one selection, among them an item in
+ * The band is written here by hand rather than by `index-export`'s builder
+ * (`src/index-export/kinds/parquet-l2/`, whose own tests check the bands it
+ * writes pass this kind's checks), so that it can hold the cases this test
+ * is about: a few data items of one selection, among them an item in
  * a nested bundle, one at two places in its root and one whose place is
  * unknown, each table in the layout's order and digested as an importer
  * reads it back. One gateway's sidecar publishes it as an index configured
