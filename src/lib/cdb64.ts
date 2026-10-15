@@ -111,8 +111,15 @@ export class Cdb64Writer {
   private position: bigint = BigInt(HEADER_SIZE);
   private records: Record[][] = [];
   private finalized = false;
+  private readonly sync: boolean;
 
-  constructor(outputPath: string) {
+  /**
+   * @param options.sync Flush the file to disk before it is renamed into
+   *   place (default true). Off only where nothing needs to survive a power
+   *   cut, such as tests, which write thousands of small files.
+   */
+  constructor(outputPath: string, { sync = true }: { sync?: boolean } = {}) {
+    this.sync = sync;
     this.outputPath = outputPath;
     this.tempPath = `${outputPath}.tmp.${process.pid}`;
 
@@ -260,7 +267,7 @@ export class Cdb64Writer {
     try {
       await fileHandle.write(header, 0, HEADER_SIZE, 0);
       // Ensure data is flushed to disk before renaming (critical on macOS APFS)
-      await fileHandle.sync();
+      if (this.sync) await fileHandle.sync();
     } finally {
       await fileHandle.close();
     }

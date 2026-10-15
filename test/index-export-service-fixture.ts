@@ -146,6 +146,8 @@ export class ExportServiceHarness {
       openRoots: this.roots,
       diskSpace: async () => ({ free: this.freeBytes, total: 1e13 }),
       headerCheck: { retryDelayMs: 1 },
+      // Thousands of small files a suite; none need survive a power cut.
+      syncBands: false,
     });
 
   live = (): Promise<OwnBand[]> =>

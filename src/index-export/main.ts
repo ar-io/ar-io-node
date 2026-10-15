@@ -36,7 +36,7 @@ import { gatewayRootSource } from '../lib/index-band/verify.js';
 import { release } from '../version.js';
 import { ExportConfig, parseExportConfig } from './config.js';
 import { INDEX_NAME } from './kinds/root-tx/kind.js';
-import { openSource } from './kinds/root-tx/sources/config.js';
+import { openSource, urlIdentity } from './kinds/root-tx/sources/config.js';
 import { ExportLock } from './lock.js';
 import log from './log.js';
 import { startMetricsServer } from './metrics.js';
@@ -282,7 +282,7 @@ async function main(): Promise<void> {
     release,
     publisher: config.publisher,
     sources: config.sources.map((s) => s.config.name),
-    headerCheckUrl: config.headerCheckUrl,
+    headerCheckUrl: urlIdentity(config.headerCheckUrl),
   });
   service.start();
 }
