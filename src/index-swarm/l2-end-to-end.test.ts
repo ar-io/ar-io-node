@@ -16,7 +16,7 @@
  * is about: a few data items of one selection, among them an item in
  * a nested bundle, one at two places in its root and one whose place is
  * unknown, each table in the layout's order and digested as an importer
- * reads it back. One gateway's sidecar publishes it as an index configured
+ * reads it back, with the lookups derived from it. One gateway's sidecar publishes it as an index configured
  * with only a name and a kind; a second's subscribes and installs it, and
  * the rows it holds reproduce the band's digests.
  */
@@ -48,6 +48,10 @@ import {
   parseBandFile,
   serializeBandFile,
 } from '../lib/parquet-l2/layout.js';
+import {
+  verifyBandLookups,
+  writeBandLookups,
+} from '../lib/parquet-l2/lookups.js';
 import { sha256File } from '../lib/sha256-file.js';
 import { createIndexesRouter } from '../routes/indexes.js';
 import { createTestLogger } from '../../test/test-logger.js';
@@ -234,6 +238,7 @@ async function writeBand(dir: string): Promise<ParquetL2Band> {
   await fs.mkdir(dir, { recursive: true });
   const rows = bandRows();
   const tables: ParquetL2Band['tables'] = {};
+  let lookups: ParquetL2Band['lookups'];
   const db = await openFooterReader();
   try {
     for (const spec of PARQUET_L2_TABLES) {
@@ -250,6 +255,7 @@ async function writeBand(dir: string): Promise<ParquetL2Band> {
       );
       tables[spec.name] = await digestTable(db, file, spec);
     }
+    lookups = await writeBandLookups(db, dir);
   } finally {
     await db.close();
   }
@@ -259,6 +265,7 @@ async function writeBand(dir: string): Promise<ParquetL2Band> {
     heightRange: [FIRST, BAND_TO],
     selection: SELECTION,
     tables,
+    lookups,
     createdAt: '2026-10-14T00:00:00.000Z',
   };
   await fs.writeFile(path.join(dir, BAND_FILE), serializeBandFile(band));
@@ -415,6 +422,8 @@ describe('L2 bands, from a publisher into a subscribing gateway', () => {
          WHERE NOT ((${all('IS NULL')}) OR (${all('IS NOT NULL')}))`,
       )) as Array<{ n: bigint | number }>;
       assert.equal(Number(partial.n), 0);
+      // The lookups arrive whole: their rows are what the tables give.
+      assert.deepEqual(await verifyBandLookups(db, dir, declared), []);
     } finally {
       await db.close();
     }

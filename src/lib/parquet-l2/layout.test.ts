@@ -19,6 +19,7 @@ import {
   L2_BAND_ID_PATTERN,
   MAX_BAND_FILE_BYTES,
   orderByClause,
+  PARQUET_L2_LOOKUPS,
   PARQUET_L2_SCHEMA,
   PARQUET_L2_TABLES,
   parseBandFile,
@@ -41,23 +42,52 @@ const valid = (): any => ({
   tables: Object.fromEntries(
     PARQUET_L2_TABLES.map((t) => [t.name, { rows: 5, rowDigest: digest }]),
   ),
+  lookups: Object.fromEntries(
+    PARQUET_L2_LOOKUPS.map((l) => [l.name, { rows: 4, rowDigest: digest }]),
+  ),
   createdAt: '2026-10-02T00:00:00.000Z',
 });
 const TAG = 'f5b1208c';
 
 describe('parquet-l2 layout', () => {
-  it('names every file a band holds: its description and one per table', () => {
+  it('names every file a band holds: its description, one per table and one per lookup', () => {
     assert.deepEqual(
       PARQUET_L2_TABLES.map((t) => t.name),
       ['data_items', 'tags', 'wallets', 'parents'],
     );
+    assert.deepEqual(
+      PARQUET_L2_LOOKUPS.map((l) => l.name),
+      ['id', 'wallet', 'tag'],
+    );
     assert.deepEqual(bandFiles('l2-1'), [
       BAND_FILE,
       'data_items.parquet',
+      'lookup_id.parquet',
+      'lookup_tag.parquet',
+      'lookup_wallet.parquet',
       'parents.parquet',
       'tags.parquet',
       'wallets.parquet',
     ]);
+  });
+
+  it("keys its lookups as an l1-3 band's, and takes L1's tag lookup unchanged", () => {
+    const l1Specs = new Map(l1.PARQUET_L1_LOOKUPS.map((s) => [s.name, s]));
+    const shape = (s: (typeof PARQUET_L2_LOOKUPS)[number]) => ({
+      file: s.file,
+      columns: s.columns,
+      orderBy: s.orderBy,
+    });
+    const [id, wallet, tag] = PARQUET_L2_LOOKUPS;
+    assert.equal(tag, l1Specs.get('tag'));
+    assert.deepEqual(shape(wallet), shape(l1Specs.get('wallet')!));
+    assert.deepEqual(
+      { ...shape(id), file: 'lookup_tx_id.parquet' },
+      shape(l1Specs.get('tx_id')!),
+    );
+    for (const spec of PARQUET_L2_LOOKUPS) {
+      assert.equal(spec.file, `lookup_${spec.name}.parquet`);
+    }
   });
 
   it('shares the L1 band file and its cap', () => {
@@ -197,7 +227,17 @@ describe('parseBandFile', () => {
     refuse((b) => (b.heightRange = [-1, 4]), /heightRange/);
     // Only what the layout declares: not an L1 band's fields.
     refuse((b) => (b.supersedes = ['l2-old']), /unknown field "supersedes"/);
-    refuse((b) => (b.lookups = {}), /unknown field "lookups"/);
+    // Every lookup, described as a table is.
+    refuse((b) => delete b.lookups, /lookups must be an object/);
+    refuse((b) => (b.lookups = []), /lookups must be an object/);
+    refuse(
+      (b) => (b.lookups.tx_id = { rows: 1, rowDigest: digest }),
+      /unknown lookup "tx_id"/,
+    );
+    refuse((b) => delete b.lookups.wallet, /lookup wallet needs/);
+    refuse((b) => (b.lookups.tag.rowDigest = 'xyz'), /lookup tag needs/);
+    refuse((b) => (b.lookups.id.rows = -1), /lookup id needs/);
+    refuse((b) => (b.lookups.id.extra = 1), /and nothing else/);
     refuse((b) => delete b.selection, /selection must be an object/);
     refuse((b) => (b.selection.tag.name = ''), /selection\.tag\.name/);
     refuse((b) => (b.tables = []), /tables must be an object/);
@@ -260,6 +300,7 @@ describe('serializeBandFile', () => {
       'heightRange',
       'selection',
       'tables',
+      'lookups',
       'checks',
       'createdAt',
     ]);
@@ -268,6 +309,10 @@ describe('serializeBandFile', () => {
     assert.deepEqual(
       Object.keys(json.tables),
       PARQUET_L2_TABLES.map((t) => t.name),
+    );
+    assert.deepEqual(
+      Object.keys(json.lookups),
+      PARQUET_L2_LOOKUPS.map((l) => l.name),
     );
     assert.deepEqual(Object.keys(json.checks), ['a', 'b']);
   });
@@ -309,10 +354,11 @@ describe('bandTablesDigest and the band id', () => {
     assert.notEqual(l2BandId(a, TAG), l2BandId(b, TAG));
   });
 
-  it('leaves out checks and createdAt', () => {
+  it('leaves out lookups, checks and createdAt', () => {
     const a = band();
     const b = {
       ...band(),
+      lookups: { id: { rows: 9, rowDigest: 'c'.repeat(64) } },
       checks: { x: 1 },
       createdAt: '2027-01-01T00:00:00.000Z',
     };

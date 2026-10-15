@@ -53,6 +53,7 @@ function band(
         wallets: { rows: 0, rowDigest: '0'.repeat(64) },
         parents: { rows: 0, rowDigest: '0'.repeat(64) },
       },
+      lookups: {},
       createdAt: '2026-10-01T00:00:00.000Z',
     },
     facts: {

@@ -21,15 +21,29 @@
  * index. The layout is generic: a selection names a tag and a value prefix,
  * and one app's data items are one selection among many.
  *
+ * A band also carries lookup files ({@link PARQUET_L2_LOOKUPS}), as an
+ * `l1-3` band does: Parquet derived from its tables and sorted by a key, so
+ * a reader finds one data item, wallet or tag pair without scanning the
+ * band. They are described in `band.json` like the tables, and left out of
+ * the band's id, which covers only the tables' rows and the selection.
+ *
  * The kind that checks bands reads this module, and a builder that writes
  * them must, so the two cannot drift.
  */
 import crypto from 'node:crypto';
 
 import type { ColumnSpec } from '../parquet/check.js';
+import { prefix64Sql } from '../parquet/keys.js';
+import {
+  LookupDescription,
+  LookupDigestOrder,
+  LookupSpec,
+  sqlPaths,
+} from '../parquet/lookups.js';
 import {
   BAND_FILE,
   MAX_BAND_FILE_BYTES,
+  PARQUET_L1_LOOKUPS,
   type TableSpec,
 } from '../parquet-l1/layout.js';
 
@@ -300,6 +314,65 @@ export const PARQUET_L2_TABLES: TableSpec[] = [
 ];
 
 /**
+ * The lookups a band carries, derived from its own tables with the engine
+ * and key encodings of an `l1-3` band's (`PARQUET_L1_LOOKUPS`), so one
+ * reader serves both. Each file is sorted by its key in row groups of
+ * 16,384, so a reader finds a key by reading the footer and one or two row
+ * groups; a key is a pointer, confirmed against the bytes it came from.
+ *
+ * `data_items` holds a row per place an item sits; a lookup holds one per
+ * item and height, however many places it sits at there.
+ */
+export const PARQUET_L2_LOOKUPS: LookupSpec[] = [
+  {
+    // A data item id's prefix, to the height its rows are at.
+    name: 'id',
+    file: 'lookup_id.parquet',
+    columns: [col('id8', 'UBIGINT'), col('height', 'UBIGINT')],
+    orderBy: ['id8', 'height'],
+    derive: (t) =>
+      `SELECT ${prefix64Sql('id')} AS id8, height
+       FROM (SELECT DISTINCT id, height
+             FROM read_parquet(${sqlPaths(t.data_items)}))`,
+  },
+  {
+    // An address's prefix, to every item it signed (role 0) or that names
+    // it as target (role 1), with its height and size: as an L1 band's.
+    name: 'wallet',
+    file: 'lookup_wallet.parquet',
+    columns: [
+      col('addr8', 'UBIGINT'),
+      col('role', 'UTINYINT'),
+      col('height', 'UBIGINT'),
+      col('data_size', 'UBIGINT'),
+    ],
+    orderBy: ['addr8', 'height', 'role', 'data_size'],
+    derive: (t) =>
+      `WITH items AS (
+         SELECT DISTINCT id, height, owner_address, target, data_size
+         FROM read_parquet(${sqlPaths(t.data_items)}))
+       SELECT ${prefix64Sql('owner_address')} AS addr8, 0::UTINYINT AS role, height, data_size
+       FROM items
+       WHERE owner_address IS NOT NULL
+       UNION ALL
+       SELECT ${prefix64Sql('target')} AS addr8, 1::UTINYINT AS role, height, data_size
+       FROM items
+       WHERE target IS NOT NULL AND octet_length(target) > 0`,
+  },
+  // Every (name, value) tag pair: an L1 band's lookup, unchanged. It reads
+  // only `tags`' height, id, tag_name and tag_value, which L2's has, and
+  // counts each item once per pair (`txs`) however many heights hold it.
+  PARQUET_L1_LOOKUPS.find((spec) => spec.name === 'tag')!,
+];
+
+/**
+ * The order `l2-1` lookup digests are taken in: `numeric`, the spec's order
+ * by value, which is the files' own order, so a reader can digest a lookup
+ * as it reads it. (An `l1-3` band's are taken in `legacy-text` order.)
+ */
+export const PARQUET_L2_LOOKUP_DIGEST_ORDER: LookupDigestOrder = 'numeric';
+
+/**
  * A table's order as SQL: its `orderBy` columns, quoted (`offset` is a
  * keyword), ascending, nulls last. The order rows are written and digested
  * in, stated whole, so no writer or reader relies on its engine's default
@@ -327,6 +400,11 @@ export interface ParquetL2Band {
   /** Per table: rows, and a digest of the rows, independent of the Parquet bytes. */
   tables: Record<string, { rows: number; rowDigest: string }>;
   /**
+   * Per lookup: rows, and a digest of the rows. Derived from the tables, so
+   * not part of the band's id ({@link bandTablesDigest}).
+   */
+  lookups: Record<string, LookupDescription>;
+  /**
    * What its builder checked, free-form and small: counts, say. Not part
    * of the band's id, so builders that check differently publish the same
    * id over different `band.json` files.
@@ -343,6 +421,7 @@ const BAND_FIELDS = [
   'heightRange',
   'selection',
   'tables',
+  'lookups',
   'checks',
   'createdAt',
 ] as const;
@@ -361,8 +440,8 @@ function sortedKeys(value: unknown): unknown {
 }
 
 /**
- * A band's `band.json`, written the one way: fields and tables in the
- * layout's order, the selection's keys in its declared order, and the keys
+ * A band's `band.json`, written the one way: fields, tables and lookups in
+ * the layout's order, the selection's keys in its declared order, and the keys
  * of `checks` sorted. Two publishers of the same rows therefore write the
  * same bytes.
  */
@@ -378,6 +457,15 @@ export function serializeBandFile(band: ParquetL2Band): string {
         {
           rows: band.tables[name].rows,
           rowDigest: band.tables[name].rowDigest,
+        },
+      ]),
+    ),
+    lookups: Object.fromEntries(
+      PARQUET_L2_LOOKUPS.map(({ name }) => [
+        name,
+        {
+          rows: band.lookups[name].rows,
+          rowDigest: band.lookups[name].rowDigest,
         },
       ]),
     ),
@@ -397,9 +485,45 @@ const isIsoTime = (value: unknown): value is string =>
   new Date(value).toISOString() === value;
 
 /**
+ * Parses what a `band.json` says of its tables, or of its lookups: exactly
+ * `names`, each with rows and a row digest and nothing else.
+ */
+function parseDescriptions(
+  raw: unknown,
+  names: string[],
+  what: 'table' | 'lookup',
+): Record<string, LookupDescription> {
+  if (!isObject(raw)) {
+    throw new Error(`${BAND_FILE}: ${what}s must be an object`);
+  }
+  for (const name of Object.keys(raw)) {
+    if (!names.includes(name)) {
+      throw new Error(`${BAND_FILE}: unknown ${what} ${JSON.stringify(name)}`);
+    }
+  }
+  const parsed: Record<string, LookupDescription> = {};
+  for (const name of names) {
+    const entry = raw[name];
+    if (
+      !isObject(entry) ||
+      Object.keys(entry).some((key) => key !== 'rows' && key !== 'rowDigest') ||
+      !isCount(entry.rows) ||
+      typeof entry.rowDigest !== 'string' ||
+      !/^[0-9a-f]{64}$/.test(entry.rowDigest)
+    ) {
+      throw new Error(
+        `${BAND_FILE}: ${what} ${name} needs rows and a 64-hex rowDigest, and nothing else`,
+      );
+    }
+    parsed[name] = { rows: entry.rows, rowDigest: entry.rowDigest };
+  }
+  return parsed;
+}
+
+/**
  * Parses and checks a `band.json`. A publisher's file comes from anywhere,
  * so every field is checked, a field the layout doesn't declare is refused,
- * and every table of the layout must be described.
+ * and every table and lookup of the layout must be described.
  *
  * @throws with a message naming what is wrong.
  */
@@ -436,32 +560,13 @@ export function parseBandFile(text: string): ParquetL2Band {
     throw new Error(`${BAND_FILE}: heightRange must be [from, to], from <= to`);
   }
   const selection = parseSelection(raw.selection, `${BAND_FILE}: selection`);
-  if (!isObject(raw.tables)) {
-    throw new Error(`${BAND_FILE}: tables must be an object`);
-  }
-  const described = raw.tables;
   const names = PARQUET_L2_TABLES.map((table) => table.name);
-  for (const name of Object.keys(described)) {
-    if (!names.includes(name)) {
-      throw new Error(`${BAND_FILE}: unknown table ${JSON.stringify(name)}`);
-    }
-  }
-  const tables: ParquetL2Band['tables'] = {};
-  for (const name of names) {
-    const entry = described[name];
-    if (
-      !isObject(entry) ||
-      Object.keys(entry).some((key) => key !== 'rows' && key !== 'rowDigest') ||
-      !isCount(entry.rows) ||
-      typeof entry.rowDigest !== 'string' ||
-      !/^[0-9a-f]{64}$/.test(entry.rowDigest)
-    ) {
-      throw new Error(
-        `${BAND_FILE}: table ${name} needs rows and a 64-hex rowDigest, and nothing else`,
-      );
-    }
-    tables[name] = { rows: entry.rows, rowDigest: entry.rowDigest };
-  }
+  const tables = parseDescriptions(raw.tables, names, 'table');
+  const lookups = parseDescriptions(
+    raw.lookups,
+    PARQUET_L2_LOOKUPS.map((spec) => spec.name),
+    'lookup',
+  );
   if (raw.checks !== undefined && !isObject(raw.checks)) {
     throw new Error(`${BAND_FILE}: checks must be an object`);
   }
@@ -476,18 +581,23 @@ export function parseBandFile(text: string): ParquetL2Band {
     heightRange: [range[0], range[1]],
     selection,
     tables,
+    lookups,
     ...(raw.checks !== undefined ? { checks: raw.checks } : {}),
     createdAt: raw.createdAt,
   };
 }
 
 /**
- * Every file a band of a layout holds, sorted: its description and one
- * Parquet file per table. Publisher, subscriber and verifier all take a
- * band's files from here, by the layout its `band.json` names.
+ * Every file a band of a layout holds, sorted: its description, one Parquet
+ * file per table, and one per lookup. Publisher, subscriber and verifier
+ * all take a band's files from here, by the layout its `band.json` names.
  */
 export function bandFiles(_schema: ParquetL2Schema): string[] {
-  return [BAND_FILE, ...PARQUET_L2_TABLES.map((table) => table.file)].sort();
+  return [
+    BAND_FILE,
+    ...PARQUET_L2_TABLES.map((table) => table.file),
+    ...PARQUET_L2_LOOKUPS.map((spec) => spec.file),
+  ].sort();
 }
 
 /**
@@ -495,8 +605,9 @@ export function bandFiles(_schema: ParquetL2Schema): string[] {
  * table's row count and row digest. Independent of the Parquet bytes, so
  * two publishers that wrote the same rows under the same selection agree on
  * it; the selection is bound in, so bands of two selections never do, even
- * where they hold the same rows (none, say). `checks` and `createdAt` are
- * left out.
+ * where they hold the same rows (none, say). `lookups`, `checks` and
+ * `createdAt` are left out: lookups are derived from the tables, so adding
+ * or changing them never changes a band's id.
  *
  * The band's id is taken from this ({@link l2BandId}).
  */

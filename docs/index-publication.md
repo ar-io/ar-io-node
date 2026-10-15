@@ -608,6 +608,15 @@ They carry the same trust as the tables: each file's digest is signed in
 the publication, and anyone can recompute them from the tables
 (`ar-io-node index-l1-verify --bands-dir` does).
 
+A lookup file's `rowDigest` is taken as a table's, over its rows in the
+order of its "Sorted by" columns. In an `l1-3` band that order compares
+the 64-bit columns among them (`id8`, `addr8`, `name8`, `val8`, `height`,
+`data_size`) as their decimal text, so
+`10` sorts before `100` before `9`, though the file itself is sorted by
+value: to reproduce an `l1-3` lookup's digest, sort its rows that way
+first. An L2 band's lookups (below) are digested by value, in the file's
+own order, as a future L1 layout's will be.
+
 ## L2 bands
 
 A `parquet-l2` band carries the ANS-104 data items (L2) of one height range
@@ -627,6 +636,7 @@ A band is a directory of `band.json` and these files:
 | `tags.parquet` | Each item's tags once per height, names and values in plaintext | `height, id, tag_index` |
 | `wallets.parquet` | Owners' `address` and key (`public_modulus`); the address is the key's SHA-256 | `address` |
 | `parents.parquet` | Every nested bundle between a held item and its root, located as an item is | `id, root_transaction_id, root_parent_offset, offset` |
+| `lookup_id.parquet`, `lookup_wallet.parquet`, `lookup_tag.parquet` | The band's [lookup files](#l2-lookup-files) | by key |
 
 Every order is ascending with nulls last. An item's location is eight
 columns, `root_parent_offset`, `offset`, `size`, `data_offset`,
@@ -637,8 +647,8 @@ starts in the root transaction's data. They are all set, or all null for an
 item known to be in its root but not where.
 
 `band.json` names the layout (`schema`: `l2-1`), the heights, the selection,
-each table's row count and row digest (computed as an L1 band's), and
-`createdAt`; optionally `checks`, a small free-form object of what the
+each table's row count and row digest (computed as an L1 band's), the same
+for each lookup file (`lookups`), and `createdAt`; optionally `checks`, a small free-form object of what the
 builder checked. A reader refuses any field it does not declare. The
 selection is:
 
@@ -664,7 +674,9 @@ JSON (`[from,to]`), a newline, the selection as one line of JSON with its
 keys in the order above, a newline, and one `<table>:<rows>:<rowDigest>`
 line per table in name order, joined by newlines. The selection is part of
 the band's identity: the same rows under two selections are two bands.
-`checks` and `createdAt` are not part of it.
+`lookups`, `checks` and `createdAt` are not part of it: the lookup files are
+derived from the tables, so the same rows give the same id whatever their
+lookups.
 
 A reader checks each file against the signed digests, then the file set,
 each footer's columns and row count against the layout and `band.json`,
@@ -674,6 +686,41 @@ publication carries it as each band's `metadata.selection`, and in the
 index's `filter` when the publisher sets one. A reader refuses a band whose
 `band.json` disagrees with the publication, and every band of an index
 whose bands or filter disagree.
+
+### L2 lookup files
+
+An L2 band carries [lookup files](#lookup-files) as an `l1-3` band does,
+with the same keys, row groups and two-step reads, so finding one data item,
+a wallet's items or the items carrying a tag pair, such as an ArDrive
+`Drive-Id`, reads a footer and a row group or two per band instead of
+scanning its tables. `data_items` holds a row per place an item sits; the
+lookups hold one per item and height, however many places it sits at there.
+
+| File | One row per | Columns | Sorted by |
+|---|---|---|---|
+| `lookup_id.parquet` | Distinct item and height | `id8`, `height` | `id8, height` |
+| `lookup_wallet.parquet` | Distinct item and height, for its owner (`role` 0), and for its `target` (`role` 1) when it has one | `addr8`, `role`, `height`, `data_size` | `addr8, height, role, data_size` |
+| `lookup_tag.parquet` | Distinct (name, value) tag pair, as in an L1 band | `name8`, `val8`, `name`, `value`, `txs` (distinct items), `first_height`, `last_height` | `name8, val8, name, value` |
+
+```sql
+-- the items of one drive (:drive is its Drive-Id value)
+SELECT name, value, txs, first_height, last_height
+FROM read_parquet('…/*/lookup_tag.parquet')
+WHERE name8 = ('0x' || left(sha256('Drive-Id'::BLOB), 16))::UBIGINT
+  AND val8 = ('0x' || left(sha256(:drive::BLOB), 16))::UBIGINT
+  AND name = 'Drive-Id'::BLOB AND value = :drive::BLOB;
+
+-- then its tag rows, at those heights only
+SELECT id FROM read_parquet('…/*/tags.parquet')
+WHERE height BETWEEN :first_height AND :last_height
+  AND tag_name = 'Drive-Id'::BLOB AND tag_value = :drive::BLOB;
+```
+
+Their row digests are taken by value, in the order each file is written
+in, so a reader can digest a lookup as it reads it (unlike an `l1-3`
+band's, above). A reader checks each lookup file's footer and row count as
+it does a table's. The publisher derives them from the band's own tables and checks
+them against those tables before it publishes.
 
 ## Querying a dataset over HTTP
 

@@ -21,6 +21,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   bands, or `filter`, declare different selections. Opt-in, like
   `parquet-l1`. `index-export` builds them (below). See *L2 bands* in
   [docs/index-publication.md](docs/index-publication.md).
+  - Every band carries three lookup files, as an `l1-3` band does, with the
+    same keys: `lookup_id.parquet` (an item's id to its heights),
+    `lookup_wallet.parquet` (an owner's or target's items, with heights and
+    sizes) and `lookup_tag.parquet` (each tag pair, such as a `Drive-Id`,
+    with its item count and first and last height), so a reader finds an
+    item, a wallet or a tag pair without scanning the band. `band.json`
+    describes them under `lookups`; they are not part of the band's id, and
+    a subscriber checks their footers and row counts as a table's.
 - **`index-export` builds L2 bands (`INDEX_EXPORT_KINDS=…,parquet-l2`)**:
   one index per selection in `INDEX_EXPORT_L2_INDEXES` (`ardrive-l2`:
   `App-Name` starting `ArDrive`, not `ArDriver`), published under
@@ -56,6 +64,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     order, with no sort of the band. DuckDB runs within
     `INDEX_EXPORT_L2_DUCKDB_MEMORY` (2GB) and `INDEX_EXPORT_L2_DUCKDB_THREADS`
     (2), spilling at most `INDEX_EXPORT_L2_DUCKDB_SPILL_MAX_GB` (256).
+  - The lookup files are derived from the written tables in the same
+    DuckDB, and checked before publishing: read back to their digests, and
+    derived again to hold exactly the rows the tables give.
   - A root the gateway answers 404 for is unreadable for the build, asked
     about once: its ambiguous items are written unlocated (`unproven`) and
     an owner whose key could only be read there without a key, rather than
@@ -122,6 +133,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Lookup file digests ordered by value**: the lookup engine digested a
+  lookup's rows ordering by its own text renderings of the 64-bit columns
+  (`id8`, `addr8`, `height`, `data_size`, …), so `10` < `100` < `9`, while
+  the files are sorted by value: a reader digesting a lookup in file order
+  could not reproduce its `rowDigest`. The order is now an explicit option
+  (`numeric` or `legacy-text`). `parquet-l2` (`l2-1`) lookups use `numeric`,
+  their files' own order. `parquet-l1` (`l1-3`) lookups keep `legacy-text`,
+  so every published `l1-3` band's digests are unchanged and still verify;
+  a future L1 layout moves to `numeric`.
 - **Root-TX exports no longer place a row that can't frame its own item.**
   A row with no size, a payload that doesn't start after the item, a header
   longer than the item, or (its payload size known) an item that doesn't
