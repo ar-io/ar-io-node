@@ -681,9 +681,9 @@ own offsets. `stats.placedBy` gives the located rows by how they were
 placed; a row any copy of which `placePayload` repaired counts as
 `repaired`.
 
-The header check of a band's sample is unchanged: a read that fails, a
-404 included, counts against its 80% pass ratio, so a band whose located
-rows mostly sit in roots no node serves waits (`couldnt_check`, `gate`).
+The header check of a band's sample passes over roots that are gone (see
+*Checks before publishing* below), so a band whose roots are mostly gone
+builds as long as enough of those that answer verify.
 
 ### Distinct rows
 
@@ -738,10 +738,17 @@ Besides the rules above, before a band publishes:
   row after the one before it in the table's order, as an importer digests
   it;
 - a header check through `INDEX_EXPORT_HEADER_CHECK_URL`, as for root-TX
-  bands: 150 located rows, 50 more of each of `repaired`, `proven`,
-  `absolute`, `deep` and `normalised`. A wrong header rejects the band;
-  under 80% read leaves it for the retry. A band with no located row has
-  nothing to check.
+  bands: 150 located rows read, 50 more of each of `repaired`, `proven`,
+  `absolute`, `deep` and `normalised`, and 150 of a replacement's
+  `newly-located`, each from a pool ten times as large, walked until that
+  many are read, passing over rows whose root the gateway no longer has
+  (404, `unreadable`, out of the pass ratio). Every relocated row is read,
+  and one whose root is gone leaves the band for the retry. A wrong header
+  rejects the band; under 80% of those read passing, or too few verified,
+  leaves it for the retry. `checks` in `band.json` gives what was read
+  (`sampled`), the pool (`poolSize`), the rows passed over (`unreadable`)
+  and their share of those tried (`unreadableShare`), an estimate of the
+  band's gone roots. A band with no located row has nothing to check.
 
 ### Lifecycle
 

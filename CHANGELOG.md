@@ -62,6 +62,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     stop the band; timeouts, 5xx and 429 still stop it, to be retried. A
     re-settle may locate such items, or key such owners, later; it never
     drops a key (`dropped_wallets`).
+  - The header check reads its sample from a pool ten times as large, as
+    root-TX bands do, passing over rows whose root is gone; `band.json`
+    `checks` gives `sampled`, `poolSize`, `unreadable` and
+    `unreadableShare`.
 - **Root-TX bands on the L1 grid, with a settle lag
   (`INDEX_EXPORT_ROOT_TX_LAYOUT=grid`)**: `index-export` cuts root-TX bands
   at the same heights as `parquet-l1` bands, so every publisher's bands line

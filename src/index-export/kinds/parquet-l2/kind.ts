@@ -39,15 +39,27 @@ import {
   readPublisherFacts,
   writePublisherFacts,
 } from '../../../lib/parquet-l1/layout.js';
-import { l2BandId } from '../../../lib/parquet-l2/layout.js';
+import {
+  BAND_FILE,
+  l2BandId,
+  serializeBandFile,
+} from '../../../lib/parquet-l2/layout.js';
 import * as metrics from '../../metrics.js';
 import type { UnlocatedReason } from '../root-tx/sources/item-location.js';
 import type { L1PublishedBand } from '../parquet-l1/kind.js';
-import { compareL2Bands, L2_RELOCATED_TAG, L2Compare } from './compare.js';
+import {
+  compareL2Bands,
+  L2_NEWLY_LOCATED_TAG,
+  L2_RELOCATED_TAG,
+  L2Compare,
+  NEWLY_LOCATED_SAMPLE,
+} from './compare.js';
 import type { L2IndexConfig } from './config.js';
 import {
   DEFAULT_L2_DUCK_LIMITS,
   exportL2Band,
+  L2_SAMPLE_SIZE,
+  L2_STRATUM_SAMPLE_SIZE,
   L2BandStats,
   L2CheckError,
   L2DuckLimits,
@@ -116,12 +128,24 @@ export interface L2Outcome {
     ok: number;
     wrong: number;
     errors: number;
+    /** Candidates handed to the check: the pool its samples are read from. */
+    poolSize: number;
+    /** Candidates passed over: their roots are gone (404), out of the ratio. */
+    unreadable: number;
+    /** Unreadable among those tried: an estimate of the band's gone roots. */
+    unreadableShare: number;
     /** Rows that passed with a malformed tag count: malformed items, right locations. */
     malformedTags: number;
     malformed?: Array<{ id: string; reason: string; tag?: string }>;
     byTag: Record<
       string,
-      { checked: number; ok: number; wrong: number; malformedTags?: number }
+      {
+        checked: number;
+        ok: number;
+        wrong: number;
+        unreadable?: number;
+        malformedTags?: number;
+      }
     >;
   };
   /** Where a dry run with `--keep` left the band. */
@@ -133,6 +157,22 @@ export interface L2Outcome {
 }
 
 const HTTP_STATUS = /status code (\d{3})/;
+
+/**
+ * How many entries of each header-check stratum to read, from pools
+ * {@link HEADER_CHECK_POOL_FACTOR} times as large: the general sample, the
+ * placement and normalisation strata, and a replacement's newly located
+ * rows. Relocated rows have no target: every one is read.
+ */
+export const L2_HEADER_TARGETS: Record<string, number> = {
+  '': L2_SAMPLE_SIZE,
+  repaired: L2_STRATUM_SAMPLE_SIZE,
+  proven: L2_STRATUM_SAMPLE_SIZE,
+  absolute: L2_STRATUM_SAMPLE_SIZE,
+  deep: L2_STRATUM_SAMPLE_SIZE,
+  normalised: L2_STRATUM_SAMPLE_SIZE,
+  [L2_NEWLY_LOCATED_TAG]: NEWLY_LOCATED_SAMPLE,
+};
 
 /** Every reason an item is unlocated, so a gauge drops to 0 when one clears. */
 const UNLOCATED_REASONS: UnlocatedReason[] = [
@@ -217,7 +257,6 @@ export async function runL2Step(
       ),
       tables: built.band.tables,
       createdAt: built.band.createdAt,
-      checks: built.band.checks ?? {},
       stats: built.stats,
       bandBytes: built.bandBytes,
       stagingBytes: built.stagingBytes,
@@ -227,6 +266,8 @@ export async function runL2Step(
     outcome = {
       ...base,
       ...facts,
+      // After the header check, which adds what it read.
+      checks: built.band.checks ?? {},
       ...decision.decision,
       ...(decision.compare !== undefined ? { compare: decision.compare } : {}),
       ...(decision.header !== undefined ? { header: decision.header } : {}),
@@ -380,8 +421,11 @@ async function decide(
   ];
   let header: L2Outcome['header'];
   if (entries.length > 0) {
+    // Pools walked until each sample is read, roots that are gone passed
+    // over; every relocated row read (no target).
     const check = await checkBandHeaders({
       entries,
+      targets: L2_HEADER_TARGETS,
       totalRecords: built.band.tables.data_items.rows,
       openRoot: ctx.openRoot,
       minRecords: 0,
@@ -392,6 +436,9 @@ async function decide(
       ok: check.ok,
       wrong: check.wrong.length,
       errors: check.errors.length,
+      poolSize: check.poolSize,
+      unreadable: check.unreadable.length,
+      unreadableShare: Number(check.unreadableShare.toFixed(3)),
       malformedTags: check.malformedTags,
       ...(check.malformedTags > 0
         ? { malformed: check.malformed.slice(0, 20) }
@@ -408,6 +455,27 @@ async function decide(
         check.malformedTags,
       );
     }
+    if (check.unreadable.length > 0) {
+      metrics.gateUnreadable.inc(
+        { index: ctx.index.name, kind: step.role },
+        check.unreadable.length,
+      );
+    }
+    // What the band says it checked, in its band.json: not part of its id.
+    built.band = {
+      ...built.band,
+      checks: {
+        ...built.band.checks,
+        sampled: check.checked,
+        poolSize: check.poolSize,
+        unreadable: check.unreadable.length,
+        unreadableShare: Number(check.unreadableShare.toFixed(3)),
+      },
+    };
+    await fs.writeFile(
+      path.join(built.dir, BAND_FILE),
+      serializeBandFile(built.band),
+    );
     for (const wrong of check.wrong) {
       metrics.gateWrong.inc({
         index: ctx.index.name,
@@ -440,7 +508,17 @@ async function decide(
         ],
       });
     }
-    const unread = check.errors.filter((e) => e.tag === L2_RELOCATED_TAG);
+    // A relocated row replaces a location already published: each must read
+    // back right, and a root that is gone proves nothing either.
+    const unread = [
+      ...check.errors.filter((e) => e.tag === L2_RELOCATED_TAG),
+      ...check.unreadable
+        .filter((e) => e.tag === L2_RELOCATED_TAG)
+        .map((e) => ({
+          id: e.id,
+          error: `root ${e.rootTxId} not found (404)`,
+        })),
+    ];
     if (unread.length > 0) {
       return withHeader({
         result: 'couldnt_check',

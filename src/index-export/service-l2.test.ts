@@ -539,10 +539,17 @@ describe('ExportService, parquet-l2 roots the network no longer serves', () => {
     assert.deepEqual([first.result, first.reason], ['published', 'new']);
     assert.deepEqual(first.checks?.unlocated, { unproven: 2 });
     assert.equal(first.stats?.proofs.unproven, 2);
-    // The repaired b1's header can't be read either: an error against the
-    // sample's pass ratio, never a wrong header.
+    // The repaired b1's header can't be read either: passed over in the
+    // sample, out of its pass ratio, and never a wrong header.
     assert.equal(first.header?.wrong, 0);
-    assert.ok((first.header?.errors ?? 0) >= 1);
+    assert.equal(first.header?.errors, 0);
+    assert.equal(first.header?.unreadable, 1);
+    assert.equal(first.header?.ok, 11);
+    assert.equal(first.header?.poolSize, 12);
+    assert.equal(first.checks?.sampled, 11);
+    assert.equal(first.checks?.unreadable, 1);
+    assert.equal(first.checks?.poolSize, 12);
+    assert.equal(first.checks?.unreadableShare, Number((1 / 12).toFixed(3)));
     const [band] = await live();
 
     gone.clear();
@@ -562,6 +569,23 @@ describe('ExportService, parquet-l2 roots the network no longer serves', () => {
     );
     assert.equal(again.compare?.unlocated, 2);
     assert.equal((await live())[0].id, back.id);
+  });
+
+  it('verifies a band most of whose roots are gone among those that answer, and writes what it read in band.json', async () => {
+    // The nested root and the lone item's root gone: 2 of the 13 located
+    // rows' roots. Then the plain root too: nothing left to verify.
+    gone.add(toB64Url(nested.id));
+    gone.add(toB64Url(lone.id));
+    const step = d1(await run({ dryRun: true }));
+    assert.deepEqual([step.result, step.reason], ['dry_run', 'dry_run']);
+    assert.equal(step.header?.unreadable, 2);
+    assert.equal(step.header?.ok, 10);
+    assert.ok((step.header?.byTag['']?.unreadable ?? 0) >= 1);
+    gone.add(toB64Url(plain.id));
+    const none = d1(await run({ dryRun: true }));
+    assert.deepEqual([none.result, none.reason], ['couldnt_check', 'gate']);
+    assert.equal(none.header?.ok, 0);
+    assert.equal(none.checks?.unreadableShare, 1);
   });
 
   it("keeps an owner's key: a re-settle that can no longer read it is refused", async () => {

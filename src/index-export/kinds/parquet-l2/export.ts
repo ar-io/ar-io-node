@@ -47,6 +47,7 @@ import { setImmediate } from 'node:timers/promises';
 import type { Database } from 'duckdb-async';
 
 import { BandSampleEntry, Reservoir } from '../../../lib/index-band/build.js';
+import { HEADER_CHECK_POOL_FACTOR } from '../../../lib/index-band/verify.js';
 import { toB64Url } from '../../../lib/encoding.js';
 import { RowDigest } from '../../../lib/parquet/digest.js';
 import type { TableSpec } from '../../../lib/parquet-l1/layout.js';
@@ -88,7 +89,12 @@ import {
   resolveOwnerKeys,
 } from './wallets.js';
 
-/** Header-check samples: general, and per placement or normalisation. */
+/**
+ * Header-check samples: how many entries to read, general and per placement
+ * or normalisation. Each is drawn {@link HEADER_CHECK_POOL_FACTOR} times
+ * over, a pool the check walks until that many are read, passing over roots
+ * the gateway no longer has.
+ */
 export const L2_SAMPLE_SIZE = 150;
 export const L2_STRATUM_SAMPLE_SIZE = 50;
 
@@ -551,7 +557,10 @@ async function build(
       below: 0,
       belowSample: [] as string[],
     };
-    const general = new Reservoir<BandSampleEntry>(L2_SAMPLE_SIZE, Math.random);
+    const general = new Reservoir<BandSampleEntry>(
+      L2_SAMPLE_SIZE * HEADER_CHECK_POOL_FACTOR,
+      Math.random,
+    );
     const strata = new Map<string, Reservoir<BandSampleEntry>>();
     const offerSample = (
       item: AssembledItem,
@@ -575,7 +584,10 @@ async function build(
       for (const tag of tags) {
         let reservoir = strata.get(tag);
         if (reservoir === undefined) {
-          reservoir = new Reservoir(L2_STRATUM_SAMPLE_SIZE, Math.random);
+          reservoir = new Reservoir(
+            L2_STRATUM_SAMPLE_SIZE * HEADER_CHECK_POOL_FACTOR,
+            Math.random,
+          );
           strata.set(tag, reservoir);
         }
         reservoir.offer(entry(tag));

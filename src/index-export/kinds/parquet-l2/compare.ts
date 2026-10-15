@@ -18,12 +18,17 @@ import * as path from 'node:path';
 import type { Database } from 'duckdb-async';
 
 import type { BandSampleEntry } from '../../../lib/index-band/build.js';
+import { HEADER_CHECK_POOL_FACTOR } from '../../../lib/index-band/verify.js';
 import { toB64Url } from '../../../lib/encoding.js';
 import { PARQUET_L2_TABLES } from '../../../lib/parquet-l2/layout.js';
 
 /** The header-check stratum of every row a replacement relocates. */
 export const L2_RELOCATED_TAG = 'relocated';
-/** The header-check stratum of rows located now and not before, sampled. */
+/**
+ * The header-check stratum of rows located now and not before: a pool of
+ * {@link HEADER_CHECK_POOL_FACTOR} times the sample, walked until the
+ * sample is read.
+ */
 export const L2_NEWLY_LOCATED_TAG = 'newly-located';
 export const NEWLY_LOCATED_SAMPLE = 150;
 
@@ -171,7 +176,7 @@ export async function compareL2Bands(
   if (compare.newlyLocated > 0) {
     // A spread of them, the same each time for the same rows.
     const rows = (await duck.all(
-      `${newlyLocatedSql} ORDER BY hash(n.id, n.root_transaction_id) LIMIT ${NEWLY_LOCATED_SAMPLE}`,
+      `${newlyLocatedSql} ORDER BY hash(n.id, n.root_transaction_id) LIMIT ${NEWLY_LOCATED_SAMPLE * HEADER_CHECK_POOL_FACTOR}`,
     )) as LocatedRow[];
     compare.newlyLocatedEntries = rows.map((row) =>
       entry(row, L2_NEWLY_LOCATED_TAG),
