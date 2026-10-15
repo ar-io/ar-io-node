@@ -179,10 +179,13 @@ export interface RunOptions {
    */
   resettle?: 'gate' | 'full';
   /**
-   * `parquet-l2`, with a dry run: build only this range of each index (a
-   * band on the grid), and nothing of the other indexes.
+   * Heights an operator's run is held to (`--range`). With `resettle`:
+   * re-settle only the frozen bands inside them (root-TX grid and every L2
+   * index), and build nothing else (no freeze, roll, tip or L1 band).
+   * Without, in a dry run: build only this band (on the grid) of each L2
+   * index, and nothing of the other indexes.
    */
-  l2Range?: [number, number];
+  range?: [number, number];
 }
 
 /** One `parquet-l2` index's part of a run. */
@@ -558,10 +561,13 @@ export class ExportService {
       peakBytes: 0,
     };
     await fs.mkdir(config.workDir, { recursive: true });
-    if (
-      config.kinds.includes('root-tx-index') &&
-      options.l2Range === undefined
-    ) {
+    // `--range` alone pins one L2 band; with `--resettle`, it holds every
+    // index to re-settling the frozen bands inside it.
+    const pinned =
+      options.range !== undefined && options.resettle === undefined;
+    const resettleOnly =
+      options.range !== undefined && options.resettle !== undefined;
+    if (config.kinds.includes('root-tx-index') && !pinned) {
       await fs.mkdir(config.publishDir, { recursive: true });
     }
 
@@ -599,12 +605,12 @@ export class ExportService {
       // is this run's.
       if (!dryRun) await this.clearStaging();
       // A pinned L2 range is an operator's look at one band: nothing else.
-      const pinned = options.l2Range !== undefined;
+      // A re-settle held to a range builds no L1 band either.
       const result: RunMemory =
         kinds.includes('root-tx-index') && !pinned
           ? await this.run(report, options, dryRun)
           : { superseded: [] };
-      if (kinds.includes('parquet-l1') && !pinned) {
+      if (kinds.includes('parquet-l1') && !pinned && !resettleOnly) {
         await this.runL1(report, options, dryRun);
       }
       if (kinds.includes('parquet-l2')) {
@@ -997,21 +1003,27 @@ export class ExportService {
     // Only a bootstrap cuts bands that could overlap a stranger's.
     if (start.frozen.length === 0)
       await this.refuseForeignBands(state.adoptions);
-    if (start.seeds.length > 0) {
+    const range = (options.resettle !== undefined ? options.range : undefined);
+    if (start.seeds.length > 0 && range === undefined) {
       context.rootHeights = await RootHeights.of(start.seeds);
     }
 
     // 1. Freeze, in height order. A dry run publishes nothing, so what it
     // built counts as frozen for the steps that follow.
+    // With a range, only its re-settles.
     const built: Array<[number, number]> = [];
-    for (const step of planFreezes({
-      bands: atStart,
-      stableTop,
-      settleBlocks: config.settleBlocks ?? DEFAULT_SETTLE_BLOCKS,
-      ...(config.startHeight !== undefined
-        ? { startHeight: config.startHeight }
-        : {}),
-    })) {
+    const freezes =
+      range !== undefined
+        ? []
+        : planFreezes({
+            bands: atStart,
+            stableTop,
+            settleBlocks: config.settleBlocks ?? DEFAULT_SETTLE_BLOCKS,
+            ...(config.startHeight !== undefined
+              ? { startHeight: config.startHeight }
+              : {}),
+          });
+    for (const step of freezes) {
       const outcome = await fingerprinted(step, atStart);
       if (
         dryRun &&
@@ -1026,7 +1038,9 @@ export class ExportService {
 
     // 2. Roll complete 100,000-height ranges.
     let bands = await live();
-    for (const { step, awaits } of planRolls(bands, built)) {
+    for (const { step, awaits } of range !== undefined
+      ? []
+      : planRolls(bands, built)) {
       if (awaits.length > 0) {
         plan.push(describeGridStep(step, { awaits }));
         report.steps.push({
@@ -1063,15 +1077,18 @@ export class ExportService {
       frozenTop(now.frozen),
       ...built.map(([, to]) => to),
     ].filter((top): top is number => top !== undefined);
-    const tip = planTip({
-      bands,
-      stableTop,
-      from: tipStart(
-        frozenTop(start.frozen),
-        frozenNow.length > 0 ? Math.max(...frozenNow) : undefined,
-        config.startHeight,
-      ),
-    });
+    const tip =
+      range !== undefined
+        ? undefined
+        : planTip({
+            bands,
+            stableTop,
+            from: tipStart(
+              frozenTop(start.frozen),
+              frozenNow.length > 0 ? Math.max(...frozenNow) : undefined,
+              config.startHeight,
+            ),
+          });
     if (tip !== undefined) {
       const lookup = frozenLookup(now.frozen, log);
       context.frozenHolds = lookup.holds;
@@ -1093,7 +1110,15 @@ export class ExportService {
         intervalMs,
         force: options.resettle !== undefined,
         settledAt: state.resettledAt ?? {},
-      });
+      }).filter(
+        (step) =>
+          range === undefined ||
+          (step.heightRange[0] >= range[0] &&
+            (step.heightRange[1] as number) <= range[1]),
+      );
+      if (range !== undefined && steps.length === 0) {
+        log.warn('No frozen band lies inside --range', { range });
+      }
       // A gateway or source that failed a build this run would fail each
       // re-settle too, after rebuilding it: wait for the retry.
       const blocked = report.steps.some((s) => s.result === 'couldnt_check');
@@ -1630,7 +1655,7 @@ export class ExportService {
    * sub-range above the frozen ones; then re-settle the frozen bands that
    * are due. Freezes and re-settles stop starting once the run's time budget
    * has passed, and the tip waits while freezes are behind, since it would
-   * span every height they left. With `l2Range`, a dry run builds that one
+   * span every height they left. With `range` alone, a dry run builds that one
    * band of each index and nothing else.
    */
   private async runL2(
@@ -1865,12 +1890,14 @@ export class ExportService {
           return outcome;
         };
 
-        if (options.l2Range !== undefined) {
+        const range =
+          options.resettle !== undefined ? options.range : undefined;
+        if (options.range !== undefined && options.resettle === undefined) {
           const bands = await live();
           await run(
             planL2Pin({
               bands,
-              range: options.l2Range,
+              range: options.range,
               stableTop,
               settleBlocks,
             }),
@@ -1887,12 +1914,16 @@ export class ExportService {
         // 1. Freeze, in height order. A dry run publishes nothing, so what
         // it built counts as frozen for the tip.
         let bands = await live();
-        const freezes = planL2Freezes({
-          bands,
-          stableTop,
-          settleBlocks,
-          ...(startHeight !== undefined ? { startHeight } : {}),
-        });
+        // With a range, only its re-settles.
+        const freezes =
+          range !== undefined
+            ? []
+            : planL2Freezes({
+                bands,
+                stableTop,
+                settleBlocks,
+                ...(startHeight !== undefined ? { startHeight } : {}),
+              });
         let builtTop: number | undefined;
         for (const [i, step] of freezes.entries()) {
           if (i > 0 && overBudget()) {
@@ -1915,19 +1946,22 @@ export class ExportService {
 
         // 2. Roll every range of twenty frozen d bands into its h.
         bands = await live();
-        for (const step of planL2Rolls(bands)) {
+        for (const step of range !== undefined ? [] : planL2Rolls(bands)) {
           await fingerprinted(step, bands);
         }
 
         // 3. The tip, unless freezes are behind (the time budget, or a
         // bootstrap that failed): it would span every height they left.
         bands = await live();
-        const tips = planL2Tip({
-          bands,
-          stableTop,
-          ...(startHeight !== undefined ? { startHeight } : {}),
-          ...(dryRun && builtTop !== undefined ? { above: builtTop } : {}),
-        });
+        const tips =
+          range !== undefined
+            ? []
+            : planL2Tip({
+                bands,
+                stableTop,
+                ...(startHeight !== undefined ? { startHeight } : {}),
+                ...(dryRun && builtTop !== undefined ? { above: builtTop } : {}),
+              });
         const behind = tips.length > maxTipBands(settleBlocks);
         for (const step of tips) {
           if (behind) {
@@ -1950,7 +1984,18 @@ export class ExportService {
             intervalMs,
             force: options.resettle !== undefined,
             resettledAt: state.resettledAt ?? {},
-          });
+          }).filter(
+            (step) =>
+              range === undefined ||
+              (step.heightRange[0] >= range[0] &&
+                step.heightRange[1] <= range[1]),
+          );
+          if (range !== undefined && steps.length === 0) {
+            log.warn('No frozen L2 band lies inside --range', {
+              index: index.name,
+              range,
+            });
+          }
           for (const step of steps) {
             const blocked = entry.steps.some(
               (s) => s.result === 'couldnt_check',

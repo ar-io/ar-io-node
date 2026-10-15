@@ -33,6 +33,7 @@ interface DataItemRow {
   offset: number | null;
   data_offset: number | null;
   size: number | null;
+  data_size: number | null;
   root_parent_offset: number | null;
 }
 
@@ -79,7 +80,7 @@ export class SqliteRecordSource implements RecordSource {
       this.db = new Sqlite(dbPath, { readonly: true, fileMustExist: true });
       this.batch = this.db.prepare(`
         SELECT id, parent_id, root_transaction_id, height,
-          block_transaction_index, offset, data_offset, size,
+          block_transaction_index, offset, data_offset, size, data_size,
           root_parent_offset
         FROM stable_data_items
         WHERE (height, block_transaction_index, id) > (?, ?, ?)
@@ -200,6 +201,7 @@ function toItemRow(raw: DataItemRow): ItemRow {
     offset: nullable(raw.offset),
     dataOffset: nullable(raw.data_offset),
     size: nullable(raw.size),
+    dataSize: nullable(raw.data_size),
     rootParentOffset: nullable(raw.root_parent_offset),
   };
 }

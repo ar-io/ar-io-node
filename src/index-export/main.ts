@@ -21,9 +21,11 @@
  *                        band, due or not (root-TX: rebuilding those whose
  *                        sources changed)
  *     --resettle=full    the same, rebuilding every one
- *     --range <from>-<to>
- *                        parquet-l2, with --dry-run or --keep: build only
- *                        this band (on the grid) of each L2 index, nothing else
+ *     --range <from>-<to> with --resettle: only the frozen bands inside
+ *                        these heights are re-settled (root-TX grid and
+ *                        every L2 index), and nothing else is built; without
+ *                        --resettle, with --dry-run or --keep: only this band
+ *                        (on the grid) of each L2 index is built, nothing else
  *   main.js --adopt <band> --as h|r|d [--top <height>]
  *                        record an existing band as this service's (grid
  *                        layout: also --as tip)
@@ -57,7 +59,7 @@ const height = (value: string, flag: string): number => {
 /** `--range <from>-<to>`, two block heights. */
 const heightRange = (value: string): [number, number] => {
   const match = /^(\d+)-(\d+)$/.exec(value);
-  if (match === null) {
+  if (match === null || Number(match[1]) > Number(match[2])) {
     throw new Error(`--range must be <from>-<to>, two block heights: ${value}`);
   }
   return [Number(match[1]), Number(match[2])];
@@ -190,11 +192,17 @@ async function main(): Promise<void> {
       '--resettle is for the grid layout (INDEX_EXPORT_ROOT_TX_LAYOUT=grid) and parquet-l2',
     );
   }
-  if (values.range !== undefined) {
-    if (!l2) throw new Error('--range is for parquet-l2 (INDEX_EXPORT_KINDS)');
+  // --range with --resettle picks the frozen bands re-settled; alone, the
+  // L2 band built for a look (never published).
+  if (values.range !== undefined && values.resettle === undefined) {
+    if (!l2) {
+      throw new Error(
+        `--range without --resettle builds one parquet-l2 band; with --resettle it picks the bands re-settled. ${USAGE}`,
+      );
+    }
     if (values['dry-run'] !== true && values.keep === undefined) {
       throw new Error(
-        '--range goes with --dry-run or --keep: it never publishes',
+        '--range without --resettle goes with --dry-run or --keep: it never publishes',
       );
     }
   }
@@ -277,7 +285,7 @@ async function main(): Promise<void> {
         ? { resettle: values.resettle }
         : {}),
       ...(values.range !== undefined
-        ? { l2Range: heightRange(values.range) }
+        ? { range: heightRange(values.range) }
         : {}),
       force: true,
     });

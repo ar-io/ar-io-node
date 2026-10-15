@@ -323,7 +323,7 @@ describe('ExportService, parquet-l2', () => {
   });
 
   it('builds a pinned range in a dry run, publishing nothing', async () => {
-    const pinned = await run({ dryRun: true, l2Range: [105_000, 109_999] });
+    const pinned = await run({ dryRun: true, range: [105_000, 109_999] });
     assert.deepEqual(steps(pinned.steps), [
       ['pin', 105_000, 109_999, 'dry_run', 'dry_run'],
     ]);
@@ -336,7 +336,7 @@ describe('ExportService, parquet-l2', () => {
 
     // Kept, to compare: in the keep directory, never the publish one.
     const keep = path.join(dir, 'keep');
-    const kept = await run({ keepDir: keep, l2Range: [100_000, 104_999] });
+    const kept = await run({ keepDir: keep, range: [100_000, 104_999] });
     assert.equal(kept.steps[0].result, 'dry_run');
     assert.equal(
       kept.steps[0].keptAt,
@@ -392,6 +392,18 @@ describe('ExportService, parquet-l2', () => {
         [105_000, 'unchanged', 'same_id'],
       ],
     );
+  });
+
+  it('re-settles only the frozen bands inside --range, and builds nothing else', async () => {
+    await run();
+    source.top = 115_200;
+    const held = await run({ resettle: 'full', range: [100_000, 104_999] });
+    assert.deepEqual(
+      held.steps.map((s) => [s.step, s.heightRange[0], s.heightRange[1]]),
+      [['resettle', 100_000, 104_999]],
+    );
+    // The tip that would have frozen and moved up is as it was.
+    assert.ok((await live()).some((b) => b.from === 110_000 && b.to === 110_200));
   });
 
   it("gates on the owners' keys bundles.db holds too", async () => {

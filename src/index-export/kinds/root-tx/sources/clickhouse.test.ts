@@ -154,6 +154,7 @@ class FakeClickHouse implements ClickHouseQuerier {
           item_offset: row.offset ?? 0,
           item_data_offset: row.dataOffset ?? 0,
           item_size: row.size ?? 0,
+          item_data_size: row.dataSize ?? 0,
           root_parent_offset: row.rootParentOffset ?? 0,
           parent_parent_id: nested && p !== undefined ? hex(p.parentId) : '',
           parent_data_offset: nested ? (p?.dataOffset ?? 0) : 0,
@@ -245,7 +246,8 @@ const fixture = (): TableRow[] => [
     height: 1500,
     offset: 2000,
     dataOffset: 3000,
-    size: 60000,
+    // Header 1,000, payload 50,000: an item that frames itself.
+    size: 51000,
     dataSize: 50000,
   },
   {
@@ -293,7 +295,8 @@ const fixture = (): TableRow[] => [
     size: 300,
     insertedAt: 9,
   },
-  // A size ClickHouse doesn't know (stored as 0): kept, without it.
+  // A size ClickHouse doesn't know (stored as 0): its offsets can't be
+  // shown to frame an item, so root only (`layout`).
   {
     id: id(8),
     parentId: ROOT,
@@ -312,8 +315,9 @@ const checkExport = (records: BandRecord[]) => {
     [id(1), id(2), PARENT, id(3), id(4), id(7), id(8)].map(hex).sort(),
   );
   assert.ok(byId.get(hex(id(7)))?.rootTxId.equals(id(103)));
-  assert.equal(byId.get(hex(id(8)))?.rootOffset, 128);
+  assert.equal(byId.get(hex(id(8)))?.rootOffset, undefined);
   assert.equal(byId.get(hex(id(8)))?.size, undefined);
+  assert.equal(byId.get(hex(PARENT))?.rootOffset, 2000);
   assert.equal(byId.get(hex(id(1)))?.rootDataOffset, 200);
   assert.ok(byId.get(hex(id(2)))?.rootTxId.equals(id(102)));
   assert.equal(byId.get(hex(id(2)))?.height, 1600);
@@ -331,7 +335,8 @@ describe('ClickHouseRecordSource', () => {
     const records = await collect(source.records(1000, 1999));
     checkExport(records);
     assert.equal(source.stats.repaired, 1);
-    assert.equal(source.stats.rootOnly, 1);
+    assert.equal(source.stats.rootOnly, 2);
+    assert.deepEqual(source.stats.unrepaired, { layout: 1 });
     for (const record of records) assert.equal(record.source, 'gw1');
   });
 
