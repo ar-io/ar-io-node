@@ -46,6 +46,7 @@ import {
   RootHeights,
   SeedPlacement,
 } from './grid.js';
+import type { GateVerdict } from './fingerprint.js';
 import type { BuildStep, GridStepKind } from './planner.js';
 import { REPAIRED_TAG, RecordSource, SourceStats } from './sources/rows.js';
 
@@ -85,6 +86,10 @@ export interface StepOutcome {
   seeds?: SeedPlacement;
   /** Grid re-settle: the rebuilt band against the published one. */
   resettle?: ResettleReport;
+  /** Grid re-settle: what the fingerprint gate found (see `fingerprint.ts`). */
+  gate?: { verdict: GateVerdict; detail?: string };
+  /** Optional sources that failed part way, so the band was built without them. */
+  failedSources?: string[];
   seconds: number;
   /** Scratch plus the finished band, an upper bound for the disk a build needs. */
   peakBytes?: number;
@@ -187,6 +192,7 @@ export async function buildStepBand(
     ctx.sources.map((source) => [source.name, snapshot(source.stats)]),
   );
   const optionalFailures: string[] = [];
+  const failedSources: string[] = [];
   const placement = step.seeds !== undefined ? emptyPlacement() : undefined;
   let resettle: ResettleReport | undefined;
 
@@ -230,6 +236,7 @@ export async function buildStepBand(
           const message =
             error instanceof Error ? error.message : String(error);
           optionalFailures.push(`${source.name}: ${message}`);
+          failedSources.push(source.name);
           log.warn('Optional source failed; building without it', {
             source: source.name,
             error: message,
@@ -530,6 +537,7 @@ export async function buildStepBand(
     inputs,
     ...(placement !== undefined ? { seeds: placement } : {}),
     ...(resettle !== undefined ? { resettle } : {}),
+    ...(failedSources.length > 0 ? { failedSources } : {}),
     seconds: (Date.now() - started) / 1000,
     ...(peakBytes !== undefined ? { peakBytes } : {}),
   };

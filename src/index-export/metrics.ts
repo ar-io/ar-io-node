@@ -119,6 +119,13 @@ export const resettles = metric(
   ['index', 'kind', 'result'],
 ) as promClient.Counter<'index' | 'kind' | 'result'>;
 
+export const resettleGate = metric(
+  'counter',
+  'index_export_resettle_gate_total',
+  'Grid layout: due bands by what the fingerprint gate found: same_sources (not rebuilt), changed, unrecorded (no fingerprint yet: rebuilt once) or source_down (not rebuilt this run).',
+  ['index', 'kind', 'verdict'],
+) as promClient.Counter<'index' | 'kind' | 'verdict'>;
+
 export const resettleEntries = metric(
   'gauge',
   'index_export_resettle_entries',

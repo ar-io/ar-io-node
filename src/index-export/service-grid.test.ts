@@ -13,6 +13,7 @@ import { afterEach, describe, it } from 'node:test';
 
 import {
   DAY,
+  MemorySource,
   PUBLISHER,
   useExportService,
 } from '../../test/index-export-service-fixture.js';
@@ -352,7 +353,7 @@ describe('ExportService, grid layout', () => {
       try {
         const report = await ctx.service(grid()).runOnce({
           dryRun: true,
-          resettle: true,
+          resettle: 'gate',
         });
         assert.equal(report.failed, undefined);
         assert.deepEqual(
@@ -540,7 +541,8 @@ describe('ExportService, grid layout', () => {
       gridRecords();
       await ctx.service(grid()).runOnce();
       const before = ids(await live());
-      const report = await ctx.service(grid()).runOnce({ resettle: true });
+      // Rebuilt in full, past the fingerprint gate.
+      const report = await ctx.service(grid()).runOnce({ resettle: 'full' });
       assert.deepEqual(
         report.steps.map((s) => [s.grid, s.heightRange, s.result, s.reason]),
         [
@@ -550,6 +552,10 @@ describe('ExportService, grid layout', () => {
           ['resettle', [105_000, 109_999], 'unchanged', 'same_content'],
         ],
       );
+      assert.deepEqual(report.steps[1].gate, {
+        verdict: 'same_sources',
+        detail: 'rebuilt anyway: --resettle=full',
+      });
       assert.deepEqual(ids(await live()), before);
       const state = await ctx.exportState();
       assert.deepEqual(
@@ -564,7 +570,7 @@ describe('ExportService, grid layout', () => {
       const old = await find('d-h105000-');
       addLate();
       ctx.now += DAY;
-      const report = await ctx.service(grid()).runOnce({ resettle: true });
+      const report = await ctx.service(grid()).runOnce({ resettle: 'gate' });
       const step = report.steps.find(
         (s) => s.grid === 'resettle' && s.heightRange[0] === 105_000,
       );
@@ -609,7 +615,7 @@ describe('ExportService, grid layout', () => {
       }));
       const report = await ctx
         .service(grid(), withOverlay(bundler))
-        .runOnce({ resettle: true });
+        .runOnce({ resettle: 'gate' });
       const step = report.steps.find((s) => s.heightRange[0] === 105_000);
       assert.equal(step?.result, 'published');
       assert.equal(step?.resettle?.changed, 5);
@@ -629,7 +635,7 @@ describe('ExportService, grid layout', () => {
       // Every root of the band's 300 old entries is now unseeded.
       unreadable((h) => h >= 105_000 && h < 105_300);
       ctx.now += DAY;
-      const report = await ctx.service(grid()).runOnce({ resettle: true });
+      const report = await ctx.service(grid()).runOnce({ resettle: 'gate' });
       const step = step105(report);
       assert.equal(step?.result, 'published');
       assert.deepEqual(step?.resettle?.header, {
@@ -650,7 +656,7 @@ describe('ExportService, grid layout', () => {
       // 30 of the 40 added entries' roots fail to read: 25%, under 80%.
       unreadable((h) => h >= 105_500 && h < 105_530);
       ctx.now += DAY;
-      const report = await ctx.service(grid()).runOnce({ resettle: true });
+      const report = await ctx.service(grid()).runOnce({ resettle: 'gate' });
       const step = step105(report);
       assert.equal(step?.result, 'couldnt_check');
       assert.equal(step?.reason, 'gate');
@@ -673,7 +679,7 @@ describe('ExportService, grid layout', () => {
           : r,
       );
       ctx.now += DAY;
-      const report = await ctx.service(grid()).runOnce({ resettle: true });
+      const report = await ctx.service(grid()).runOnce({ resettle: 'gate' });
       const step = step105(report);
       assert.equal(step?.result, 'rejected');
       assert.equal(step?.reason, 'wrong_header');
@@ -693,7 +699,7 @@ describe('ExportService, grid layout', () => {
         (_, { rootOffset, rootDataOffset, size, ...rootOnly }) => rootOnly,
       );
       ctx.now += DAY;
-      const report = await ctx.service(grid()).runOnce({ resettle: true });
+      const report = await ctx.service(grid()).runOnce({ resettle: 'gate' });
       const step = step105(report);
       assert.equal(step?.result, 'published');
       assert.equal(step?.resettle?.added, 40);
@@ -712,7 +718,7 @@ describe('ExportService, grid layout', () => {
       }));
       const report = await ctx
         .service(grid(), withOverlay(bundler))
-        .runOnce({ resettle: true });
+        .runOnce({ resettle: 'gate' });
       const step = report.steps.find((s) => s.heightRange[0] === 105_000);
       assert.equal(step?.result, 'rejected');
       assert.equal(step?.reason, 'wrong_header');
@@ -738,7 +744,7 @@ describe('ExportService, grid layout', () => {
       }));
       const report = await ctx
         .service(grid({ resettleMaxChanged: 4 }), withOverlay(bundler))
-        .runOnce({ resettle: true });
+        .runOnce({ resettle: 'gate' });
       const step = report.steps.find((s) => s.heightRange[0] === 105_000);
       assert.equal(step?.result, 'rejected');
       assert.equal(step?.reason, 'too_many_changed');
@@ -777,7 +783,7 @@ describe('ExportService, grid layout', () => {
       }));
       const report = await ctx
         .service(grid(), withOverlay(bundler))
-        .runOnce({ resettle: true });
+        .runOnce({ resettle: 'gate' });
       const step = report.steps.find((s) => s.heightRange[0] === 105_000);
       assert.equal(step?.result, 'couldnt_check');
       assert.equal(step?.reason, 'changed_unchecked');
@@ -798,7 +804,7 @@ describe('ExportService, grid layout', () => {
       // New rows, so the tip changes and needs its check.
       for (let i = 2300; i < 2310; i++) ctx.records[i] = record(i, 110_150);
       ctx.gw1.top = 110_200;
-      const report = await ctx.service(grid()).runOnce({ resettle: true });
+      const report = await ctx.service(grid()).runOnce({ resettle: 'gate' });
       assert.deepEqual(
         report.steps.map((s) => [s.grid, s.result]),
         [['tip', 'couldnt_check']],
@@ -828,6 +834,248 @@ describe('ExportService, grid layout', () => {
       ctx.now += DAY;
       const after = await ctx.service(weekly).runOnce();
       assert.ok(after.steps.every((s) => s.grid !== 'resettle'));
+    });
+  });
+
+  describe('re-settle fingerprint gate', () => {
+    /** A source that counts its reads and fingerprints without reading. */
+    class CountingSource extends MemorySource {
+      readonly reads: Array<[number, number]> = [];
+      identity = 'memory';
+
+      async *records(from: number, to: number) {
+        this.reads.push([from, to]);
+        yield* super.records(from, to);
+      }
+
+      /** Like ClickHouse's: a digest of the rows, without giving them. */
+      async fingerprint(from: number, to: number) {
+        const hash = crypto.createHash('sha256');
+        for (const r of ctx.records) {
+          const height = r.height ?? 0;
+          if (height < from || height > to || height > this.top) continue;
+          hash.update(
+            `${toB64Url(r.id)} ${toB64Url(r.rootTxId)} ${height} ${r.rootOffset} ${r.rootDataOffset} ${r.size}\n`,
+          );
+        }
+        return hash.digest('hex');
+      }
+    }
+    const counting = (name = 'gw1') => {
+      const source = new CountingSource(name, () => ctx.records);
+      source.top = ctx.gw1.top;
+      return source;
+    };
+    const only =
+      (source: RecordSource, optional = false) =>
+      () => [{ source, optional }];
+    const resettles = (report: { steps: StepOutcome[] }) =>
+      report.steps
+        .filter((s) => s.grid === 'resettle')
+        .map((s) => [s.heightRange[0], s.result, s.reason, s.gate?.verdict]);
+    const readsIn = (source: CountingSource, from: number, to: number) =>
+      source.reads.filter(([a, b]) => a <= to && b >= from);
+
+    it('does not rebuild a band whose sources are unchanged', async () => {
+      gridRecords();
+      await ctx.service(grid(), only(counting())).runOnce();
+      const before = ids(await live());
+      const gw1 = counting();
+      const report = await ctx
+        .service(grid(), only(gw1))
+        .runOnce({ resettle: 'gate' });
+      assert.deepEqual(resettles(report), [
+        [0, 'unchanged', 'same_sources', 'same_sources'],
+        [100_000, 'unchanged', 'same_sources', 'same_sources'],
+        [105_000, 'unchanged', 'same_sources', 'same_sources'],
+      ]);
+      // Nothing built: no band, and the sources never read for it.
+      for (const step of report.steps.filter((s) => s.grid === 'resettle')) {
+        assert.equal(step.band, undefined);
+        assert.deepEqual(step.inputs, {});
+      }
+      assert.deepEqual(readsIn(gw1, 0, 109_999), []);
+      assert.deepEqual(ids(await live()), before);
+      const state = await ctx.exportState();
+      assert.equal(Object.keys(state.resettledAt ?? {}).length, 3);
+      assert.equal(Object.keys(state.fingerprints ?? {}).length, 3);
+    });
+
+    it('rebuilds a band when one row is added to its source', async () => {
+      gridRecords();
+      await ctx.service(grid(), only(counting())).runOnce();
+      const old = await find('d-h100000-');
+      ctx.records[2300] = record(2300, 100_777);
+      const gw1 = counting();
+      const report = await ctx
+        .service(grid(), only(gw1))
+        .runOnce({ resettle: 'gate' });
+      assert.deepEqual(resettles(report), [
+        [0, 'unchanged', 'same_sources', 'same_sources'],
+        [100_000, 'published', 'new', 'changed'],
+        [105_000, 'unchanged', 'same_sources', 'same_sources'],
+      ]);
+      assert.deepEqual(readsIn(gw1, 100_000, 104_999), [[100_000, 104_999]]);
+      const now = await find('d-h100000-');
+      assert.notEqual(now.id, old.id);
+      // Recorded for the new band, which next time is left alone.
+      const again = await ctx
+        .service(grid(), only(counting()))
+        .runOnce({ resettle: 'gate' });
+      assert.deepEqual(
+        resettles(again).map(([, result, reason]) => [result, reason]),
+        Array(3).fill(['unchanged', 'same_sources']),
+      );
+    });
+
+    it('rebuilds a band when an overlay file covering it changes', async () => {
+      gridRecords();
+      const dir = path.join(ctx.dir, 'overlay');
+      await fs.mkdir(dir);
+      const file = path.join(dir, '105000-109999.csv');
+      const line = (i: number) => {
+        const r = ctx.records[i];
+        const item = ctx.items[i];
+        return `${toB64Url(r.id)},${toB64Url(r.rootTxId)},,${item.rootDataItemOffset},${item.rootDataOffset},${item.dataItemSize},${r.height}\n`;
+      };
+      await fs.writeFile(file, line(800));
+      const sources = () => [
+        { source: ctx.gw1, optional: false },
+        { source: new CsvOverlaySource('bundler', dir), optional: false },
+      ];
+      await ctx.service(grid(), sources).runOnce();
+      const same = await ctx.service(grid(), sources).runOnce({
+        resettle: 'gate',
+      });
+      assert.deepEqual(
+        resettles(same).map(([, , reason]) => reason),
+        Array(3).fill('same_sources'),
+      );
+      // The same rows written again, plus one: another file.
+      await fs.writeFile(file, line(800) + line(801));
+      const report = await ctx.service(grid(), sources).runOnce({
+        resettle: 'gate',
+      });
+      assert.deepEqual(resettles(report), [
+        [0, 'unchanged', 'same_sources', 'same_sources'],
+        [100_000, 'unchanged', 'same_sources', 'same_sources'],
+        [105_000, 'unchanged', 'same_content', 'changed'],
+      ]);
+      assert.match(
+        report.steps.find((s) => s.heightRange[0] === 105_000)?.gate?.detail ??
+          '',
+        /bundler changed/,
+      );
+    });
+
+    it('rebuilds once a band with no fingerprint, then records one', async () => {
+      gridRecords();
+      // Built by hand, as index-band-build does: nothing recorded.
+      for (const [kind, from, to] of [
+        ['h', 0, 99_999],
+        ['d', 100_000, 104_999],
+      ] as const) {
+        await buildBand({
+          log,
+          records: ctx.records.filter(
+            (r) => (r.height ?? 0) >= from && (r.height ?? 0) <= to,
+          ),
+          publishDir: ctx.config().publishDir,
+          workDir: path.join(ctx.dir, 'scratch'),
+          publisher: PUBLISHER,
+          kind,
+          heightRange: [from, to],
+        });
+      }
+      const first = await ctx.service(grid()).runOnce({ resettle: 'gate' });
+      assert.deepEqual(
+        resettles(first).filter(([from]) => (from as number) < 105_000),
+        [
+          [0, 'unchanged', 'same_content', 'unrecorded'],
+          [100_000, 'unchanged', 'same_content', 'unrecorded'],
+        ],
+      );
+      const second = await ctx.service(grid()).runOnce({ resettle: 'gate' });
+      assert.deepEqual(
+        resettles(second).map(([, , reason]) => reason),
+        ['same_sources', 'same_sources', 'same_sources'],
+      );
+    });
+
+    it('rebuilds a band when a source is renamed or pointed elsewhere', async () => {
+      gridRecords();
+      await ctx.service(grid(), only(counting())).runOnce();
+      const renamed = await ctx
+        .service(grid(), only(counting('gw1-new')))
+        .runOnce({ resettle: 'gate' });
+      assert.deepEqual(
+        resettles(renamed).map(([, , , verdict]) => verdict),
+        ['changed', 'changed', 'changed'],
+      );
+      assert.match(
+        renamed.steps.find((s) => s.grid === 'resettle')?.gate?.detail ?? '',
+        /gw1-new is new; gw1 is no longer a source/,
+      );
+      const moved = counting('gw1-new');
+      moved.identity = 'memory elsewhere';
+      const elsewhere = await ctx
+        .service(grid(), only(moved))
+        .runOnce({ resettle: 'gate' });
+      assert.deepEqual(
+        resettles(elsewhere).map(([, , , verdict]) => verdict),
+        ['changed', 'changed', 'changed'],
+      );
+    });
+
+    it('waits, rebuilding nothing, while only a source that is down differs', async () => {
+      gridRecords();
+      const gw2 = counting('gw2');
+      const both = () => [
+        { source: ctx.gw1, optional: false },
+        { source: gw2, optional: true },
+      ];
+      await ctx.service(grid(), both).runOnce();
+      gw2.fail = 'connection refused';
+      const report = await ctx.service(grid(), both).runOnce({
+        resettle: 'gate',
+      });
+      assert.deepEqual(
+        resettles(report).map(([, result, reason]) => [result, reason]),
+        Array(3).fill(['skipped', 'source_down']),
+      );
+      // Not settled: due again with the next run.
+      assert.equal((await ctx.exportState()).resettledAt, undefined);
+    });
+
+    it('takes a rolled h band’s fingerprint from its d bands', async () => {
+      ctx.records = ctx.items.map((_, i) =>
+        record(
+          i,
+          i < 300
+            ? 50_000 + i
+            : i < 2300
+              ? 100_000 + ((i - 300) % 20) * 5000 + ((i - 300) % 7)
+              : 200_000 + (i % 50),
+        ),
+      );
+      ctx.gw1.top = 105_100;
+      await ctx.service(grid()).runOnce();
+      ctx.gw1.top = 200_100;
+      const rolled = await ctx.service(grid()).runOnce();
+      const h = rolled.steps.find((s) => s.grid === 'roll');
+      assert.equal(h?.result, 'published');
+      const state = await ctx.exportState();
+      assert.equal(
+        Object.keys(
+          state.fingerprints?.[h?.band?.id ?? '']?.sources.gw1?.ranges ?? {},
+        ).length,
+        20,
+      );
+      const report = await ctx.service(grid()).runOnce({ resettle: 'gate' });
+      assert.deepEqual(
+        resettles(report).find(([from]) => from === 100_000),
+        [100_000, 'unchanged', 'same_sources', 'same_sources'],
+      );
     });
   });
 });

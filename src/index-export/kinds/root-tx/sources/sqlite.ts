@@ -66,6 +66,10 @@ export class SqliteRecordSource implements RecordSource {
   private readonly maxHeight: Sqlite.Statement;
   private readonly parentLookups = new Map<number, Sqlite.Statement>();
 
+  get identity(): string {
+    return `sqlite ${this.dbPath}`;
+  }
+
   constructor(
     readonly name: string,
     private readonly dbPath: string,

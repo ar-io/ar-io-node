@@ -28,6 +28,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     which must read and verify, and a sample of the added, so entries whose
     roots are no longer seeded don't block it. Any wrong header leaves the
     band as it is.
+  - A due band is rebuilt only when its sources changed: each source's
+    fingerprint of the band's heights is recorded when it settles (one
+    aggregate query for ClickHouse; the files' names, sizes and SHA-256 for
+    a CSV source) and compared first; equal fingerprints settle it without
+    a rebuild (`unchanged`, `same_sources`,
+    `index_export_resettle_gate_total`). `--once --resettle=full` rebuilds
+    every one.
+- **Faster whole-band reads.** `Cdb64Reader.entries()` reads in 1 MiB
+  pieces rather than three reads a record, and the re-settle's comparison
+  walks two bands in id order: about 3 MB/s before, over 200 MB/s on local
+  disk.
     Each is reported with its counts and counted in
     `index_export_resettles_total` and `index_export_resettle_entries`.
   - Grid bands built by hand with `index-band-build` (`h-`, `d-` and

@@ -327,6 +327,13 @@ export const MAX_CDB64_VALUE_LENGTH = 1024 * 1024;
 const RECORD_HEADER_SIZE = 16;
 
 /**
+ * Bytes {@link Cdb64Reader.entries} reads at a time (more for a larger
+ * record): a whole-file scan in a few hundred reads rather than three a
+ * record.
+ */
+export const ENTRIES_CHUNK_BYTES = 1024 * 1024;
+
+/**
  * Read a little-endian uint64 as a Number, or undefined if it exceeds
  * Number.MAX_SAFE_INTEGER.
  *
@@ -658,6 +665,9 @@ export class Cdb64Reader {
    * Iterates over all key-value pairs in the database.
    * Records are yielded in the order they were written (file order).
    *
+   * Reads as {@link entryBatches} does: a yielded `key` and `value` are
+   * views of a piece of the file, which they keep in memory while held.
+   *
    * Usage:
    *   for await (const { key, value } of reader.entries()) {
    *     // process key and value
@@ -667,6 +677,21 @@ export class Cdb64Reader {
    *   past the record region
    */
   async *entries(): AsyncGenerator<{ key: Buffer; value: Buffer }> {
+    for await (const batch of this.entryBatches()) yield* batch;
+  }
+
+  /**
+   * The records in file order, a batch for each {@link ENTRIES_CHUNK_BYTES}
+   * piece of the record region: a whole-file scan in a few hundred reads,
+   * rather than three a record, and one step of iteration a piece. A
+   * record larger than a piece is read alone. A batch's keys and values
+   * are views of its piece: they stay valid, and keep the piece in memory
+   * while held, so copy them to keep many.
+   *
+   * @throws on a record whose lengths exceed the reader's bounds or run
+   *   past the record region
+   */
+  async *entryBatches(): AsyncGenerator<Array<{ key: Buffer; value: Buffer }>> {
     if (!this.opened) {
       throw new Error('Reader not opened. Call open() first.');
     }
@@ -686,36 +711,52 @@ export class Cdb64Reader {
     let position = HEADER_SIZE;
 
     while (position < recordsEnd) {
-      if (position + RECORD_HEADER_SIZE > recordsEnd) {
-        throw new Error(
-          `Invalid record at position ${position}: header runs past the record region`,
-        );
+      let piece = await this.source.read(
+        position,
+        Math.min(ENTRIES_CHUNK_BYTES, recordsEnd - position),
+      );
+      const batch: Array<{ key: Buffer; value: Buffer }> = [];
+      let at = 0;
+      while (position + at < recordsEnd) {
+        const start = position + at;
+        if (start + RECORD_HEADER_SIZE > recordsEnd) {
+          throw new Error(
+            `Invalid record at position ${start}: header runs past the record region`,
+          );
+        }
+        // The rest is in the next piece.
+        if (at + RECORD_HEADER_SIZE > piece.length) break;
+        const keyLength = readSafeUint64(piece, at);
+        const valueLength = readSafeUint64(piece, at + 8);
+
+        // Sanity check to avoid reading garbage
+        if (
+          keyLength === undefined ||
+          valueLength === undefined ||
+          keyLength > MAX_CDB64_KEY_LENGTH ||
+          valueLength > this.maxValueLength ||
+          start + RECORD_HEADER_SIZE + keyLength + valueLength > recordsEnd
+        ) {
+          throw new Error(
+            `Invalid record at position ${start}: key=${keyLength}, value=${valueLength}`,
+          );
+        }
+
+        const length = RECORD_HEADER_SIZE + keyLength + valueLength;
+        if (at + length > piece.length) {
+          if (at > 0) break;
+          // Larger than a piece: read it alone.
+          piece = await this.source.read(start, length);
+        }
+        const keyStart = at + RECORD_HEADER_SIZE;
+        batch.push({
+          key: piece.subarray(keyStart, keyStart + keyLength),
+          value: piece.subarray(keyStart + keyLength, at + length),
+        });
+        at += length;
       }
-      const recordHeader = await this.source.read(position, RECORD_HEADER_SIZE);
-
-      const keyLength = readSafeUint64(recordHeader, 0);
-      const valueLength = readSafeUint64(recordHeader, 8);
-
-      // Sanity check to avoid reading garbage
-      if (
-        keyLength === undefined ||
-        valueLength === undefined ||
-        keyLength > MAX_CDB64_KEY_LENGTH ||
-        valueLength > this.maxValueLength ||
-        position + RECORD_HEADER_SIZE + keyLength + valueLength > recordsEnd
-      ) {
-        throw new Error(
-          `Invalid record at position ${position}: key=${keyLength}, value=${valueLength}`,
-        );
-      }
-
-      const keyStart = position + RECORD_HEADER_SIZE;
-      const key = await this.source.read(keyStart, keyLength);
-      const value = await this.source.read(keyStart + keyLength, valueLength);
-
-      yield { key, value };
-
-      position = keyStart + keyLength + valueLength;
+      position += at;
+      yield batch;
     }
   }
 

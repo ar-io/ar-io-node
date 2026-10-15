@@ -28,6 +28,14 @@ import {
   DEFAULT_SETTLE_BLOCKS,
   ExportConfig,
 } from './config.js';
+import {
+  BandFingerprint,
+  combineFingerprints,
+  compareFingerprints,
+  fingerprintBand,
+  GateVerdict,
+  withoutSources,
+} from './kinds/root-tx/fingerprint.js';
 import { frozenLookup, RootHeights } from './kinds/root-tx/grid.js';
 import {
   buildStepBand,
@@ -126,8 +134,11 @@ export interface RunOptions {
   toHeight?: number;
   /** An operator's run: retry a fold that was rejected. */
   force?: boolean;
-  /** Grid layout: re-settle every frozen band this run, due or not. */
-  resettle?: boolean;
+  /**
+   * Grid layout: re-settle every frozen band this run, due or not; `gate`
+   * rebuilds only those whose sources changed, `full` rebuilds them all.
+   */
+  resettle?: 'gate' | 'full';
 }
 
 export interface RunReport {
@@ -529,11 +540,23 @@ export class ExportService {
         now: () => this.now(),
       };
       if (this.grid) {
-        await this.runGrid(report, options, dryRun, memory, state, {
-          ...context,
-          resettleMaxChanged:
-            config.resettleMaxChanged ?? DEFAULT_RESETTLE_MAX_CHANGED,
-        });
+        const readyNames = new Set(ready.map(({ source }) => source.name));
+        await this.runGrid(
+          report,
+          options,
+          dryRun,
+          memory,
+          state,
+          {
+            ...context,
+            resettleMaxChanged:
+              config.resettleMaxChanged ?? DEFAULT_RESETTLE_MAX_CHANGED,
+          },
+          // Configured, but down this run.
+          opened
+            .map(({ source }) => source.name)
+            .filter((name) => !readyNames.has(name)),
+        );
         if (options.keepDir !== undefined) report.keptIn = options.keepDir;
         return memory;
       }
@@ -695,6 +718,7 @@ export class ExportService {
     memory: RunMemory,
     state: IndexState,
     context: StepContext,
+    down: string[],
   ): Promise<void> {
     const { config, log } = this.deps;
     const stableTop = report.stableTop as number;
@@ -762,6 +786,57 @@ export class ExportService {
       return outcome;
     };
 
+    // What each band settled against: recorded when it is built from the
+    // sources (fingerprinted first, so a row that lands meanwhile is a
+    // change next time, never one missed), rolled, or re-settled.
+    const recorded = (id: string): BandFingerprint | undefined =>
+      memory.fingerprints?.[id] ?? state.fingerprints?.[id];
+    const record = (id: string, fingerprint: BandFingerprint) => {
+      memory.fingerprints = { ...memory.fingerprints, [id]: fingerprint };
+    };
+    const splits = () =>
+      new Map(context.sources.map((source) => [source, source.stats.splits]));
+    /**
+     * Builds a band from the sources, fingerprinting them first; records
+     * the fingerprint under the band it leaves live, less the sources it
+     * read otherwise (one that failed part way, or split a read).
+     */
+    const fingerprinted = async (
+      step: BuildStep,
+      bands: OwnBand[],
+      gate?: (fingerprint: {
+        fingerprint: BandFingerprint;
+        failed: Record<string, string>;
+      }) => Promise<{ outcome?: StepOutcome; gate: StepOutcome['gate'] }>,
+    ): Promise<StepOutcome> => {
+      const [from, to] = step.heightRange as [number, number];
+      const taken = await fingerprintBand(context.sources, from, to);
+      const decided = await gate?.(taken);
+      if (decided?.outcome !== undefined) return decided.outcome;
+      const before = splits();
+      const outcome = await run(step, bands);
+      if (decided?.gate !== undefined) outcome.gate = decided.gate;
+      const kept =
+        outcome.result === 'published'
+          ? outcome.band?.id
+          : outcome.result === 'unchanged'
+            ? step.fold?.id
+            : undefined;
+      if (kept !== undefined) {
+        record(
+          kept,
+          withoutSources(taken.fingerprint, [
+            ...Object.keys(taken.failed),
+            ...(outcome.failedSources ?? []),
+            ...context.sources
+              .filter((source) => source.stats.splits !== before.get(source))
+              .map((source) => source.name),
+          ]),
+        );
+      }
+      return outcome;
+    };
+
     const atStart = await live();
     const start = classifyGridBands(atStart);
     // Only a bootstrap cuts bands that could overlap a stranger's.
@@ -782,7 +857,7 @@ export class ExportService {
         ? { startHeight: config.startHeight }
         : {}),
     })) {
-      const outcome = await run(step, atStart);
+      const outcome = await fingerprinted(step, atStart);
       if (
         dryRun &&
         (outcome.result === 'dry_run' || outcome.result === 'published')
@@ -813,7 +888,17 @@ export class ExportService {
         });
         continue;
       }
-      await run(step, bands);
+      const outcome = await run(step, bands);
+      const combined = combineFingerprints(
+        (step.folds ?? []).map((band) => recorded(band.id)),
+      );
+      if (
+        outcome.result === 'published' &&
+        outcome.band !== undefined &&
+        combined !== undefined
+      ) {
+        record(outcome.band.id, combined);
+      }
     }
 
     // 3. The tip.
@@ -846,12 +931,12 @@ export class ExportService {
     // 4. Re-settle, when due or forced.
     const intervalMs =
       config.resettleIntervalMs ?? DEFAULT_RESETTLE_INTERVAL_HOURS * 3600_000;
-    if (options.resettle === true || intervalMs > 0) {
+    if (options.resettle !== undefined || intervalMs > 0) {
       bands = await live();
       const steps = planResettle(bands, {
         now: this.now(),
         intervalMs,
-        force: options.resettle === true,
+        force: options.resettle !== undefined,
         settledAt: state.resettledAt ?? {},
       });
       // A gateway or source that failed a build this run would fail each
@@ -866,7 +951,16 @@ export class ExportService {
           );
           continue;
         }
-        await run(step, bands);
+        await fingerprinted(step, bands, async ({ fingerprint, failed }) =>
+          this.gateResettle(step, report, plan, memory, {
+            ...compareFingerprints(
+              recorded(step.fold?.id as string),
+              fingerprint,
+              { failed, down },
+            ),
+            full: options.resettle === 'full',
+          }),
+        );
       }
     }
 
@@ -879,6 +973,74 @@ export class ExportService {
         .rmdir(path.join(config.workDir, 'dry-run'))
         .catch(() => undefined);
     }
+  }
+
+  /**
+   * The fingerprint gate's decision on a due band: an outcome when it is
+   * not rebuilt (its sources unchanged, or only ones down this run
+   * differ), or none, to rebuild it. `full` rebuilds whatever the
+   * fingerprints say.
+   */
+  private async gateResettle(
+    step: BuildStep,
+    report: RunReport,
+    plan: GridPlanEntry[],
+    memory: RunMemory,
+    {
+      verdict,
+      detail,
+      full,
+    }: { verdict: GateVerdict; detail?: string; full: boolean },
+  ): Promise<{ outcome?: StepOutcome; gate: StepOutcome['gate'] }> {
+    const band = step.fold as OwnBand;
+    metrics.resettleGate.inc({ index: INDEX_NAME, kind: step.role, verdict });
+    const gate = {
+      verdict,
+      ...(detail !== undefined || full
+        ? {
+            detail: [detail, full ? 'rebuilt anyway: --resettle=full' : '']
+              .filter((part) => part !== undefined && part !== '')
+              .join('; '),
+          }
+        : {}),
+    };
+    if (full || (verdict !== 'same_sources' && verdict !== 'source_down')) {
+      this.deps.log.info('Re-settling a band', { band: band.id, ...gate });
+      return { gate };
+    }
+    plan.push(describeGridStep(step));
+    const outcome: StepOutcome = {
+      role: step.role,
+      heightRange: step.heightRange,
+      grid: 'resettle',
+      result: verdict === 'same_sources' ? 'unchanged' : 'skipped',
+      reason: verdict,
+      ...(gate.detail !== undefined ? { details: [gate.detail] } : {}),
+      inputs: {},
+      gate,
+      seconds: 0,
+    };
+    report.steps.push(outcome);
+    metrics.runs.inc({
+      index: INDEX_NAME,
+      kind: step.role,
+      result: outcome.result,
+      reason: outcome.reason,
+    });
+    if (verdict === 'same_sources') {
+      metrics.resettles.inc({
+        index: INDEX_NAME,
+        kind: step.role,
+        result: 'unchanged',
+      });
+      memory.resettled = { ...memory.resettled, [band.id]: report.at };
+    }
+    this.deps.log.info('Re-settle not needed', {
+      band: band.id,
+      verdict,
+      detail,
+    });
+    return { outcome, gate };
   }
 
   /**
@@ -1511,6 +1673,15 @@ export class ExportService {
       } else {
         delete state.resettledAt;
       }
+      const fingerprints = Object.entries({
+        ...state.fingerprints,
+        ...memory.fingerprints,
+      }).filter(([id]) => live.has(id));
+      if (fingerprints.length > 0) {
+        state.fingerprints = Object.fromEntries(fingerprints);
+      } else {
+        delete state.fingerprints;
+      }
     }
     if (
       report.failed?.reason === 'foreign_bands' ||
@@ -1653,6 +1824,8 @@ interface RunMemory {
   resettled?: Record<string, string>;
   /** Grid layout: this publisher's live band ids after the run. */
   liveIds?: string[];
+  /** Grid layout: what bands settled against this run, by id. */
+  fingerprints?: Record<string, BandFingerprint>;
 }
 
 /** A run that couldn't start, with the reason counted in metrics. */

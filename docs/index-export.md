@@ -232,8 +232,9 @@ docker compose --profile index-export run --rm -T index-export --once --dry-run 
 # data/indexes, so on the bands' filesystem).
 docker compose --profile index-export run --rm -T index-export \
   --once --to 2010000 --keep data/indexes/export/compare > compare.json
-# Grid layout: re-settle every frozen band now, due or not (add --dry-run
-# to see what it would change).
+# Grid layout: re-settle every frozen band now, due or not, rebuilding those
+# whose sources changed (add --dry-run to see what it would change;
+# --resettle=full rebuilds every one).
 docker compose --profile index-export run --rm -T index-export --once --resettle > resettle.json
 # The service. Its first run is about 5 minutes after it starts, then daily.
 docker compose --profile index-export up -d --no-deps index-export
@@ -310,18 +311,51 @@ both; each step's `seeds` in the report gives the numbers.
 
 ### Re-settle
 
-Each frozen band is rebuilt from its own entries plus the sources' rows for
-its range `INDEX_EXPORT_ROOT_TX_RESETTLE_INTERVAL_HOURS` (168) after it was
-built or last re-settled, by the daily run after the tip, the band with the
-most entries first. `--once --resettle` re-settles every frozen band now,
-due or not, also with the interval at 0 (never automatically). A band's own
-entries are folded in at its top height, so a source's row never displaces
-one; only an overlay can relocate an entry. Rows the sources have dropped
-since (ClickHouse TTL) stay.
+Each frozen band is due `INDEX_EXPORT_ROOT_TX_RESETTLE_INTERVAL_HOURS`
+(168) after it was built or last re-settled, and is re-settled by the daily
+run after the tip, the band with the most entries first.
+`--once --resettle` re-settles every frozen band now, due or not, also with
+the interval at 0 (never automatically). A band whose sources have changed
+is rebuilt from its own entries plus the sources' rows for its range. A
+band's own entries are folded in at its top height, so a source's row never
+displaces one; only an overlay can relocate an entry. Rows the sources have
+dropped since (ClickHouse TTL) stay.
+
+**The fingerprint gate.** Rebuilding a 100,000-height band takes hours, so a
+due band is rebuilt only when its sources give something else than when it
+settled. When a band settles (frozen, rolled, or re-settled; an adopted one
+after its first full re-settle), each source's fingerprint of its heights
+is recorded in `state.json` (`fingerprints`, by band id), per 5,000-height
+sub-range, so an `h` rolled from twenty `d` bands takes theirs. A source is
+fingerprinted before the build reads it, so a row that lands meanwhile is a
+change next time, never one missed.
+
+| Source | Fingerprint |
+|---|---|
+| ClickHouse | One aggregate query: the count, XOR and sum of a hash of every row the record query reads (data items in the range; every column it reads or orders by, `inserted_at` included) |
+| CSV (overlay or a peer's files) | The files covering the range, by name, size and SHA-256 |
+| SQLite | A digest of the records it gives, read in full but not built |
+
+Each also carries the source's name, rank and where it reads (URL and user,
+or path), and a version that a release bumps when the same rows would give
+other records.
+
+| Gate | When | What happens |
+|---|---|---|
+| `same_sources` | Every source as recorded | Not rebuilt: unchanged, reason `same_sources`; settled for an interval |
+| `changed` | A source's rows, files or settings changed, one was added or removed, or one could not be fingerprinted | Rebuilt and compared, as below; the new fingerprint recorded |
+| `unrecorded` | No fingerprint: adopted, built before this release, or under an older version | Rebuilt once, then recorded |
+| `source_down` | Only recorded sources that are down this run differ | Not rebuilt; due again next run |
+
+`--once --resettle=full` rebuilds every frozen band whatever the gate says.
+A ClickHouse merge, `OPTIMIZE` or TTL expiry changes the rows, and so the
+fingerprint, though the rebuild then finds nothing to add: such a band is
+rebuilt once, and is unchanged. Each step's `gate` in the report says what
+the gate found.
 
 | Outcome | When | What happens |
 |---|---|---|
-| Unchanged | The same content, or the same entries | Nothing published; the band keeps its id. Not due again for an interval |
+| Unchanged | The same sources (`same_sources`), the same content, or the same entries | Nothing published; the band keeps its id. Not due again for an interval |
 | Published | Entries were added or relocated, and the checks passed | The same range under a new id, superseding the old band |
 | Rejected | A wrong header; an entry would be lost; more relocated entries than `INDEX_EXPORT_ROOT_TX_RESETTLE_MAX_CHANGED` (20,000); an entry relocated to a root without offsets; conflicts over 1% | The old band stays. Not tried again for an interval, or until `--once --resettle` |
 | Couldn't check | A relocated entry could not be read, or under 80% of the checked entries passed | The old band stays, and the next run tries again |
@@ -370,6 +404,7 @@ Metrics, besides the usual ones (`kind` is the role):
 | Metric | Read it as |
 |---|---|
 | `index_export_resettles_total{index,kind,result}` | Re-settles: `unchanged`, `rebuilt` or `failed` |
+| `index_export_resettle_gate_total{index,kind,verdict}` | Due bands by the fingerprint gate: `same_sources`, `changed`, `unrecorded`, `source_down` |
 | `index_export_resettle_entries{index,kind,change}` | The latest re-settle of a role: entries `added`, `changed` and `unchanged` |
 | `index_export_tip_unplaced_entries{index}` | Entries the tip keeps without a frozen band to hand them to. Steady near 0; a growing number means rows left the sources before their range froze |
 

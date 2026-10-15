@@ -5,6 +5,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import { strict as assert } from 'node:assert';
+import crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import { after, before, describe, it } from 'node:test';
 import { createClient } from '@clickhouse/client';
@@ -12,6 +13,7 @@ import { createClient } from '@clickhouse/client';
 import type { BandRecord } from '../../../../lib/index-band/build.js';
 import {
   CLICKHOUSE_EXPORT_SETTINGS,
+  CLICKHOUSE_FINGERPRINT_QUERY,
   ClickHouseQuerier,
   ClickHouseRecordSource,
 } from './clickhouse.js';
@@ -105,6 +107,33 @@ class FakeClickHouse implements ClickHouseQuerier {
     let tail: string | undefined;
     if (params.query.includes('max(height)')) {
       rows = [{ height: Math.max(0, ...this.table.map((r) => r.height)) }];
+    } else if (params.query.includes('groupBitXor')) {
+      // Every row in the range, whatever its version, by every column.
+      const from = queryParams.from as number;
+      const to = queryParams.to as number;
+      let count = 0;
+      let xor = 0n;
+      let sum = 0n;
+      for (const row of this.table) {
+        if (row.height < from || row.height > to) continue;
+        if (row.isDataItem === false) continue;
+        const h = crypto
+          .createHash('sha256')
+          .update(
+            JSON.stringify({
+              ...row,
+              id: hex(row.id),
+              parentId: hex(row.parentId),
+              rootTxId: hex(row.rootTxId),
+            }),
+          )
+          .digest()
+          .readBigUInt64BE(0);
+        count += 1;
+        xor ^= h;
+        sum = (sum + h) & ((1n << 64n) - 1n);
+      }
+      rows = [{ rows: count, xor: String(xor), sum: String(sum) }];
     } else {
       const from = queryParams.from as number;
       const to = queryParams.to as number;
@@ -406,6 +435,68 @@ describe('ClickHouseRecordSource', () => {
     );
   });
 
+  it('fingerprints the rows a window reads in one query, every column hashed', async () => {
+    const table = fixture();
+    const fake = new FakeClickHouse(table);
+    const source = new ClickHouseRecordSource(
+      'gw1',
+      fake,
+      400,
+      'http://ch:8123 user u',
+    );
+    assert.equal(source.identity, 'clickhouse http://ch:8123 user u');
+    const digest = await source.fingerprint(1000, 1999);
+    assert.equal(fake.queries.length, 1, 'one query');
+    assert.deepEqual(fake.queries[0].params, { from: 1000, to: 1999 });
+    assert.deepEqual(fake.queries[0].settings, {
+      ...CLICKHOUSE_EXPORT_SETTINGS,
+    });
+    assert.match(digest, /^rows \d+ xor \d+ sum \d+$/);
+    // Every column the record query reads or orders by, and its filters.
+    for (const column of [
+      'id',
+      'parent_id',
+      'root_transaction_id',
+      'height',
+      'block_transaction_index',
+      'inserted_at',
+      '"offset"',
+      'data_offset',
+      '"size"',
+      'data_size',
+      'root_parent_offset',
+      'is_data_item',
+    ]) {
+      assert.ok(CLICKHOUSE_FINGERPRINT_QUERY.includes(column), column);
+    }
+    assert.equal(await source.fingerprint(1000, 1999), digest, 'stable');
+    // One row more, a new version, or a changed offset: another digest.
+    for (const change of [
+      (t: typeof table) => t.push({ ...t[0], id: id(999), height: 1500 }),
+      (t: typeof table) =>
+        t.push({ ...t[0], insertedAt: (t[0].insertedAt ?? 0) + 1 }),
+      (t: typeof table) => (t[0] = { ...t[0], offset: (t[0].offset ?? 0) + 1 }),
+    ]) {
+      const changed = fixture();
+      change(changed);
+      assert.notEqual(
+        await new ClickHouseRecordSource(
+          'gw1',
+          new FakeClickHouse(changed),
+        ).fingerprint(1000, 1999),
+        digest,
+      );
+    }
+  });
+
+  it('counts a window split for lack of memory, which reads otherwise than a fingerprint', async () => {
+    const fake = new FakeClickHouse(fixture());
+    fake.outOfMemory.add('1000-1999');
+    const source = new ClickHouseRecordSource('gw1', fake, 1000);
+    await collect(source.records(1000, 1999));
+    assert.equal(source.stats.splits, 1);
+  });
+
   it('closes its client', async () => {
     const fake = new FakeClickHouse([]);
     await new ClickHouseRecordSource('gw1', fake).close();
@@ -487,6 +578,46 @@ describe(
       try {
         checkExport(await collect(source.records(1000, 1999)));
         assert.equal(await source.stableHeight(), 1699);
+      } finally {
+        await source.close();
+      }
+    });
+
+    it('fingerprints the rows in one query, the same until a row is added', async () => {
+      const querier = () =>
+        createClient({
+          url: realUrl,
+          username: process.env.INDEX_EXPORT_TEST_CLICKHOUSE_USER ?? 'default',
+          password: process.env.INDEX_EXPORT_TEST_CLICKHOUSE_PASSWORD ?? '',
+          database,
+        }) as unknown as ClickHouseQuerier;
+      const source = new ClickHouseRecordSource('gw1', querier());
+      try {
+        const digest = await source.fingerprint(1000, 1999);
+        assert.match(digest, /^rows \d+ xor \d+ sum \d+$/);
+        assert.equal(
+          digest.split(' ')[1],
+          String(
+            fixture().filter(
+              (r) =>
+                r.isDataItem !== false && r.height >= 1000 && r.height <= 1999,
+            ).length,
+          ),
+        );
+        assert.equal(await source.fingerprint(1000, 1999), digest);
+        const client = admin();
+        await client.command({
+          query: `INSERT INTO ${database}.transactions
+            (height, block_transaction_index, is_data_item, id, anchor, quantity,
+             reward, data_size, content_type, format, parent_id,
+             root_transaction_id, "offset", "size", data_offset,
+             root_parent_offset, inserted_at)
+            VALUES (1500, 9, 1, unhex('${'ab'.repeat(32)}'), '', 0, 0, 0, '', 0,
+              unhex('${'cd'.repeat(32)}'), unhex('${'cd'.repeat(32)}'), 10, 20, 30, 0,
+              toDateTime(5))`,
+        });
+        await client.close();
+        assert.notEqual(await source.fingerprint(1000, 1999), digest);
       } finally {
         await source.close();
       }

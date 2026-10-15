@@ -7,6 +7,7 @@
 import * as fs from 'node:fs/promises';
 
 import {
+  CLICKHOUSE_WINDOW_BLOCKS,
   ClickHouseQuerier,
   ClickHouseRecordSource,
   createClickHouseQuerier,
@@ -259,6 +260,8 @@ export async function openSource(
             username: config.user as string,
             password,
           }),
+          CLICKHOUSE_WINDOW_BLOCKS,
+          `${config.url} user ${config.user as string}`,
         );
       }
       return new ClickHouseRecordSource(
@@ -268,6 +271,8 @@ export async function openSource(
           username: env.CLICKHOUSE_USER as string,
           password: env.CLICKHOUSE_PASSWORD ?? '',
         }),
+        CLICKHOUSE_WINDOW_BLOCKS,
+        `${env.CLICKHOUSE_URL as string} user ${env.CLICKHOUSE_USER as string}`,
       );
     }
     case 'sqlite':
