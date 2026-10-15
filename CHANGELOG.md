@@ -64,8 +64,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   and its root not asked for again; 416 stays wrong, and timeouts, 429 and
   5xx still count against the ratio. Samples are drawn ten times over and
   walked until their size has been read (root-TX builds, re-settles,
-  `index-band-build`, `index-band-verify`), and a band also needs 50
-  verified entries (all of a smaller sample). Results, logs and
+  `index-band-build`, `index-band-verify`), and a band also needs 80% of
+  50 verified (or of a smaller sample), which fails it only when gone roots
+  use the pool up; a run's report gives `sampled` (entries read) and
+  `poolSize`. Results, logs and
   `index-band-verify` report `unreadable`, the pool size and the unreadable
   share; `index_export_gate_unreadable_total` counts them. A relocated
   entry in a re-settle must still read and verify.

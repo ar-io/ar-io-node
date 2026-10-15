@@ -416,9 +416,6 @@ describe('checkBandHeaders', () => {
         totalRecords: 10,
         openRoot: flaky(failures),
         minRecords: 1,
-        // The ratio alone: by default every one of a sample this small
-        // must pass (see the minVerified tests).
-        minVerified: 1,
         concurrency: 1,
         retries: 0,
       });
@@ -501,7 +498,7 @@ describe('checkBandHeaders', () => {
       assert.equal(result.unreadableShare, 1);
       assert.match(
         result.reasons.join(' '),
-        /0 entries verified, fewer than 10: of the 20 tried, 20 are under roots the gateway doesn't have \(404\) and 0 could not be read; the sample ran out/,
+        /0 entries verified, fewer than 8: of the 20 tried, 20 are under roots the gateway doesn't have \(404\) and 0 could not be read; the sample ran out/,
       );
     });
 
@@ -549,7 +546,6 @@ describe('checkBandHeaders', () => {
           'root-2': 503,
           'root-3': 503,
         }),
-        minVerified: 1,
         retryDelayMs: 1,
       });
       assert.equal(unavailable.errors.length, 3);

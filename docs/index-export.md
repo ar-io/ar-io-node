@@ -182,7 +182,10 @@ answers 404 for (history whose roots are gone network-wide) is
 `unreadable`: passed over, neither passed nor wrong, and left out of the
 pass ratio; that root is not asked for again. A band passes when no entry
 read is wrong, at least 80% of those read passed (a timeout, 429 or 5xx
-counts against it), and at least 50 passed (all of a smaller sample). Each
+counts against it), and at least 40 passed (80% of 50, or of a smaller
+sample), which fails a band only when roots that are gone use the pool up.
+The report's `sampled` counts the entries read, `poolSize` the candidates.
+Each
 step's log gives `unreadable`, the pool and the unreadable share, an
 estimate of how much of the band's history is gone, and
 `index_export_gate_unreadable_total` counts them.
@@ -361,7 +364,8 @@ other records.
 `--once --resettle=full` rebuilds every frozen band whatever the gate says.
 A ClickHouse merge, `OPTIMIZE` or TTL expiry changes the rows, and so the
 fingerprint, though the rebuild then finds nothing to add: such a band is
-rebuilt once, and is unchanged. Each step's `gate` in the report says what
+rebuilt once, and is unchanged; that is the safe direction, never a change
+missed. Each step's `gate` in the report says what
 the gate found.
 
 | Outcome | When | What happens |

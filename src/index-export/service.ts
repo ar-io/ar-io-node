@@ -200,7 +200,16 @@ export function reportForOutput(report: RunReport): unknown {
     steps: report.steps.map((step) => {
       if (step.band === undefined) return step;
       const { sample, ...band } = step.band;
-      return { ...step, band: { ...band, sampled: sample.length } };
+      const { sampled, ...rest } = step;
+      // The entries the header check read, and the candidates it drew on.
+      return {
+        ...rest,
+        band: {
+          ...band,
+          sampled: sampled ?? sample.length,
+          poolSize: sample.length,
+        },
+      };
     }),
   };
 }

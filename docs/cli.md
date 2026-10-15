@@ -130,8 +130,9 @@ data_item_id,root_tx_id,path,root_data_item_offset,root_data_offset,data_item_si
 root transaction. A band fails if any header is wrong: its signature hash
 isn't the ID, it doesn't end where the payload starts, or the offsets run
 past the end of the root (416, or a short range). It also fails if fewer
-than 80% of the entries read passed, if fewer than 50 passed (or all of
-them, in a smaller sample), or if the band has fewer than 1,000 entries. A
+than 80% of the entries read passed, if fewer than 40 passed (80% of 50,
+or of a smaller sample: this bites only when roots that are gone use the
+pool up), or if the band has fewer than 1,000 entries. A
 failed band is not published, and the command exits 1 with the result on
 stderr. A band can pass with a few entries the gateway couldn't serve (a
 timeout, a 429, a 5xx): they are listed in `errors` and count against the

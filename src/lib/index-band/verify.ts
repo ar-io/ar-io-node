@@ -50,8 +50,9 @@ export interface HeaderCheckOptions {
    */
   targets?: Record<string, number>;
   /**
-   * The fewest entries that must pass (default: the entries the check aims
-   * to read, at most {@link DEFAULT_MIN_VERIFIED}).
+   * The fewest entries that must pass (default: `minOkRatio` of the
+   * entries the check aims to read, at most {@link DEFAULT_MIN_VERIFIED},
+   * rounded up), so it bites only when roots that are gone use the pool up.
    */
   minVerified?: number;
   /** Random source for the order a pool is walked in, in [0, 1). */
@@ -369,7 +370,9 @@ export async function checkBandHeaders({
 
   const checked = ok + wrong.length + errors.length;
   const tried = checked + unreadable.length;
-  const verifiedFloor = minVerified ?? Math.min(target, DEFAULT_MIN_VERIFIED);
+  const verifiedFloor =
+    minVerified ??
+    Math.ceil(minOkRatio * Math.min(target, DEFAULT_MIN_VERIFIED));
   const reasons: string[] = [];
   if (totalRecords < minRecords) {
     reasons.push(`band has ${totalRecords} entries, fewer than ${minRecords}`);
@@ -381,7 +384,8 @@ export async function checkBandHeaders({
     reasons.push(`${wrong.length} of ${checked} checked entries are wrong`);
   }
   // When entries are wrong, that is the reason; the counts add nothing.
-  if (wrong.length === 0 && checked > 0 && ok / checked < minOkRatio) {
+  const underRatio = checked > 0 && ok / checked < minOkRatio;
+  if (wrong.length === 0 && underRatio) {
     // Say why: an entry the gateway couldn't serve isn't a wrong one, and
     // the usual cause is a gateway that has to fetch the roots itself.
     const unchecked =
@@ -392,7 +396,12 @@ export async function checkBandHeaders({
       `${ok} of ${checked} checked entries passed, under ${Math.round(minOkRatio * 100)}%${unchecked}`,
     );
   }
-  if (wrong.length === 0 && entries.length > 0 && ok < verifiedFloor) {
+  if (
+    wrong.length === 0 &&
+    !underRatio &&
+    entries.length > 0 &&
+    ok < verifiedFloor
+  ) {
     reasons.push(
       `${ok} entries verified, fewer than ${verifiedFloor}: of the ${tried} tried, ${unreadable.length} are under roots the gateway doesn't have (404) and ${errors.length} could not be read${tried === entries.length ? '; the sample ran out' : ''}`,
     );

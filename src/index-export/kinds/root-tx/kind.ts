@@ -95,6 +95,8 @@ export interface StepOutcome {
   seeds?: SeedPlacement;
   /** Grid re-settle: the rebuilt band against the published one. */
   resettle?: ResettleReport;
+  /** Entries the header check read, when it ran. */
+  sampled?: number;
   /** Grid re-settle: what the fingerprint gate found (see `fingerprint.ts`). */
   gate?: { verdict: GateVerdict; detail?: string };
   /** Optional sources that failed part way, so the band was built without them. */
@@ -273,6 +275,7 @@ export async function buildStepBand(
     | { result: StepResult; reason: string; details?: string[] }
     | undefined;
   let peakBytes: number | undefined;
+  let sampled: number | undefined;
   const beforePublish = async (
     staged: StagedBand,
   ): Promise<PublishDecision> => {
@@ -414,6 +417,7 @@ export async function buildStepBand(
       minRecords: 0,
       ...ctx.headerCheck,
     });
+    sampled = check.checked;
     if (resettle !== undefined) {
       resettle.header = {
         checked: check.checked,
@@ -587,6 +591,7 @@ export async function buildStepBand(
     ...(placement !== undefined ? { seeds: placement } : {}),
     ...(resettle !== undefined ? { resettle } : {}),
     ...(failedSources.length > 0 ? { failedSources } : {}),
+    ...(sampled !== undefined ? { sampled } : {}),
     seconds: (Date.now() - started) / 1000,
     ...(peakBytes !== undefined ? { peakBytes } : {}),
   };
