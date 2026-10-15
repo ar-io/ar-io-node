@@ -33,6 +33,7 @@ import {
 } from '../../../lib/index-band/read.js';
 import {
   checkBandHeaders,
+  HEADER_CHECK_POOL_FACTOR,
   RootSourceFactory,
 } from '../../../lib/index-band/verify.js';
 import { DEFAULT_RESETTLE_MAX_CHANGED } from '../../config.js';
@@ -42,6 +43,7 @@ import {
   diffBands,
   emptyPlacement,
   placeSeedEntries,
+  RESETTLE_ADDED_TAG,
   RESETTLE_CHANGED_TAG,
   RootHeights,
   SeedPlacement,
@@ -61,6 +63,13 @@ export const SAMPLE_SIZE = 150;
 export const SAMPLE_SIZES = { [REPAIRED_TAG]: 50, [OVERLAY_CHANGED_TAG]: 200 };
 // A re-settle checks only its delta instead: every entry it relocates,
 // SAMPLE_SIZE of those it adds, and the tagged sample entries among either.
+// Each sample is drawn HEADER_CHECK_POOL_FACTOR times over, a pool walked
+// until its size has been read, passing over roots that are gone.
+const TARGETS = {
+  '': SAMPLE_SIZE,
+  ...SAMPLE_SIZES,
+  [RESETTLE_ADDED_TAG]: SAMPLE_SIZE,
+};
 
 export type StepResult =
   | 'published'
@@ -111,11 +120,21 @@ export interface ResettleReport {
     ok: number;
     wrong: number;
     errors: number;
+    /** Candidates the check could draw on. */
+    poolSize: number;
+    /** Entries under roots the gateway doesn't have (404); only when some were. */
+    unreadable?: number;
     /** Entries that passed with a malformed tag count; only when some did. */
     malformedTags?: number;
     byTag: Record<
       string,
-      { checked: number; ok: number; wrong: number; malformedTags?: number }
+      {
+        checked: number;
+        ok: number;
+        wrong: number;
+        unreadable?: number;
+        malformedTags?: number;
+      }
     >;
   };
 }
@@ -302,7 +321,7 @@ export async function buildStepBand(
         { dir: staged.dir, manifest: await readBandManifest(staged.dir) },
         {
           maxChanged,
-          addedSampleSize: SAMPLE_SIZE,
+          addedSampleSize: SAMPLE_SIZE * HEADER_CHECK_POOL_FACTOR,
           watch: new Set(tagged.map((entry) => entry.id)),
         },
       );
@@ -389,6 +408,7 @@ export async function buildStepBand(
     }
     const check = await checkBandHeaders({
       entries: delta ?? staged.sample,
+      targets: TARGETS,
       totalRecords: staged.records,
       openRoot: ctx.openRoot,
       minRecords: 0,
@@ -400,6 +420,10 @@ export async function buildStepBand(
         ok: check.ok,
         wrong: check.wrong.length,
         errors: check.errors.length,
+        poolSize: check.poolSize,
+        ...(check.unreadable.length > 0
+          ? { unreadable: check.unreadable.length }
+          : {}),
         ...(check.malformedTags > 0
           ? { malformedTags: check.malformedTags }
           : {}),
@@ -410,6 +434,18 @@ export async function buildStepBand(
       { index: INDEX_NAME, kind: step.role },
       check.checked > 0 ? check.ok / check.checked : 0,
     );
+    if (check.unreadable.length > 0) {
+      metrics.gateUnreadable.inc(
+        { index: INDEX_NAME, kind: step.role },
+        check.unreadable.length,
+      );
+      log.info('Header check passed over roots the gateway does not have', {
+        unreadable: check.unreadable.length,
+        poolSize: check.poolSize,
+        unreadableShare: Number(check.unreadableShare.toFixed(3)),
+        sample: check.unreadable.slice(0, 5).map((e) => e.rootTxId),
+      });
+    }
     if (check.malformedTags > 0) {
       metrics.gateMalformedTags.inc(
         { index: INDEX_NAME, kind: step.role },
@@ -442,7 +478,16 @@ export async function buildStepBand(
     }
     // A relocated entry replaces one already published: each must read
     // back right, whatever the share of the rest that did.
-    const unread = check.errors.filter((e) => e.tag === RESETTLE_CHANGED_TAG);
+    // A root that is gone proves nothing either.
+    const unread = [
+      ...check.errors.filter((e) => e.tag === RESETTLE_CHANGED_TAG),
+      ...check.unreadable
+        .filter((e) => e.tag === RESETTLE_CHANGED_TAG)
+        .map((e) => ({
+          id: e.id,
+          error: `root ${e.rootTxId} not found (404)`,
+        })),
+    ];
     if (unread.length > 0) {
       return decline('couldnt_check', 'changed_unchecked', [
         `${unread.length} relocated entries could not be read from the gateway`,
@@ -455,6 +500,9 @@ export async function buildStepBand(
     log.info('Header check passed', {
       checked: check.checked,
       ok: check.ok,
+      poolSize: check.poolSize,
+      unreadable: check.unreadable.length,
+      unreadableShare: Number(check.unreadableShare.toFixed(3)),
       byTag: check.byTag,
       ...(check.malformedTags > 0
         ? {
@@ -483,6 +531,7 @@ export async function buildStepBand(
       dryRun: ctx.dryRun,
       sampleSize: SAMPLE_SIZE,
       sampleSizes: SAMPLE_SIZES,
+      samplePool: HEADER_CHECK_POOL_FACTOR,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

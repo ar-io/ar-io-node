@@ -27,7 +27,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     `INDEX_EXPORT_ROOT_TX_RESETTLE_MAX_CHANGED`, 20,000, a band), each of
     which must read and verify, and a sample of the added, so entries whose
     roots are no longer seeded don't block it. Any wrong header leaves the
-    band as it is.
+    band as it is. Each is reported with its counts and counted in
+    `index_export_resettles_total` and `index_export_resettle_entries`.
   - A due band is rebuilt only when its sources changed: each source's
     fingerprint of the band's heights is recorded when it settles (one
     aggregate query for ClickHouse; the files' names, sizes and SHA-256 for
@@ -35,12 +36,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     a rebuild (`unchanged`, `same_sources`,
     `index_export_resettle_gate_total`). `--once --resettle=full` rebuilds
     every one.
-- **Faster whole-band reads.** `Cdb64Reader.entries()` reads in 1 MiB
-  pieces rather than three reads a record, and the re-settle's comparison
-  walks two bands in id order: about 3 MB/s before, over 200 MB/s on local
-  disk.
-    Each is reported with its counts and counted in
-    `index_export_resettles_total` and `index_export_resettle_entries`.
   - Grid bands built by hand with `index-band-build` (`h-`, `d-` and
     `tip-` ids) are taken as they are; a legacy layout's current `r` and
     daily `d` move into the new bands and the first tip supersedes them.
@@ -52,8 +47,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - `docs/index-export.md` documents the overlay files a `csv` source reads
     (names, columns, header).
 
+### Changed
+
+- **Faster whole-band reads.** `Cdb64Reader.entries()` reads in 1 MiB
+  pieces rather than three reads a record (`entryBatches()` yields a
+  piece's records at once), and a re-settle's comparison walks two bands in
+  id order: 2.6 MB/s before, about 400 MB/s after on local disk.
+
 ### Fixed
 
+- **The header check verifies a band among the roots that can still be
+  read.** History whose roots are gone network-wide no longer makes a band
+  "couldn't check" (turbo-gateway.com's 1.3M band had 46% of sampled roots
+  readable, and needed `--skip-header-check`). A read answered 404 is
+  `unreadable`: neither passed nor wrong, left out of the 80% pass ratio,
+  and its root not asked for again; 416 stays wrong, and timeouts, 429 and
+  5xx still count against the ratio. Samples are drawn ten times over and
+  walked until their size has been read (root-TX builds, re-settles,
+  `index-band-build`, `index-band-verify`), and a band also needs 50
+  verified entries (all of a smaller sample). Results, logs and
+  `index-band-verify` report `unreadable`, the pool size and the unreadable
+  share; `index_export_gate_unreadable_total` counts them. A relocated
+  entry in a re-settle must still read and verify.
 - **Band header check: an item with a malformed tag count is no longer a
   wrong offset.** Some early bundlers wrote the tag bytes' length into the
   header's tag count field too (an Arweave-signed item at height 789,458

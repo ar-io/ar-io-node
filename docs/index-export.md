@@ -176,6 +176,17 @@ offsets were repaired and 200 the overlay changed. The check reads root
 transactions over the network, so point it at a gateway that holds them,
 not one that would have to fetch them.
 
+Each sample is drawn from a pool ten times its size, walked in random order
+until the sample's size has been read. An entry whose root the gateway
+answers 404 for (history whose roots are gone network-wide) is
+`unreadable`: passed over, neither passed nor wrong, and left out of the
+pass ratio; that root is not asked for again. A band passes when no entry
+read is wrong, at least 80% of those read passed (a timeout, 429 or 5xx
+counts against it), and at least 50 passed (all of a smaller sample). Each
+step's log gives `unreadable`, the pool and the unreadable share, an
+estimate of how much of the band's history is gone, and
+`index_export_gate_unreadable_total` counts them.
+
 An entry passes when the bytes at its offset decode as a header of exactly
 the length its offsets give, ending where the header's tag bytes say, whose
 signature hashes to its id. A header whose tag count field disagrees with
@@ -370,11 +381,13 @@ The safety rules:
   unseeded, so they are not read again. The checked set is:
   - every relocated entry (one whose root, offsets or size changed), each
     one, stratum `resettle-changed`;
-  - a sample of 150 of the added entries, stratum `resettle-added`;
+  - a sample of 150 of the added entries, stratum `resettle-added`, read
+    from a pool of 1,500 past roots that are gone;
   - the build's usual `repaired` and `overlay-changed` sample entries that
     are themselves added or relocated.
-- **Every relocated entry must read and verify.** One that cannot be read
-  makes the band "couldn't check", whatever share of the rest passed.
+- **Every relocated entry must read and verify.** One that cannot be read,
+  its root gone (404) included, makes the band "couldn't check", whatever
+  share of the rest passed.
 - **The 80% pass ratio applies to the checked set only**, and a read that
   fails in transport counts against it, as for any band.
 - **Any wrong header fails the band.**

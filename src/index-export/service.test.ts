@@ -110,12 +110,13 @@ describe('ExportService', () => {
       ],
     );
     assert.equal(report.gateUrl, 'http://gateway.test');
-    // Printed without each band's header sample, which only counts.
+    // Printed without each band's header sample, which only counts: the
+    // pool the check reads 150 from, every entry of this 1,100-entry band.
     const printed = reportForOutput(report) as {
       steps: Array<{ band: Record<string, unknown> }>;
     };
     assert.equal(printed.steps[0].band.sample, undefined);
-    assert.equal(printed.steps[0].band.sampled, 150);
+    assert.equal(printed.steps[0].band.sampled, 1100);
     assert.equal(printed.steps[0].band.records, report.steps[0].band?.records);
     assert.ok(report.peakBytes >= (report.steps[0].peakBytes ?? 0));
     assert.ok((report.steps[0].peakBytes ?? 0) > 0);

@@ -84,6 +84,13 @@ export const gateMalformedTags = metric(
   ['index', 'kind'],
 ) as promClient.Counter<'index' | 'kind'>;
 
+export const gateUnreadable = metric(
+  'counter',
+  'index_export_gate_unreadable_total',
+  "Sampled entries the header check passed over because the gateway doesn't have their root (404): history whose roots are gone network-wide. Neither passed nor wrong.",
+  ['index', 'kind'],
+) as promClient.Counter<'index' | 'kind'>;
+
 export const gateHttp = metric(
   'counter',
   'index_export_gate_http_total',

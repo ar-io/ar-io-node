@@ -367,6 +367,46 @@ describe('index-band-build and index-band-verify', () => {
     }
   });
 
+  it('verify reports roots the gateway no longer has, apart from wrong offsets', async () => {
+    const opts = options('verify-gone');
+    const built = (await indexBandBuildCLICommand(opts, {
+      log,
+      openInput: () => Readable.from([csv(correct)]),
+      roots,
+    })) as Record<string, any>;
+    assert.equal(built.headerCheck.poolSize, 3);
+    assert.equal(built.headerCheck.unreadable, 0);
+
+    const gone = {
+      openRoot: (): ByteRangeSource =>
+        ({
+          read: async () => {
+            throw Object.assign(
+              new Error('Request failed with status code 404'),
+              { response: { status: 404 } },
+            );
+          },
+          close: async () => undefined,
+          isOpen: () => true,
+        }) as ByteRangeSource,
+      close: () => {},
+    };
+    const thrown = await indexBandVerifyCLICommand(
+      { bandDir: built.dir },
+      { log, roots: gone },
+    ).then(
+      () => assert.fail('expected verify to fail: nothing could be verified'),
+      (error: unknown) => error as Record<string, any>,
+    );
+    assert.equal(thrown.passed, false);
+    assert.deepEqual(thrown.wrong, []);
+    assert.equal(thrown.poolSize, 3);
+    assert.equal(thrown.unreadable, 3);
+    assert.equal(thrown.unreadableShare, 1);
+    assert.equal(thrown.unreadableSample.length, 3);
+    assert.match(thrown.reasons.join(' '), /doesn't have \(404\)/);
+  });
+
   it('verify throws its result when a band fails the check', async () => {
     const opts = options('verify-bad', { skipHeaderCheck: true });
     const shifted = (item: ScannedDataItem): [number, number] => [

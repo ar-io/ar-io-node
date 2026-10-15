@@ -643,6 +643,7 @@ describe('ExportService, grid layout', () => {
         ok: 40,
         wrong: 0,
         errors: 0,
+        poolSize: 40,
         byTag: { 'resettle-added': { checked: 40, ok: 40, wrong: 0 } },
       });
       assert.notEqual((await find('d-h105000-')).id, old.id);
@@ -795,6 +796,44 @@ describe('ExportService, grid layout', () => {
         'tried again next run',
       );
       assert.equal(state.retry?.attempts, 1);
+    });
+
+    it('cannot check a band when a relocated entry’s root is gone (404): a relocation must be proven', async () => {
+      gridRecords();
+      await ctx.service(grid()).runOnce();
+      const old = await find('d-h105000-');
+      const moved = toB64Url(rootAt(999_999));
+      const roots = ctx.roots;
+      ctx.roots = () => {
+        const { openRoot, close } = roots();
+        return {
+          openRoot: (rootTxId: string): ByteRangeSource =>
+            rootTxId === moved
+              ? ({
+                  read: async () => {
+                    throw Object.assign(
+                      new Error('Request failed with status code 404'),
+                      { response: { status: 404 } },
+                    );
+                  },
+                  close: async () => undefined,
+                } as unknown as ByteRangeSource)
+              : openRoot(rootTxId),
+          close,
+        };
+      };
+      const bundler = await overlay([800], (i) => ({
+        root: rootAt(999_999),
+        from: i,
+      }));
+      const report = await ctx
+        .service(grid(), withOverlay(bundler))
+        .runOnce({ resettle: 'gate' });
+      const step = report.steps.find((s) => s.heightRange[0] === 105_000);
+      assert.equal(step?.result, 'couldnt_check');
+      assert.equal(step?.reason, 'changed_unchecked');
+      assert.match(step?.details?.join(' ') ?? '', /not found \(404\)/);
+      assert.equal((await find('d-h105000-')).id, old.id);
     });
 
     it('waits while a build this run could not check', async () => {

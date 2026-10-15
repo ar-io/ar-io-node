@@ -174,6 +174,13 @@ export interface BuildBandOptions {
    * in the general sample.
    */
   sampleSizes?: Record<string, number>;
+  /**
+   * Candidates to sample for each entry a sample is to hold (default 1):
+   * with more, each sample is a pool that {@link checkBandHeaders} walks
+   * until it has read the sample's size, passing over entries whose roots
+   * are gone.
+   */
+  samplePool?: number;
   /** Random source for sampling, in [0, 1). */
   random?: () => number;
   /**
@@ -487,6 +494,7 @@ export async function buildBand({
   dryRun = false,
   sampleSize = 150,
   sampleSizes = {},
+  samplePool = 1,
   random = Math.random,
   now = Date.now,
 }: BuildBandOptions): Promise<BuiltBand> {
@@ -505,6 +513,9 @@ export async function buildBand({
   }
   if (publisher.length === 0) {
     throw new Error('publisher is required');
+  }
+  if (!Number.isSafeInteger(samplePool) || samplePool < 1) {
+    throw new Error(`samplePool must be a positive integer: ${samplePool}`);
   }
   for (const [tag, size] of Object.entries(sampleSizes)) {
     if (tag.length === 0 || !Number.isSafeInteger(size) || size < 1) {
@@ -588,11 +599,14 @@ export async function buildBand({
     // Sort, deduplicate and write, one partition at a time.
     const bandDir = path.join(staging, 'band');
     await fs.mkdir(bandDir);
-    const sample = new Reservoir<BandSampleEntry>(sampleSize, random);
+    const sample = new Reservoir<BandSampleEntry>(
+      sampleSize * samplePool,
+      random,
+    );
     const tagSamples = new Map(
       Object.entries(sampleSizes).map(([tag, size]) => [
         tag,
-        new Reservoir<BandSampleEntry>(size, random),
+        new Reservoir<BandSampleEntry>(size * samplePool, random),
       ]),
     );
     const readBack = new Reservoir<{ key: Buffer; value: Buffer }>(
