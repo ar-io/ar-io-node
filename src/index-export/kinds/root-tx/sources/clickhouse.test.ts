@@ -595,18 +595,19 @@ describe(
       try {
         const digest = await source.fingerprint(1000, 1999);
         assert.match(digest, /^rows \d+ xor \d+ sum \d+$/);
-        assert.equal(
-          digest.split(' ')[1],
-          String(
-            fixture().filter(
-              (r) =>
-                r.isDataItem !== false && r.height >= 1000 && r.height <= 1999,
-            ).length,
-          ),
-        );
-        assert.equal(await source.fingerprint(1000, 1999), digest);
+        // Every row the table holds there, as stored (an insert collapses
+        // rows that share the sorting key).
         const client = admin();
-        await client.command({
+        const counted = await client.query({
+          query: `SELECT count() AS rows FROM ${database}.transactions WHERE height >= 1000 AND height <= 1999 AND is_data_item`,
+          format: 'JSONEachRow',
+        });
+        const [{ rows }] = (await counted.json()) as Array<{ rows: string }>;
+        await client.close();
+        assert.equal(digest.split(' ')[1], String(rows));
+        assert.equal(await source.fingerprint(1000, 1999), digest);
+        const writer = admin();
+        await writer.command({
           query: `INSERT INTO ${database}.transactions
             (height, block_transaction_index, is_data_item, id, anchor, quantity,
              reward, data_size, content_type, format, parent_id,
@@ -616,7 +617,7 @@ describe(
               unhex('${'cd'.repeat(32)}'), unhex('${'cd'.repeat(32)}'), 10, 20, 30, 0,
               toDateTime(5))`,
         });
-        await client.close();
+        await writer.close();
         assert.notEqual(await source.fingerprint(1000, 1999), digest);
       } finally {
         await source.close();
