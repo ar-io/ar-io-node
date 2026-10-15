@@ -160,7 +160,7 @@ describe('Data', function () {
   it('Verifying that /<id>/<path> for a valid manifest path returns expected response', async function () {
     // expected headers:
     // x-ar-io-hops: 1
-    // content-type: application/json; charset=utf-8
+    // content-type: application/json (an older upstream adds a charset)
     // content-length: 130
     // expected status code: 200
     // expected content: gkOH8JBTdKr_wD9SriwYwCM6p7saQAJFU60AREREQLA
@@ -184,9 +184,12 @@ describe('Data', function () {
       parseInt(res.headers['x-ar-io-hops']) >= 1,
       `Expected x-ar-io-hops >= 1, got ${res.headers['x-ar-io-hops']}`,
     );
+    // The JSON type as uploaded. Since Release 85 a gateway sends a JSON
+    // type verbatim; an upstream on an older release adds a charset, and
+    // this item is fetched from one (hops >= 1), so compare the media type.
     assert.equal(
-      res.headers['content-type'],
-      'application/json; charset=utf-8',
+      res.headers['content-type']?.split(';')[0].trim(),
+      'application/json',
     );
     assert.equal(res.headers['content-length'], '130');
     assert.equal(res.status, 200);
@@ -199,7 +202,7 @@ describe('Data', function () {
   it('Verifying that /<id> for a non-manifest returns expected response', async function () {
     // expected headers:
     // x-ar-io-hops: 1
-    // content-type: application/json; charset=utf-8
+    // content-type: application/json (an older upstream adds a charset)
     // content-length: 130
     // expected status code: 200
     // expected content: gkOH8JBTdKr_wD9SriwYwCM6p7saQAJFU60AREREQLA
@@ -223,9 +226,12 @@ describe('Data', function () {
       parseInt(res.headers['x-ar-io-hops']) >= 1,
       `Expected x-ar-io-hops >= 1, got ${res.headers['x-ar-io-hops']}`,
     );
+    // The JSON type as uploaded. Since Release 85 a gateway sends a JSON
+    // type verbatim; an upstream on an older release adds a charset, and
+    // this item is fetched from one (hops >= 1), so compare the media type.
     assert.equal(
-      res.headers['content-type'],
-      'application/json; charset=utf-8',
+      res.headers['content-type']?.split(';')[0].trim(),
+      'application/json',
     );
     assert.equal(res.headers['content-length'], '130');
     assert.equal(res.status, 200);
