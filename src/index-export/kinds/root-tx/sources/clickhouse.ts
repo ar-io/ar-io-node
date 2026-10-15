@@ -140,6 +140,31 @@ export const CLICKHOUSE_WINDOW_QUERY = `
     )
   ) AS p ON p.id = i.parent_id`;
 
+/**
+ * A digest of every row a window query over these heights reads: items and
+ * the parents it joins are both data item rows in the range, and every
+ * column the query reads or orders by is hashed, `inserted_at` included. A
+ * row added, changed, merged away or expired changes it; equal digests mean
+ * the same rows, so the same records. Rows are summed as well as XORed, so
+ * two identical rows don't cancel out. One scan, no GROUP BY; the result
+ * is one row.
+ */
+export const CLICKHOUSE_FINGERPRINT_QUERY = `
+  SELECT
+    count() AS rows,
+    toString(groupBitXor(h)) AS xor,
+    toString(sumWithOverflow(h)) AS sum
+  FROM (
+    SELECT cityHash64(
+      id, parent_id, root_transaction_id, height, block_transaction_index,
+      inserted_at, "offset", data_offset, "size", data_size,
+      root_parent_offset
+    ) AS h
+    FROM transactions
+    WHERE height >= {from:UInt32} AND height <= {to:UInt32}
+      AND is_data_item
+  )`;
+
 const hexId = (value: string): Buffer | undefined =>
   value.length > 0 ? Buffer.from(value, 'hex') : undefined;
 
@@ -174,11 +199,47 @@ export class ClickHouseRecordSource implements RecordSource {
   readonly rank = 0;
   readonly stats: SourceStats = newSourceStats();
 
+  /**
+   * @param where Where the table is, for a fingerprint's identity (e.g.
+   *   the URL and user); a source pointed elsewhere is another source.
+   */
   constructor(
     readonly name: string,
     private readonly client: ClickHouseQuerier,
     private readonly windowBlocks = CLICKHOUSE_WINDOW_BLOCKS,
+    private readonly where = '',
   ) {}
+
+  get identity(): string {
+    return `clickhouse ${this.where}`.trim();
+  }
+
+  /** {@link CLICKHOUSE_FINGERPRINT_QUERY} over the heights. */
+  async fingerprint(from: number, to: number): Promise<string> {
+    let rows: Array<{ rows: number | string; xor: string; sum: string }>;
+    try {
+      const result = await this.client.query({
+        query: CLICKHOUSE_FINGERPRINT_QUERY,
+        format: 'JSONEachRow',
+        query_params: { from, to },
+        clickhouse_settings: { ...CLICKHOUSE_EXPORT_SETTINGS },
+        abort_signal: deadline(),
+      });
+      rows = [];
+      for await (const batch of result.stream()) {
+        for (const line of batch) rows.push(parseLine(line));
+      }
+    } catch (error) {
+      throw this.failure(`fingerprint of heights ${from}-${to}`, error);
+    }
+    const [row] = rows;
+    if (rows.length !== 1 || row.xor === undefined || row.sum === undefined) {
+      throw new Error(
+        `ClickHouse source ${this.name}, fingerprint of heights ${from}-${to}: expected one row of rows, xor and sum`,
+      );
+    }
+    return `rows ${Number(row.rows)} xor ${row.xor} sum ${row.sum}`;
+  }
 
   /**
    * One below the highest height in the table, or -1 when it is empty: the
@@ -212,6 +273,7 @@ export class ClickHouseRecordSource implements RecordSource {
         if (given === 0 && start < end && MEMORY_LIMIT_EXCEEDED.test(message)) {
           const middle = Math.floor((start + end) / 2);
           pending.unshift([start, middle], [middle + 1, end]);
+          this.stats.splits += 1;
           continue;
         }
         throw this.failure(`heights ${start}-${end}`, error);

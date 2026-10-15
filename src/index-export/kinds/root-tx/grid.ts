@@ -262,10 +262,23 @@ function sampleEntry(
   };
 }
 
-async function* partitionEntries(
+/** A partition's entries, in id order. */
+interface PartitionEntries {
+  keys: Buffer[];
+  values: Buffer[];
+}
+
+/**
+ * Reads a partition whole (bands hold a few hundred thousand entries a
+ * partition), in id order: as written by `buildBand`, which writes ids in
+ * order, or sorted here for a band written another way.
+ */
+async function readPartition(
   dir: string,
-  filename: string,
-): AsyncGenerator<{ key: Buffer; value: Buffer }> {
+  filename: string | undefined,
+): Promise<PartitionEntries> {
+  const entries: PartitionEntries = { keys: [], values: [] };
+  if (filename === undefined) return entries;
   if (!PARTITION_FILE_PATTERN.test(filename)) {
     throw new Error(
       `${dir} names ${JSON.stringify(filename)}, not a partition file`,
@@ -273,11 +286,30 @@ async function* partitionEntries(
   }
   const reader = new Cdb64Reader(path.join(dir, filename));
   await reader.open();
+  let sorted = true;
   try {
-    yield* reader.entries();
+    for await (const batch of reader.entryBatches()) {
+      for (const { key, value } of batch) {
+        const last = entries.keys.length - 1;
+        if (sorted && last >= 0 && entries.keys[last].compare(key) >= 0) {
+          sorted = false;
+        }
+        entries.keys.push(key);
+        entries.values.push(value);
+      }
+    }
   } finally {
     await reader.close();
   }
+  if (!sorted) {
+    const order = entries.keys.map((_, i) => i);
+    order.sort((a, b) => entries.keys[a].compare(entries.keys[b]));
+    return {
+      keys: order.map((i) => entries.keys[i]),
+      values: order.map((i) => entries.values[i]),
+    };
+  }
+  return entries;
 }
 
 const filesByPrefix = (manifest: Cdb64Manifest, dir: string) =>
@@ -294,10 +326,11 @@ const filesByPrefix = (manifest: Cdb64Manifest, dir: string) =>
 
 /**
  * Compares two bands entry by entry, one partition at a time, so memory is
- * bounded by the old band's largest partition. Raw values are compared, so
- * a root, offsets or size that changed is a change, and an id either band
- * holds alone is added or removed. `watch` names ids (base64url) to report
- * in `watched` when they are added or changed.
+ * bounded by the largest partition of either: each is read whole in large
+ * pieces and the two are walked side by side in id order. Raw values are
+ * compared, so a root, offsets or size that changed is a change, and an id
+ * either band holds alone is added or removed. `watch` names ids
+ * (base64url) to report in `watched` when they are added or changed.
  */
 export async function diffBands(
   old: { dir: string; manifest: Cdb64Manifest },
@@ -340,49 +373,54 @@ export async function diffBands(
     ...new Set([...oldFiles.keys(), ...newFiles.keys()]),
   ].sort();
   for (const prefix of prefixes) {
-    const before = new Map<string, Buffer>();
-    const oldFile = oldFiles.get(prefix);
-    if (oldFile !== undefined) {
-      for await (const { key, value } of partitionEntries(old.dir, oldFile)) {
-        before.set(key.toString('latin1'), Buffer.from(value));
-        diff.oldEntries += 1;
+    const before = await readPartition(old.dir, oldFiles.get(prefix));
+    const after = await readPartition(next.dir, newFiles.get(prefix));
+    diff.oldEntries += before.keys.length;
+    diff.newEntries += after.keys.length;
+    let i = 0;
+    let j = 0;
+    while (i < before.keys.length || j < after.keys.length) {
+      const order =
+        i === before.keys.length
+          ? 1
+          : j === after.keys.length
+            ? -1
+            : before.keys[i].compare(after.keys[j]);
+      if (order < 0) {
+        diff.removed += 1;
+        if (diff.removedSample.length < SAMPLE_IDS) {
+          diff.removedSample.push(toB64Url(before.keys[i]));
+        }
+        i += 1;
+        continue;
       }
-    }
-    const newFile = newFiles.get(prefix);
-    if (newFile !== undefined) {
-      for await (const { key, value } of partitionEntries(next.dir, newFile)) {
-        diff.newEntries += 1;
-        const k = key.toString('latin1');
-        const was = before.get(k);
-        if (was === undefined) {
-          diff.added += 1;
-          noteWatched(key);
-          const entry = sampleEntry(key, value, RESETTLE_ADDED_TAG);
-          if (entry !== undefined) added.offer(entry);
-          continue;
-        }
-        before.delete(k);
-        if (was.equals(value)) {
-          diff.unchanged += 1;
-          continue;
-        }
-        diff.changed += 1;
+      const key = after.keys[j];
+      const value = after.values[j];
+      j += 1;
+      if (order > 0) {
+        diff.added += 1;
         noteWatched(key);
-        const entry = sampleEntry(key, value, RESETTLE_CHANGED_TAG);
-        if (entry === undefined) {
-          diff.unverifiable += 1;
-          if (diff.unverifiableSample.length < SAMPLE_IDS) {
-            diff.unverifiableSample.push(toB64Url(key));
-          }
-        } else if (diff.changedEntries.length < maxChanged) {
-          diff.changedEntries.push(entry);
-        }
+        const entry = sampleEntry(key, value, RESETTLE_ADDED_TAG);
+        if (entry !== undefined) added.offer(entry);
+        continue;
       }
-    }
-    diff.removed += before.size;
-    for (const k of before.keys()) {
-      if (diff.removedSample.length >= SAMPLE_IDS) break;
-      diff.removedSample.push(toB64Url(Buffer.from(k, 'latin1')));
+      const was = before.values[i];
+      i += 1;
+      if (was.equals(value)) {
+        diff.unchanged += 1;
+        continue;
+      }
+      diff.changed += 1;
+      noteWatched(key);
+      const entry = sampleEntry(key, value, RESETTLE_CHANGED_TAG);
+      if (entry === undefined) {
+        diff.unverifiable += 1;
+        if (diff.unverifiableSample.length < SAMPLE_IDS) {
+          diff.unverifiableSample.push(toB64Url(key));
+        }
+      } else if (diff.changedEntries.length < maxChanged) {
+        diff.changedEntries.push(entry);
+      }
     }
   }
   diff.addedSample = added.items;

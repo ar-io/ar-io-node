@@ -233,7 +233,7 @@ describe('ExportService, parquet-l2', () => {
     const [d1, d2] = await live();
 
     // Nothing changed: both left as they are.
-    const same = await run({ resettle: true });
+    const same = await run({ resettle: 'full' });
     assert.deepEqual(steps(same.steps.filter((s) => s.step === 'resettle')), [
       ['resettle', 105_000, 109_999, 'unchanged', 'same_id'],
       ['resettle', 100_000, 104_999, 'unchanged', 'same_id'],
@@ -241,7 +241,7 @@ describe('ExportService, parquet-l2', () => {
 
     // a2 arrives late: d1 is rebuilt with it and replaces the old band.
     source.items.push(rows.get('a2')!);
-    const added = await run({ resettle: true });
+    const added = await run({ resettle: 'full' });
     const rebuilt = added.steps.find(
       (s) => s.step === 'resettle' && s.heightRange[0] === 100_000,
     )!;
@@ -261,7 +261,7 @@ describe('ExportService, parquet-l2', () => {
     source.items = source.items.filter(
       (row) => !row.id.equals(rows.get('b2')!.id),
     );
-    const dropped = await run({ resettle: true });
+    const dropped = await run({ resettle: 'full' });
     const refused = dropped.steps.find((s) => s.heightRange[0] === 105_000)!;
     assert.deepEqual(
       [refused.result, refused.reason],
@@ -278,7 +278,7 @@ describe('ExportService, parquet-l2', () => {
     source.items = source.items
       .filter((row) => !row.id.equals(rows.get('b1')!.id))
       .concat({ ...rows.get('b1')!, offset: undefined }, rows.get('b2')!);
-    const unlocated = await run({ resettle: true });
+    const unlocated = await run({ resettle: 'full' });
     const refusedAgain = unlocated.steps.find(
       (s) => s.heightRange[0] === 105_000,
     )!;
@@ -312,7 +312,7 @@ describe('ExportService, parquet-l2', () => {
     source.items = source.items.map((row) =>
       row.id.equals(a1.id) ? moved : row,
     );
-    const relocated = await run({ resettle: true });
+    const relocated = await run({ resettle: 'full' });
     const step = relocated.steps.find((s) => s.heightRange[0] === 100_000)!;
     assert.deepEqual([step.result, step.reason], ['rejected', 'wrong_header']);
     assert.equal(step.compare?.relocated, 1);
@@ -546,7 +546,7 @@ describe('ExportService, parquet-l2 roots the network no longer serves', () => {
     const [band] = await live();
 
     gone.clear();
-    const back = d1(await run({ resettle: true }));
+    const back = d1(await run({ resettle: 'full' }));
     assert.deepEqual([back.result, back.reason], ['published', 'replaces']);
     assert.equal(back.compare?.newlyLocated, 2);
     assert.equal(back.header?.byTag['newly-located']?.ok, 2);
@@ -555,7 +555,7 @@ describe('ExportService, parquet-l2 roots the network no longer serves', () => {
 
     // Gone again: a re-settle would unlocate them, and is refused.
     gone.add(toB64Url(nested.id));
-    const again = d1(await run({ resettle: true }));
+    const again = d1(await run({ resettle: 'full' }));
     assert.deepEqual(
       [again.result, again.reason],
       ['rejected', 'unlocated_rows'],
@@ -569,7 +569,7 @@ describe('ExportService, parquet-l2 roots the network no longer serves', () => {
     assert.equal(first.result, 'published');
     assert.equal(first.rows?.wallets, 2);
     gone.add(toB64Url(lone.id));
-    const without = d1(await run({ resettle: true }));
+    const without = d1(await run({ resettle: 'full' }));
     assert.deepEqual(
       [without.result, without.reason],
       ['rejected', 'dropped_wallets'],

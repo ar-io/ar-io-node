@@ -18,7 +18,9 @@
  *     --keep <dir>       a dry run that keeps its bands in <dir>
  *     --to <height>      read no higher, to compare runs at a fixed height
  *     --resettle         grid layout and parquet-l2: re-settle every frozen
- *                        band, due or not
+ *                        band, due or not (root-TX: rebuilding those whose
+ *                        sources changed)
+ *     --resettle=full    the same, rebuilding every one
  *     --range <from>-<to>
  *                        parquet-l2, with --dry-run or --keep: build only
  *                        this band (on the grid) of each L2 index, nothing else
@@ -45,7 +47,7 @@ import { ExportService, reportForOutput, runResult } from './service.js';
 import { updateIndexState } from './state.js';
 
 const USAGE =
-  'Usage: main.js [--once [--dry-run | --keep <dir>] [--to <height>] [--resettle] [--range <from>-<to>]] | [--adopt <band-id> --as h|r|d|tip [--top <height>]]';
+  'Usage: main.js [--once [--dry-run | --keep <dir>] [--to <height>] [--resettle[=full]] [--range <from>-<to>]] | [--adopt <band-id> --as h|r|d|tip [--top <height>]]';
 
 const height = (value: string, flag: string): number => {
   if (!/^\d+$/.test(value)) throw new Error(`${flag} must be a block height`);
@@ -144,12 +146,16 @@ async function adopt(
 
 async function main(): Promise<void> {
   const { values } = parseArgs({
+    // `--resettle` alone gates on fingerprints; `--resettle=full` rebuilds.
+    args: process.argv
+      .slice(2)
+      .map((arg) => (arg === '--resettle' ? '--resettle=gate' : arg)),
     options: {
       once: { type: 'boolean' },
       'dry-run': { type: 'boolean' },
       keep: { type: 'string' },
       to: { type: 'string' },
-      resettle: { type: 'boolean' },
+      resettle: { type: 'string' },
       range: { type: 'string' },
       adopt: { type: 'string' },
       as: { type: 'string' },
@@ -162,7 +168,7 @@ async function main(): Promise<void> {
     (values['dry-run'] === true ||
       values.keep !== undefined ||
       values.to !== undefined ||
-      values.resettle === true ||
+      values.resettle !== undefined ||
       values.range !== undefined)
   ) {
     throw new Error(
@@ -172,7 +178,14 @@ async function main(): Promise<void> {
 
   const config = parseExportConfig(process.env);
   const l2 = config.kinds.includes('parquet-l2');
-  if (values.resettle === true && config.rootTxLayout !== 'grid' && !l2) {
+  if (
+    values.resettle !== undefined &&
+    values.resettle !== 'gate' &&
+    values.resettle !== 'full'
+  ) {
+    throw new Error(`--resettle takes =full or nothing. ${USAGE}`);
+  }
+  if (values.resettle !== undefined && config.rootTxLayout !== 'grid' && !l2) {
     throw new Error(
       '--resettle is for the grid layout (INDEX_EXPORT_ROOT_TX_LAYOUT=grid) and parquet-l2',
     );
@@ -260,7 +273,9 @@ async function main(): Promise<void> {
       ...(values.to !== undefined
         ? { toHeight: height(values.to, '--to') }
         : {}),
-      ...(values.resettle === true ? { resettle: true } : {}),
+      ...(values.resettle === 'gate' || values.resettle === 'full'
+        ? { resettle: values.resettle }
+        : {}),
       ...(values.range !== undefined
         ? { l2Range: heightRange(values.range) }
         : {}),

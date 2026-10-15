@@ -21,6 +21,7 @@ import { readBandRecordsCsv } from '../../lib/index-band/csv.js';
 import {
   checkBandHeaders,
   gatewayRootSource,
+  HEADER_CHECK_POOL_FACTOR,
   HeaderCheckResult,
   RootSourceFactory,
   sampleBandEntries,
@@ -77,6 +78,9 @@ function parseMetadata(value: string | undefined): Record<string, unknown> {
   return parsed as Record<string, unknown>;
 }
 
+/** Entries the header check reads, unless --sample-size says otherwise. */
+const DEFAULT_SAMPLE_SIZE = 150;
+
 const defaultOpenInput = (input: string): Readable =>
   input === '-' ? process.stdin : createReadStream(input);
 
@@ -89,6 +93,13 @@ function headerCheckJson(result: HeaderCheckResult): JsonSerializable {
     ok: result.ok,
     wrong: result.wrong,
     errors: result.errors,
+    // Candidates drawn on, and those passed over: their roots are gone.
+    poolSize: result.poolSize,
+    unreadable: result.unreadable.length,
+    unreadableShare: Number(result.unreadableShare.toFixed(3)),
+    ...(result.unreadable.length > 0
+      ? { unreadableSample: result.unreadable.slice(0, 20) }
+      : {}),
     ...(result.malformedTags > 0
       ? { malformedTags: result.malformedTags, malformed: result.malformed }
       : {}),
@@ -160,6 +171,7 @@ export async function indexBandBuildCLICommand(
     metadata,
     dryRun: options.dryRun === true,
     ...(sampleSize !== undefined ? { sampleSize } : {}),
+    samplePool: HEADER_CHECK_POOL_FACTOR,
     ...(check
       ? {
           beforePublish: async (staged) => {
@@ -173,6 +185,7 @@ export async function indexBandBuildCLICommand(
             try {
               headerCheck = await checkBandHeaders({
                 entries: staged.sample,
+                targets: { '': sampleSize ?? DEFAULT_SAMPLE_SIZE },
                 totalRecords: staged.records,
                 openRoot: roots.openRoot,
               });
@@ -237,7 +250,8 @@ export async function indexBandVerifyCLICommand(
   deps: IndexBandCommandDeps,
 ): Promise<JsonSerializable> {
   const bandDir = requiredStringFromOptions(options, 'bandDir');
-  const sampleSize = positiveIntegerFromOptions(options, 'sampleSize') ?? 150;
+  const sampleSize =
+    positiveIntegerFromOptions(options, 'sampleSize') ?? DEFAULT_SAMPLE_SIZE;
   const readTimeout = positiveIntegerFromOptions(options, 'readTimeout');
   if (options.gatewayUrl === undefined && deps.roots === undefined) {
     throw new Error('--gateway-url is required');
@@ -247,7 +261,11 @@ export async function indexBandVerifyCLICommand(
       `--band-dir ${bandDir} is not a band (no manifest.json)${process.env.AR_IO_NODE_CLI_DATA_DIR !== undefined ? '; through tools/ar-io-node, give a path under data/indexes, such as a build\'s "dir"' : ''}`,
     );
   });
-  const sample = await sampleBandEntries(bandDir, sampleSize);
+  // A pool, so entries under roots that are gone can be passed over.
+  const sample = await sampleBandEntries(
+    bandDir,
+    sampleSize * HEADER_CHECK_POOL_FACTOR,
+  );
   deps.log.info('Checking sampled headers against their roots', {
     entries: sample.entries.length,
     gateway: options.gatewayUrl,
@@ -256,7 +274,11 @@ export async function indexBandVerifyCLICommand(
     deps.roots ?? gatewayRootSource(options.gatewayUrl as string, readTimeout);
   let result: HeaderCheckResult;
   try {
-    result = await checkBandHeaders({ ...sample, openRoot: roots.openRoot });
+    result = await checkBandHeaders({
+      ...sample,
+      targets: { '': sampleSize },
+      openRoot: roots.openRoot,
+    });
   } finally {
     roots.close();
   }

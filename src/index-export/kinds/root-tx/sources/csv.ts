@@ -4,6 +4,8 @@
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+import crypto from 'node:crypto';
+import { createReadStream } from 'node:fs';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 
@@ -73,6 +75,41 @@ export class CsvOverlaySource implements RecordSource {
     readonly dir: string,
     readonly rank: 0 | 1 = 1,
   ) {}
+
+  get identity(): string {
+    return `csv ${this.dir}`;
+  }
+
+  /** File digests read this run, by name, size and time written. */
+  private readonly digests = new Map<string, string>();
+
+  /**
+   * The files `records(from, to)` reads, by name, size and SHA-256, so a
+   * file added, removed, renamed or rewritten changes it. Each file is
+   * hashed once while the source is open.
+   */
+  async fingerprint(from: number, to: number): Promise<string> {
+    const files = (await this.files()).filter(
+      (file) => file.to >= from && file.from <= to,
+    );
+    const lines: string[] = [];
+    for (const file of files) {
+      const filePath = path.join(this.dir, file.name);
+      const { size, mtimeMs } = await fs.stat(filePath);
+      const key = `${file.name} ${size} ${mtimeMs}`;
+      let digest = this.digests.get(key);
+      if (digest === undefined) {
+        const hash = crypto.createHash('sha256');
+        for await (const chunk of createReadStream(filePath)) {
+          hash.update(chunk as Buffer);
+        }
+        digest = hash.digest('hex');
+        this.digests.set(key, digest);
+      }
+      lines.push(`${file.name} ${size} ${digest}`);
+    }
+    return crypto.createHash('sha256').update(lines.join('\n')).digest('hex');
+  }
 
   /** The top of the highest file's coverage, or -1 with no files. */
   async stableHeight(): Promise<number> {

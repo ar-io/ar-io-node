@@ -10,6 +10,7 @@ import * as path from 'node:path';
 import { Cdb64Manifest, parseManifest } from '../lib/cdb64-manifest.js';
 import { bandPublisherTag } from '../lib/index-band/build.js';
 import { supersededBands } from '../lib/index-publication.js';
+import type { BandFingerprint } from './kinds/root-tx/fingerprint.js';
 
 /**
  * A band's role in the plan: history, recent (folded weekly) or delta
@@ -94,6 +95,11 @@ export interface IndexState {
    * after this or its own creation, whichever is later.
    */
   resettledAt?: Record<string, string>;
+  /**
+   * Grid layout: what each live frozen band settled against, per source,
+   * by band id; a due band whose sources still match is not rebuilt.
+   */
+  fingerprints?: Record<string, BandFingerprint>;
 }
 
 /** What the service remembers between runs, per index; the rest is derived from disk. */

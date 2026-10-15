@@ -27,6 +27,18 @@ export interface RecordSource {
    */
   records(from: number, to: number): AsyncIterable<BandRecord>;
   /**
+   * What the source reads beyond its name and rank (a URL, a path), for a
+   * grid re-settle's fingerprint: a source pointed elsewhere is another
+   * source.
+   */
+  readonly identity?: string;
+  /**
+   * A digest of the rows `records(from, to)` reads, cheaper than reading
+   * them: equal digests mean equal records (see `fingerprint.ts`). Without
+   * it, a fingerprint digests the records themselves.
+   */
+  fingerprint?(from: number, to: number): Promise<string>;
+  /**
    * What the source has given and left out since it was opened; open a
    * source per run for per-run counts.
    */
@@ -74,6 +86,11 @@ export interface SourceStats {
   unrepaired: Partial<Record<UnrepairedReason, number>>;
   /** Rows left out, by reason. */
   dropped: Partial<Record<DropReason, number>>;
+  /**
+   * Reads split in two after running out of memory, so read otherwise than
+   * a fingerprint describes (see `fingerprint.ts`).
+   */
+  splits: number;
 }
 
 export const newSourceStats = (): SourceStats => ({
@@ -83,6 +100,7 @@ export const newSourceStats = (): SourceStats => ({
   repaired: 0,
   unrepaired: {},
   dropped: {},
+  splits: 0,
 });
 
 export function countDrop(stats: SourceStats, reason: DropReason): void {

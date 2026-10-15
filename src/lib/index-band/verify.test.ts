@@ -425,6 +425,178 @@ describe('checkBandHeaders', () => {
     assert.equal((await run(3)).passed, false, '7 of 10 is under 80%');
   });
 
+  describe('roots that are gone (404)', () => {
+    /** A root the gateway answers with this status, or the real bytes. */
+    const answering =
+      (statuses: Record<string, number>, requests: string[] = []) =>
+      (rootTxId: string) => ({
+        read: async (offset: number, size: number) => {
+          requests.push(rootTxId);
+          const status = statuses[rootTxId];
+          if (status !== undefined) {
+            throw Object.assign(
+              new Error(`Request failed with status code ${status}`),
+              { response: { status } },
+            );
+          }
+          return openRoot(rootTxId).read(offset, size);
+        },
+        close: async () => {},
+        isOpen: () => true,
+      });
+    /** `n` candidates, the item headers real, each under its own root name. */
+    const pool = (n: number, root: (i: number) => string, tag?: string) =>
+      Array.from({ length: n }, (_, i) => ({
+        ...entry(items[i % items.length]),
+        rootTxId: root(i),
+        ...(tag !== undefined ? { tag } : {}),
+      }));
+    const gone = (names: string[]) =>
+      Object.fromEntries(names.map((name) => [name, 404]));
+
+    it('passes over roots that are gone, reading others up to the target', async () => {
+      // 100 candidates, every other one under a root that is gone.
+      const candidates = pool(100, (i) =>
+        i % 2 === 0 ? `gone-${i}` : `ok-${i}`,
+      );
+      const result = await checkBandHeaders({
+        entries: candidates,
+        totalRecords: 5000,
+        openRoot: answering(
+          gone(candidates.filter((_, i) => i % 2 === 0).map((c) => c.rootTxId)),
+        ),
+        targets: { '': 30 },
+        retryDelayMs: 1,
+      });
+      assert.equal(result.passed, true, result.reasons.join('; '));
+      assert.equal(result.checked, 30);
+      assert.equal(result.ok, 30);
+      assert.deepEqual(result.wrong, []);
+      assert.deepEqual(result.errors, []);
+      assert.ok(result.unreadable.length > 0);
+      assert.equal(result.poolSize, 100);
+      assert.equal(result.byTag[''].unreadable, result.unreadable.length);
+      assert.equal(
+        result.unreadableShare,
+        result.unreadable.length / (30 + result.unreadable.length),
+      );
+    });
+
+    it('cannot check a band whose roots are all gone, naming them', async () => {
+      const candidates = pool(20, (i) => `gone-${i}`);
+      const result = await checkBandHeaders({
+        entries: candidates,
+        totalRecords: 5000,
+        openRoot: answering(gone(candidates.map((c) => c.rootTxId))),
+        targets: { '': 10 },
+        retryDelayMs: 1,
+      });
+      assert.equal(result.passed, false);
+      assert.deepEqual(result.wrong, []);
+      assert.equal(result.checked, 0);
+      assert.equal(result.unreadable.length, 20);
+      assert.equal(result.unreadableShare, 1);
+      assert.match(
+        result.reasons.join(' '),
+        /0 entries verified, fewer than 8: of the 20 tried, 20 are under roots the gateway doesn't have \(404\) and 0 could not be read; the sample ran out/,
+      );
+    });
+
+    it('fails a band with a wrong header among the roots it can read', async () => {
+      const candidates = pool(20, (i) => (i < 10 ? `gone-${i}` : `ok-${i}`));
+      // One readable candidate points at the next item's header.
+      candidates[15] = {
+        ...candidates[15],
+        rootOffset: items[1].rootDataItemOffset,
+        rootDataOffset: items[1].rootDataOffset,
+        id: items[0].id,
+      };
+      const result = await checkBandHeaders({
+        entries: candidates,
+        totalRecords: 5000,
+        openRoot: answering(
+          gone(candidates.slice(0, 10).map((c) => c.rootTxId)),
+        ),
+        retryDelayMs: 1,
+      });
+      assert.equal(result.passed, false);
+      assert.equal(result.wrong.length, 1);
+      assert.equal(result.unreadable.length, 10);
+      assert.match(
+        result.reasons.join(' '),
+        /1 of 10 checked entries are wrong/,
+      );
+    });
+
+    it('still calls a 416 wrong, and counts a 503 against the ratio', async () => {
+      const candidates = pool(10, (i) => `root-${i}`);
+      const pastEnd = await checkBandHeaders({
+        entries: candidates,
+        totalRecords: 5000,
+        openRoot: answering({ 'root-3': 416 }),
+        retryDelayMs: 1,
+      });
+      assert.equal(pastEnd.wrong.length, 1);
+      assert.deepEqual(pastEnd.unreadable, []);
+      const unavailable = await checkBandHeaders({
+        entries: candidates,
+        totalRecords: 5000,
+        openRoot: answering({
+          'root-1': 503,
+          'root-2': 503,
+          'root-3': 503,
+        }),
+        retryDelayMs: 1,
+      });
+      assert.equal(unavailable.errors.length, 3);
+      assert.deepEqual(unavailable.unreadable, []);
+      assert.equal(unavailable.passed, false);
+      assert.match(
+        unavailable.reasons.join(' '),
+        /7 of 10 checked entries passed, under 80%/,
+      );
+    });
+
+    it('asks for a root it found gone only once, and never retries a 404', async () => {
+      const requests: string[] = [];
+      const candidates = pool(12, (i) => (i < 6 ? 'gone' : `ok-${i}`));
+      const result = await checkBandHeaders({
+        entries: candidates,
+        totalRecords: 5000,
+        openRoot: answering({ gone: 404 }, requests),
+        // Every candidate is read: half can pass.
+        minVerified: 6,
+        concurrency: 1,
+        retryDelayMs: 1,
+      });
+      assert.equal(requests.filter((r) => r === 'gone').length, 1);
+      assert.equal(result.unreadable.length, 6);
+      assert.equal(result.ok, 6);
+      assert.equal(result.passed, true, result.reasons.join('; '));
+    });
+
+    it('reads each stratum to its own target, and a stratum without one whole', async () => {
+      const result = await checkBandHeaders({
+        entries: [
+          ...pool(50, (i) => `a-${i}`),
+          ...pool(20, (i) => `b-${i}`, 'repaired'),
+          ...pool(7, (i) => `c-${i}`, 'resettle-changed'),
+        ],
+        totalRecords: 5000,
+        openRoot: answering({}),
+        targets: { '': 15, repaired: 5 },
+        retryDelayMs: 1,
+      });
+      assert.deepEqual(result.byTag, {
+        '': { checked: 15, ok: 15, wrong: 0 },
+        repaired: { checked: 5, ok: 5, wrong: 0 },
+        'resettle-changed': { checked: 7, ok: 7, wrong: 0 },
+      });
+      assert.equal(result.poolSize, 77);
+      assert.equal(result.passed, true, result.reasons.join('; '));
+    });
+  });
+
   it('retries a read that failed in transport, but never a wrong range', async () => {
     const good = entry(items[0]);
     let calls = 0;
