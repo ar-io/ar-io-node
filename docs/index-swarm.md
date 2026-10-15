@@ -628,8 +628,8 @@ subscription takes one only when it names it, `"name": ["root-tx-index",
 "ardrive-l2"]`. The sidecar checks and installs them under
 `installed/<index>/`; nothing in the gateway reads them yet. A publisher
 offers them as `{"name":"ardrive-l2","kind":"parquet-l2"}`, with band
-directories under `data/indexes/published/ardrive-l2/` built outside this
-release. A `filter`, if set, must be the selection its bands declare:
+directories under `data/indexes/published/ardrive-l2/`, which `index-export`
+builds (see [L2 bands](index-export.md#l2-bands)). A `filter`, if set, must be the selection its bands declare:
 subscribers refuse every band of an index whose bands or filter disagree.
 
 #### Over the swarm

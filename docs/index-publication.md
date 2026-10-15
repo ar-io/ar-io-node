@@ -617,7 +617,7 @@ item's height is its root transaction's, and bands cover the same fixed
 heights as [L1 bands](#l1-bands), so an L2 band lies over the L1 band of the
 same heights. The `index-export` service builds them from a gateway's
 ClickHouse (see [index-export.md](index-export.md#l2-bands)); a gateway
-also publishes and takes bands built elsewhere.
+also takes bands other publishers built.
 
 A band is a directory of `band.json` and these files:
 

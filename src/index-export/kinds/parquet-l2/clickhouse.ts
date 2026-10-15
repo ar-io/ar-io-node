@@ -286,7 +286,10 @@ export class ClickHouseL2Source implements L2ItemSource {
     private readonly client: ClickHouseQuerier,
     private readonly windowBlocks = CLICKHOUSE_L2_WINDOW_BLOCKS,
     private readonly windowItems = CLICKHOUSE_L2_WINDOW_ITEMS,
-    /** Where the table is (URL and user): another place is another source. */
+    /**
+     * Where the table is, its URL's origin and path (`urlIdentity`): another
+     * place is another source. Recorded and logged, so never credentials.
+     */
     private readonly where = '',
   ) {}
 

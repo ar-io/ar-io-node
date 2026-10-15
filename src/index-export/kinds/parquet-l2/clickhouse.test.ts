@@ -30,6 +30,7 @@ import {
 } from '../root-tx/sources/clickhouse.js';
 import { deriveL1Bands } from '../parquet-l1/kind.js';
 import { ClickHouseL2Source, toSourceRow } from './clickhouse.js';
+import { openL2Source, urlIdentity } from './config.js';
 import { exportL2Band } from './export.js';
 import { GatewayReads } from './gateway-reads.js';
 import type { L2SourceRow, L2SourceWindow } from './source.js';
@@ -108,6 +109,68 @@ const collect = async (windows: AsyncIterable<L2SourceWindow>) => {
   for await (const window of windows) out.push(window);
   return out;
 };
+
+describe('the L2 source identity', () => {
+  it('keeps an origin and path, never credentials or a query', async () => {
+    assert.equal(
+      urlIdentity('https://reader:s3cret@peer.example:8443/ch/?token=x'),
+      'https://peer.example:8443/ch',
+    );
+    assert.equal(
+      urlIdentity('http://clickhouse:8123'),
+      'http://clickhouse:8123',
+    );
+    assert.equal(urlIdentity('not a url'), '(not a URL)');
+    assert.equal(urlIdentity(undefined), '');
+    const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'parquet-l2-id-'));
+    try {
+      const passwordFile = path.join(dir, 'peer');
+      await fsp.writeFile(passwordFile, 'hunter2\n');
+      const seen: Array<Record<string, string>> = [];
+      const clickhouse = (options: {
+        url: string;
+        username: string;
+        password: string;
+      }) => {
+        seen.push(options);
+        return new FakeClickHouse(() => []);
+      };
+      const peer = await openL2Source(
+        {
+          config: {
+            type: 'clickhouse',
+            name: 'clickhouse-peer.example:8443',
+            url: 'https://reader:inline@peer.example:8443/ch',
+            user: 'reader',
+            passwordFile,
+          },
+          optional: false,
+        },
+        {},
+        { clickhouse },
+      );
+      const own = await openL2Source(
+        { config: { type: 'clickhouse', name: 'clickhouse' }, optional: false },
+        {
+          CLICKHOUSE_URL: 'http://default:pw@clickhouse:8123',
+          CLICKHOUSE_USER: 'default',
+          CLICKHOUSE_PASSWORD: 'pw',
+        },
+        { clickhouse },
+      );
+      // The client gets what it needs; the identity, recorded in state and
+      // logged, gets none of it.
+      assert.equal(seen[0].password, 'hunter2');
+      assert.equal(peer.identity, 'clickhouse https://peer.example:8443/ch');
+      assert.equal(own.identity, 'clickhouse http://clickhouse:8123');
+      for (const identity of [peer.identity, own.identity]) {
+        assert.doesNotMatch(identity, /reader|inline|hunter2|default|pw/);
+      }
+    } finally {
+      await fsp.rm(dir, { recursive: true, force: true });
+    }
+  });
+});
 
 describe('ClickHouseL2Source', () => {
   it('reads rows as the exporter takes them: 0 unknown, empty bytes absent', () => {

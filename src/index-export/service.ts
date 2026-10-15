@@ -592,8 +592,20 @@ export class ExportService {
     }
     try {
       const { kinds } = this.deps.config;
+      // A pinned L2 range is an operator's look at one band: nothing else.
+      // A re-settle held to a range builds no L1 band either, and the
+      // legacy root-TX layout, which has no frozen bands to pick, nothing.
+      const rootTx =
+        kinds.includes('root-tx-index') &&
+        !pinned &&
+        (options.range === undefined || this.grid);
+      const l1 = kinds.includes('parquet-l1') && !pinned && !resettleOnly;
       if (!dryRun) {
-        for (const index of indexNames(this.deps.config)) {
+        // Only the indexes this run builds: the others keep their last run.
+        for (const index of indexNames(this.deps.config).filter(
+          (name) =>
+            (name !== INDEX_NAME || rootTx) && (name !== L1_INDEX || l1),
+        )) {
           await updateIndexState(this.stateFile, index, (state) => {
             state.lastRun = { at: report.at, outcome: 'running' };
           });
@@ -604,13 +616,10 @@ export class ExportService {
       // Staging only a run killed before its cleanup can have left: the lock
       // is this run's.
       if (!dryRun) await this.clearStaging();
-      // A pinned L2 range is an operator's look at one band: nothing else.
-      // A re-settle held to a range builds no L1 band either.
-      const result: RunMemory =
-        kinds.includes('root-tx-index') && !pinned
-          ? await this.run(report, options, dryRun)
-          : { superseded: [] };
-      if (kinds.includes('parquet-l1') && !pinned && !resettleOnly) {
+      const result: RunMemory = rootTx
+        ? await this.run(report, options, dryRun)
+        : { superseded: [] };
+      if (l1) {
         await this.runL1(report, options, dryRun);
       }
       if (kinds.includes('parquet-l2')) {
@@ -618,12 +627,12 @@ export class ExportService {
       }
       if (!dryRun) {
         // Each index keeps its own outcome and retry.
-        if (kinds.includes('root-tx-index')) {
+        if (rootTx) {
           await updateIndexState(this.stateFile, INDEX_NAME, (state) =>
             this.updateState(state, report, result),
           );
         }
-        if (kinds.includes('parquet-l1')) {
+        if (l1) {
           await updateIndexState(this.stateFile, L1_INDEX, (state) =>
             this.updateL1State(state, report),
           );

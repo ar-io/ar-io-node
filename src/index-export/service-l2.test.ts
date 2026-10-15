@@ -408,6 +408,52 @@ describe('ExportService, parquet-l2', () => {
     );
   });
 
+  it('runs nothing of a legacy root-TX layout with --range, and keeps its state', async () => {
+    await run();
+    const stateFile = path.join(dir, 'export', 'state.json');
+    const before = indexState(await loadState(stateFile), 'root-tx-index');
+    let opened = 0;
+    const service = new ExportService({
+      config: config({ kinds: ['root-tx-index', 'parquet-l2'] }),
+      log,
+      now: () => now,
+      openSources: async () => {
+        opened += 1;
+        return [];
+      },
+      openRoots: () => ({
+        openRoot: gatewayOf(roots).openRoot,
+        close: () => undefined,
+      }),
+      openL2Source: async () => source,
+      diskSpace: async () => ({ free: 1e13, total: 1e14 }),
+      headerCheck: { retryDelayMs: 1 },
+    });
+    const report = await service.runOnce({
+      resettle: 'full',
+      range: [100_000, 104_999],
+      force: true,
+    });
+    // No bootstrap, fold, delta or publish of the legacy layout.
+    assert.equal(opened, 0);
+    assert.deepEqual(report.steps, []);
+    assert.equal(report.failed, undefined);
+    assert.deepEqual(
+      await fs
+        .readdir(path.join(dir, 'published', 'root-tx-index'))
+        .catch(() => []),
+      [],
+    );
+    assert.deepEqual(
+      report.l2?.[0]?.steps.map((s) => [s.step, s.heightRange[0]]),
+      [['resettle', 100_000]],
+    );
+    assert.deepEqual(
+      indexState(await loadState(stateFile), 'root-tx-index'),
+      before,
+    );
+  });
+
   it("gates on the owners' keys bundles.db holds too", async () => {
     const db = path.join(dir, 'bundles.db');
     const sqlite = new Sqlite(db);

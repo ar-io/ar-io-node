@@ -377,10 +377,12 @@ re-check one band: `--once --resettle=full --range 1100000-1199999`.
 
 `--range` means one thing per run, for every index the run builds:
 
-| Given | Root-TX (grid) | `parquet-l2` (each index) | `parquet-l1` |
-|---|---|---|---|
-| `--range` with `--resettle[=full]` | Re-settles only its frozen bands inside the heights | The same | Nothing built |
-| `--range` alone (with `--dry-run` or `--keep`) | Nothing built | Builds exactly that band (a range on the grid), never published | Nothing built |
+| Given | Root-TX (grid) | Root-TX (legacy) | `parquet-l2` (each index) | `parquet-l1` |
+|---|---|---|---|---|
+| `--range` with `--resettle[=full]` | Re-settles only its frozen bands inside the heights | Nothing built: it has no frozen bands to pick | The same as the grid | Nothing built |
+| `--range` alone (with `--dry-run` or `--keep`) | Nothing built | Nothing built | Builds exactly that band (a range on the grid), never published | Nothing built |
+
+An index that builds nothing keeps its state (last run, retry) as it was.
 
 `--range` alone without `parquet-l2` among the kinds, or without
 `--dry-run` or `--keep`, is refused.
