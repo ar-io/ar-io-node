@@ -188,7 +188,7 @@ describe('Data', function () {
     // type verbatim; an upstream on an older release adds a charset, and
     // this item is fetched from one (hops >= 1), so compare the media type.
     assert.equal(
-      res.headers['content-type']?.split(';')[0].trim(),
+      res.headers['content-type']?.toString().split(';')[0].trim(),
       'application/json',
     );
     assert.equal(res.headers['content-length'], '130');
@@ -230,7 +230,7 @@ describe('Data', function () {
     // type verbatim; an upstream on an older release adds a charset, and
     // this item is fetched from one (hops >= 1), so compare the media type.
     assert.equal(
-      res.headers['content-type']?.split(';')[0].trim(),
+      res.headers['content-type']?.toString().split(';')[0].trim(),
       'application/json',
     );
     assert.equal(res.headers['content-length'], '130');
