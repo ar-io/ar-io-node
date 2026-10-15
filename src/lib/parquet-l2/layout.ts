@@ -34,7 +34,12 @@ import crypto from 'node:crypto';
 
 import type { ColumnSpec } from '../parquet/check.js';
 import { prefix64Sql } from '../parquet/keys.js';
-import { LookupDescription, LookupSpec, sqlPaths } from '../parquet/lookups.js';
+import {
+  LookupDescription,
+  LookupDigestOrder,
+  LookupSpec,
+  sqlPaths,
+} from '../parquet/lookups.js';
 import {
   BAND_FILE,
   MAX_BAND_FILE_BYTES,
@@ -359,6 +364,13 @@ export const PARQUET_L2_LOOKUPS: LookupSpec[] = [
   // counts each item once per pair (`txs`) however many heights hold it.
   PARQUET_L1_LOOKUPS.find((spec) => spec.name === 'tag')!,
 ];
+
+/**
+ * The order `l2-1` lookup digests are taken in: `numeric`, the spec's order
+ * by value, which is the files' own order, so a reader can digest a lookup
+ * as it reads it. (An `l1-3` band's are taken in `legacy-text` order.)
+ */
+export const PARQUET_L2_LOOKUP_DIGEST_ORDER: LookupDigestOrder = 'numeric';
 
 /**
  * A table's order as SQL: its `orderBy` columns, quoted (`offset` is a

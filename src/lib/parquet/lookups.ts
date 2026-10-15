@@ -52,6 +52,23 @@ export interface LookupSpec {
   derive: (tables: TableFiles) => string;
 }
 
+/**
+ * The order a lookup's rows are digested in. Rows are always written in the
+ * spec's order, by value.
+ *
+ * - `numeric`: the spec's order by value, the file's own order, so a reader
+ *   can digest a lookup as it reads it.
+ * - `legacy-text`: the spec's order with every UBIGINT and DECIMAL column
+ *   compared as its decimal text (`10` < `100` < `9`). How `l1-3` lookups
+ *   were digested, kept so every published `l1-3` band still verifies: the
+ *   digest query ordered by its own VARCHAR aliases of those columns.
+ */
+export type LookupDigestOrder = 'numeric' | 'legacy-text';
+
+export interface LookupDigestOptions {
+  order: LookupDigestOrder;
+}
+
 /** What a band's description says of one lookup, as of a table. */
 export interface LookupDescription {
   rows: number;
@@ -66,13 +83,26 @@ export const sqlPaths = (files: string[]) =>
   `[${files.map(sqlPath).join(', ')}]`;
 
 /**
- * Reads a column for digesting. A 64-bit unsigned or decimal value can
- * exceed what a JavaScript number holds, so it is read as its decimal text,
- * which the digest encodes the same way.
+ * Whether a column is read as its decimal text for digesting: a 64-bit
+ * unsigned or decimal value can exceed what a JavaScript number holds, and
+ * the digest encodes the text the same way.
  */
-const selectColumn = (column: ColumnSpec) =>
-  column.type.startsWith('DECIMAL') || column.type === 'UBIGINT'
-    ? `CAST("${column.name}" AS VARCHAR) AS "${column.name}"`
+const readAsText = (column: ColumnSpec) =>
+  column.type.startsWith('DECIMAL') || column.type === 'UBIGINT';
+
+/**
+ * The digest query's name for a column. Under `numeric` a column read as
+ * text gets a name of its own, so the ORDER BY sorts the column's values,
+ * not the text: an alias of the column's own name would shadow it.
+ */
+const digestName = (column: ColumnSpec, order: LookupDigestOrder) =>
+  order === 'numeric' && readAsText(column)
+    ? `__v_${column.name}`
+    : column.name;
+
+const selectColumn = (column: ColumnSpec, order: LookupDigestOrder) =>
+  readAsText(column)
+    ? `CAST("${column.name}" AS VARCHAR) AS "${digestName(column, order)}"`
     : `"${column.name}"`;
 
 /**
@@ -85,6 +115,7 @@ export async function writeLookup(
   spec: LookupSpec,
   tables: TableFiles,
   dir: string,
+  options: LookupDigestOptions,
 ): Promise<LookupDescription> {
   const file = path.join(dir, spec.file);
   const columns = spec.columns.map((c) => `"${c.name}"`).join(', ');
@@ -92,23 +123,27 @@ export async function writeLookup(
   await duck.exec(
     `COPY (SELECT ${columns} FROM (${spec.derive(tables)}) ORDER BY ${order}) TO ${sqlPath(file)} (FORMAT PARQUET, COMPRESSION 'zstd', ROW_GROUP_SIZE ${LOOKUP_ROW_GROUP_SIZE})`,
   );
-  return digestLookup(duck, spec, file);
+  return digestLookup(duck, spec, file, options);
 }
 
 /**
  * The row count and row digest of a lookup file, its rows read in the spec's
- * order. The same digest a band's tables use, so it does not depend on the
- * Parquet bytes, and two publishers holding the same rows agree on it.
+ * order as `options.order` compares it. The same digest a band's tables
+ * use, so it does not depend on the Parquet bytes, and two publishers
+ * holding the same rows agree on it.
  */
 export async function digestLookup(
   duck: Database,
   spec: LookupSpec,
   file: string,
+  { order }: LookupDigestOptions,
 ): Promise<LookupDescription> {
   const digest = new RowDigest(spec.columns);
-  const names = spec.columns.map((c) => c.name);
+  const names = spec.columns.map((c) => digestName(c, order));
+  // Under `legacy-text` a column read as text is selected under its own
+  // name, so ORDER BY names the text; under `numeric`, the column.
   const stream = await duck.stream(
-    `SELECT ${spec.columns.map(selectColumn).join(', ')} FROM read_parquet(${sqlPath(file)}) ORDER BY ${spec.orderBy.map((c) => `"${c}"`).join(', ')}`,
+    `SELECT ${spec.columns.map((c) => selectColumn(c, order)).join(', ')} FROM read_parquet(${sqlPath(file)}) ORDER BY ${spec.orderBy.map((c) => `"${c}"`).join(', ')}`,
   );
   for await (const row of stream) {
     digest.add(names.map((n) => (row as Record<string, unknown>)[n]));
@@ -133,12 +168,13 @@ export async function verifyLookup(
   file: string,
   tables: TableFiles,
   declared: LookupDescription,
+  options: LookupDigestOptions,
 ): Promise<string[]> {
   // A file that can't be read is a failed check of that file, not an error
   // that ends the verification: the caller reports every band.
   try {
     const problems: string[] = [];
-    const found = await digestLookup(duck, spec, file);
+    const found = await digestLookup(duck, spec, file, options);
     if (
       found.rows !== declared.rows ||
       found.rowDigest !== declared.rowDigest

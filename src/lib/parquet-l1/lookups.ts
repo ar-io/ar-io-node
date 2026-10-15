@@ -22,6 +22,7 @@ import {
 } from '../parquet/lookups.js';
 import {
   lookupsOf,
+  PARQUET_L1_LOOKUP_DIGEST_ORDER,
   PARQUET_L1_SCHEMA,
   PARQUET_L1_TABLES,
   ParquetL1Band,
@@ -53,7 +54,9 @@ export async function writeBandLookups(
   const tables = bandTableFiles(bandDir);
   const described: Record<string, LookupDescription> = {};
   for (const spec of lookupsOf(schema)) {
-    described[spec.name] = await writeLookup(duck, spec, tables, outDir);
+    described[spec.name] = await writeLookup(duck, spec, tables, outDir, {
+      order: PARQUET_L1_LOOKUP_DIGEST_ORDER,
+    });
   }
   return described;
 }
@@ -83,6 +86,7 @@ export async function verifyBandLookups(
         path.join(bandDir, spec.file),
         tables,
         declared,
+        { order: PARQUET_L1_LOOKUP_DIGEST_ORDER },
       )),
     );
   }

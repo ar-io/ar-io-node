@@ -608,6 +608,15 @@ They carry the same trust as the tables: each file's digest is signed in
 the publication, and anyone can recompute them from the tables
 (`ar-io-node index-l1-verify --bands-dir` does).
 
+A lookup file's `rowDigest` is taken as a table's, over its rows in the
+order of its "Sorted by" columns. In an `l1-3` band that order compares
+the 64-bit columns among them (`id8`, `addr8`, `name8`, `val8`, `height`,
+`data_size`) as their decimal text, so
+`10` sorts before `100` before `9`, though the file itself is sorted by
+value: to reproduce an `l1-3` lookup's digest, sort its rows that way
+first. An L2 band's lookups (below) are digested by value, in the file's
+own order, as a future L1 layout's will be.
+
 ## L2 bands
 
 A `parquet-l2` band carries the ANS-104 data items (L2) of one height range
@@ -707,8 +716,10 @@ WHERE height BETWEEN :first_height AND :last_height
   AND tag_name = 'Drive-Id'::BLOB AND tag_value = :drive::BLOB;
 ```
 
-A reader checks each lookup file's footer and row count as it does a
-table's. The publisher derives them from the band's own tables and checks
+Their row digests are taken by value, in the order each file is written
+in, so a reader can digest a lookup as it reads it (unlike an `l1-3`
+band's, above). A reader checks each lookup file's footer and row count as
+it does a table's. The publisher derives them from the band's own tables and checks
 them against those tables before it publishes.
 
 ## Querying a dataset over HTTP

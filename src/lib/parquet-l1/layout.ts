@@ -34,7 +34,12 @@
  */
 import { FORK_2_0 } from './chain.js';
 import { prefix64Sql, sha256_64Sql } from '../parquet/keys.js';
-import { LookupDescription, LookupSpec, sqlPaths } from '../parquet/lookups.js';
+import {
+  LookupDescription,
+  LookupDigestOrder,
+  LookupSpec,
+  sqlPaths,
+} from '../parquet/lookups.js';
 
 /** The layout version a band is written with, in its `band.json`. */
 export const PARQUET_L1_SCHEMA = 'l1-3';
@@ -393,6 +398,16 @@ export const PARQUET_L1_LOOKUPS: LookupSpec[] = [
        GROUP BY tag_name, tag_value`,
   },
 ];
+
+/**
+ * The order `l1-3` lookup digests are taken in: `legacy-text`. l1-3 lookup
+ * digests use text order of 64-bit columns (`id8`, `addr8`, `height`,
+ * `data_size`, …: `10` < `100` < `9`), though the files are sorted by
+ * value, because the digest query ordered by its own text aliases of them.
+ * Kept so every published `l1-3` band still verifies; a future schema moves
+ * to `numeric`, the files' own order.
+ */
+export const PARQUET_L1_LOOKUP_DIGEST_ORDER: LookupDigestOrder = 'legacy-text';
 
 /** The lookups a layout declares: none before `l1-3`. */
 export function lookupsOf(schema: ParquetL1Schema): LookupSpec[] {

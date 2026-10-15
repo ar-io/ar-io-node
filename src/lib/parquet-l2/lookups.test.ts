@@ -11,8 +11,9 @@ import * as path from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import { Database } from 'duckdb-async';
 
+import { RowDigest } from '../parquet/digest.js';
 import { prefix64, sha256_64 } from '../parquet/keys.js';
-import { sqlPath } from '../parquet/lookups.js';
+import { digestLookup, sqlPath } from '../parquet/lookups.js';
 import { PARQUET_L2_LOOKUPS, PARQUET_L2_TABLES } from './layout.js';
 import { verifyBandLookups, writeBandLookups } from './lookups.js';
 
@@ -183,6 +184,34 @@ describe('parquet-l2 lookups', () => {
       await verifyBandLookups(duck, dir, { lookups: described }),
       [],
     );
+  });
+
+  it('digests each lookup in its file order, by value', async () => {
+    const described = await writeBandLookups(duck, dir);
+    for (const spec of PARQUET_L2_LOOKUPS) {
+      // As a reader digests a lookup while it reads it: no ORDER BY.
+      const digest = new RowDigest(spec.columns);
+      const rows = (await duck.all(
+        `SELECT ${spec.columns.map((c) => (c.type === 'UBIGINT' ? `CAST("${c.name}" AS VARCHAR) AS "${c.name}"` : `"${c.name}"`)).join(', ')}
+         FROM read_parquet(${sqlPath(path.join(dir, spec.file))})`,
+      )) as Array<Record<string, unknown>>;
+      for (const row of rows) digest.add(spec.columns.map((c) => row[c.name]));
+      assert.deepEqual(
+        described[spec.name],
+        { rows: digest.rows, rowDigest: digest.hex() },
+        spec.name,
+      );
+    }
+    // Here the wallet rows of one height differ in size by a digit (50 and
+    // 100), so text order would digest them otherwise.
+    const wallet = PARQUET_L2_LOOKUPS[1];
+    const legacy = await digestLookup(
+      duck,
+      wallet,
+      path.join(dir, wallet.file),
+      { order: 'legacy-text' },
+    );
+    assert.notEqual(legacy.rowDigest, described.wallet.rowDigest);
   });
 
   it('finds a lookup that disagrees with its band or its tables', async () => {

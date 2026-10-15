@@ -133,6 +133,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Lookup file digests ordered by value**: the lookup engine digested a
+  lookup's rows ordering by its own text renderings of the 64-bit columns
+  (`id8`, `addr8`, `height`, `data_size`, …), so `10` < `100` < `9`, while
+  the files are sorted by value: a reader digesting a lookup in file order
+  could not reproduce its `rowDigest`. The order is now an explicit option
+  (`numeric` or `legacy-text`). `parquet-l2` (`l2-1`) lookups use `numeric`,
+  their files' own order. `parquet-l1` (`l1-3`) lookups keep `legacy-text`,
+  so every published `l1-3` band's digests are unchanged and still verify;
+  a future L1 layout moves to `numeric`.
 - **Root-TX exports no longer place a row that can't frame its own item.**
   A row with no size, a payload that doesn't start after the item, a header
   longer than the item, or (its payload size known) an item that doesn't
