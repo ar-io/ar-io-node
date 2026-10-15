@@ -13,11 +13,18 @@
  *   main.js              the service: a run a day, retries, /healthz
  *   main.js --once       one run now (an operator's: retries a rejected
  *                        fold), its report as JSON on stdout, then exit
- *     --dry-run          build and check, publish nothing
+ *     --dry-run          build and check, publish nothing; in the grid
+ *                        layout the report also lists the plan
  *     --keep <dir>       a dry run that keeps its bands in <dir>
  *     --to <height>      read no higher, to compare runs at a fixed height
+ *     --resettle         grid layout: re-settle every frozen band, due or
+ *                        not, rebuilding those whose sources changed
+ *     --resettle=full    the same, rebuilding every one
+ *     --range <from>-<to> with --resettle: only the frozen bands inside
+ *                        these heights, and nothing else built
  *   main.js --adopt <band> --as h|r|d [--top <height>]
- *                        record an existing band as this service's
+ *                        record an existing band as this service's (grid
+ *                        layout: also --as tip)
  *
  * A `--once` run exits 1 when rejected, unable to check, or locked out.
  */
@@ -29,7 +36,7 @@ import { gatewayRootSource } from '../lib/index-band/verify.js';
 import { release } from '../version.js';
 import { ExportConfig, parseExportConfig } from './config.js';
 import { INDEX_NAME } from './kinds/root-tx/kind.js';
-import { openSource } from './kinds/root-tx/sources/config.js';
+import { openSource, urlIdentity } from './kinds/root-tx/sources/config.js';
 import { ExportLock } from './lock.js';
 import log from './log.js';
 import { startMetricsServer } from './metrics.js';
@@ -37,11 +44,20 @@ import { ExportService, reportForOutput, runResult } from './service.js';
 import { updateIndexState } from './state.js';
 
 const USAGE =
-  'Usage: main.js [--once [--dry-run | --keep <dir>] [--to <height>]] | [--adopt <band-id> --as h|r|d [--top <height>]]';
+  'Usage: main.js [--once [--dry-run | --keep <dir>] [--to <height>] [--resettle[=full]] [--range <from>-<to>]] | [--adopt <band-id> --as h|r|d|tip [--top <height>]]';
 
 const height = (value: string, flag: string): number => {
   if (!/^\d+$/.test(value)) throw new Error(`${flag} must be a block height`);
   return Number(value);
+};
+
+/** `--range <from>-<to>`, two block heights. */
+const heightRange = (value: string): [number, number] => {
+  const match = /^(\d+)-(\d+)$/.exec(value);
+  if (match === null || Number(match[1]) > Number(match[2])) {
+    throw new Error(`--range must be <from>-<to>, two block heights: ${value}`);
+  }
+  return [Number(match[1]), Number(match[2])];
 };
 
 /**
@@ -54,8 +70,11 @@ async function adopt(
   as: string | undefined,
   top: string | undefined,
 ): Promise<void> {
-  if (as !== 'h' && as !== 'r' && as !== 'd') {
-    throw new Error(`--as must be h, r or d. ${USAGE}`);
+  const grid = config.rootTxLayout === 'grid';
+  if (as !== 'h' && as !== 'r' && as !== 'd' && !(grid && as === 'tip')) {
+    throw new Error(
+      `--as must be h, r or d${grid ? ', or tip' : ' (tip in the grid layout)'}. ${USAGE}`,
+    );
   }
   const manifest = JSON.parse(
     await fs.readFile(
@@ -89,7 +108,7 @@ async function adopt(
       );
     }
   }
-  if (as === 'r' && bandTop - range[0] + 1 >= config.recentMaxBlocks) {
+  if (!grid && as === 'r' && bandTop - range[0] + 1 >= config.recentMaxBlocks) {
     throw new Error(
       `${id} spans ${bandTop - range[0] + 1} blocks, at least INDEX_EXPORT_RECENT_MAX_BLOCKS (${config.recentMaxBlocks}): as r it would be frozen and never folded; adopt it as h`,
     );
@@ -124,11 +143,17 @@ async function adopt(
 
 async function main(): Promise<void> {
   const { values } = parseArgs({
+    // `--resettle` alone gates on fingerprints; `--resettle=full` rebuilds.
+    args: process.argv
+      .slice(2)
+      .map((arg) => (arg === '--resettle' ? '--resettle=gate' : arg)),
     options: {
       once: { type: 'boolean' },
       'dry-run': { type: 'boolean' },
       keep: { type: 'string' },
       to: { type: 'string' },
+      resettle: { type: 'string' },
+      range: { type: 'string' },
       adopt: { type: 'string' },
       as: { type: 'string' },
       top: { type: 'string' },
@@ -139,12 +164,33 @@ async function main(): Promise<void> {
     values.once !== true &&
     (values['dry-run'] === true ||
       values.keep !== undefined ||
-      values.to !== undefined)
+      values.to !== undefined ||
+      values.resettle !== undefined ||
+      values.range !== undefined)
   ) {
-    throw new Error(`--dry-run, --keep and --to go with --once. ${USAGE}`);
+    throw new Error(
+      `--dry-run, --keep, --to, --resettle and --range go with --once. ${USAGE}`,
+    );
   }
 
   const config = parseExportConfig(process.env);
+  if (
+    values.resettle !== undefined &&
+    values.resettle !== 'gate' &&
+    values.resettle !== 'full'
+  ) {
+    throw new Error(`--resettle takes =full or nothing. ${USAGE}`);
+  }
+  if (values.range !== undefined && values.resettle === undefined) {
+    throw new Error(
+      `--range picks the bands --resettle re-settles: give both. ${USAGE}`,
+    );
+  }
+  if (values.resettle !== undefined && config.rootTxLayout !== 'grid') {
+    throw new Error(
+      '--resettle is for the grid layout (INDEX_EXPORT_ROOT_TX_LAYOUT=grid)',
+    );
+  }
   if (values.adopt !== undefined) {
     await adopt(config, values.adopt, values.as, values.top);
     return;
@@ -206,6 +252,12 @@ async function main(): Promise<void> {
       ...(values.to !== undefined
         ? { toHeight: height(values.to, '--to') }
         : {}),
+      ...(values.resettle === 'gate' || values.resettle === 'full'
+        ? { resettle: values.resettle }
+        : {}),
+      ...(values.range !== undefined
+        ? { rootTxRange: heightRange(values.range) }
+        : {}),
       force: true,
     });
     // Wait for the write: stdout to a pipe is asynchronous, and exiting
@@ -230,7 +282,7 @@ async function main(): Promise<void> {
     release,
     publisher: config.publisher,
     sources: config.sources.map((s) => s.config.name),
-    headerCheckUrl: config.headerCheckUrl,
+    headerCheckUrl: urlIdentity(config.headerCheckUrl),
   });
   service.start();
 }

@@ -100,6 +100,19 @@ describe('ExportService', () => {
     }
   });
 
+  it('reports the header-check gateway by origin and path, never its query', async () => {
+    const report = await ctx
+      .service({
+        headerCheckUrl: 'https://gw.example:8443/base?token=s3cret&x=1',
+      })
+      .runOnce({ dryRun: true, toHeight: 1100 });
+    assert.equal(report.gateUrl, 'https://gw.example:8443/base');
+    assert.doesNotMatch(
+      JSON.stringify(reportForOutput(report)),
+      /s3cret|token=/,
+    );
+  });
+
   it('builds and checks on a dry run, but publishes, locks and saves nothing', async () => {
     const report = await ctx.service().runOnce({ dryRun: true });
     assert.deepEqual(
@@ -110,12 +123,15 @@ describe('ExportService', () => {
       ],
     );
     assert.equal(report.gateUrl, 'http://gateway.test');
-    // Printed without each band's header sample, which only counts.
+    // Printed without each band's header sample, which only counts: the
+    // entries read, and the pool they were read from (this band's 1,100).
     const printed = reportForOutput(report) as {
-      steps: Array<{ band: Record<string, unknown> }>;
+      steps: Array<{ band: Record<string, unknown>; sampled?: unknown }>;
     };
     assert.equal(printed.steps[0].band.sample, undefined);
     assert.equal(printed.steps[0].band.sampled, 150);
+    assert.equal(printed.steps[0].band.poolSize, 1100);
+    assert.equal(printed.steps[0].sampled, undefined);
     assert.equal(printed.steps[0].band.records, report.steps[0].band?.records);
     assert.ok(report.peakBytes >= (report.steps[0].peakBytes ?? 0));
     assert.ok((report.steps[0].peakBytes ?? 0) > 0);

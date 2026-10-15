@@ -305,6 +305,21 @@ describe('exportChecks', () => {
     );
   });
 
+  it('takes the tip as the daily band in the grid layout, whose d bands freeze weekly', () => {
+    const [grid] = exportChecks(
+      { state: { lastSuccess: { d: hoursAgo(24 * 6), tip: hoursAgo(3) } } },
+      now,
+    );
+    assert.equal(grid.level, 'ok');
+    assert.match(grid.text, /Daily band \(tip\)/);
+    const [late] = exportChecks(
+      { state: { lastSuccess: { d: hoursAgo(1), tip: hoursAgo(49) } } },
+      now,
+    );
+    assert.equal(late.level, 'fail');
+    assert.match(late.text, /daily band \(tip\)/);
+  });
+
   it('fails a daily band over two days old, or never built', () => {
     for (const lastSuccess of [{ d: hoursAgo(49) }, {}]) {
       const [first] = exportChecks({ state: { lastSuccess } }, now);

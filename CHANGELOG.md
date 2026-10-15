@@ -21,6 +21,90 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   bands, or `filter`, declare different selections. Opt-in, like
   `parquet-l1`. Nothing builds L2 bands yet. See *L2 bands* in
   [docs/index-publication.md](docs/index-publication.md).
+- **Root-TX bands on the L1 grid, with a settle lag
+  (`INDEX_EXPORT_ROOT_TX_LAYOUT=grid`)**: `index-export` cuts root-TX bands
+  at the same heights as `parquet-l1` bands, so every publisher's bands line
+  up whatever its start height, and subscribers stop downloading a
+  multi-GB recent band every week. A 5,000-height `d` band freezes once its
+  top is `INDEX_EXPORT_ROOT_TX_SETTLE_BLOCKS` (5,040, about 7 days) below the
+  stable top, from the sources and the tip's entries; twenty of them roll
+  into a 100,000-height `h` band; a `tip` above them is rebuilt daily,
+  superseding the previous one, and published only when it changed. The
+  default `legacy` layout is unchanged.
+  - Frozen bands are re-settled every
+    `INDEX_EXPORT_ROOT_TX_RESETTLE_INTERVAL_HOURS` (168; 0 for never, or
+    `--once --resettle` to force one): rebuilt from their own entries and
+    the sources, and replaced only when entries were added or relocated. A
+    re-settle never loses an entry and header-checks only what it changes:
+    every relocated entry (at most
+    `INDEX_EXPORT_ROOT_TX_RESETTLE_MAX_CHANGED`, 20,000, a band), each of
+    which must read and verify, and a sample of the added, so entries whose
+    roots are no longer seeded don't block it. Any wrong header leaves the
+    band as it is. Each is reported with its counts and counted in
+    `index_export_resettles_total` and `index_export_resettle_entries`.
+  - A due band is rebuilt only when its sources changed: each source's
+    fingerprint of the band's heights is recorded when it settles (one
+    aggregate query for ClickHouse; the files' names, sizes and SHA-256 for
+    a CSV source) and compared first; equal fingerprints settle it without
+    a rebuild (`unchanged`, `same_sources`,
+    `index_export_resettle_gate_total`). `--once --resettle=full` rebuilds
+    every one.
+  - Grid bands built by hand with `index-band-build` (`h-`, `d-` and
+    `tip-` ids) are taken as they are; a legacy layout's current `r` and
+    daily `d` move into the new bands and the first tip supersedes them.
+    Bands off the grid, or overlapping, stop the run before anything is
+    built (`grid_layout`). See "Grid layout" in `docs/index-export.md`.
+  - A `--once --dry-run` lists the plan in the report (`plan`).
+  - `tools/index-swarm-status` takes the tip as the daily band once there
+    is one.
+  - `docs/index-export.md` documents the overlay files a `csv` source reads
+    (names, columns, header).
+  - `--once --resettle --range <from>-<to>` re-settles only the frozen
+    bands inside those heights, building nothing else.
+
+### Changed
+
+- **Faster whole-band reads.** `Cdb64Reader.entries()` reads in 1 MiB
+  pieces rather than three reads a record (`entryBatches()` yields a
+  piece's records at once), and a re-settle's comparison walks two bands in
+  id order: 2.6 MB/s before, about 400 MB/s after on local disk.
+
+### Fixed
+
+- **Root-TX exports no longer place a row that can't frame its own item.**
+  A row with no size, a payload that doesn't start after the item, a header
+  longer than the item, or (its payload size known) an item that doesn't
+  end where its payload does now keeps its root only, counted as
+  `unrepaired` `layout`, top-level or nested, before any placement. Such
+  rows (one at height 1,123,650: offset 1,762, size 1,151, data offset
+  5,543, data size 3) were placed and failed header checks as wrong.
+  ClickHouse and SQLite sources now read the item's payload size for this.
+- **The header check verifies a band among the roots that can still be
+  read.** History whose roots are gone network-wide no longer makes a band
+  "couldn't check" (turbo-gateway.com's 1.3M band had 46% of sampled roots
+  readable, and needed `--skip-header-check`). A read answered 404 is
+  `unreadable`: neither passed nor wrong, left out of the 80% pass ratio,
+  and its root not asked for again; 416 stays wrong, and timeouts, 429 and
+  5xx still count against the ratio. Samples are drawn ten times over and
+  walked until their size has been read (root-TX builds, re-settles,
+  `index-band-build`, `index-band-verify`), and a band also needs 80% of
+  50 verified (or of a smaller sample), which fails it only when gone roots
+  use the pool up; a run's report gives `sampled` (entries read) and
+  `poolSize`. Results, logs and
+  `index-band-verify` report `unreadable`, the pool size and the unreadable
+  share; `index_export_gate_unreadable_total` counts them. A relocated
+  entry in a re-settle must still read and verify.
+- **Band header check: an item with a malformed tag count is no longer a
+  wrong offset.** Some early bundlers wrote the tag bytes' length into the
+  header's tag count field too (an Arweave-signed item at height 789,458
+  says 264 for 9 tags). Its signature hashes to its id and its header ends
+  where its tag bytes say, so its location is right; the check called it
+  wrong and refused the whole band (`wrong_header`), a root-TX band or a
+  re-settle alike. Such an entry now passes and is counted separately
+  (`malformedTags` in the check's result, its strata, a re-settle's
+  report and `index-band-verify`'s output;
+  `index_export_gate_malformed_tags_total`). Every other wrong header is
+  still wrong, and a bundle scan still refuses such a header.
 
 ## [Release 85] - 2026-10-14
 

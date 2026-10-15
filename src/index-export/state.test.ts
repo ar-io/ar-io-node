@@ -14,6 +14,7 @@ import {
   deriveOwnBands,
   emptyIndexState,
   emptyState,
+  GRID_ROLES,
   indexState,
   loadState,
   updateIndexState,
@@ -53,6 +54,22 @@ describe('ownBandRole', () => {
     ]) {
       assert.equal(ownBandRole(id, PUB, {}), undefined, id);
     }
+  });
+
+  it('claims a tip band in the grid layout only', () => {
+    const id = `tip-h2010000-tip-${tag}-abcdef123456`;
+    assert.equal(ownBandRole(id, PUB, {}), undefined, 'legacy');
+    assert.equal(ownBandRole(id, PUB, {}, GRID_ROLES), 'tip');
+    assert.equal(
+      ownBandRole(
+        'tip-h2010000-tip-deadbeef-abcdef123456',
+        PUB,
+        {},
+        GRID_ROLES,
+      ),
+      undefined,
+      "another publisher's",
+    );
   });
 
   it('claims an adopted band whatever its id, at the role it was adopted as', () => {
@@ -128,6 +145,39 @@ describe('deriveOwnBands', () => {
         ['h', 1950000, 1999999, 1999999, false],
         ['r', 2000000, 2007270, 2007270, false],
         ['d', 2006759, null, 2006759, false],
+      ],
+    );
+  });
+
+  it('finds grid bands built by index-band-build, the tip in the grid layout only', async () => {
+    await publish(`h-h1900000-1999999-${TAG}-aaaaaaaaaaaa`, [1900000, 1999999]);
+    await publish(`d-h2000000-2004999-${TAG}-bbbbbbbbbbbb`, [2000000, 2004999]);
+    await publish(`tip-h2005000-tip-${TAG}-cccccccccccc`, [2005000, null]);
+    // A tip it superseded.
+    await publish(`tip-h2000000-tip-${TAG}-dddddddddddd`, [2000000, null]);
+    const manifest = path.join(
+      dir,
+      `tip-h2005000-tip-${TAG}-cccccccccccc`,
+      'manifest.json',
+    );
+    const parsed = JSON.parse(await fs.readFile(manifest, 'utf8'));
+    parsed.metadata.supersedes = [`tip-h2000000-tip-${TAG}-dddddddddddd`];
+    await fs.writeFile(manifest, JSON.stringify(parsed));
+
+    assert.deepEqual(
+      (await deriveOwnBands(dir, PUBLISHER, {})).map((b) => b.role),
+      ['h', 'd'],
+    );
+    assert.deepEqual(
+      (await deriveOwnBands(dir, PUBLISHER, {}, GRID_ROLES)).map((b) => [
+        b.role,
+        b.from,
+        b.to,
+      ]),
+      [
+        ['h', 1900000, 1999999],
+        ['d', 2000000, 2004999],
+        ['tip', 2005000, null],
       ],
     );
   });

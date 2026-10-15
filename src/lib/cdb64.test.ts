@@ -15,6 +15,7 @@ import {
   cdb64Hash,
   Cdb64Writer,
   Cdb64Reader,
+  ENTRIES_CHUNK_BYTES,
   verifyCdb64File,
 } from './cdb64.js';
 import { ByteRangeSource, FileByteRangeSource } from './byte-range-source.js';
@@ -349,6 +350,41 @@ describe('CDB64', () => {
   });
 
   describe('Cdb64Reader.entries()', () => {
+    it('reads records across its read pieces, one larger than a piece among them', async () => {
+      const cdbPath = path.join(tempDir, 'pieces.cdb');
+      // Records of odd sizes, so piece edges fall inside headers, keys and
+      // values; one value larger than a whole piece.
+      const records = Array.from({ length: 30_000 }, (_, i) => ({
+        key: Buffer.from(`key-${i}`),
+        value:
+          i === 12_345
+            ? Buffer.alloc(ENTRIES_CHUNK_BYTES, 7) // the most a value may hold
+            : Buffer.alloc((i * 37) % 251, i % 256),
+      }));
+      const writer = new Cdb64Writer(cdbPath);
+      await writer.open();
+      for (const { key, value } of records) await writer.add(key, value);
+      await writer.finalize();
+      assert.ok(
+        (await fs.stat(cdbPath)).size > 4 * ENTRIES_CHUNK_BYTES,
+        'several pieces',
+      );
+
+      const reader = new Cdb64Reader(cdbPath);
+      await reader.open();
+      let i = 0;
+      try {
+        for await (const { key, value } of reader.entries()) {
+          assert.ok(key.equals(records[i].key), `key ${i}`);
+          assert.ok(value.equals(records[i].value), `value ${i}`);
+          i += 1;
+        }
+      } finally {
+        await reader.close();
+      }
+      assert.equal(i, records.length);
+    });
+
     it('should return no entries for empty database', async () => {
       const cdbPath = path.join(tempDir, 'empty-entries.cdb');
 

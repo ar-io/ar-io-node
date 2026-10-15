@@ -353,7 +353,7 @@ const MARK: Record<Level, string> = {
 /** What the index-export service leaves in `data/indexes/export`. */
 export interface ExportStatus {
   state?: {
-    lastSuccess?: Partial<Record<'h' | 'r' | 'd', string>>;
+    lastSuccess?: Partial<Record<'h' | 'r' | 'd' | 'tip', string>>;
     lastRejection?: { at: string; role: string; reasons: string[] };
     retry?: { at: string; attempts: number; reason: string };
     lastRun?: { at: string; outcome: string; detail?: string };
@@ -405,20 +405,22 @@ export function exportChecks(status: ExportStatus, now: number): Check[] {
   const age = (at: string | undefined) =>
     at === undefined ? undefined : (now - Date.parse(at)) / 1000;
 
-  const delta = age(state.lastSuccess?.d);
+  // The grid layout's daily band is the tip; its d bands freeze weekly.
+  const daily = state.lastSuccess?.tip !== undefined ? 'tip' : 'd';
+  const delta = age(state.lastSuccess?.[daily]);
   if (delta === undefined || delta > EXPORT_DELTA_FAIL_SECONDS) {
     checks.push({
       level: 'fail',
       text:
         delta === undefined
-          ? 'No daily band (d) has been built yet'
-          : `The daily band (d) last succeeded ${formatAge(delta)} ago`,
+          ? `No daily band (${daily}) has been built yet`
+          : `The daily band (${daily}) last succeeded ${formatAge(delta)} ago`,
       fix: `Check docker compose logs index-export and its last run below; to run now: ${RUN_ONCE}`,
     });
   } else {
     checks.push({
       level: 'ok',
-      text: `Daily band (d) last succeeded ${formatAge(delta)} ago`,
+      text: `Daily band (${daily}) last succeeded ${formatAge(delta)} ago`,
     });
   }
   const recent = age(state.lastSuccess?.r);
@@ -445,7 +447,7 @@ export function exportChecks(status: ExportStatus, now: number): Check[] {
   const since =
     rejection === undefined
       ? undefined
-      : state.lastSuccess?.[rejection.role as 'h' | 'r' | 'd'];
+      : state.lastSuccess?.[rejection.role as 'h' | 'r' | 'd' | 'tip'];
   if (
     rejection !== undefined &&
     rejected !== undefined &&

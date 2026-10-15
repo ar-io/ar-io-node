@@ -7,6 +7,7 @@
 import * as fs from 'node:fs/promises';
 
 import {
+  CLICKHOUSE_WINDOW_BLOCKS,
   ClickHouseQuerier,
   ClickHouseRecordSource,
   createClickHouseQuerier,
@@ -221,6 +222,20 @@ const KEYS: Record<string, string[]> = {
   csv: ['name', 'path', 'rank', 'optional'],
 };
 
+/**
+ * Where a URL points, for what is persisted, logged or reported (a
+ * fingerprint's identity, the header-check gateway): its origin and path,
+ * never a user, password or query it carries.
+ */
+export function urlIdentity(url: string): string {
+  try {
+    const { origin, pathname } = new URL(url);
+    return `${origin}${pathname === '/' ? '' : pathname}`;
+  } catch {
+    return 'an unparsable URL';
+  }
+}
+
 function hostOf(url: string, at: string): string {
   try {
     return new URL(url).host;
@@ -259,6 +274,8 @@ export async function openSource(
             username: config.user as string,
             password,
           }),
+          CLICKHOUSE_WINDOW_BLOCKS,
+          urlIdentity(config.url),
         );
       }
       return new ClickHouseRecordSource(
@@ -268,6 +285,8 @@ export async function openSource(
           username: env.CLICKHOUSE_USER as string,
           password: env.CLICKHOUSE_PASSWORD ?? '',
         }),
+        CLICKHOUSE_WINDOW_BLOCKS,
+        urlIdentity(env.CLICKHOUSE_URL as string),
       );
     }
     case 'sqlite':

@@ -5,6 +5,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import { strict as assert } from 'node:assert';
+import crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import { after, before, describe, it } from 'node:test';
 import { createClient } from '@clickhouse/client';
@@ -12,6 +13,7 @@ import { createClient } from '@clickhouse/client';
 import type { BandRecord } from '../../../../lib/index-band/build.js';
 import {
   CLICKHOUSE_EXPORT_SETTINGS,
+  CLICKHOUSE_FINGERPRINT_QUERY,
   ClickHouseQuerier,
   ClickHouseRecordSource,
 } from './clickhouse.js';
@@ -105,6 +107,33 @@ class FakeClickHouse implements ClickHouseQuerier {
     let tail: string | undefined;
     if (params.query.includes('max(height)')) {
       rows = [{ height: Math.max(0, ...this.table.map((r) => r.height)) }];
+    } else if (params.query.includes('groupBitXor')) {
+      // Every row in the range, whatever its version, by every column.
+      const from = queryParams.from as number;
+      const to = queryParams.to as number;
+      let count = 0;
+      let xor = 0n;
+      let sum = 0n;
+      for (const row of this.table) {
+        if (row.height < from || row.height > to) continue;
+        if (row.isDataItem === false) continue;
+        const h = crypto
+          .createHash('sha256')
+          .update(
+            JSON.stringify({
+              ...row,
+              id: hex(row.id),
+              parentId: hex(row.parentId),
+              rootTxId: hex(row.rootTxId),
+            }),
+          )
+          .digest()
+          .readBigUInt64BE(0);
+        count += 1;
+        xor ^= h;
+        sum = (sum + h) & ((1n << 64n) - 1n);
+      }
+      rows = [{ rows: count, xor: String(xor), sum: String(sum) }];
     } else {
       const from = queryParams.from as number;
       const to = queryParams.to as number;
@@ -125,6 +154,7 @@ class FakeClickHouse implements ClickHouseQuerier {
           item_offset: row.offset ?? 0,
           item_data_offset: row.dataOffset ?? 0,
           item_size: row.size ?? 0,
+          item_data_size: row.dataSize ?? 0,
           root_parent_offset: row.rootParentOffset ?? 0,
           parent_parent_id: nested && p !== undefined ? hex(p.parentId) : '',
           parent_data_offset: nested ? (p?.dataOffset ?? 0) : 0,
@@ -216,7 +246,8 @@ const fixture = (): TableRow[] => [
     height: 1500,
     offset: 2000,
     dataOffset: 3000,
-    size: 60000,
+    // Header 1,000, payload 50,000: an item that frames itself.
+    size: 51000,
     dataSize: 50000,
   },
   {
@@ -264,7 +295,8 @@ const fixture = (): TableRow[] => [
     size: 300,
     insertedAt: 9,
   },
-  // A size ClickHouse doesn't know (stored as 0): kept, without it.
+  // A size ClickHouse doesn't know (stored as 0): its offsets can't be
+  // shown to frame an item, so root only (`layout`).
   {
     id: id(8),
     parentId: ROOT,
@@ -283,8 +315,9 @@ const checkExport = (records: BandRecord[]) => {
     [id(1), id(2), PARENT, id(3), id(4), id(7), id(8)].map(hex).sort(),
   );
   assert.ok(byId.get(hex(id(7)))?.rootTxId.equals(id(103)));
-  assert.equal(byId.get(hex(id(8)))?.rootOffset, 128);
+  assert.equal(byId.get(hex(id(8)))?.rootOffset, undefined);
   assert.equal(byId.get(hex(id(8)))?.size, undefined);
+  assert.equal(byId.get(hex(PARENT))?.rootOffset, 2000);
   assert.equal(byId.get(hex(id(1)))?.rootDataOffset, 200);
   assert.ok(byId.get(hex(id(2)))?.rootTxId.equals(id(102)));
   assert.equal(byId.get(hex(id(2)))?.height, 1600);
@@ -302,7 +335,8 @@ describe('ClickHouseRecordSource', () => {
     const records = await collect(source.records(1000, 1999));
     checkExport(records);
     assert.equal(source.stats.repaired, 1);
-    assert.equal(source.stats.rootOnly, 1);
+    assert.equal(source.stats.rootOnly, 2);
+    assert.deepEqual(source.stats.unrepaired, { layout: 1 });
     for (const record of records) assert.equal(record.source, 'gw1');
   });
 
@@ -406,6 +440,68 @@ describe('ClickHouseRecordSource', () => {
     );
   });
 
+  it('fingerprints the rows a window reads in one query, every column hashed', async () => {
+    const table = fixture();
+    const fake = new FakeClickHouse(table);
+    const source = new ClickHouseRecordSource(
+      'gw1',
+      fake,
+      400,
+      'http://ch:8123 user u',
+    );
+    assert.equal(source.identity, 'clickhouse http://ch:8123 user u');
+    const digest = await source.fingerprint(1000, 1999);
+    assert.equal(fake.queries.length, 1, 'one query');
+    assert.deepEqual(fake.queries[0].params, { from: 1000, to: 1999 });
+    assert.deepEqual(fake.queries[0].settings, {
+      ...CLICKHOUSE_EXPORT_SETTINGS,
+    });
+    assert.match(digest, /^rows \d+ xor \d+ sum \d+$/);
+    // Every column the record query reads or orders by, and its filters.
+    for (const column of [
+      'id',
+      'parent_id',
+      'root_transaction_id',
+      'height',
+      'block_transaction_index',
+      'inserted_at',
+      '"offset"',
+      'data_offset',
+      '"size"',
+      'data_size',
+      'root_parent_offset',
+      'is_data_item',
+    ]) {
+      assert.ok(CLICKHOUSE_FINGERPRINT_QUERY.includes(column), column);
+    }
+    assert.equal(await source.fingerprint(1000, 1999), digest, 'stable');
+    // One row more, a new version, or a changed offset: another digest.
+    for (const change of [
+      (t: typeof table) => t.push({ ...t[0], id: id(999), height: 1500 }),
+      (t: typeof table) =>
+        t.push({ ...t[0], insertedAt: (t[0].insertedAt ?? 0) + 1 }),
+      (t: typeof table) => (t[0] = { ...t[0], offset: (t[0].offset ?? 0) + 1 }),
+    ]) {
+      const changed = fixture();
+      change(changed);
+      assert.notEqual(
+        await new ClickHouseRecordSource(
+          'gw1',
+          new FakeClickHouse(changed),
+        ).fingerprint(1000, 1999),
+        digest,
+      );
+    }
+  });
+
+  it('counts a window split for lack of memory, which reads otherwise than a fingerprint', async () => {
+    const fake = new FakeClickHouse(fixture());
+    fake.outOfMemory.add('1000-1999');
+    const source = new ClickHouseRecordSource('gw1', fake, 1000);
+    await collect(source.records(1000, 1999));
+    assert.equal(source.stats.splits, 1);
+  });
+
   it('closes its client', async () => {
     const fake = new FakeClickHouse([]);
     await new ClickHouseRecordSource('gw1', fake).close();
@@ -487,6 +583,47 @@ describe(
       try {
         checkExport(await collect(source.records(1000, 1999)));
         assert.equal(await source.stableHeight(), 1699);
+      } finally {
+        await source.close();
+      }
+    });
+
+    it('fingerprints the rows in one query, the same until a row is added', async () => {
+      const querier = () =>
+        createClient({
+          url: realUrl,
+          username: process.env.INDEX_EXPORT_TEST_CLICKHOUSE_USER ?? 'default',
+          password: process.env.INDEX_EXPORT_TEST_CLICKHOUSE_PASSWORD ?? '',
+          database,
+        }) as unknown as ClickHouseQuerier;
+      const source = new ClickHouseRecordSource('gw1', querier());
+      try {
+        const digest = await source.fingerprint(1000, 1999);
+        assert.match(digest, /^rows \d+ xor \d+ sum \d+$/);
+        // Every row the table holds there, as stored (an insert collapses
+        // rows that share the sorting key).
+        const client = admin();
+        const counted = await client.query({
+          query: `SELECT count() AS rows FROM ${database}.transactions WHERE height >= 1000 AND height <= 1999 AND is_data_item`,
+          format: 'JSONEachRow',
+        });
+        const [{ rows }] = (await counted.json()) as Array<{ rows: string }>;
+        await client.close();
+        assert.equal(digest.split(' ')[1], String(rows));
+        assert.equal(await source.fingerprint(1000, 1999), digest);
+        const writer = admin();
+        await writer.command({
+          query: `INSERT INTO ${database}.transactions
+            (height, block_transaction_index, is_data_item, id, anchor, quantity,
+             reward, data_size, content_type, format, parent_id,
+             root_transaction_id, "offset", "size", data_offset,
+             root_parent_offset, inserted_at)
+            VALUES (1500, 9, 1, unhex('${'ab'.repeat(32)}'), '', 0, 0, 0, '', 0,
+              unhex('${'cd'.repeat(32)}'), unhex('${'cd'.repeat(32)}'), 10, 20, 30, 0,
+              toDateTime(5))`,
+        });
+        await writer.close();
+        assert.notEqual(await source.fingerprint(1000, 1999), digest);
       } finally {
         await source.close();
       }

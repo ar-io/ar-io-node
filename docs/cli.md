@@ -123,17 +123,30 @@ data_item_id,root_tx_id,path,root_data_item_offset,root_data_offset,data_item_si
 | `--gateway-url <url>` | The gateway the header check reads root transactions from. Required unless `--skip-header-check`. See [Choosing `--gateway-url`](#choosing---gateway-url) |
 | `--read-timeout <ms>` | How long the check waits for each root read (default 30000) |
 | `--skip-header-check` | Publish without the header check |
-| `--sample-size <n>` | Entries the check samples (default 150) |
+| `--sample-size <n>` | Entries the check reads (default 150), from a pool ten times that |
 | `--dry-run` | Build and check, but publish nothing |
 
 **The header check** samples entries with offsets and range-reads each one's
 root transaction. A band fails if any header is wrong: its signature hash
 isn't the ID, it doesn't end where the payload starts, or the offsets run
-past the end of the root. It also fails if fewer than 80% of the sample
-could be read and passed, or if the band has fewer than 1,000 entries. A failed band is not
-published, and the command exits 1 with the result on stderr. A band can pass
-with a few entries the gateway couldn't serve: they are listed in `errors`
-and count against the 80%, but aren't evidence the band is wrong.
+past the end of the root (416, or a short range). It also fails if fewer
+than 80% of the entries read passed, if fewer than 40 passed (80% of 50,
+or of a smaller sample: this bites only when roots that are gone use the
+pool up), or if the band has fewer than 1,000 entries. A
+failed band is not published, and the command exits 1 with the result on
+stderr. A band can pass with a few entries the gateway couldn't serve (a
+timeout, a 429, a 5xx): they are listed in `errors` and count against the
+80%, but aren't evidence the band is wrong.
+
+**Roots that are gone.** Old history can sit under root transactions no
+gateway has any more. The check samples a pool of ten candidates for each
+entry it is to read and walks it in random order: an entry whose root the
+gateway answers 404 for is `unreadable`, neither passed nor wrong and left
+out of the 80%, and that root is not asked for again. The check goes on
+until it has read `--sample-size` entries or the pool runs out, and the
+result says how many were unreadable and what share of those tried
+(`unreadableShare`, an estimate of how much of the band's history is gone).
+When too few could be verified, the reason says how many were unreadable.
 
 ## `index-band-verify`
 
@@ -150,9 +163,14 @@ Runs the header check on a built or installed band:
 | `--band-dir <path>` | The band's directory (it holds `manifest.json`). Required |
 | `--gateway-url <url>` | As for `index-band-build`. Required |
 | `--read-timeout <ms>` | As for `index-band-build` (default 30000) |
-| `--sample-size <n>` | Entries to check (default 150) |
+| `--sample-size <n>` | Entries to read (default 150), from a pool ten times that |
 
-It prints the result and exits 1 if the band fails.
+It prints the result and exits 1 if the band fails. Roots the gateway
+answers 404 for are passed over, as for `index-band-build`. An entry whose header
+has the right id and length but a tag count field that disagrees with its
+tag bytes (written so by some early bundlers) passes: the item is
+malformed, not its offsets wrong. Such entries are listed under
+`malformed`, and counted in `malformedTags`.
 
 ## `index-band-export`
 
@@ -857,7 +875,10 @@ turbo-gateway.com):
     "checked": 150,
     "ok": 149,
     "wrong": [],
-    "errors": [{ "id": "…", "error": "timeout of 30000ms exceeded" }]
+    "errors": [{ "id": "…", "error": "timeout of 30000ms exceeded" }],
+    "poolSize": 1500,
+    "unreadable": 0,
+    "unreadableShare": 0
   }
 }
 ```
@@ -877,10 +898,14 @@ reasons.
 
 ### `index-band-verify` result
 
-`{ "bandDir", "passed", "reasons", "totalRecords", "checked", "ok", "wrong", "errors" }`.
-`wrong` lists entries whose header doesn't match (`id`, `reason`); `errors`
-lists entries the gateway couldn't serve (`id`, `error`), which count against
-the 80% pass ratio but are not evidence the band is wrong. Exit `1`, with the
+`{ "bandDir", "passed", "reasons", "totalRecords", "checked", "ok", "wrong", "errors", "poolSize", "unreadable", "unreadableShare" }`.
+`checked` counts the entries read. `wrong` lists entries whose header
+doesn't match (`id`, `reason`); `errors` lists entries the gateway couldn't
+serve (`id`, `error`), which count against the 80% pass ratio but are not
+evidence the band is wrong. `unreadable` counts the entries passed over
+because the gateway doesn't have their root (404), out of `poolSize`
+candidates, and `unreadableShare` is their share of those tried; with some,
+`unreadableSample` lists up to 20 (`id`, `rootTxId`). Exit `1`, with the
 object on stderr, when `passed` is false.
 
 ### Example
