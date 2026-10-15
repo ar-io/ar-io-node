@@ -63,6 +63,7 @@ interface ExportRow {
   item_offset: number | string;
   item_data_offset: number | string;
   item_size: number | string;
+  item_data_size: number | string;
   root_parent_offset: number | string;
   parent_parent_id: string;
   parent_data_offset: number | string;
@@ -85,6 +86,7 @@ export const CLICKHOUSE_WINDOW_QUERY = `
     i.item_offset AS item_offset,
     i.item_data_offset AS item_data_offset,
     i.item_size AS item_size,
+    i.item_data_size AS item_data_size,
     i.root_parent_offset AS root_parent_offset,
     hex(p.parent_id) AS parent_parent_id,
     p.data_offset AS parent_data_offset,
@@ -99,13 +101,14 @@ export const CLICKHOUSE_WINDOW_QUERY = `
       latest.4 AS item_offset,
       latest.5 AS item_data_offset,
       latest.6 AS item_size,
-      latest.7 AS root_parent_offset
+      latest.7 AS root_parent_offset,
+      latest.8 AS item_data_size
     FROM (
       SELECT
         id,
         argMax(
           (parent_id, root_transaction_id, height, "offset", data_offset,
-           "size", root_parent_offset),
+           "size", root_parent_offset, data_size),
           (height, block_transaction_index, inserted_at)
         ) AS latest
       FROM transactions
@@ -302,6 +305,7 @@ export class ClickHouseRecordSource implements RecordSource {
           offset: known(raw.item_offset),
           dataOffset: known(raw.item_data_offset),
           size: known(raw.item_size),
+          dataSize: known(raw.item_data_size),
           rootParentOffset: Number(raw.root_parent_offset),
           // A parent missing from the join comes back empty.
           parent:

@@ -836,6 +836,23 @@ describe('ExportService, grid layout', () => {
       assert.equal((await find('d-h105000-')).id, old.id);
     });
 
+    it('re-settles only the bands inside a range, building nothing else', async () => {
+      gridRecords();
+      await ctx.service(grid()).runOnce();
+      ctx.gw1.top = 115_200; // a d would freeze, and the tip move
+      const report = await ctx.service(grid()).runOnce({
+        resettle: 'full',
+        rootTxRange: [100_000, 109_999],
+      });
+      assert.deepEqual(
+        report.steps.map((s) => [s.grid, s.heightRange[0], s.result]),
+        [
+          ['resettle', 100_000, 'unchanged'],
+          ['resettle', 105_000, 'unchanged'],
+        ],
+      );
+    });
+
     it('waits while a build this run could not check', async () => {
       gridRecords();
       await ctx.service(grid()).runOnce();

@@ -139,6 +139,11 @@ export interface RunOptions {
    * rebuilds only those whose sources changed, `full` rebuilds them all.
    */
   resettle?: 'gate' | 'full';
+  /**
+   * Grid layout, with `resettle`: re-settle only the frozen bands inside
+   * these heights, and build nothing else (no freeze, roll or tip).
+   */
+  rootTxRange?: [number, number];
 }
 
 export interface RunReport {
@@ -851,21 +856,27 @@ export class ExportService {
     // Only a bootstrap cuts bands that could overlap a stranger's.
     if (start.frozen.length === 0)
       await this.refuseForeignBands(state.adoptions);
-    if (start.seeds.length > 0) {
+    const range = options.rootTxRange;
+    if (start.seeds.length > 0 && range === undefined) {
       context.rootHeights = await RootHeights.of(start.seeds);
     }
 
     // 1. Freeze, in height order. A dry run publishes nothing, so what it
     // built counts as frozen for the steps that follow.
+    // With a range, only its re-settles.
     const built: Array<[number, number]> = [];
-    for (const step of planFreezes({
-      bands: atStart,
-      stableTop,
-      settleBlocks: config.settleBlocks ?? DEFAULT_SETTLE_BLOCKS,
-      ...(config.startHeight !== undefined
-        ? { startHeight: config.startHeight }
-        : {}),
-    })) {
+    const freezes =
+      range !== undefined
+        ? []
+        : planFreezes({
+            bands: atStart,
+            stableTop,
+            settleBlocks: config.settleBlocks ?? DEFAULT_SETTLE_BLOCKS,
+            ...(config.startHeight !== undefined
+              ? { startHeight: config.startHeight }
+              : {}),
+          });
+    for (const step of freezes) {
       const outcome = await fingerprinted(step, atStart);
       if (
         dryRun &&
@@ -880,7 +891,9 @@ export class ExportService {
 
     // 2. Roll complete 100,000-height ranges.
     let bands = await live();
-    for (const { step, awaits } of planRolls(bands, built)) {
+    for (const { step, awaits } of range !== undefined
+      ? []
+      : planRolls(bands, built)) {
       if (awaits.length > 0) {
         plan.push(describeGridStep(step, { awaits }));
         report.steps.push({
@@ -917,15 +930,18 @@ export class ExportService {
       frozenTop(now.frozen),
       ...built.map(([, to]) => to),
     ].filter((top): top is number => top !== undefined);
-    const tip = planTip({
-      bands,
-      stableTop,
-      from: tipStart(
-        frozenTop(start.frozen),
-        frozenNow.length > 0 ? Math.max(...frozenNow) : undefined,
-        config.startHeight,
-      ),
-    });
+    const tip =
+      range !== undefined
+        ? undefined
+        : planTip({
+            bands,
+            stableTop,
+            from: tipStart(
+              frozenTop(start.frozen),
+              frozenNow.length > 0 ? Math.max(...frozenNow) : undefined,
+              config.startHeight,
+            ),
+          });
     if (tip !== undefined) {
       const lookup = frozenLookup(now.frozen, log);
       context.frozenHolds = lookup.holds;
@@ -947,7 +963,15 @@ export class ExportService {
         intervalMs,
         force: options.resettle !== undefined,
         settledAt: state.resettledAt ?? {},
-      });
+      }).filter(
+        (step) =>
+          range === undefined ||
+          (step.heightRange[0] >= range[0] &&
+            (step.heightRange[1] as number) <= range[1]),
+      );
+      if (range !== undefined && steps.length === 0) {
+        log.warn('No frozen band lies inside --range', { range });
+      }
       // A gateway or source that failed a build this run would fail each
       // re-settle too, after rebuilding it: wait for the retry.
       const blocked = report.steps.some((s) => s.result === 'couldnt_check');

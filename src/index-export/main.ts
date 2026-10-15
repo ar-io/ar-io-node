@@ -20,6 +20,8 @@
  *     --resettle         grid layout: re-settle every frozen band, due or
  *                        not, rebuilding those whose sources changed
  *     --resettle=full    the same, rebuilding every one
+ *     --range <from>-<to> with --resettle: only the frozen bands inside
+ *                        these heights, and nothing else built
  *   main.js --adopt <band> --as h|r|d [--top <height>]
  *                        record an existing band as this service's (grid
  *                        layout: also --as tip)
@@ -42,11 +44,20 @@ import { ExportService, reportForOutput, runResult } from './service.js';
 import { updateIndexState } from './state.js';
 
 const USAGE =
-  'Usage: main.js [--once [--dry-run | --keep <dir>] [--to <height>] [--resettle[=full]]] | [--adopt <band-id> --as h|r|d|tip [--top <height>]]';
+  'Usage: main.js [--once [--dry-run | --keep <dir>] [--to <height>] [--resettle[=full]] [--range <from>-<to>]] | [--adopt <band-id> --as h|r|d|tip [--top <height>]]';
 
 const height = (value: string, flag: string): number => {
   if (!/^\d+$/.test(value)) throw new Error(`${flag} must be a block height`);
   return Number(value);
+};
+
+/** `--range <from>-<to>`, two block heights. */
+const heightRange = (value: string): [number, number] => {
+  const match = /^(\d+)-(\d+)$/.exec(value);
+  if (match === null || Number(match[1]) > Number(match[2])) {
+    throw new Error(`--range must be <from>-<to>, two block heights: ${value}`);
+  }
+  return [Number(match[1]), Number(match[2])];
 };
 
 /**
@@ -142,6 +153,7 @@ async function main(): Promise<void> {
       keep: { type: 'string' },
       to: { type: 'string' },
       resettle: { type: 'string' },
+      range: { type: 'string' },
       adopt: { type: 'string' },
       as: { type: 'string' },
       top: { type: 'string' },
@@ -153,10 +165,11 @@ async function main(): Promise<void> {
     (values['dry-run'] === true ||
       values.keep !== undefined ||
       values.to !== undefined ||
-      values.resettle !== undefined)
+      values.resettle !== undefined ||
+      values.range !== undefined)
   ) {
     throw new Error(
-      `--dry-run, --keep, --to and --resettle go with --once. ${USAGE}`,
+      `--dry-run, --keep, --to, --resettle and --range go with --once. ${USAGE}`,
     );
   }
 
@@ -167,6 +180,11 @@ async function main(): Promise<void> {
     values.resettle !== 'full'
   ) {
     throw new Error(`--resettle takes =full or nothing. ${USAGE}`);
+  }
+  if (values.range !== undefined && values.resettle === undefined) {
+    throw new Error(
+      `--range picks the bands --resettle re-settles: give both. ${USAGE}`,
+    );
   }
   if (values.resettle !== undefined && config.rootTxLayout !== 'grid') {
     throw new Error(
@@ -236,6 +254,9 @@ async function main(): Promise<void> {
         : {}),
       ...(values.resettle === 'gate' || values.resettle === 'full'
         ? { resettle: values.resettle }
+        : {}),
+      ...(values.range !== undefined
+        ? { rootTxRange: heightRange(values.range) }
         : {}),
       force: true,
     });

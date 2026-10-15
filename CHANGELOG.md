@@ -46,6 +46,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     is one.
   - `docs/index-export.md` documents the overlay files a `csv` source reads
     (names, columns, header).
+  - `--once --resettle --range <from>-<to>` re-settles only the frozen
+    bands inside those heights, building nothing else.
 
 ### Changed
 
@@ -56,6 +58,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Root-TX exports no longer place a row that can't frame its own item.**
+  A row with no size, a payload that doesn't start after the item, a header
+  longer than the item, or (its payload size known) an item that doesn't
+  end where its payload does now keeps its root only, counted as
+  `unrepaired` `layout`, top-level or nested, before any placement. Such
+  rows (one at height 1,123,650: offset 1,762, size 1,151, data offset
+  5,543, data size 3) were placed and failed header checks as wrong.
+  ClickHouse and SQLite sources now read the item's payload size for this.
 - **The header check verifies a band among the roots that can still be
   read.** History whose roots are gone network-wide no longer makes a band
   "couldn't check" (turbo-gateway.com's 1.3M band had 46% of sampled roots

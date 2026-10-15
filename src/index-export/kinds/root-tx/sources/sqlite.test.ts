@@ -69,16 +69,20 @@ describe('SqliteRecordSource', () => {
         offset, size, root_parent_offset
       ) VALUES (?, ?, ?, ?, ?, x'00', x'00', ?, ?, 0, 0, ?, ?, ?)`);
     for (const item of items) {
+      const offset = item.offset === undefined ? 64 : item.offset;
+      const dataOffset = item.dataOffset ?? (item.offset ?? 64) + 100;
+      const size = item.size === undefined ? 1100 : item.size;
       statement.run(
         item.id,
         item.parentId,
         item.rootTxId,
         item.height,
         item.index ?? 0,
-        item.dataOffset ?? (item.offset ?? 64) + 100,
-        item.dataSize ?? 1000,
-        item.offset === undefined ? 64 : item.offset,
-        item.size === undefined ? 1100 : item.size,
+        dataOffset,
+        // By default, a payload that ends where the item does.
+        item.dataSize ?? (size ?? 0) - (dataOffset - (offset ?? 0)),
+        offset,
+        size,
         item.rootParentOffset === undefined ? 0 : item.rootParentOffset,
       );
     }
@@ -146,6 +150,7 @@ describe('SqliteRecordSource', () => {
         height: 50,
         offset: 500,
         dataOffset: 1000,
+        size: 50500,
         dataSize: 50000,
       },
       // Relative (unbundled with #907's zero): repaired.

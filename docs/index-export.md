@@ -113,7 +113,10 @@ the two disagree.
 Where a peer indexer's database is not reachable, the peer can run
 `ar-io-node index-band-export` into coverage-named files that this service
 reads as a peer (`"rank": 0`). Offsets are placed only where proven: an item
-whose `root_parent_offset` is ambiguous keeps its root without them.
+whose `root_parent_offset` is ambiguous keeps its root without them, and so
+does a row whose own numbers can't frame an item (no size, a payload that
+doesn't start after the item, a header longer than the item, or an end the
+payload doesn't share), counted as `unrepaired` reason `layout`.
 [`index-band-export`](cli.md#index-band-export) shows what one source gives.
 
 **L1 bands** read `core.db` (`INDEX_EXPORT_CORE_DB`, read-only). It must hold
@@ -248,7 +251,8 @@ docker compose --profile index-export run --rm -T index-export \
   --once --to 2010000 --keep data/indexes/export/compare > compare.json
 # Grid layout: re-settle every frozen band now, due or not, rebuilding those
 # whose sources changed (add --dry-run to see what it would change;
-# --resettle=full rebuilds every one).
+# --resettle=full rebuilds every one; --range 1100000-1199999 only the
+# bands inside those heights).
 docker compose --profile index-export run --rm -T index-export --once --resettle > resettle.json
 # The service. Its first run is about 5 minutes after it starts, then daily.
 docker compose --profile index-export up -d --no-deps index-export
@@ -362,6 +366,9 @@ other records.
 | `source_down` | Only recorded sources that are down this run differ | Not rebuilt; due again next run |
 
 `--once --resettle=full` rebuilds every frozen band whatever the gate says.
+`--range <from>-<to>` with `--resettle` re-settles only the frozen bands
+inside those heights and builds nothing else (no freeze, roll or tip), to
+re-check one band: `--once --resettle=full --range 1100000-1199999`.
 A ClickHouse merge, `OPTIMIZE` or TTL expiry changes the rows, and so the
 fingerprint, though the rebuild then finds nothing to add: such a band is
 rebuilt once, and is unchanged; that is the safe direction, never a change

@@ -71,6 +71,80 @@ describe('toBandRecord', () => {
     assert.equal(stats.rowsRead, 1);
   });
 
+  describe('a row whose own numbers cannot frame an item', () => {
+    const top = (more: Partial<ItemRow>): ItemRow => ({
+      ...nested({ parentId: ROOT, parent: undefined }),
+      offset: 64,
+      dataOffset: 164,
+      size: 400,
+      dataSize: 300,
+      ...more,
+    });
+
+    it('gets its root only, counted as layout, top-level or nested', () => {
+      for (const [what, row] of [
+        ['no size', top({ size: undefined })],
+        ['the payload starts at the item', top({ dataOffset: 64 })],
+        ['the payload starts before the item', top({ dataOffset: 60 })],
+        [
+          'a header longer than the item',
+          top({ dataOffset: 500, dataSize: undefined }),
+        ],
+        ['an end the payload does not share', top({ dataSize: 299 })],
+        ['nested, no size', nested({ size: undefined })],
+        ['nested, ends elsewhere', nested({ dataSize: 1000 })],
+      ] as const) {
+        const stats = newSourceStats();
+        const record = place(row, stats);
+        assert.ok(record !== undefined, what);
+        assert.equal(record.rootOffset, undefined, what);
+        assert.equal(record.rootDataOffset, undefined, what);
+        assert.ok(record.rootTxId.equals(ROOT), what);
+        assert.deepEqual(stats.unrepaired, { layout: 1 }, what);
+        assert.equal(stats.rootOnly, 1, what);
+      }
+    });
+
+    it('leaves a consistent row as it was', () => {
+      const stats = newSourceStats();
+      assert.deepEqual(place(top({}), stats), {
+        id: ITEM,
+        rootTxId: ROOT,
+        height: 500,
+        source: 'gw1',
+        rootOffset: 64,
+        rootDataOffset: 164,
+        size: 400,
+      });
+      assert.deepEqual(stats.unrepaired, {});
+      // Without the payload's size, only the other rules apply.
+      assert.equal(place(top({ dataSize: undefined }))?.rootOffset, 64);
+    });
+
+    it('refuses the shape found at height 1,123,650, which no placement makes right', () => {
+      // pa77lXKnEMeMCUI1svtQlqaCRv8jGHSNPGGLAqzb2ss: nested, root_parent_offset
+      // 0, offset 1,762, size 1,151, data_offset 5,543, data_size 3; its
+      // parent's payload at 1,760,998 (5,546 bytes). 5,543 - 1,762 + 3 is
+      // 3,784, not 1,151.
+      const stats = newSourceStats();
+      const record = place(
+        nested({
+          offset: 1762,
+          dataOffset: 5543,
+          size: 1151,
+          dataSize: 3,
+          rootParentOffset: 0,
+          parent: { ...parent, dataOffset: 1_760_998, dataSize: 5546 },
+        }),
+        stats,
+      );
+      assert.equal(record?.rootOffset, undefined);
+      assert.equal(record?.sampleTag, undefined, 'not offered as repaired');
+      assert.deepEqual(stats.unrepaired, { layout: 1 });
+      assert.equal(stats.repaired, 0);
+    });
+  });
+
   it('uses a root_parent_offset that matches the parent payload', () => {
     const record = place(nested({ rootParentOffset: 1000 }));
     assert.equal(record?.rootOffset, 1200);
@@ -123,8 +197,7 @@ describe('toBandRecord', () => {
       }),
       // As absolute, it runs past the payload's end.
       nested({ offset: 50900, dataOffset: 51000, size: 400 }),
-      // Absolute can't be proven without both sizes.
-      nested({ offset: 49800, dataOffset: 49900, size: undefined }),
+      // Absolute can't be proven without the parent's size.
       nested({
         offset: 49800,
         dataOffset: 49900,
@@ -137,9 +210,9 @@ describe('toBandRecord', () => {
       assert.equal(record.rootOffset, undefined);
       assert.ok(record.rootTxId.equals(ROOT));
     }
-    assert.deepEqual(stats.unrepaired, { ambiguous: 5 });
-    assert.equal(stats.rootOnly, 5);
-    assert.equal(stats.records, 5);
+    assert.deepEqual(stats.unrepaired, { ambiguous: 4 });
+    assert.equal(stats.rootOnly, 4);
+    assert.equal(stats.records, 4);
   });
 
   it('gives the root only when the parent is unknown', () => {
