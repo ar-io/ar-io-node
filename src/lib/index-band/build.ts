@@ -184,6 +184,12 @@ export interface BuildBandOptions {
   /** Random source for sampling, in [0, 1). */
   random?: () => number;
   /**
+   * Flush the band's files and directories to disk before renaming it into
+   * place (default true). Off only where nothing needs to survive a power
+   * cut, such as tests: a band is up to 256 files.
+   */
+  sync?: boolean;
+  /**
    * The clock stamped into the manifest's `createdAt`. The service decides
    * when a band is due to fold from that stamp, so both must read the same
    * clock or a test's clock drifts against the band's.
@@ -496,6 +502,7 @@ export async function buildBand({
   sampleSizes = {},
   samplePool = 1,
   random = Math.random,
+  sync = true,
   now = Date.now,
 }: BuildBandOptions): Promise<BuiltBand> {
   const log = parentLog.child({ function: 'buildBand' });
@@ -688,7 +695,7 @@ export async function buildBand({
       };
 
       const filename = `${indexToPrefix(partition)}.cdb`;
-      writer = new Cdb64Writer(path.join(bandDir, filename));
+      writer = new Cdb64Writer(path.join(bandDir, filename), { sync });
       await writer.open();
       let partitionRecords = 0;
       for (let first = 0; first < order.length; ) {
@@ -804,8 +811,10 @@ export async function buildBand({
     );
     // The partitions are synced by their writer; make the manifest and the
     // directory durable too, so a power cut can't publish an empty manifest.
-    await syncPath(path.join(bandDir, 'manifest.json'));
-    await syncPath(bandDir);
+    if (sync) {
+      await syncPath(path.join(bandDir, 'manifest.json'));
+      await syncPath(bandDir);
+    }
 
     // Read back.
     for (const partition of partitions) {
@@ -971,7 +980,7 @@ export async function buildBand({
       }
       throw error;
     }
-    await syncPath(publishDir);
+    if (sync) await syncPath(publishDir);
     log.info('Published band', {
       id,
       records: written,

@@ -100,6 +100,19 @@ describe('ExportService', () => {
     }
   });
 
+  it('reports the header-check gateway by origin and path, never its query', async () => {
+    const report = await ctx
+      .service({
+        headerCheckUrl: 'https://gw.example:8443/base?token=s3cret&x=1',
+      })
+      .runOnce({ dryRun: true, toHeight: 1100 });
+    assert.equal(report.gateUrl, 'https://gw.example:8443/base');
+    assert.doesNotMatch(
+      JSON.stringify(reportForOutput(report)),
+      /s3cret|token=/,
+    );
+  });
+
   it('builds and checks on a dry run, but publishes, locks and saves nothing', async () => {
     const report = await ctx.service().runOnce({ dryRun: true });
     assert.deepEqual(

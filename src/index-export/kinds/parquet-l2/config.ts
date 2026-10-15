@@ -24,6 +24,7 @@ import {
   resolveSourceConfigs,
   ResolvedSource,
   SourceEnv,
+  urlIdentity,
 } from '../root-tx/sources/config.js';
 import {
   CLICKHOUSE_L2_WINDOW_BLOCKS,
@@ -150,20 +151,6 @@ export function resolveL2Source(
   }
 }
 
-/**
- * Where a URL points, for an identity that is recorded and logged: its
- * origin and path, never a user, password or query string.
- */
-export function urlIdentity(url: string | undefined): string {
-  if (url === undefined || url.trim() === '') return '';
-  try {
-    const parsed = new URL(url);
-    return `${parsed.origin}${parsed.pathname.replace(/\/+$/, '')}`;
-  } catch {
-    return '(not a URL)';
-  }
-}
-
 /** Opens the L2 source; a peer's password is read from its file here. */
 export async function openL2Source(
   { config }: ResolvedSource,
@@ -207,6 +194,6 @@ export async function openL2Source(
     }),
     CLICKHOUSE_L2_WINDOW_BLOCKS,
     deps.windowItems,
-    urlIdentity(env.CLICKHOUSE_URL),
+    env.CLICKHOUSE_URL === undefined ? '' : urlIdentity(env.CLICKHOUSE_URL),
   );
 }

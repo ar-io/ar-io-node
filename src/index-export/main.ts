@@ -41,7 +41,7 @@ import { release } from '../version.js';
 import { ExportConfig, parseExportConfig } from './config.js';
 import { INDEX_NAME } from './kinds/root-tx/kind.js';
 import { openL2Source } from './kinds/parquet-l2/config.js';
-import { openSource } from './kinds/root-tx/sources/config.js';
+import { openSource, urlIdentity } from './kinds/root-tx/sources/config.js';
 import { ExportLock } from './lock.js';
 import log from './log.js';
 import { startMetricsServer } from './metrics.js';
@@ -314,7 +314,7 @@ async function main(): Promise<void> {
     ...(config.l2Indexes !== undefined
       ? { l2Indexes: config.l2Indexes.map((index) => index.name) }
       : {}),
-    headerCheckUrl: config.headerCheckUrl,
+    headerCheckUrl: urlIdentity(config.headerCheckUrl),
   });
   service.start();
 }

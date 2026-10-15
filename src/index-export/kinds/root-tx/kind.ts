@@ -163,6 +163,8 @@ export interface StepContext {
   frozenHolds?: (id: Buffer, height: number) => Promise<boolean>;
   /** Grid re-settle: the most entries one band may relocate. */
   resettleMaxChanged?: number;
+  /** Flush bands to disk before publishing them (default true; tests). */
+  sync?: boolean;
 }
 
 /**
@@ -482,16 +484,17 @@ export async function buildStepBand(
     }
     // A relocated entry replaces one already published: each must read
     // back right, whatever the share of the rest that did.
-    // A root that is gone proves nothing either.
-    const unread = [
-      ...check.errors.filter((e) => e.tag === RESETTLE_CHANGED_TAG),
-      ...check.unreadable
-        .filter((e) => e.tag === RESETTLE_CHANGED_TAG)
-        .map((e) => ({
-          id: e.id,
-          error: `root ${e.rootTxId} not found (404)`,
-        })),
-    ];
+    // A relocation onto a root that is gone can never be proven, so it is
+    // not retried: the band is left as it is, rejected, until the next
+    // interval or an operator's --resettle=full.
+    const gone = check.unreadable.filter((e) => e.tag === RESETTLE_CHANGED_TAG);
+    if (gone.length > 0) {
+      return decline('rejected', 'relocation_root_gone', [
+        `${gone.length} relocated entries point into roots the gateway doesn't have (404), so the relocation can't be proven`,
+        ...gone.slice(0, 20).map((e) => `${e.id}: root ${e.rootTxId}`),
+      ]);
+    }
+    const unread = check.errors.filter((e) => e.tag === RESETTLE_CHANGED_TAG);
     if (unread.length > 0) {
       return decline('couldnt_check', 'changed_unchecked', [
         `${unread.length} relocated entries could not be read from the gateway`,
@@ -536,6 +539,7 @@ export async function buildStepBand(
       sampleSize: SAMPLE_SIZE,
       sampleSizes: SAMPLE_SIZES,
       samplePool: HEADER_CHECK_POOL_FACTOR,
+      ...(ctx.sync !== undefined ? { sync: ctx.sync } : {}),
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

@@ -191,4 +191,36 @@ describe('openSource', () => {
       await fs.rm(dir, { recursive: true, force: true });
     }
   });
+
+  it('keeps a URL’s user and password out of a source’s identity', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'index-export-cfg-'));
+    try {
+      await fs.writeFile(path.join(dir, 'gw2'), 'peer-pass\n');
+      const clickhouse = () =>
+        ({ query: async () => ({}), close: async () => undefined }) as never;
+      const env = { ...CH_ENV, CLICKHOUSE_URL: 'http://user:pass@host:8123' };
+      const [local, peer] = resolveSourceConfigs(
+        JSON.stringify([
+          { type: 'clickhouse' },
+          {
+            type: 'clickhouse',
+            name: 'gw2',
+            url: 'https://reader:hunter2@peer.example:8443/ch',
+            user: 'reader',
+            passwordFile: path.join(dir, 'gw2'),
+          },
+        ]),
+        env,
+      );
+      const own = await openSource(local, env, { clickhouse });
+      const other = await openSource(peer, env, { clickhouse });
+      assert.equal(own.identity, 'clickhouse http://host:8123');
+      assert.equal(other.identity, 'clickhouse https://peer.example:8443/ch');
+      for (const identity of [own.identity, other.identity]) {
+        assert.doesNotMatch(identity ?? '', /user|pass|reader|hunter2/);
+      }
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
 });

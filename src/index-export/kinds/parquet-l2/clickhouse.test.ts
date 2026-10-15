@@ -30,7 +30,8 @@ import {
 } from '../root-tx/sources/clickhouse.js';
 import { deriveL1Bands } from '../parquet-l1/kind.js';
 import { ClickHouseL2Source, toSourceRow } from './clickhouse.js';
-import { openL2Source, urlIdentity } from './config.js';
+import { openL2Source } from './config.js';
+import { urlIdentity } from '../root-tx/sources/config.js';
 import { exportL2Band } from './export.js';
 import { GatewayReads } from './gateway-reads.js';
 import type { L2SourceRow, L2SourceWindow } from './source.js';
@@ -113,15 +114,14 @@ const collect = async (windows: AsyncIterable<L2SourceWindow>) => {
 describe('the L2 source identity', () => {
   it('keeps an origin and path, never credentials or a query', async () => {
     assert.equal(
-      urlIdentity('https://reader:s3cret@peer.example:8443/ch/?token=x'),
+      urlIdentity('https://reader:s3cret@peer.example:8443/ch?token=x'),
       'https://peer.example:8443/ch',
     );
     assert.equal(
       urlIdentity('http://clickhouse:8123'),
       'http://clickhouse:8123',
     );
-    assert.equal(urlIdentity('not a url'), '(not a URL)');
-    assert.equal(urlIdentity(undefined), '');
+    assert.equal(urlIdentity('not a url'), 'an unparsable URL');
     const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'parquet-l2-id-'));
     try {
       const passwordFile = path.join(dir, 'peer');

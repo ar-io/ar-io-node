@@ -109,6 +109,7 @@ import type { L2ItemSource } from './kinds/parquet-l2/source.js';
 import { fingerprintL2Band } from './kinds/parquet-l2/fingerprint.js';
 import { openWalletsDb } from './kinds/parquet-l2/wallets.js';
 import { idHeightRange as l2IdHeightRange } from '../lib/parquet-l2/layout.js';
+import { urlIdentity } from './kinds/root-tx/sources/config.js';
 import { CsvOverlaySource } from './kinds/root-tx/sources/csv.js';
 import type { RecordSource } from './kinds/root-tx/sources/rows.js';
 import { ExportLock, LOCK_STALE_MS, LockHolder } from './lock.js';
@@ -258,6 +259,11 @@ export interface ServiceDeps {
   headerCheck?: { retries?: number; retryDelayMs?: number };
   /** Opens the `parquet-l2` item source, fresh for each index's run. */
   openL2Source?: () => Promise<L2ItemSource>;
+  /**
+   * Flush built bands to disk before publishing them (default true). Tests
+   * turn it off: a band is up to 256 files, each flushed.
+   */
+  syncBands?: boolean;
 }
 
 /**
@@ -557,7 +563,8 @@ export class ExportService {
       dryRun,
       steps: [],
       l1Steps: [],
-      gateUrl: config.headerCheckUrl,
+      // Its origin and path only: a query can carry a token.
+      gateUrl: urlIdentity(config.headerCheckUrl),
       peakBytes: 0,
     };
     await fs.mkdir(config.workDir, { recursive: true });
@@ -701,6 +708,9 @@ export class ExportService {
         dryRun: dryRun && options.keepDir === undefined,
         ...(this.deps.headerCheck !== undefined
           ? { headerCheck: this.deps.headerCheck }
+          : {}),
+        ...(this.deps.syncBands !== undefined
+          ? { sync: this.deps.syncBands }
           : {}),
         ...(this.lock !== undefined
           ? { stillHeld: async () => this.lock?.held() ?? false }
@@ -871,6 +881,7 @@ export class ExportService {
   private async runGrid(
     ...args: Parameters<ExportService['runGridSteps']>
   ): Promise<void> {
+    const [, , , memory, state] = args;
     try {
       await this.runGridSteps(...args);
     } catch (error) {
@@ -878,6 +889,18 @@ export class ExportService {
         throw new RunFailure('grid_layout', error.message);
       }
       throw error;
+    } finally {
+      // A run that stopped part way (the disk, a source) still keeps what
+      // the bands it published settled against, and when: the state keeps
+      // these for live bands only.
+      if (memory.liveIds === undefined) {
+        const { publishDir, publisher } = this.deps.config;
+        await deriveOwnBands(publishDir, publisher, state.adoptions, GRID_ROLES)
+          .then((bands) => {
+            memory.liveIds = bands.map((band) => band.id);
+          })
+          .catch(() => undefined);
+      }
     }
   }
 
