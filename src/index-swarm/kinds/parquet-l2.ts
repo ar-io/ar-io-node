@@ -13,7 +13,7 @@
  *
  * Checked as an L1 band is: digests against the signed publication, then
  * here the file set, each file's footer and schema against the layout and
- * the row counts the band declares, and its heights on the L1 grid. One
+ * the row counts the band declares (its lookup files' as its tables'), and its heights on the L1 grid. One
  * check more: every band of an index declares the same selection, in its
  * `band.json`, in the publication's metadata for it, and in the index's
  * `filter` when the publisher sets one. Checks of the rows themselves
@@ -43,6 +43,7 @@ import {
   bandTablesDigest,
   idHeightRange,
   MAX_BAND_FILE_BYTES,
+  PARQUET_L2_LOOKUPS,
   PARQUET_L2_SCHEMAS,
   PARQUET_L2_TABLES,
   parseBandFile,
@@ -254,6 +255,14 @@ export class ParquetL2Kind implements ArtifactKind {
         await checkParquetFile(db, path.join(dir, table.file), {
           columns: table.columns,
           rows: declared.tables[table.name].rows,
+        });
+      }
+      // Lookups get the same footer check: their columns as the layout
+      // declares them, and the rows their band says.
+      for (const spec of PARQUET_L2_LOOKUPS) {
+        await checkParquetFile(db, path.join(dir, spec.file), {
+          columns: spec.columns,
+          rows: declared.lookups[spec.name].rows,
         });
       }
     } finally {

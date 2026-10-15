@@ -18,6 +18,7 @@ import {
   BAND_FILE,
   bandFiles,
   l2BandId,
+  PARQUET_L2_LOOKUPS,
   PARQUET_L2_TABLES,
   ParquetL2Band,
   ParquetL2Selection,
@@ -64,7 +65,7 @@ async function writeTable(
   }
 }
 
-/** A band's description, 3 rows a table. */
+/** A band's description, 3 rows a table and a lookup. */
 const described = (
   heightRange: [number, number] = [0, 99_999],
   selection: ParquetL2Selection = SELECTION,
@@ -76,6 +77,12 @@ const described = (
   tables: Object.fromEntries(
     PARQUET_L2_TABLES.map((t) => [
       t.name,
+      { rows: 3, rowDigest: 'b'.repeat(64) },
+    ]),
+  ),
+  lookups: Object.fromEntries(
+    PARQUET_L2_LOOKUPS.map((l) => [
+      l.name,
       { rows: 3, rowDigest: 'b'.repeat(64) },
     ]),
   ),
@@ -108,7 +115,7 @@ describe('ParquetL2Kind', () => {
     id = l2BandId(described(), TAG);
     band = path.join(root, id);
     await fs.mkdir(band);
-    for (const table of PARQUET_L2_TABLES) {
+    for (const table of [...PARQUET_L2_TABLES, ...PARQUET_L2_LOOKUPS]) {
       await writeTable(path.join(band, table.file), table, 3);
     }
     await rewrite(described());
@@ -313,6 +320,49 @@ describe('ParquetL2Kind', () => {
       kind.validate(descriptor, band, indexOf(descriptor)),
       /holds 7 rows, its band says 3/,
     );
+  });
+
+  it('refuses a missing lookup file, a lookup column of another type, or a lookup row count the band file doesn’t say', async () => {
+    const descriptor = await kind.describe(band);
+    // Without its lookups the file set is not the layout's.
+    const bare = {
+      ...descriptor,
+      files: descriptor.files.filter((f) => !f.name.startsWith('lookup_')),
+    };
+    await assert.rejects(
+      kind.validate(bare, band, indexOf(bare)),
+      /not the l2-1 files/,
+    );
+    await fs.rm(path.join(band, 'lookup_tag.parquet'));
+    await assert.rejects(
+      kind.validate(descriptor, band, indexOf(descriptor)),
+      /missing lookup_tag\.parquet/,
+    );
+    await assert.rejects(kind.describe(band), /lacks lookup_tag\.parquet/);
+    const [id, wallet, tag] = PARQUET_L2_LOOKUPS;
+    await writeTable(path.join(band, tag.file), tag, 3);
+
+    await writeTable(path.join(band, wallet.file), wallet, 3, {
+      role: 'INTEGER',
+    });
+    let current = await kind.describe(band);
+    await assert.rejects(
+      kind.validate(current, band, indexOf(current)),
+      /have "role INTEGER", want "role UTINYINT"/,
+    );
+    await writeTable(path.join(band, wallet.file), wallet, 3);
+    await writeTable(path.join(band, id.file), id, 4);
+    current = await kind.describe(band);
+    await assert.rejects(
+      kind.validate(current, band, indexOf(current)),
+      /holds 4 rows, its band says 3/,
+    );
+    // The band's id is its tables', whatever its lookups say.
+    const recounted = described();
+    recounted.lookups.id = { rows: 4, rowDigest: 'c'.repeat(64) };
+    assert.equal(await rewrite(recounted), descriptor.id);
+    current = await kind.describe(band);
+    await kind.validate(current, band, indexOf(current));
   });
 
   describe('selection', () => {

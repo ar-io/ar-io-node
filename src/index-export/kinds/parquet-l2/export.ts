@@ -31,14 +31,18 @@
  *   writes each table's Parquet in that order. No sort of the band.
  * - **`parents` and `wallets`** (a row per nested bundle, per owner) are
  *   gathered in the database too, kept distinct and sorted there.
+ * - **Lookups** (`PARQUET_L2_LOOKUPS`) are derived by DuckDB from the
+ *   tables' Parquet once it is written, sorted by their keys, under the same
+ *   limits and spill.
  * - **DuckDB** runs with a memory limit, a thread count and a spill
  *   directory in the staging directory, capped (`L2DuckLimits`).
  * - **Checks before anything publishes**: every location all set or all
  *   null, the layout arithmetic of every located row, `tag_count` against
  *   the tag rows, every root at its L1 position (against the L1 bands
  *   themselves when those gave the positions), one row per key, every
- *   key's SHA-256 its address; and every table read back from its Parquet,
- *   in order, to the digest written.
+ *   key's SHA-256 its address; every table read back from its Parquet,
+ *   in order, to the digest written; and every lookup read back to its
+ *   digest and found to hold exactly the rows its tables give.
  */
 import crypto from 'node:crypto';
 import * as fs from 'node:fs/promises';
@@ -60,6 +64,10 @@ import {
   ParquetL2Selection,
   serializeBandFile,
 } from '../../../lib/parquet-l2/layout.js';
+import {
+  verifyBandLookups,
+  writeBandLookups,
+} from '../../../lib/parquet-l2/lookups.js';
 import { decodeColumn, encodeField } from '../parquet-l1/export.js';
 import type { L1PublishedBand } from '../parquet-l1/kind.js';
 import type {
@@ -970,12 +978,23 @@ async function build(
         tags: { rows: tagsDigest.rows, rowDigest: tagsDigest.hex() },
       },
     });
+    // Derived from the tables just written, and checked against them before
+    // anything publishes: a lookup that disagrees is this build's fault,
+    // not the rows'.
+    const lookups = await writeBandLookups(duck, bandDir);
+    const lookupProblems = await verifyBandLookups(duck, bandDir, { lookups });
+    if (lookupProblems.length > 0) {
+      throw new Error(
+        `The band's lookups don't match its tables: ${lookupProblems.join('; ')}`,
+      );
+    }
     const band: ParquetL2Band = {
       version: 1,
       schema: PARQUET_L2_SCHEMA,
       heightRange: [from, to],
       selection,
       tables: tables.tables,
+      lookups,
       checks: {
         located: counts.located,
         // What the rows and the source determine: an ambiguous item left

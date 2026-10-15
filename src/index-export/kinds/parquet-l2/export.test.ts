@@ -34,6 +34,8 @@ import {
   parseBandFile,
   serializeBandFile,
 } from '../../../lib/parquet-l2/layout.js';
+import { verifyBandLookups } from '../../../lib/parquet-l2/lookups.js';
+import { sqlPath } from '../../../lib/parquet/lookups.js';
 import { ParquetL2Kind } from '../../../index-swarm/kinds/parquet-l2.js';
 import { withBandWriter } from '../parquet-l1/export.js';
 import { deriveL1Bands } from '../parquet-l1/kind.js';
@@ -238,6 +240,54 @@ describe('exportL2Band', () => {
       kind: 'parquet-l2',
       bands: [descriptor],
     } as never);
+  });
+
+  it('writes lookups its tables give, checked, and left out of its id', async () => {
+    const result = await exportBand(new MemoryL2Source(rows(), ancestors()));
+    try {
+      const { band } = result;
+      // Seven items, one height each, all signed by their owner; the tag
+      // pairs as their items carry them.
+      assert.equal(band.lookups.id.rows, 7);
+      assert.ok(band.lookups.wallet.rows >= 7);
+      assert.ok(band.lookups.tag.rows > 0);
+      const files = await fs.readdir(result.dir);
+      for (const file of [
+        'lookup_id.parquet',
+        'lookup_wallet.parquet',
+        'lookup_tag.parquet',
+      ]) {
+        assert.ok(files.includes(file), file);
+      }
+      assert.deepEqual(
+        parseBandFile(
+          await fs.readFile(path.join(result.dir, 'band.json'), 'utf8'),
+        ).lookups,
+        band.lookups,
+      );
+      assert.equal(
+        l2BandId(band, bandPublisherTag(PUBLISHER)),
+        l2BandId({ ...band, lookups: {} }, bandPublisherTag(PUBLISHER)),
+      );
+      await withBandWriter(path.join(dir, 'read'), async (duck) => {
+        assert.deepEqual(await verifyBandLookups(duck, result.dir, band), []);
+        // A lookup another row longer is refused, against its band and
+        // against its tables.
+        const file = path.join(result.dir, 'lookup_id.parquet');
+        await duck.exec(
+          `COPY (SELECT * FROM read_parquet(${sqlPath(file)})
+                 UNION ALL SELECT 1::UBIGINT, 100000::UBIGINT)
+           TO ${sqlPath(`${file}.tampered`)} (FORMAT PARQUET)`,
+        );
+        await fs.rename(`${file}.tampered`, file);
+        const problems = await verifyBandLookups(duck, result.dir, band);
+        assert.equal(problems.length, 2, problems.join('\n'));
+        assert.match(problems[0], /holds 8 rows .* its band says 7 rows/);
+        assert.match(problems[1], /1 rows that its tables do not give/);
+      });
+    } finally {
+      await fs.rm(result.staging, { recursive: true, force: true });
+    }
   });
 
   it('gives the same band.json and id whatever order the source gives its rows in', async () => {

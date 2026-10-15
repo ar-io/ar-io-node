@@ -728,6 +728,9 @@ largest, `h1800000`, holds 69M items and 518M tag rows):
   their digests and order;
 - `parents` and `wallets` are gathered in the database, kept distinct and
   sorted there; owners' keys are resolved streaming from it;
+- the three [lookup files](index-publication.md#l2-lookup-files) are
+  derived by DuckDB from the tables' Parquet once it is written, each
+  sorted by its key, in the same database;
 - DuckDB runs within `INDEX_EXPORT_L2_DUCKDB_MEMORY` (2 GB) and
   `INDEX_EXPORT_L2_DUCKDB_THREADS` (2), spilling into the staging
   directory, at most `INDEX_EXPORT_L2_DUCKDB_SPILL_MAX_GB` (256 GB).
@@ -756,6 +759,10 @@ Besides the rules above, before a band publishes:
 - each table's row digest taken by reading the written file back, every
   row after the one before it in the table's order, as an importer digests
   it;
+- each lookup file read back for its row digest (in `band.json` under
+  `lookups`), and derived again from the written tables to hold exactly
+  the rows they give; a mismatch is the build's fault, so the band is left
+  for the retry rather than rejected;
 - a header check through `INDEX_EXPORT_HEADER_CHECK_URL`, as for root-TX
   bands: 150 located rows read, 50 more of each of `repaired`, `proven`,
   `absolute`, `deep` and `normalised`, and 150 of a replacement's
