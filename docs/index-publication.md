@@ -22,6 +22,7 @@ client, stdlib plus one Ed25519 library, is at the end of the page.
 - [Looking up one ID](#looking-up-one-id)
 - [L1 bands](#l1-bands)
 - [Lookup files](#lookup-files)
+- [L2 bands](#l2-bands)
 - [Querying a dataset over HTTP](#querying-a-dataset-over-http)
 - [Reference client](#reference-client)
 - [Compatibility rules](#compatibility-rules)
@@ -126,8 +127,8 @@ shortened real example, with 254 of the 257 file entries removed:
 | Field | Type | Meaning |
 |---|---|---|
 | `name` | `[a-z0-9-]{1,64}` | Unique within the document. |
-| `kind` | `[a-z0-9-]{1,64}` | What the bands are and how to read them. Version 1 defines two kinds: `cdb64-root-tx` (root-TX bands) and `parquet-l1` (L1 bands). |
-| `filter` | any JSON | Optional. For `cdb64-root-tx`, the `ANS104_UNBUNDLE_FILTER` the index was built under, which says which bundles it covers. |
+| `kind` | `[a-z0-9-]{1,64}` | What the bands are and how to read them. Version 1 defines three kinds: `cdb64-root-tx` (root-TX bands), `parquet-l1` (L1 bands) and `parquet-l2` (L2 bands). |
+| `filter` | any JSON | Optional. For `cdb64-root-tx`, the `ANS104_UNBUNDLE_FILTER` the index was built under, which says which bundles it covers. For `parquet-l2`, the [selection](#l2-bands) its bands declare. |
 | `bands` | array | The bands currently offered. |
 
 ### Bands
@@ -606,6 +607,72 @@ pointers, so a wallet's bytes stored and a tag's count need no table read.
 They carry the same trust as the tables: each file's digest is signed in
 the publication, and anyone can recompute them from the tables
 (`ar-io-node index-l1-verify --bands-dir` does).
+
+## L2 bands
+
+A `parquet-l2` band carries the ANS-104 data items (L2) of one height range
+that a declared **selection** takes, in Parquet: one app's items, say, so a
+gateway can import them instead of unbundling the chain to find them. A data
+item's height is its root transaction's, and bands cover the same fixed
+heights as [L1 bands](#l1-bands), so an L2 band lies over the L1 band of the
+same heights. No release builds them yet; a gateway publishes and takes
+bands built elsewhere.
+
+A band is a directory of `band.json` and these files:
+
+| File | Holds | Sorted by |
+|---|---|---|
+| `data_items.parquet` | One row per place an item sits in its root transaction: `id`, the root's `height`, `block_transaction_index` and `root_transaction_id`, `parent_id`, `owner_address`, `target`, `anchor`, `signature_type`, `data_size`, `content_type`, `content_encoding`, `tag_count`, and its location | `height, block_transaction_index, id, root_parent_offset, offset` |
+| `tags.parquet` | Each item's tags once per height, names and values in plaintext | `height, id, tag_index` |
+| `wallets.parquet` | Owners' `address` and key (`public_modulus`); the address is the key's SHA-256 | `address` |
+| `parents.parquet` | Every nested bundle between a held item and its root, located as an item is | `id, root_transaction_id, root_parent_offset, offset` |
+
+Every order is ascending with nulls last. An item's location is eight
+columns, `root_parent_offset`, `offset`, `size`, `data_offset`,
+`owner_offset`, `owner_size`, `signature_offset` and `signature_size`, the
+way a gateway's bundle index keeps them: offsets are bytes into the payload
+of the item's parent bundle, and `root_parent_offset` is where that payload
+starts in the root transaction's data. They are all set, or all null for an
+item known to be in its root but not where.
+
+`band.json` names the layout (`schema`: `l2-1`), the heights, the selection,
+each table's row count and row digest (computed as an L1 band's), and
+`createdAt`; optionally `checks`, a small free-form object of what the
+builder checked. A reader refuses any field it does not declare. The
+selection is:
+
+```json
+{
+  "kind": "ans104-data-items",
+  "tag": {
+    "name": "App-Name",
+    "valuePrefix": "ArDrive",
+    "excludeValuePrefix": "ArDrive-Test"
+  }
+}
+```
+
+An item is in it when one of its tags is named `name` exactly and its value
+starts with `valuePrefix` and not with `excludeValuePrefix` (optional; it
+must extend `valuePrefix`), compared as UTF-8 bytes. Each string is at most
+256 bytes, and no other field is allowed.
+
+A band's id is `l2-h<from>-<to>-<publisher tag>-<digest>`, the shape of an L1
+band's. The digest is the first 12 hex digits of SHA-256 over the heights as
+JSON (`[from,to]`), a newline, the selection as one line of JSON with its
+keys in the order above, a newline, and one `<table>:<rows>:<rowDigest>`
+line per table in name order, joined by newlines. The selection is part of
+the band's identity: the same rows under two selections are two bands.
+`checks` and `createdAt` are not part of it.
+
+A reader checks each file against the signed digests, then the file set,
+each footer's columns and row count against the layout and `band.json`,
+that the heights are on the L1 grid, and that the id names the band's
+heights and digest. Every band of an index declares the same selection: the
+publication carries it as each band's `metadata.selection`, and in the
+index's `filter` when the publisher sets one. A reader refuses a band whose
+`band.json` disagrees with the publication, and every band of an index
+whose bands or filter disagree.
 
 ## Querying a dataset over HTTP
 

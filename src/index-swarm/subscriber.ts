@@ -1223,7 +1223,7 @@ export class Subscriber {
     // A copy already on disk (state lost, or a crash between install and
     // the state write) is adopted rather than fetched again.
     const adopted = await this.adoptInstalledCopy(
-      index.name,
+      index,
       band,
       targetDir,
       claimed,
@@ -1448,7 +1448,7 @@ export class Subscriber {
     transport: 'http' | 'torrent';
   }): Promise<boolean> {
     try {
-      await kind.validate(band, sourceDir);
+      await kind.validate(band, sourceDir, index);
     } catch (error: any) {
       // Bytes that match their digests but are not the shape this kind can
       // serve must not reach the gateway, and must not be resumed onto.
@@ -1508,7 +1508,7 @@ export class Subscriber {
    * Returns its directory, or undefined.
    */
   private async adoptInstalledCopy(
-    indexName: string,
+    index: IndexEntry,
     band: BandDescriptor,
     targetDir: string,
     claimed: ReadonlySet<string>,
@@ -1516,7 +1516,7 @@ export class Subscriber {
   ): Promise<string | undefined> {
     // This generation's directory under any suffix, and the layout from
     // before generations, in that order.
-    const indexDir = path.join(this.installedDir, indexName);
+    const indexDir = path.join(this.installedDir, index.name);
     const prefix = `${band.id}${GENERATION_SEPARATOR}${bandGeneration(band)}`;
     const onDisk = (await fs.readdir(indexDir).catch(() => [] as string[]))
       .filter((name) => name === prefix || name.startsWith(`${prefix}.`))
@@ -1543,10 +1543,10 @@ export class Subscriber {
       // The same gate a download passes: what is on disk is not trusted
       // for being there.
       try {
-        await kind.validate(band, dir);
+        await kind.validate(band, dir, index);
       } catch (error: any) {
         this.log.warn('A copy on disk failed validation; not adopting it', {
-          index: indexName,
+          index: index.name,
           band: band.id,
           dir,
           error: error?.message,

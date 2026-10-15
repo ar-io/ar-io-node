@@ -2438,9 +2438,9 @@ describe('Subscriber', () => {
     // a fresh download.
     const base = createKindRegistry({ log }).get('cdb64-root-tx')!;
     const strict: ArtifactKind = Object.assign(Object.create(base), {
-      validate: async (band: any, dir: string) => {
+      validate: async (band: any, dir: string, index: any) => {
         if (dir.startsWith(subInstalled)) throw new Error('not well-formed');
-        return base.validate(band, dir);
+        return base.validate(band, dir, index);
       },
     });
 

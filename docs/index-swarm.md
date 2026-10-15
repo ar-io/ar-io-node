@@ -622,6 +622,16 @@ they can also be [queried in place](index-publication.md#reading-installed-bands
 An index taken off `name` has its bands retired; history already filled
 from them stays in `core.db`.
 
+**L2 bands.** `parquet-l2` indexes, an app's data items as Parquet (see
+[L2 bands](index-publication.md#l2-bands)), are opt-in the same way: a
+subscription takes one only when it names it, `"name": ["root-tx-index",
+"ardrive-l2"]`. The sidecar checks and installs them under
+`installed/<index>/`; nothing in the gateway reads them yet. A publisher
+offers them as `{"name":"ardrive-l2","kind":"parquet-l2"}`, with band
+directories under `data/indexes/published/ardrive-l2/` built outside this
+release. A `filter`, if set, must be the selection its bands declare:
+subscribers refuse every band of an index whose bands or filter disagree.
+
 #### Over the swarm
 
 With a torrent engine, a band the publication offers as a torrent is fetched

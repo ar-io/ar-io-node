@@ -20,7 +20,7 @@
  * publisher can offer a kind this node does not understand without breaking
  * the subscription.
  */
-import { BandDescriptor } from '../../lib/index-publication.js';
+import { BandDescriptor, IndexEntry } from '../../lib/index-publication.js';
 import { InstalledBand } from '../state.js';
 
 /** Bands of one index that are installed here, keyed by band id. */
@@ -87,9 +87,14 @@ export interface ArtifactKind {
    * become live. Digests prove the bytes are the ones the manifest named;
    * this proves they are the shape this kind can actually serve.
    *
+   * `index` is the signed entry the band was offered in, for a kind whose
+   * bands must agree with each other or with the index: every `parquet-l2`
+   * band of an index declares one selection. A kind that checks each band
+   * alone ignores it.
+   *
    * @throws with a message naming what failed.
    */
-  validate(band: BandDescriptor, dir: string): Promise<void>;
+  validate(band: BandDescriptor, dir: string, index: IndexEntry): Promise<void>;
 
   /** Make a validated band live. Must be atomic from a reader's point of view. */
   install(request: InstallRequest): Promise<InstalledSet>;
