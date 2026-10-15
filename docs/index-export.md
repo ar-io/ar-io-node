@@ -846,7 +846,10 @@ A run stops starting freezes and re-settles after
 `INDEX_EXPORT_L2_RUN_BUDGET_MINUTES` (4 hours); the rest wait for the next
 run, 15 minutes later, and so does the tip, which would otherwise span
 every height the freezes left. A failed freeze stops the freezes; the tip
-then still covers its heights.
+then still covers the heights they left, as long as those fit in the tip's
+limit of sub-ranges (the settle window plus two: one failed `d` band does).
+A bootstrap that fails before much is frozen leaves more, and the tip waits
+for the freezes as it does after the time budget.
 
 ### Running L2 exports
 

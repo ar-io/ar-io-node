@@ -1982,8 +1982,11 @@ export class ExportService {
           await fingerprinted(step, bands);
         }
 
-        // 3. The tip, unless freezes are behind (the time budget, or a
-        // bootstrap that failed): it would span every height they left.
+        // 3. The tip. After a failed freeze it still covers the heights the
+        // freezes left, as long as they fit in maxTipBands sub-ranges (one
+        // failed d band does). When they don't (the time budget ran out, or a
+        // bootstrap failed before much was frozen), the tip waits: it would
+        // span every height the freezes left.
         bands = await live();
         const tips =
           range !== undefined
