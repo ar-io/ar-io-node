@@ -6,178 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
-### Added
-
-- **L2 index bands (`parquet-l2`)**: a new index kind for the ANS-104 data
-  items one declared selection takes (a tag name and a value prefix, with
-  an optional narrower prefix excluded: `App-Name` starting `ArDrive`, say),
-  with their tags, owners' keys, nested bundles and offsets in their root
-  transactions, as Parquet on the L1 bands' height grid. The selection is declared in each band's
-  `band.json`, bound into its id (`l2-h<from>-<to>-<publisher>-<digest>`),
-  and carried in the signed publication. The index-swarm sidecar publishes
-  them as `{"name":"ardrive-l2","kind":"parquet-l2"}`, and a subscriber that
-  names the index checks each band's files, footers, schema, row counts, id
-  and selection before installing it, refusing every band of an index whose
-  bands, or `filter`, declare different selections. Opt-in, like
-  `parquet-l1`. `index-export` builds them (below). See *L2 bands* in
-  [docs/index-publication.md](docs/index-publication.md).
-  - Every band carries three lookup files, as an `l1-3` band does, with the
-    same keys: `lookup_id.parquet` (an item's id to its heights),
-    `lookup_wallet.parquet` (an owner's or target's items, with heights and
-    sizes) and `lookup_tag.parquet` (each tag pair, such as a `Drive-Id`,
-    with its item count and first and last height), so a reader finds an
-    item, a wallet or a tag pair without scanning the band. `band.json`
-    describes them under `lookups`; they are not part of the band's id, and
-    a subscriber checks their footers and row counts as a table's.
-- **`index-export` builds L2 bands (`INDEX_EXPORT_KINDS=…,parquet-l2`)**:
-  one index per selection in `INDEX_EXPORT_L2_INDEXES` (`ardrive-l2`:
-  `App-Name` starting `ArDrive`, not `ArDriver`), published under
-  `published/<name>/`, from this gateway's ClickHouse or a peer's
-  (`INDEX_EXPORT_L2_SOURCE`), on the L1 grid with the root-TX grid's settle
-  lag (`INDEX_EXPORT_L2_SETTLE_BLOCKS`), daily tip bands and weekly
-  re-settles.
-  - Every item takes its root's height and block position from this
-    publisher's `parquet-l1` bands (else ClickHouse's L1 rows); a root found
-    in neither refuses the band.
-  - Items are located by the root-TX bands' placement rules, item-relative
-    header offsets moved into the payload, and only when their offsets
-    describe one item; absolute offsets are written parent-relative, and an
-    ambiguous item is settled by reading its header from the root through
-    `INDEX_EXPORT_HEADER_CHECK_URL`. Owners' keys come from ClickHouse,
-    `bundles.db` or the root, kept only when they hash to the address.
-  - The same rows give the same band and id whatever order they are read
-    in; rows that can't be told apart refuse the band rather than be
-    tie-broken. A band that replaces others never loses an item or a
-    location, and every relocated item is header-checked.
-  - `--once --dry-run --range <from>-<to>` builds one band of each index
-    (`--keep` keeps it). New metrics: `index_export_l2_rows`,
-    `index_export_l2_unlocated_rows`, `index_export_l2_owners_without_key`,
-    `index_export_l2_proofs_total`. See *L2 bands* in
-    [docs/index-export.md](docs/index-export.md).
-  - An ambiguous item's proof reads its header as the band header check
-    does: a header whose tag count field is malformed (see *Fixed*) still
-    proves its reading, and is counted (`stats.malformedTags`).
-  - Any band builds in memory that follows a window of the source, never
-    the band: windows of at most `INDEX_EXPORT_L2_WINDOW_ITEMS` (50,000)
-    items, rows sorted and digested a window at a time and appended to a
-    DuckDB database in the staging directory, which writes the Parquet in
-    order, with no sort of the band. DuckDB runs within
-    `INDEX_EXPORT_L2_DUCKDB_MEMORY` (2GB) and `INDEX_EXPORT_L2_DUCKDB_THREADS`
-    (2), spilling at most `INDEX_EXPORT_L2_DUCKDB_SPILL_MAX_GB` (256).
-  - The lookup files are derived from the written tables in the same
-    DuckDB, and checked before publishing: read back to their digests, and
-    derived again to hold exactly the rows the tables give.
-  - A root the gateway answers 404 for is unreadable for the build, asked
-    about once: its ambiguous items are written unlocated (`unproven`) and
-    an owner whose key could only be read there without a key, rather than
-    stop the band; timeouts, 5xx and 429 still stop it, to be retried. A
-    re-settle may locate such items, or key such owners, later; it never
-    drops a key (`dropped_wallets`).
-  - The header check reads its sample from a pool ten times as large, as
-    root-TX bands do, passing over rows whose root is gone; what it read
-    (`sampled`, `poolSize`, `unreadable`, `unreadableShare`) goes in the
-    publisher's `.publisher.json`, never `band.json`, which holds only what
-    the rows and the selection determine.
-  - Re-settles are gated on a fingerprint of the rows each band's
-    sub-ranges read (and the `bundles.db` keys of its owners), as root-TX
-    grid bands are: `--resettle` gates, `--resettle=full` rebuilds. A band
-    built with 404s is rebuilt every
-    `INDEX_EXPORT_L2_RECHECK_UNREADABLE_EVERY` (4) gated re-settles.
-- **Root-TX bands on the L1 grid, with a settle lag
-  (`INDEX_EXPORT_ROOT_TX_LAYOUT=grid`)**: `index-export` cuts root-TX bands
-  at the same heights as `parquet-l1` bands, so every publisher's bands line
-  up whatever its start height, and subscribers stop downloading a
-  multi-GB recent band every week. A 5,000-height `d` band freezes once its
-  top is `INDEX_EXPORT_ROOT_TX_SETTLE_BLOCKS` (5,040, about 7 days) below the
-  stable top, from the sources and the tip's entries; twenty of them roll
-  into a 100,000-height `h` band; a `tip` above them is rebuilt daily,
-  superseding the previous one, and published only when it changed. The
-  default `legacy` layout is unchanged.
-  - Frozen bands are re-settled every
-    `INDEX_EXPORT_ROOT_TX_RESETTLE_INTERVAL_HOURS` (168; 0 for never, or
-    `--once --resettle` to force one): rebuilt from their own entries and
-    the sources, and replaced only when entries were added or relocated. A
-    re-settle never loses an entry and header-checks only what it changes:
-    every relocated entry (at most
-    `INDEX_EXPORT_ROOT_TX_RESETTLE_MAX_CHANGED`, 20,000, a band), each of
-    which must read and verify, and a sample of the added, so entries whose
-    roots are no longer seeded don't block it. Any wrong header leaves the
-    band as it is. Each is reported with its counts and counted in
-    `index_export_resettles_total` and `index_export_resettle_entries`.
-  - A due band is rebuilt only when its sources changed: each source's
-    fingerprint of the band's heights is recorded when it settles (one
-    aggregate query for ClickHouse; the files' names, sizes and SHA-256 for
-    a CSV source) and compared first; equal fingerprints settle it without
-    a rebuild (`unchanged`, `same_sources`,
-    `index_export_resettle_gate_total`). `--once --resettle=full` rebuilds
-    every one.
-  - Grid bands built by hand with `index-band-build` (`h-`, `d-` and
-    `tip-` ids) are taken as they are; a legacy layout's current `r` and
-    daily `d` move into the new bands and the first tip supersedes them.
-    Bands off the grid, or overlapping, stop the run before anything is
-    built (`grid_layout`). See "Grid layout" in `docs/index-export.md`.
-  - A `--once --dry-run` lists the plan in the report (`plan`).
-  - `tools/index-swarm-status` takes the tip as the daily band once there
-    is one.
-  - `docs/index-export.md` documents the overlay files a `csv` source reads
-    (names, columns, header).
-  - `--once --resettle --range <from>-<to>` re-settles only the frozen
-    bands inside those heights, building nothing else.
-
-### Changed
-
-- **Faster whole-band reads.** `Cdb64Reader.entries()` reads in 1 MiB
-  pieces rather than three reads a record (`entryBatches()` yields a
-  piece's records at once), and a re-settle's comparison walks two bands in
-  id order: 2.6 MB/s before, about 400 MB/s after on local disk.
-
-### Fixed
-
-- **Lookup file digests ordered by value**: the lookup engine digested a
-  lookup's rows ordering by its own text renderings of the 64-bit columns
-  (`id8`, `addr8`, `height`, `data_size`, …), so `10` < `100` < `9`, while
-  the files are sorted by value: a reader digesting a lookup in file order
-  could not reproduce its `rowDigest`. The order is now an explicit option
-  (`numeric` or `legacy-text`). `parquet-l2` (`l2-1`) lookups use `numeric`,
-  their files' own order. `parquet-l1` (`l1-3`) lookups keep `legacy-text`,
-  so every published `l1-3` band's digests are unchanged and still verify;
-  a future L1 layout moves to `numeric`.
-- **Root-TX exports no longer place a row that can't frame its own item.**
-  A row with no size, a payload that doesn't start after the item, a header
-  longer than the item, or (its payload size known) an item that doesn't
-  end where its payload does now keeps its root only, counted as
-  `unrepaired` `layout`, top-level or nested, before any placement. Such
-  rows (one at height 1,123,650: offset 1,762, size 1,151, data offset
-  5,543, data size 3) were placed and failed header checks as wrong.
-  ClickHouse and SQLite sources now read the item's payload size for this.
-- **The header check verifies a band among the roots that can still be
-  read.** History whose roots are gone network-wide no longer makes a band
-  "couldn't check" (turbo-gateway.com's 1.3M band had 46% of sampled roots
-  readable, and needed `--skip-header-check`). A read answered 404 is
-  `unreadable`: neither passed nor wrong, left out of the 80% pass ratio,
-  and its root not asked for again; 416 stays wrong, and timeouts, 429 and
-  5xx still count against the ratio. Samples are drawn ten times over and
-  walked until their size has been read (root-TX builds, re-settles,
-  `index-band-build`, `index-band-verify`), and a band also needs 80% of
-  50 verified (or of a smaller sample), which fails it only when gone roots
-  use the pool up; a run's report gives `sampled` (entries read) and
-  `poolSize`. Results, logs and
-  `index-band-verify` report `unreadable`, the pool size and the unreadable
-  share; `index_export_gate_unreadable_total` counts them. A relocated
-  entry in a re-settle must still read and verify.
-- **Band header check: an item with a malformed tag count is no longer a
-  wrong offset.** Some early bundlers wrote the tag bytes' length into the
-  header's tag count field too (an Arweave-signed item at height 789,458
-  says 264 for 9 tags). Its signature hashes to its id and its header ends
-  where its tag bytes say, so its location is right; the check called it
-  wrong and refused the whole band (`wrong_header`), a root-TX band or a
-  re-settle alike. Such an entry now passes and is counted separately
-  (`malformedTags` in the check's result, its strata, a re-settle's
-  report and `index-band-verify`'s output;
-  `index_export_gate_malformed_tags_total`). Every other wrong header is
-  still wrong, and a bundle scan still refuses such a header.
-
-## [Release 85] - 2026-10-14
+## [Release 85] - 2026-10-15
 
 This is a **recommended release** focused on **the Arweave base layer as a
 shared, verifiable index, serving compressed and mislabelled data correctly,
@@ -185,7 +14,8 @@ and chunk availability**. Key highlights include `parquet-l1` L1 index bands,
 shared between gateways over the index swarm, an RSS feed per index and a
 WebSeed, from which a gateway fills its L1 history while it runs
 (`tools/index-swarm-setup --l1`) instead of indexing the chain block by
-block, checked with `index-l1-verify`;
+block, checked with `index-l1-verify`; opt-in `parquet-l2` bands of
+ANS-104 data items, and root-TX bands on the L1 grid;
 the `index-export` service, which builds a gateway's index bands, and the
 `ar-io-node` CLI; fixes for gzip-encoded items served with a missing or wrong
 `Content-Encoding`, and for uploads of the same bytes served with each other's
@@ -471,6 +301,122 @@ with core**).
   `.torrent` whose info dictionary does not hash to the infohash it is filed
   under is not served.
 
+- **L2 index bands (`parquet-l2`)**: a new index kind for the ANS-104 data
+  items one declared selection takes (a tag name and a value prefix, with
+  an optional narrower prefix excluded: `App-Name` starting `ArDrive`, say),
+  with their tags, owners' keys, nested bundles and offsets in their root
+  transactions, as Parquet on the L1 bands' height grid. The selection is declared in each band's
+  `band.json`, bound into its id (`l2-h<from>-<to>-<publisher>-<digest>`),
+  and carried in the signed publication. The index-swarm sidecar publishes
+  them as `{"name":"ardrive-l2","kind":"parquet-l2"}`, and a subscriber that
+  names the index checks each band's files, footers, schema, row counts, id
+  and selection before installing it, refusing every band of an index whose
+  bands, or `filter`, declare different selections. Opt-in, like
+  `parquet-l1`. `index-export` builds them (below). See *L2 bands* in
+  [docs/index-publication.md](docs/index-publication.md).
+  - Every band carries three lookup files, as an `l1-3` band does, with the
+    same keys: `lookup_id.parquet` (an item's id to its heights),
+    `lookup_wallet.parquet` (an owner's or target's items, with heights and
+    sizes) and `lookup_tag.parquet` (each tag pair, such as a `Drive-Id`,
+    with its item count and first and last height), so a reader finds an
+    item, a wallet or a tag pair without scanning the band. `band.json`
+    describes them under `lookups`; they are not part of the band's id, and
+    a subscriber checks their footers and row counts as a table's.
+- **`index-export` builds L2 bands (`INDEX_EXPORT_KINDS=…,parquet-l2`)**:
+  one index per selection in `INDEX_EXPORT_L2_INDEXES` (`ardrive-l2`:
+  `App-Name` starting `ArDrive`, not `ArDriver`), published under
+  `published/<name>/`, from this gateway's ClickHouse or a peer's
+  (`INDEX_EXPORT_L2_SOURCE`), on the L1 grid with the root-TX grid's settle
+  lag (`INDEX_EXPORT_L2_SETTLE_BLOCKS`), daily tip bands and weekly
+  re-settles.
+  - Every item takes its root's height and block position from this
+    publisher's `parquet-l1` bands (else ClickHouse's L1 rows); a root found
+    in neither refuses the band.
+  - Items are located by the root-TX bands' placement rules, item-relative
+    header offsets moved into the payload, and only when their offsets
+    describe one item; absolute offsets are written parent-relative, and an
+    ambiguous item is settled by reading its header from the root through
+    `INDEX_EXPORT_HEADER_CHECK_URL`. Owners' keys come from ClickHouse,
+    `bundles.db` or the root, kept only when they hash to the address.
+  - The same rows give the same band and id whatever order they are read
+    in; rows that can't be told apart refuse the band rather than be
+    tie-broken. A band that replaces others never loses an item or a
+    location, and every relocated item is header-checked.
+  - `--once --dry-run --range <from>-<to>` builds one band of each index
+    (`--keep` keeps it). New metrics: `index_export_l2_rows`,
+    `index_export_l2_unlocated_rows`, `index_export_l2_owners_without_key`,
+    `index_export_l2_proofs_total`. See *L2 bands* in
+    [docs/index-export.md](docs/index-export.md).
+  - An ambiguous item's proof reads its header as the band header check
+    does: a header whose tag count field is malformed (see *Fixed*) still
+    proves its reading, and is counted (`stats.malformedTags`).
+  - Any band builds in memory that follows a window of the source, never
+    the band: windows of at most `INDEX_EXPORT_L2_WINDOW_ITEMS` (50,000)
+    items, rows sorted and digested a window at a time and appended to a
+    DuckDB database in the staging directory, which writes the Parquet in
+    order, with no sort of the band. DuckDB runs within
+    `INDEX_EXPORT_L2_DUCKDB_MEMORY` (2GB) and `INDEX_EXPORT_L2_DUCKDB_THREADS`
+    (2), spilling at most `INDEX_EXPORT_L2_DUCKDB_SPILL_MAX_GB` (256).
+  - The lookup files are derived from the written tables in the same
+    DuckDB, and checked before publishing: read back to their digests, and
+    derived again to hold exactly the rows the tables give.
+  - A root the gateway answers 404 for is unreadable for the build, asked
+    about once: its ambiguous items are written unlocated (`unproven`) and
+    an owner whose key could only be read there without a key, rather than
+    stop the band; timeouts, 5xx and 429 still stop it, to be retried. A
+    re-settle may locate such items, or key such owners, later; it never
+    drops a key (`dropped_wallets`).
+  - The header check reads its sample from a pool ten times as large, as
+    root-TX bands do, passing over rows whose root is gone; what it read
+    (`sampled`, `poolSize`, `unreadable`, `unreadableShare`) goes in the
+    publisher's `.publisher.json`, never `band.json`, which holds only what
+    the rows and the selection determine.
+  - Re-settles are gated on a fingerprint of the rows each band's
+    sub-ranges read (and the `bundles.db` keys of its owners), as root-TX
+    grid bands are: `--resettle` gates, `--resettle=full` rebuilds. A band
+    built with 404s is rebuilt every
+    `INDEX_EXPORT_L2_RECHECK_UNREADABLE_EVERY` (4) gated re-settles.
+- **Root-TX bands on the L1 grid, with a settle lag
+  (`INDEX_EXPORT_ROOT_TX_LAYOUT=grid`)**: `index-export` cuts root-TX bands
+  at the same heights as `parquet-l1` bands, so every publisher's bands line
+  up whatever its start height, and subscribers stop downloading a
+  multi-GB recent band every week. A 5,000-height `d` band freezes once its
+  top is `INDEX_EXPORT_ROOT_TX_SETTLE_BLOCKS` (5,040, about 7 days) below the
+  stable top, from the sources and the tip's entries; twenty of them roll
+  into a 100,000-height `h` band; a `tip` above them is rebuilt daily,
+  superseding the previous one, and published only when it changed. The
+  default `legacy` layout is unchanged.
+  - Frozen bands are re-settled every
+    `INDEX_EXPORT_ROOT_TX_RESETTLE_INTERVAL_HOURS` (168; 0 for never, or
+    `--once --resettle` to force one): rebuilt from their own entries and
+    the sources, and replaced only when entries were added or relocated. A
+    re-settle never loses an entry and header-checks only what it changes:
+    every relocated entry (at most
+    `INDEX_EXPORT_ROOT_TX_RESETTLE_MAX_CHANGED`, 20,000, a band), each of
+    which must read and verify, and a sample of the added, so entries whose
+    roots are no longer seeded don't block it. Any wrong header leaves the
+    band as it is. Each is reported with its counts and counted in
+    `index_export_resettles_total` and `index_export_resettle_entries`.
+  - A due band is rebuilt only when its sources changed: each source's
+    fingerprint of the band's heights is recorded when it settles (one
+    aggregate query for ClickHouse; the files' names, sizes and SHA-256 for
+    a CSV source) and compared first; equal fingerprints settle it without
+    a rebuild (`unchanged`, `same_sources`,
+    `index_export_resettle_gate_total`). `--once --resettle=full` rebuilds
+    every one.
+  - Grid bands built by hand with `index-band-build` (`h-`, `d-` and
+    `tip-` ids) are taken as they are; a legacy layout's current `r` and
+    daily `d` move into the new bands and the first tip supersedes them.
+    Bands off the grid, or overlapping, stop the run before anything is
+    built (`grid_layout`). See "Grid layout" in `docs/index-export.md`.
+  - A `--once --dry-run` lists the plan in the report (`plan`).
+  - `tools/index-swarm-status` takes the tip as the daily band once there
+    is one.
+  - `docs/index-export.md` documents the overlay files a `csv` source reads
+    (names, columns, header).
+  - `--once --resettle --range <from>-<to>` re-settles only the frozen
+    bands inside those heights, building nothing else.
+
 ### Changed
 
 - **A single-range GET of an uncached item fetches only the range.** The data,
@@ -581,6 +527,11 @@ with core**).
   use the not-found TTL (`CACHE_NOT_FOUND_MAX_AGE`, `must-revalidate`) rather
   than the 30-day blocked TTL, because an unblock never revalidates this URL.
   Every other path on a sandbox host is unchanged.
+
+- **Faster whole-band reads.** `Cdb64Reader.entries()` reads in 1 MiB
+  pieces rather than three reads a record (`entryBatches()` yields a
+  piece's records at once), and a re-settle's comparison walks two bands in
+  id order: 2.6 MB/s before, about 400 MB/s after on local disk.
 
 ### Fixed
 
@@ -912,6 +863,50 @@ with core**).
   names a coding, for gzip and zstd only and only when the body starts with
   the coding's magic bytes, so a copy decoded upstream is still served
   without it. Edge caches keep affected responses until they are purged.
+
+- **Lookup file digests ordered by value**: the lookup engine digested a
+  lookup's rows ordering by its own text renderings of the 64-bit columns
+  (`id8`, `addr8`, `height`, `data_size`, …), so `10` < `100` < `9`, while
+  the files are sorted by value: a reader digesting a lookup in file order
+  could not reproduce its `rowDigest`. The order is now an explicit option
+  (`numeric` or `legacy-text`). `parquet-l2` (`l2-1`) lookups use `numeric`,
+  their files' own order. `parquet-l1` (`l1-3`) lookups keep `legacy-text`,
+  so every published `l1-3` band's digests are unchanged and still verify;
+  a future L1 layout moves to `numeric`.
+- **Root-TX exports no longer place a row that can't frame its own item.**
+  A row with no size, a payload that doesn't start after the item, a header
+  longer than the item, or (its payload size known) an item that doesn't
+  end where its payload does now keeps its root only, counted as
+  `unrepaired` `layout`, top-level or nested, before any placement. Such
+  rows (one at height 1,123,650: offset 1,762, size 1,151, data offset
+  5,543, data size 3) were placed and failed header checks as wrong.
+  ClickHouse and SQLite sources now read the item's payload size for this.
+- **The header check verifies a band among the roots that can still be
+  read.** History whose roots are gone network-wide no longer makes a band
+  "couldn't check" (turbo-gateway.com's 1.3M band had 46% of sampled roots
+  readable, and needed `--skip-header-check`). A read answered 404 is
+  `unreadable`: neither passed nor wrong, left out of the 80% pass ratio,
+  and its root not asked for again; 416 stays wrong, and timeouts, 429 and
+  5xx still count against the ratio. Samples are drawn ten times over and
+  walked until their size has been read (root-TX builds, re-settles,
+  `index-band-build`, `index-band-verify`), and a band also needs 80% of
+  50 verified (or of a smaller sample), which fails it only when gone roots
+  use the pool up; a run's report gives `sampled` (entries read) and
+  `poolSize`. Results, logs and
+  `index-band-verify` report `unreadable`, the pool size and the unreadable
+  share; `index_export_gate_unreadable_total` counts them. A relocated
+  entry in a re-settle must still read and verify.
+- **Band header check: an item with a malformed tag count is no longer a
+  wrong offset.** Some early bundlers wrote the tag bytes' length into the
+  header's tag count field too (an Arweave-signed item at height 789,458
+  says 264 for 9 tags). Its signature hashes to its id and its header ends
+  where its tag bytes say, so its location is right; the check called it
+  wrong and refused the whole band (`wrong_header`), a root-TX band or a
+  re-settle alike. Such an entry now passes and is counted separately
+  (`malformedTags` in the check's result, its strata, a re-settle's
+  report and `index-band-verify`'s output;
+  `index_export_gate_malformed_tags_total`). Every other wrong header is
+  still wrong, and a bundle scan still refuses such a header.
 
 ### Documentation
 
