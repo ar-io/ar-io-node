@@ -374,6 +374,16 @@ other records.
 `--range <from>-<to>` with `--resettle` re-settles only the frozen bands
 inside those heights and builds nothing else (no freeze, roll or tip), to
 re-check one band: `--once --resettle=full --range 1100000-1199999`.
+
+`--range` means one thing per run, for every index the run builds:
+
+| Given | Root-TX (grid) | `parquet-l2` (each index) | `parquet-l1` |
+|---|---|---|---|
+| `--range` with `--resettle[=full]` | Re-settles only its frozen bands inside the heights | The same | Nothing built |
+| `--range` alone (with `--dry-run` or `--keep`) | Nothing built | Builds exactly that band (a range on the grid), never published | Nothing built |
+
+`--range` alone without `parquet-l2` among the kinds, or without
+`--dry-run` or `--keep`, is refused.
 A ClickHouse merge, `OPTIMIZE` or TTL expiry changes the rows, and so the
 fingerprint, though the rebuild then finds nothing to add: such a band is
 rebuilt once, and is unchanged; that is the safe direction, never a change
@@ -840,7 +850,9 @@ then still covers its heights.
 
 ```bash
 # One band of each L2 index, for a look or a comparison: built and checked,
-# nothing published, no state saved. --range takes a band on the grid.
+# nothing published, no state saved. --range takes a band on the grid
+# (see "--range means one thing per run").
+# Re-check frozen L2 bands only: --once --resettle[=full] --range <from>-<to>.
 docker compose --profile index-export run --rm -T index-export \
   --once --dry-run --range 1300000-1399999 > l2-h1300000.json
 # The same, keeping the band (under data/indexes) to compare its files.

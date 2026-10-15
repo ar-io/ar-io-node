@@ -16,6 +16,7 @@ import {
   normaliseHeaderOffsets,
   resolveAmbiguous,
 } from './item-location.js';
+import { framesItself } from './rows.js';
 
 const ROOT = Buffer.alloc(32, 1);
 const BUNDLE = Buffer.alloc(32, 2);
@@ -265,6 +266,20 @@ describe('locateItem', () => {
     );
     assert.equal(repaired.normalised, true);
     assert.equal(repaired.location.signatureOffset, 502);
+  });
+
+  it("applies root-TX's shared layout rule: the row of h1123650 that can't frame itself is unlocated", () => {
+    // pa77lXKnEMeMCUI1svtQlqaCRv8jGHSNPGGLAqzb2ss: offset 1762, size 1151,
+    // data_offset 5543, data_size 3.
+    const row = inBundle(1762, {
+      size: 1151,
+      dataOffset: 5543,
+      dataSize: 3,
+      signatureOffset: 1764,
+      ownerOffset: 1764 + 65,
+    });
+    assert.equal(framesItself(row, 1762, 5543), false);
+    assert.equal(reason(locateItem(row)), 'layout');
   });
 
   it('leaves unlocated an item whose offsets are unknown or describe no item', () => {

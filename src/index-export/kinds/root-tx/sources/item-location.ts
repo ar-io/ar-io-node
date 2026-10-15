@@ -33,6 +33,7 @@
  *   ({@link resolveAmbiguous}).
  */
 import {
+  framesItself,
   isNested,
   ItemRow,
   PayloadPlacement,
@@ -71,8 +72,6 @@ export interface LocatableItem extends ItemRow {
   ownerSize?: number;
   signatureOffset?: number;
   signatureSize?: number;
-  /** The payload's size. */
-  dataSize?: number;
 }
 
 /** Why an item is written without a location. */
@@ -156,18 +155,23 @@ export function normaliseHeaderOffsets({
 }
 
 /**
- * Whether offsets describe one ANS-104 data item: a size, the payload ending
- * where the item does, the signature right after the 2-byte signature type,
- * the owner right after the signature, and the payload after the owner.
- * The same in any frame, so it is checked before an item is placed.
+ * Whether offsets describe one ANS-104 data item: the shared rule root-TX
+ * bands apply ({@link framesItself}: a size, the payload starting after the
+ * item and ending where it does), and, for the header offsets an L2 band
+ * keeps, the signature right after the 2-byte signature type, the owner
+ * right after the signature, and the payload after the owner. The same in
+ * any frame, so it is checked before an item is placed.
  */
 export function itemLayoutValid(
   item: Omit<ItemLocation, 'rootParentOffset'>,
   dataSize: number,
 ): boolean {
   return (
-    item.size > 0 &&
-    item.dataOffset + dataSize === item.offset + item.size &&
+    framesItself(
+      { size: item.size, dataSize } as ItemRow,
+      item.offset,
+      item.dataOffset,
+    ) &&
     item.signatureOffset === item.offset + 2 &&
     item.ownerOffset === item.signatureOffset + item.signatureSize &&
     item.dataOffset >= item.ownerOffset + item.ownerSize
@@ -354,13 +358,8 @@ export function locateParent(
   ) {
     return { located: false, reason: 'no_offsets' };
   }
-  if (
-    !(
-      size > 0 &&
-      dataOffset + dataSize === offset + size &&
-      dataOffset >= offset
-    )
-  ) {
+  // The shared rule ({@link framesItself}), its payload's size known.
+  if (!framesItself(row, offset, dataOffset)) {
     return { located: false, reason: 'layout' };
   }
   const placed = placePayload(row, offset);

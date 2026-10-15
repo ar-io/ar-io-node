@@ -1003,7 +1003,7 @@ export class ExportService {
     // Only a bootstrap cuts bands that could overlap a stranger's.
     if (start.frozen.length === 0)
       await this.refuseForeignBands(state.adoptions);
-    const range = (options.resettle !== undefined ? options.range : undefined);
+    const range = options.resettle !== undefined ? options.range : undefined;
     if (start.seeds.length > 0 && range === undefined) {
       context.rootHeights = await RootHeights.of(start.seeds);
     }
@@ -1960,7 +1960,9 @@ export class ExportService {
                 bands,
                 stableTop,
                 ...(startHeight !== undefined ? { startHeight } : {}),
-                ...(dryRun && builtTop !== undefined ? { above: builtTop } : {}),
+                ...(dryRun && builtTop !== undefined
+                  ? { above: builtTop }
+                  : {}),
               });
         const behind = tips.length > maxTipBands(settleBlocks);
         for (const step of tips) {

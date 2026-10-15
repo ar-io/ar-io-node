@@ -403,7 +403,9 @@ describe('ExportService, parquet-l2', () => {
       [['resettle', 100_000, 104_999]],
     );
     // The tip that would have frozen and moved up is as it was.
-    assert.ok((await live()).some((b) => b.from === 110_000 && b.to === 110_200));
+    assert.ok(
+      (await live()).some((b) => b.from === 110_000 && b.to === 110_200),
+    );
   });
 
   it("gates on the owners' keys bundles.db holds too", async () => {
