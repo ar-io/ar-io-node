@@ -73,10 +73,12 @@ What it costs, measured on a live gateway in 2026-10:
 Check it with `./tools/index-swarm-status`.
 
 **To opt out** of subscribing, set `INDEX_SWARM_SUBSCRIBE=[]` and recreate the
-sidecar (`docker compose up -d --no-deps index-swarm`). Any explicit value
-replaces the default, so naming another publisher also drops the ar.io one
-unless it is listed too. To stop sharing altogether, see
-[turning it off](#turning-it-off).
+sidecar (`docker compose up -d --no-deps index-swarm`). Nothing new is then
+downloaded, but bands already installed stay: the gateway still searches
+them and the engine still seeds them. Any explicit value replaces the
+default, so naming another publisher also drops the ar.io one unless it is
+listed too, and its installed bands are then retired. To stop seeding or
+remove the bands, see [turning it off](#turning-it-off).
 
 **Upgrading.** A gateway that already sets `INDEX_SWARM_SUBSCRIBE`,
 `INDEX_SWARM_ENGINE_AUTH`, `CDB64_ROOT_TX_INDEX_SOURCES` or
@@ -1214,8 +1216,11 @@ loaded and published bands stay served, from the last document written.
 Subscribers see that document age and, once it expires, alarm.
 
 To stop taking bands but keep the services, set `INDEX_SWARM_SUBSCRIBE=[]`
-and recreate the sidecar; installed bands from publishers no longer listed
-are retired.
+and recreate the sidecar. With nothing subscribed the sidecar runs no
+subscriber (a publisher keeps publishing), so nothing retires the bands
+already installed or takes them out of the engine: the gateway keeps searching them and the engine keeps seeding them
+until both are removed as below. A subscription that lists other publishers
+instead retires the bands of each publisher it no longer names.
 
 To keep sharing but over HTTP only, without the torrent engine (as a sidecar
 ran before Release 85 when no engine password was set), put just the two
@@ -1233,8 +1238,13 @@ Then `docker compose --profile disabled stop index-swarm-engine`,
 `docker compose --profile disabled rm -f index-swarm-engine index-swarm-engine-init`,
 remove `INDEX_SWARM_ENGINE_AUTH` from `.env` if set, delete
 `data/indexes/engine-auth` (root-owned, so with `sudo`) and recreate the
-sidecar (`docker compose up -d --no-deps index-swarm`). With no password the
-sidecar does not look for an engine and moves bands over HTTP only.
+sidecar (`docker compose up -d --no-deps --force-recreate index-swarm`: it
+reads the password only at startup, and deleting the file changes nothing
+compose can see). With no password the sidecar does not look for an engine
+and moves bands over HTTP only. Do not use `tools/index-swarm-setup
+--restart` on such a gateway: it names the engine services, and Compose
+starts a service named on the command line even when its profile is off.
+Run setup without `--restart` and recreate what it lists, engine excluded.
 
 To remove the feature:
 
