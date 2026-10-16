@@ -442,6 +442,10 @@ with core**).
     `data/indexes/installed/root-tx-index` first, then the three shipped
     indexes, so installed bands answer first. A directory that does not
     exist yet is waited for, as before.
+  - `ROOT_TX_LOOKUP_ORDER` defaults to `db,cdb,gateways,graphql,hyperbeam`
+    (was `db,gateways,graphql,hyperbeam,cdb`): CDB64 indexes, installed
+    bands included, are asked right after the local index and before any
+    network source.
   - `INDEX_SWARM_MAX_DISK_BYTES` defaults to 64 GiB (was no ceiling); `0` is
     no ceiling.
   - The tracker's direct port (6969) is published on `127.0.0.1` by default

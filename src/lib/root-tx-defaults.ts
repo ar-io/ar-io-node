@@ -11,8 +11,12 @@
  * loading the whole gateway configuration.
  */
 
-/** Default `ROOT_TX_LOOKUP_ORDER`. */
-export const DEFAULT_ROOT_TX_LOOKUP_ORDER = 'db,gateways,graphql,hyperbeam,cdb';
+/**
+ * Default `ROOT_TX_LOOKUP_ORDER`. `cdb` comes right after `db`: Index Sharing
+ * installs root-TX bands by default, and they answer from local disk before
+ * any network source is asked.
+ */
+export const DEFAULT_ROOT_TX_LOOKUP_ORDER = 'db,cdb,gateways,graphql,hyperbeam';
 
 /**
  * Where the index-swarm sidecar installs root-TX bands, as a CDB64 source

@@ -94,8 +94,9 @@ load), use the `testing` skill in `.claude/skills/`; `release` and
   whole file.
 
 - The `index-swarm` sidecar (`src/index-swarm/`) shares signed index bands
-  between gateways over HTTP and, with the torrent engine (compose profile
-  `index-swarm-torrent`), BitTorrent. Anything a publisher, peer or engine
+  between gateways over HTTP and, with the torrent engine, BitTorrent. Both
+  start by default since Release 85, subscribed to the ar.io publisher's
+  root-TX bands (`INDEX_SWARM_SUBSCRIBE=[]` opts out). Anything a publisher, peer or engine
   supplies is untrusted: files are checked against signed digests, a
   torrent against signed infohashes and file list, and a torrent download is
   copied and hashed out of `swarm/` before install, never installed in place.

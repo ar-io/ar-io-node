@@ -29,10 +29,10 @@ Related pages:
 A request for a data item needs the item's root transaction and its offsets.
 `ROOT_TX_LOOKUP_ORDER` lists the sources asked for them, in order: `db` (the
 local index), `cdb` (CDB64 indexes), `gateways`, `graphql`, `hyperbeam` and
-others. The default is `db,gateways,graphql,hyperbeam,cdb`, so CDB64 is
-enabled but asked last. A gateway with local indexes, such as installed
-bands, gains most with `cdb` right after `db` (see
-[lookup order](index-swarm.md#lookup-order)):
+others. The default is `db,cdb,gateways,graphql,hyperbeam`: CDB64 indexes,
+including the bands Index Sharing installs, are asked right after the local
+index (see [lookup order](index-swarm.md#lookup-order)). An order set before
+Release 85 that puts `cdb` last should move it up:
 
 ```bash
 ROOT_TX_LOOKUP_ORDER=db,cdb,gateways,graphql
@@ -193,7 +193,7 @@ Observability (per-node Prometheus metrics):
 | --- | --- | --- |
 | `CDB64_ROOT_TX_INDEX_SOURCES` | `data/indexes/installed/root-tx-index`, then the three shipped indexes in `resources/` (below) | Comma-separated sources, searched in order |
 | `CDB64_ROOT_TX_INDEX_WATCH` | `true` | Load and unload local indexes as they change, without a restart |
-| `ROOT_TX_LOOKUP_ORDER` | `db,gateways,graphql,hyperbeam,cdb` | Order of root-TX sources; `cdb` is CDB64 |
+| `ROOT_TX_LOOKUP_ORDER` | `db,cdb,gateways,graphql,hyperbeam` | Order of root-TX sources; `cdb` is CDB64 |
 | `CDB64_REMOTE_RETRIEVAL_ORDER` | `chunks` | How Arweave-hosted index files are fetched: `gateways`, `chunks`, `tx-data` |
 | `CDB64_REMOTE_CACHE_MAX_REGIONS` | `100` | Cached byte ranges per remote source |
 | `CDB64_REMOTE_CACHE_TTL_MS` | `300000` | How long a cached byte range is kept (5 minutes) |

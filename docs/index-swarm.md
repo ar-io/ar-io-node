@@ -793,9 +793,9 @@ lets bands come and go without a restart. Changing
 
 `ROOT_TX_LOOKUP_ORDER` decides which root-TX sources are asked, and in what
 order, until one gives a usable answer. Its default,
-`db,gateways,graphql,hyperbeam,cdb`, asks every network source before the
-installed bands, so a subscriber gets little from them. Put `cdb` right
-after `db`:
+`db,cdb,gateways,graphql,hyperbeam`, asks the installed bands right after
+the local index. An order set by hand that puts `cdb` after network sources
+gets little from them; put `cdb` right after `db`:
 
 ```bash
 ROOT_TX_LOOKUP_ORDER=db,cdb,gateways,graphql
