@@ -1216,9 +1216,9 @@ loaded and published bands stay served, from the last document written.
 Subscribers see that document age and, once it expires, alarm.
 
 To stop taking bands but keep the services, set `INDEX_SWARM_SUBSCRIBE=[]`
-and recreate the sidecar. With nothing subscribed the sidecar is idle, so it
-neither retires the bands already installed nor takes them out of the
-engine: the gateway keeps searching them and the engine keeps seeding them
+and recreate the sidecar. With nothing subscribed the sidecar runs no
+subscriber (a publisher keeps publishing), so nothing retires the bands
+already installed or takes them out of the engine: the gateway keeps searching them and the engine keeps seeding them
 until both are removed as below. A subscription that lists other publishers
 instead retires the bands of each publisher it no longer names.
 
