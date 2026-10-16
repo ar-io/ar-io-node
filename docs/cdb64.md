@@ -191,7 +191,7 @@ Observability (per-node Prometheus metrics):
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `CDB64_ROOT_TX_INDEX_SOURCES` | The three shipped indexes in `resources/` (below) | Comma-separated sources, searched in order |
+| `CDB64_ROOT_TX_INDEX_SOURCES` | `data/indexes/installed/root-tx-index`, then the three shipped indexes in `resources/` (below) | Comma-separated sources, searched in order |
 | `CDB64_ROOT_TX_INDEX_WATCH` | `true` | Load and unload local indexes as they change, without a restart |
 | `ROOT_TX_LOOKUP_ORDER` | `db,gateways,graphql,hyperbeam,cdb` | Order of root-TX sources; `cdb` is CDB64 |
 | `CDB64_REMOTE_RETRIEVAL_ORDER` | `chunks` | How Arweave-hosted index files are fetched: `gateways`, `chunks`, `tx-data` |
@@ -201,17 +201,21 @@ Observability (per-node Prometheus metrics):
 | `CDB64_REMOTE_MAX_CONCURRENT_REQUESTS` | `4` | Concurrent remote reads: one limit shared by every remote source |
 | `CDB64_REMOTE_SEMAPHORE_TIMEOUT_MS` | `5000` | How long a remote read waits for a free slot |
 
-The shipped default is three indexes up to height 1,820,000. Their manifests
-are in `resources/`, and their partitions are read from Arweave on demand.
-They cover non-AO, non-Redstone data items with a content type, the same
-without one, and AO data items. They carry no offsets.
+The default searches first the root-TX bands the
+[`index-swarm` sidecar](index-swarm.md) installs (it runs by default), a
+[collection](#collection-directory) that may not exist yet (a missing
+directory is waited for and costs nothing), then three shipped
+indexes up to height 1,820,000. Their manifests are in `resources/`, and
+their partitions are read from Arweave on demand. They cover non-AO,
+non-Redstone data items with a content type, the same without one, and AO
+data items. They carry no offsets.
 
 ```text
-resources/cdb64-root-tx-index-non-ao-non-redstone-with-content-type-to-height-1820000,resources/cdb64-root-tx-index-non-ao-non-redstone-without-content-type-to-height-1820000,resources/cdb64-root-tx-index-ao-to-height-1820000
+data/indexes/installed/root-tx-index,resources/cdb64-root-tx-index-non-ao-non-redstone-with-content-type-to-height-1820000,resources/cdb64-root-tx-index-non-ao-non-redstone-without-content-type-to-height-1820000,resources/cdb64-root-tx-index-ao-to-height-1820000
 ```
 
 Setting `CDB64_ROOT_TX_INDEX_SOURCES` replaces this list. To add a source and
-keep the shipped indexes, write them out after it. Compose mounts
+keep the defaults, write them out after it. Compose mounts
 `./data/cdb64-root-tx-index` (`CDB64_ROOT_TX_INDEX_DATA_PATH`) into the
 container at `data/cdb64-root-tx-index`; it is searched only when listed.
 

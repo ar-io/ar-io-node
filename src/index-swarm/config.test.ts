@@ -8,11 +8,16 @@ import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
 
 import {
+  AR_IO_INDEX_PUBLISHER,
   DEFAULT_ENGINE_URL,
+  DEFAULT_MAX_DISK_BYTES,
+  DEFAULT_SUBSCRIBE,
   parseEngineAuth,
+  parseMaxDiskBytes,
   parsePublish,
   parseSubscribe,
   resolveEngineUrl,
+  resolveSubscribe,
 } from './config.js';
 
 describe('index-swarm config', () => {
@@ -130,6 +135,87 @@ describe('index-swarm config', () => {
         () => parseSubscribe('[{"publisher":"w","url":42}]'),
         /\[0\]\.url must be a string/,
       );
+    });
+  });
+
+  describe('resolveSubscribe', () => {
+    const DEFAULT = [
+      {
+        publisher: '34LYvMptiDvBP5sqfh1oAd6Q4qFsy4PWaZ1HTFmML7h5',
+        name: 'root-tx-index',
+      },
+    ];
+
+    it('subscribes to the ar.io publisher, root-TX only, when unset', () => {
+      assert.equal(
+        AR_IO_INDEX_PUBLISHER,
+        '34LYvMptiDvBP5sqfh1oAd6Q4qFsy4PWaZ1HTFmML7h5',
+      );
+      assert.deepEqual(resolveSubscribe(undefined), DEFAULT);
+    });
+
+    it("treats empty and blank as unset, since compose passes '' for an unset variable", () => {
+      assert.deepEqual(resolveSubscribe(''), DEFAULT);
+      assert.deepEqual(resolveSubscribe('  '), DEFAULT);
+    });
+
+    it('takes [] as subscribing to nothing', () => {
+      assert.deepEqual(resolveSubscribe('[]'), []);
+      assert.deepEqual(resolveSubscribe(' [ ] '), []);
+    });
+
+    it('uses an explicit value as given, without adding the default', () => {
+      assert.deepEqual(
+        resolveSubscribe(
+          '[{"publisher":"OtherWallet","name":"root-tx-index"}]',
+        ),
+        [{ publisher: 'OtherWallet', name: 'root-tx-index' }],
+      );
+      assert.deepEqual(
+        resolveSubscribe(
+          '[{"publisher":"34LYvMptiDvBP5sqfh1oAd6Q4qFsy4PWaZ1HTFmML7h5","name":["root-tx-index","parquet-l1"]}]',
+        ),
+        [
+          {
+            publisher: '34LYvMptiDvBP5sqfh1oAd6Q4qFsy4PWaZ1HTFmML7h5',
+            name: ['root-tx-index', 'parquet-l1'],
+          },
+        ],
+      );
+    });
+
+    it('still refuses a malformed explicit value', () => {
+      assert.throws(() => resolveSubscribe('not-json'), /not valid JSON/);
+    });
+
+    it('hands out copies, so the default cannot be changed through them', () => {
+      const first = resolveSubscribe(undefined);
+      first[0].publisher = 'changed';
+      assert.deepEqual(resolveSubscribe(undefined), DEFAULT);
+      assert.ok(Object.isFrozen(DEFAULT_SUBSCRIBE));
+    });
+  });
+
+  describe('parseMaxDiskBytes', () => {
+    it('defaults to 64 GiB when unset or empty', () => {
+      assert.equal(DEFAULT_MAX_DISK_BYTES, 68_719_476_736);
+      assert.equal(parseMaxDiskBytes(undefined), 68_719_476_736);
+      assert.equal(parseMaxDiskBytes(''), 68_719_476_736);
+    });
+
+    it('keeps an explicit value, larger or smaller', () => {
+      assert.equal(parseMaxDiskBytes('53687091200'), 53_687_091_200);
+      assert.equal(parseMaxDiskBytes('1000'), 1000);
+    });
+
+    it('takes 0 as no ceiling', () => {
+      assert.equal(parseMaxDiskBytes('0'), undefined);
+    });
+
+    it('refuses what is not a whole number of bytes', () => {
+      for (const raw of ['-1', '1.5', 'lots', '64GiB']) {
+        assert.throws(() => parseMaxDiskBytes(raw), /whole number of bytes/);
+      }
     });
   });
 

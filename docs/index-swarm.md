@@ -4,8 +4,11 @@ The `index-swarm` sidecar publishes the bands this gateway offers and
 subscribes to bands other gateways publish. Bands install and retire under a
 running gateway without a restart.
 
-It is **off by default**. A gateway that never enables the `index-swarm`
-compose profile behaves as it always did. Related pages:
+It is **on by default** from Release 85. A plain `docker compose up -d`
+starts the sidecar and its torrent engine, and the sidecar subscribes to the
+ar.io publisher's root-TX bands; the gateway searches the installed bands
+first. See [on by default](#on-by-default) for what that costs and how to opt
+out. Related pages:
 
 - [index-export.md](index-export.md): how a publisher builds its bands;
 - [index-publication.md](index-publication.md): the protocol, for anyone
@@ -24,6 +27,60 @@ See [Torrent engine](#torrent-engine).
 
 ## Quick start
 
+### On by default
+
+From Release 85, a gateway shares indexes without any setting:
+
+- **What it takes.** The sidecar subscribes to the root-TX bands of the ar.io
+  publisher, gateway wallet `34LYvMptiDvBP5sqfh1oAd6Q4qFsy4PWaZ1HTFmML7h5`
+  (turbo-gateway.com). L1 bands stay opt-in (see `--l1` below).
+- **What the gateway does with them.** The default
+  `CDB64_ROOT_TX_INDEX_SOURCES` searches `data/indexes/installed/root-tx-index`
+  first, before the shipped snapshots, so installed bands answer root-TX
+  lookups and `/ar-io/offsets/<id>`. The directory need not exist yet.
+- **How bands move.** Over the publisher's HTTP routes and, through the
+  torrent engine (`index-swarm-engine`), peer to peer. Every subscriber seeds
+  what it installed.
+- **The engine password.** With `INDEX_SWARM_ENGINE_AUTH` unset,
+  `index-swarm-engine-init` generates `swarm:` and 48 random hex characters on
+  its first start and keeps it in `data/indexes/engine-auth` (root-owned, mode
+  0600). Later starts reuse it, the sidecar reads it, and it is never logged.
+  The engine's own container does not mount that directory. Set
+  `INDEX_SWARM_ENGINE_AUTH` to choose one instead; a set value always wins.
+  The engine never runs without a password.
+- **Port 6881.** The engine publishes its peer port, 6881 TCP and UDP. Open it
+  to the internet if you can: a subscriber behind NAT still downloads and
+  seeds to the peers it connects to, so this is recommended, not required. If
+  another program holds 6881, set `INDEX_SWARM_ENGINE_PORT` to a free port
+  below 32768. Nothing else is exposed: the tracker's port is published on
+  `127.0.0.1` only (see [the tracker](#the-tracker)).
+
+What it costs, measured on a live gateway in 2026-10:
+
+| Resource | Use |
+|---|---|
+| Disk | About 22 GB of installed root-TX bands, under `data/indexes/` (with torrents, a band being fetched needs its size again while it is copied out of `swarm/`). Capped by `INDEX_SWARM_MAX_DISK_BYTES`, 64 GiB by default |
+| Memory | About 90 MB for the sidecar and about 300 MB for the engine (see [the engine's memory note](#running-the-engine) for mapped file pages) |
+| Upload | Peers fetching from this node, capped at `INDEX_SWARM_UPLOAD_LIMIT_BYTES_PER_SEC` (10 MB/s) and `INDEX_SWARM_UPLOAD_DAILY_LIMIT_BYTES` (100 GB a day) |
+| Download | The first pull of about 22 GB takes minutes to hours; after that, only new bands |
+
+Check it with `./tools/index-swarm-status`.
+
+**To opt out** of subscribing, set `INDEX_SWARM_SUBSCRIBE=[]` and recreate the
+sidecar (`docker compose up -d --no-deps index-swarm`). Any explicit value
+replaces the default, so naming another publisher also drops the ar.io one
+unless it is listed too. To stop sharing altogether, see
+[turning it off](#turning-it-off).
+
+**Upgrading.** A gateway that already sets `INDEX_SWARM_SUBSCRIBE`,
+`INDEX_SWARM_ENGINE_AUTH`, `CDB64_ROOT_TX_INDEX_SOURCES` or
+`INDEX_SWARM_MAX_DISK_BYTES` keeps its values: the defaults apply only when a
+variable is unset or empty. Names given to `docker compose --profile
+index-swarm` and `--profile index-swarm-torrent` are still accepted, and no
+longer needed.
+
+### Setting it up further
+
 Two scripts do the setup and the checking, from the gateway's directory
 (where `.env` and `docker-compose.yaml` are). They need only Docker, since
 they run in the core image. Both are covered in
@@ -34,18 +91,22 @@ replace are under [doing it by hand](#doing-it-by-hand).
 
 1. Run a gateway release that ships `tools/index-swarm-setup`. The sidecar
    runs the same image (`CORE_IMAGE_TAG`).
-2. Set it up and start it. turbo-gateway.com publishes under the gateway
-   wallet `34LYvMptiDvBP5sqfh1oAd6Q4qFsy4PWaZ1HTFmML7h5`:
+2. Set it up and start it. turbo-gateway.com, the default publisher,
+   publishes under the gateway wallet
+   `34LYvMptiDvBP5sqfh1oAd6Q4qFsy4PWaZ1HTFmML7h5`:
    ```bash
-   ./tools/index-swarm-setup --subscribe 34LYvMptiDvBP5sqfh1oAd6Q4qFsy4PWaZ1HTFmML7h5 --torrent --restart
+   ./tools/index-swarm-setup --subscribe 34LYvMptiDvBP5sqfh1oAd6Q4qFsy4PWaZ1HTFmML7h5 --restart
    ```
    To subscribe to another publisher, pass its gateway wallet instead; a
-   publishing gateway shows it as `publisher` in its `/ar-io/indexes`.
+   publishing gateway shows it as `publisher` in its `/ar-io/indexes`. With
+   `INDEX_SWARM_SUBSCRIBE` unset, the default subscription is written out
+   and kept beside it.
    The script subscribes to the publisher's root-TX bands, points the
-   gateway at them, generates the torrent engine's password, and restarts
-   what needs it, by name. Leave out `--torrent` to move bands over HTTP
-   only. Run with `--dry-run` first to see the changes; `.env` is backed up
-   before it is written.
+   gateway at them (`ROOT_TX_LOOKUP_ORDER`, and `CDB64_ROOT_TX_INDEX_SOURCES`
+   when that is set), and restarts what needs it, by name. `--torrent` is
+   still accepted and no longer needed: the engine runs by default. Run with
+   `--dry-run` first to see the changes; `.env` is backed up before it is
+   written.
 
    Add `--l1` to take the publisher's L1 bands as well, and have the gateway
    fill its L1 history from them while it runs (`L1_BAND_IMPORT_ENABLED`).
@@ -55,7 +116,7 @@ replace are under [doing it by hand](#doing-it-by-hand).
    bands do. On a gateway that already runs, it fills whatever is missing
    beneath what the gateway indexed itself. See
    [`index-l1-import --fill`](cli.md#while-the-gateway-runs---fill).
-3. With `--torrent`, open port 6881, TCP and UDP, to the internet if
+3. Open port 6881, TCP and UDP, to the internet if
    possible. A subscriber behind NAT still downloads from peers and seeds to
    the ones it connects to, so this is recommended, not required. The engine
    does not use UPnP; behind a home router, forward the port by hand. See
@@ -65,7 +126,7 @@ replace are under [doing it by hand](#doing-it-by-hand).
    ./tools/index-swarm-status
    ```
    Bands arrive newest heights first. A first pull of the root-TX bands
-   (about 20 GB) takes minutes to hours. Each line says `ok`, `WARN` or
+   (about 22 GB) takes minutes to hours. Each line says `ok`, `WARN` or
    `FAIL`, and every problem comes with the fix. `All good` means the gateway
    answers root-TX lookups from the installed bands.
 
@@ -90,7 +151,7 @@ themselves. The gateway loads each within 30 seconds.
    offer.
 4. Set it up, dry-run the first build, and start it:
    ```bash
-   ./tools/index-swarm-setup --publish --start-height 1950000 --torrent --public-host <this node's public IP>
+   ./tools/index-swarm-setup --publish --start-height 1950000 --public-host <this node's public IP>
    docker compose --profile index-export run --rm -T index-export --once --dry-run > plan.json
    ./tools/index-swarm-setup --publish --restart
    ```
@@ -103,11 +164,12 @@ themselves. The gateway loads each within 30 seconds.
    gateway itself, at `https://<ARNS_ROOT_HOST>/ar-io/indexes/announce`
    (`--public-url` names another origin). The first scan hashes every file
    once (minutes for tens of GB).
-5. With `--torrent`, open 6881 (TCP and UDP) to the internet. Announcing
+5. Open 6881 (TCP and UDP) to the internet. Announcing
    through the gateway, the tracker needs no port of its own (see
    [the tracker](#the-tracker)); that route is Envoy's, so run the Envoy
    image from release 85 or later. Without a gateway URL, setup writes the
-   direct tracker port instead and says to open it.
+   direct tracker port instead, publishes it on every address
+   (`INDEX_SWARM_TRACKER_HOST_IP=0.0.0.0`) and says to open it.
 6. Check it with `./tools/index-swarm-status`, and from outside:
    `curl -s https://<your gateway>/ar-io/indexes | jq '{sequence, publisher, bands: [.indexes[].bands[].id]}'`.
 7. Behind nginx, read [running behind nginx](#running-behind-nginx) before
@@ -123,17 +185,17 @@ A gateway can do both: pass `--subscribe` and `--publish` together.
 
 | Flag | Effect |
 |---|---|
-| `--subscribe <wallet>` | Adds the publisher to `INDEX_SWARM_SUBSCRIBE` (repeatable; existing entries are kept). Sets `INDEX_SWARM_MAX_DISK_BYTES` to 50 GiB if unset. Puts the installed directory first in `CDB64_ROOT_TX_INDEX_SOURCES` and `cdb` right after `db` in `ROOT_TX_LOOKUP_ORDER` (see [pointing the gateway at installed bands](#pointing-the-gateway-at-installed-bands) and [lookup order](#lookup-order)) |
-| `--publish` | Adds `root-tx-index` to `INDEX_SWARM_PUBLISH` and starts `index-export`. Sets `INDEX_EXPORT_HEADER_CHECK_URL` (default `https://turbo-gateway.com`). Refuses, writing nothing, without a registered key or `AR_IO_WALLET`. With `--torrent`, sets `INDEX_SWARM_TRACKERS` (if unset) to this node's tracker: through the gateway, `<public URL>/ar-io/indexes/announce`, or with no public URL, `http://<public host>:6969/announce` |
+| `--subscribe <wallet>` | Adds the publisher to `INDEX_SWARM_SUBSCRIBE` (repeatable; existing entries are kept, and so is the default subscription when the variable is unset). Puts `cdb` right after `db` in `ROOT_TX_LOOKUP_ORDER`, and, when `CDB64_ROOT_TX_INDEX_SOURCES` is set, the installed directory first in it (unset, the default already has it first). See [pointing the gateway at installed bands](#pointing-the-gateway-at-installed-bands) and [lookup order](#lookup-order) |
+| `--publish` | Adds `root-tx-index` to `INDEX_SWARM_PUBLISH` and starts `index-export`. Sets `INDEX_EXPORT_HEADER_CHECK_URL` (default `https://turbo-gateway.com`). Refuses, writing nothing, without a registered key or `AR_IO_WALLET`. Sets `INDEX_SWARM_TRACKERS` (if unset) to this node's tracker: through the gateway, `<public URL>/ar-io/indexes/announce`, or with no public URL, `http://<public host>:6969/announce` and `INDEX_SWARM_TRACKER_HOST_IP=0.0.0.0` |
 | `--start-height <n>`, `--header-check-url <url>` | With `--publish`: `INDEX_EXPORT_START_HEIGHT` and `INDEX_EXPORT_HEADER_CHECK_URL` |
-| `--torrent` | Generates `INDEX_SWARM_ENGINE_AUTH` (`swarm:` and 48 random hex characters; never printed) if unset. That alone turns the engine on: `INDEX_SWARM_ENGINE_URL` defaults to the compose engine |
+| `--torrent` | Accepted for older instructions. The engine runs by default and its init generates its password, so nothing is written; an existing `INDEX_SWARM_ENGINE_AUTH` is checked |
 | `--public-host <addr>`, `--engine-port <n>` | `INDEX_SWARM_ENGINE_PUBLIC_HOST`, `INDEX_SWARM_ENGINE_PORT`. Work on their own, to move an engine that already runs (with `--restart`, the engine is recreated on the new port) |
 | `--public-url <origin>` | The gateway's public origin, such as `https://gateway.example`, for the tracker URL. Defaults to `INDEXES_PUBLIC_URL`, then `https://<ARNS_ROOT_HOST>`. To change the feeds' origin too, set `INDEXES_PUBLIC_URL` |
-| `--l1` | With `--subscribe`: takes the publishers' L1 bands as well (`"name": ["root-tx-index", "parquet-l1"]`) and sets `L1_BAND_IMPORT_ENABLED=true`, so the gateway fills its L1 history from them while it runs. Core picks it up when it is next created: `--restart` does that. Sets the disk budget to 100 GiB if unset, and warns if an existing one is lower |
+| `--l1` | With `--subscribe`: takes the publishers' L1 bands as well (`"name": ["root-tx-index", "parquet-l1"]`) and sets `L1_BAND_IMPORT_ENABLED=true`, so the gateway fills its L1 history from them while it runs. Core picks it up when it is next created: `--restart` does that. Sets the disk budget to 100 GiB if unset (the default, 64 GiB, is sized for root-TX bands), and warns if an existing one is lower |
 | `--max-disk-gib <n>` | `INDEX_SWARM_MAX_DISK_BYTES`. Works on its own, to change an existing subscriber's budget |
 | `--no-gateway` | Leaves the two gateway keys alone |
 | `--dry-run` | Shows the changes and writes nothing |
-| `--restart` | Then recreates what needs it: the gateway only when `CDB64_ROOT_TX_INDEX_SOURCES`, `ROOT_TX_LOOKUP_ORDER` or `L1_BAND_IMPORT_ENABLED` differ from what it runs with, then the sidecar (and the engine, with torrents), by service name, with the compose files the running gateway was started with |
+| `--restart` | Then recreates what needs it: the gateway only when `CDB64_ROOT_TX_INDEX_SOURCES`, `ROOT_TX_LOOKUP_ORDER` or `L1_BAND_IMPORT_ENABLED` differ from what it runs with, then the engine and the sidecar, by service name, with the compose files the running gateway was started with |
 | `--env-file <path>` | A file other than `.env`, relative to the gateway's directory |
 
 It is idempotent: a second run changes only what is missing, so it is also
@@ -171,12 +233,15 @@ What the setup script writes, for an operator who would rather edit `.env`
 directly:
 
 ```bash
-INDEX_SWARM_SUBSCRIBE='[{"publisher":"<publisher gateway wallet>","name":"root-tx-index"}]'
-INDEX_SWARM_MAX_DISK_BYTES=53687091200   # 50 GiB
-CDB64_ROOT_TX_INDEX_SOURCES=data/indexes/installed/root-tx-index,<previous sources>
+INDEX_SWARM_SUBSCRIBE='[{"publisher":"34LYvMptiDvBP5sqfh1oAd6Q4qFsy4PWaZ1HTFmML7h5","name":"root-tx-index"},{"publisher":"<publisher gateway wallet>","name":"root-tx-index"}]'
 ROOT_TX_LOOKUP_ORDER=db,cdb,gateways,graphql
-INDEX_SWARM_ENGINE_AUTH=swarm:<openssl rand -hex 24>   # only for BitTorrent
+# Only if CDB64_ROOT_TX_INDEX_SOURCES is already set; its default has this first.
+CDB64_ROOT_TX_INDEX_SOURCES=data/indexes/installed/root-tx-index,<previous sources>
 ```
+
+`INDEX_SWARM_MAX_DISK_BYTES` defaults to 64 GiB, and the engine's password
+is generated; set `INDEX_SWARM_ENGINE_AUTH=swarm:<openssl rand -hex 24>` only
+to choose your own.
 
 With `--l1`, the subscription names L1 bands as well, the budget is larger,
 and core fills its history from them:
@@ -194,12 +259,8 @@ default service):
 
 ```bash
 docker compose up -d --no-deps core
-docker compose --profile index-swarm --profile index-swarm-torrent \
-  up -d --no-deps index-swarm-engine-init index-swarm-engine index-swarm
+docker compose up -d --no-deps index-swarm-engine-init index-swarm-engine index-swarm
 ```
-
-Without BitTorrent, leave out the `index-swarm-torrent` profile and the two
-engine services.
 
 ## What it is, and what it is not
 
@@ -239,9 +300,9 @@ flowchart LR
   envoy -->|"announces, :6970"| sidecar
 ```
 
-The sidecar, the engine and `index-export` are optional, each in its own
-compose profile. Without the engine, everything moves over HTTP and there is
-no tracker or peer port. Without the sidecar, the gateway serves nothing
+The sidecar and the engine run by default; `index-export`, which only a
+publisher needs, is behind its own compose profile. Without the engine,
+everything moves over HTTP and there is no tracker or peer port. Without the sidecar, the gateway serves nothing
 under `/ar-io/indexes` and loads only the CDB64 sources it is given. The
 engine is on a network of its own, so the only thing it can reach on the node
 is the sidecar.
@@ -269,17 +330,23 @@ sequenceDiagram
 
 ## Running it
 
+A plain `docker compose up -d` starts the sidecar, the engine and its init
+with the gateway. To start or recreate them alone:
+
 ```bash
-docker compose --profile index-swarm up -d index-swarm
+docker compose up -d --no-deps index-swarm-engine-init index-swarm-engine index-swarm
 ```
 
-Name the service. The sidecar declares no `depends_on`, so this cannot start
+Name the services. The sidecar declares no `depends_on`, so this cannot start
 or recreate the core, observer or any other service, and it works whether or
 not the gateway is running. To stop it:
 
 ```bash
-docker compose --profile index-swarm stop index-swarm
+docker compose stop index-swarm
 ```
+
+The `--profile index-swarm` and `--profile index-swarm-torrent` flags of
+earlier releases are still accepted and change nothing.
 
 ### It runs the core image
 
@@ -296,7 +363,8 @@ with a message naming the entry. See [envs.md](envs.md) for the full table.
 # Publish the indexes this gateway builds.
 INDEX_SWARM_PUBLISH='[{"name":"root-tx-index","kind":"cdb64-root-tx"},{"name":"parquet-l1","kind":"parquet-l1"}]'
 
-# Subscribe to a publisher, by its registered gateway wallet.
+# Subscribe to a publisher, by its registered gateway wallet. Unset or
+# empty, this is the ar.io publisher's root-TX index; [] is nothing.
 INDEX_SWARM_SUBSCRIBE='[{"publisher":"<gateway wallet>","name":"root-tx-index"}]'
 ```
 
@@ -316,7 +384,7 @@ The publisher offers whatever band directories are under
 
 ### Publishing torrents
 
-With a torrent engine (`INDEX_SWARM_ENGINE_AUTH` set), the publisher also
+With a torrent engine (the default), the publisher also
 offers every band as a torrent. It builds one when the band is first
 described or changes, and writes it to `published/.torrents/<v1
 infohash>.torrent`. It adds a `torrent` entry to the band in the publication
@@ -399,8 +467,13 @@ under both infohashes of each torrent, and refuses every other torrent with
   sits under `/ar-io/indexes`, so an nginx location or a fleet pin for that
   prefix covers it, as long as it reaches Envoy (port 3000), not core
   (port 4000).
-- **Directly**, on `INDEX_SWARM_TRACKER_PORT` (default 6969), published on
-  the host: `http://<public address>:6969/announce`.
+- **Directly**, on `INDEX_SWARM_TRACKER_PORT` (default 6969):
+  `http://<public address>:6969/announce`. Compose publishes that port on
+  `INDEX_SWARM_TRACKER_HOST_IP`, which is `127.0.0.1` by default so that a
+  subscriber, which runs no tracker, exposes nothing. A publisher announcing
+  directly sets `INDEX_SWARM_TRACKER_HOST_IP=0.0.0.0` (`index-swarm-setup`
+  does, when it writes a direct tracker URL); the sidecar warns when its
+  trackers name the direct port while it is bound to loopback.
 
 Anyone can reach it, so it is bounded: at most 2,000
 peers per torrent and 50,000 in all, and 4 ports per address. Each response
@@ -686,26 +759,27 @@ fresh start does not send the first poll to HTTP.
 ### Pointing the gateway at installed bands
 
 The subscriber installs into `data/indexes/installed/<index>/`. The gateway
-loads a root-TX band only if that directory is one of its CDB64 sources, so
-add it, **first**, to `CDB64_ROOT_TX_INDEX_SOURCES`, keeping what was there
-after it:
+loads a root-TX band only if that directory is one of its CDB64 sources. The
+default `CDB64_ROOT_TX_INDEX_SOURCES` has it **first**, then the shipped
+snapshots: three Arweave-hosted indexes that stop at height 1,820,000 and
+carry no offsets.
+
+```text
+data/indexes/installed/root-tx-index,resources/cdb64-root-tx-index-non-ao-non-redstone-with-content-type-to-height-1820000,resources/cdb64-root-tx-index-non-ao-non-redstone-without-content-type-to-height-1820000,resources/cdb64-root-tx-index-ao-to-height-1820000
+```
+
+Sources are searched in the order given, and a fresh band from a publisher
+should answer before an older shipped snapshot. An operator who sets the
+variable adds the installed directory first themselves, keeping what was
+there after it:
 
 ```bash
 CDB64_ROOT_TX_INDEX_SOURCES=data/indexes/installed/root-tx-index,<previous sources>
 ```
 
-Sources are searched in the order given, and a fresh band from a publisher
-should answer before an older shipped snapshot. If the variable was unset,
-`<previous sources>` is the shipped default: three Arweave-hosted indexes
-that stop at height 1,820,000 and carry no offsets.
-
-```text
-resources/cdb64-root-tx-index-non-ao-non-redstone-with-content-type-to-height-1820000,resources/cdb64-root-tx-index-non-ao-non-redstone-without-content-type-to-height-1820000,resources/cdb64-root-tx-index-ao-to-height-1820000
-```
-
-Write it out to keep searching them, or leave it off: each lookup against
-them fetches from Arweave, which is slow, and a subscribed set that covers
-the whole chain makes them redundant.
+The shipped snapshots can be left off: each lookup against them fetches from
+Arweave, which is slow, and a subscribed set that covers the whole chain
+makes them redundant.
 
 The directory need not exist when the gateway starts. A missing local source
 not named like a `.cdb` file is checked for every 30 seconds until it
@@ -853,32 +927,41 @@ it hides a publisher outage, so prefer no cache for the document.
 
 ## Torrent engine
 
-The torrent engine runs in a separate container, in its own compose profile,
-`index-swarm-torrent`, and the sidecar drives it over its Web API. Without
-it, and without `INDEX_SWARM_ENGINE_AUTH`, everything moves over HTTP.
+The torrent engine runs in a separate container, started by default with
+the sidecar, which drives it over its Web API. Without an engine password
+(`INDEX_SWARM_ENGINE_AUTH`, or the file its init generates), everything
+moves over HTTP.
 
 ### Running the engine
+
+```bash
+docker compose up -d --no-deps index-swarm-engine-init index-swarm-engine index-swarm
+```
+
+The engine needs a password for its Web API. With `INDEX_SWARM_ENGINE_AUTH`
+unset, `index-swarm-engine-init` generates `swarm:` and 48 random hex
+characters on its first start and writes it to `data/indexes/engine-auth`,
+root-owned and mode 0600 (it tightens a looser mode it finds), on the volume
+the init and the sidecar share; the engine does not mount that directory.
+Every later start reuses the file, and the sidecar reads it at startup,
+waiting up to 30 seconds for it on a first `up`. Neither logs it. To choose
+your own, set it:
 
 ```bash
 # .env
 INDEX_SWARM_ENGINE_AUTH=swarm:<a long random password>
 ```
 
-With a password set, `INDEX_SWARM_ENGINE_URL` defaults to the compose engine.
-Set the URL only for an engine run some other way.
-`./tools/index-swarm-setup --torrent` writes the password.
+A set value always wins over the file. With a password, `INDEX_SWARM_ENGINE_URL`
+defaults to the compose engine; set the URL only for an engine run some other
+way (the generated file is then not used). To have a new password generated,
+delete the file and recreate the init, the engine and the sidecar together.
 
-```bash
-docker compose --profile index-swarm --profile index-swarm-torrent \
-  up -d --no-deps index-swarm-engine-init index-swarm-engine index-swarm
-```
-
-Recreate `index-swarm` too when turning the engine on, so it reads
-`INDEX_SWARM_ENGINE_AUTH` and joins the engine's network.
+Recreate `index-swarm` whenever the password changes, so it reads it.
 `index-swarm-engine-init` is a one-shot container that writes the settings
-below into the engine's configuration and exits. Without
-`INDEX_SWARM_ENGINE_AUTH` it fails with a message saying so, and the engine
-never starts.
+below into the engine's configuration and exits. If it cannot have a password
+(the file is unreadable, a link, or not `user:password`), it fails with a
+message saying so, and the engine never starts.
 
 What the init manages on every engine start (anything else in the file,
 including an operator's own tuning, is left alone):
@@ -893,7 +976,7 @@ including an operator's own tuning, is left alone):
 | Save path | `swarm/`, no temp path | The only directory the engine can write data to |
 | Automatic torrent management | Off | It would move a seeded band out of `published/` |
 | Upload limit | `INDEX_SWARM_UPLOAD_LIMIT_BYTES_PER_SEC` | Peer upload is otherwise unbounded |
-| Web UI user and password | From `INDEX_SWARM_ENGINE_AUTH` | Stored as qBittorrent's own PBKDF2 hash |
+| Web UI user and password | From `INDEX_SWARM_ENGINE_AUTH`, else `data/indexes/engine-auth` | Stored as qBittorrent's own PBKDF2 hash |
 | Subnet allowlist | Off | It would exempt a whole Docker network from the password |
 | IP filter, peers and trackers | Private ranges, unless `INDEX_SWARM_ENGINE_BLOCK_PRIVATE=false` | See below |
 | Loopback without a password | Off | A request reaching the engine's loopback must not skip the password |
@@ -919,11 +1002,12 @@ keep it off the node's network:
   `INDEX_SWARM_ALLOWED_TRACKERS`.
 
 **Ports and firewalls.** The engine publishes its peer port,
-`INDEX_SWARM_ENGINE_PORT` (6881, TCP and UDP), and the sidecar publishes the
-tracker port, `INDEX_SWARM_TRACKER_PORT` (6969, TCP), whenever they run, so
-no other program may hold them. Only the peer port needs to be open to the
+`INDEX_SWARM_ENGINE_PORT` (6881, TCP and UDP), on every address, and the
+sidecar publishes the tracker port, `INDEX_SWARM_TRACKER_PORT` (6969, TCP),
+on `INDEX_SWARM_TRACKER_HOST_IP` (`127.0.0.1` by default), whenever they run,
+so no other program may hold them. Only the peer port needs to be open to the
 internet: announces reach the tracker through the gateway's HTTPS, so leave
-6969 closed unless peers announce to it directly. Docker forwards published ports before the
+6969 on loopback unless peers announce to it directly. Docker forwards published ports before the
 host's INPUT chain sees them, so a host firewall (nixos-fw, ufw) neither
 blocks nor protects them. To restrict them, filter where Docker forwards.
 With Docker's default iptables backend, use the `DOCKER-USER` chain. With
@@ -944,8 +1028,9 @@ Notes from running it:
   which is what publishing its API port under another number does. The
   sidecar reports that case by name.
 - **Failed logins are not retried**, because qBittorrent bans an address
-  after five. Check `INDEX_SWARM_ENGINE_AUTH` if the engine refuses the
-  sidecar.
+  after five. If the engine refuses the sidecar, check
+  `INDEX_SWARM_ENGINE_AUTH`, or, with it unset, that the engine's init and the
+  sidecar were both recreated since `data/indexes/engine-auth` last changed.
 - `index_swarm_engine_available` can read 0 for a moment after both start
   together; the next check flips it.
 
@@ -972,6 +1057,7 @@ data/indexes/
   swarm/<infohash>/   # with an engine: torrent downloads; the engine's only writable directory
   torrents/<infohash>.torrent    # with an engine: checked torrents kept for seeding
   state.json          # hashes, sequences seen and bands installed
+  engine-auth         # the generated engine password (root, 0600), when INDEX_SWARM_ENGINE_AUTH is unset
   export/             # index-export: scratch, state.json and lock
 ```
 
@@ -1066,9 +1152,10 @@ Subscription results that need attention:
   downloads in progress (they resume on the next start), starts nothing new,
   and waits for an install or a publish already under way.
 - **Disk.** It depends on what is subscribed. turbo-gateway.com's root-TX
-  bands are about 20 GB and its L1 bands about 15 GB; the three older
-  snapshots shipped as the gateway's defaults are 122, 150 and 245 GB.
-  `INDEX_SWARM_MAX_DISK_BYTES` counts installed bands (retired ones too,
+  bands, the default subscription, are about 22 GB and its L1 bands about
+  15 GB; the three older snapshots shipped as the gateway's defaults are 122,
+  150 and 245 GB (read from Arweave, not stored). `INDEX_SWARM_MAX_DISK_BYTES`
+  is 64 GiB unless set (`0` is no ceiling), and counts installed bands (retired ones too,
   until swept), `incoming/`, and every torrent download at its full size
   from the start. A band that may come over the swarm needs its size twice,
   for the copy out of `swarm/`. The copy a band replaces is left out, so a
@@ -1093,20 +1180,36 @@ Subscription results that need attention:
 
 Stopping the sidecar changes nothing the gateway serves: installed bands stay
 loaded and published bands stay served, from the last document written.
-Subscribers see that document age and, once it expires, alarm. To remove the
-feature:
+Subscribers see that document age and, once it expires, alarm.
 
-1. `docker compose --profile index-swarm stop index-swarm`, then
-   `docker compose --profile index-swarm rm -f index-swarm`. With the engine,
-   also `docker compose --profile index-swarm-torrent stop index-swarm-engine`
-   and remove it and `index-swarm-engine-init` the same way; then
-   `data/indexes/swarm/`, `data/indexes/torrents/` and
-   `data/index-swarm-engine/` can be deleted. Remove
-   `INDEX_SWARM_ENGINE_AUTH` from `.env` too: while it is set, the sidecar
-   expects the compose engine and warns that it is not answering.
-2. On a subscriber, restore the previous `CDB64_ROOT_TX_INDEX_SOURCES`,
-   remove `L1_BAND_IMPORT_ENABLED` if it was set, and restart the gateway,
-   then delete `data/indexes/installed/`. In that order, so the gateway no
+To stop taking bands but keep the services, set `INDEX_SWARM_SUBSCRIBE=[]`
+and recreate the sidecar; installed bands from publishers no longer listed
+are retired. To remove the feature:
+
+1. The services run by default, so keep a plain `docker compose up -d` from
+   starting them again with a `docker-compose.override.yaml` that puts them
+   behind a profile nobody enables (pass it with `-f` if the gateway is started
+   with explicit `-f` files, which turn off loading the override):
+   ```yaml
+   services:
+     index-swarm:
+       profiles: [disabled]
+     index-swarm-engine-init:
+       profiles: [disabled]
+     index-swarm-engine:
+       profiles: [disabled]
+   ```
+   Then `docker compose stop index-swarm index-swarm-engine` and
+   `docker compose rm -f index-swarm index-swarm-engine index-swarm-engine-init`
+   (with `--profile disabled` once the override is in place). Then
+   `data/indexes/swarm/`, `data/indexes/torrents/`,
+   `data/indexes/engine-auth` and `data/index-swarm-engine/` can be deleted.
+   Remove `INDEX_SWARM_ENGINE_AUTH` from `.env` too, if set: while it is, a
+   sidecar expects the compose engine and warns that it is not answering.
+2. On a subscriber, restore the previous `CDB64_ROOT_TX_INDEX_SOURCES` if it
+   was set (the default searches the installed directory, which is harmless
+   once it is gone), remove `L1_BAND_IMPORT_ENABLED` if it was set, and
+   restart the gateway, then delete `data/indexes/installed/`. In that order, so the gateway no
    longer holds the files open when they go. L1 history already filled from
    bands stays in `core.db`.
 3. On a publisher, stop `index-export`, then delete
@@ -1140,8 +1243,9 @@ are metered like data, so one accidental whole-file download can spend an
 address's allowance. Allowlist the client in
 `RATE_LIMITER_IPS_AND_CIDRS_ALLOWLIST`, or wait for the limit to refill.
 
-**`index-swarm idle: nothing configured`.** Neither `INDEX_SWARM_PUBLISH`
-nor `INDEX_SWARM_SUBSCRIBE` is set. This is the default, not an error.
+**`index-swarm idle: nothing configured`.** `INDEX_SWARM_PUBLISH` is unset
+and `INDEX_SWARM_SUBSCRIBE` is `[]`: the operator opted out of the default
+subscription. Not an error.
 
 **`Gateway is too old to load installed index bands; not installing until it
 is upgraded`.** The gateway predates the collection source. The subscriber

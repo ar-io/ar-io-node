@@ -10,6 +10,7 @@ import * as path from 'node:path';
 
 import * as config from '../config.js';
 import { directoryBytes } from '../disk.js';
+import { resolveEngineAuth } from '../engine-auth.js';
 import { QBittorrentTransport } from '../transport/qbittorrent.js';
 import { INSTALLED_ROOT_TX_SOURCE } from './setup-plan.js';
 
@@ -299,7 +300,7 @@ export function engineChecks(
     checks.push({
       level: 'fail',
       text: 'The torrent engine is not answering; bands move over HTTP only',
-      fix: 'Start it: docker compose --profile index-swarm-torrent up -d --no-deps index-swarm-engine-init index-swarm-engine (with this gateway’s -f files). Its log says why it stopped.',
+      fix: 'Start it: docker compose up -d --no-deps index-swarm-engine-init index-swarm-engine (with this gateway’s -f files). Its log says why it stopped.',
     });
     return checks;
   }
@@ -569,12 +570,25 @@ async function main(): Promise<void> {
     print(title, checks);
   };
 
+  // The engine password as the sidecar finds it: the setting, else the file
+  // the engine's init generated. Not waited for: the sidecar is running.
+  const engineAuth = await resolveEngineAuth({
+    fromEnv: config.ENGINE_AUTH_SETTING,
+    engineUrl: config.ENGINE_URL_SETTING,
+    defaultEngineUrl: config.DEFAULT_ENGINE_URL,
+    file: config.ENGINE_AUTH_FILE,
+  }).catch(() => ({ auth: undefined, source: 'none' as const }));
+  const engineUrl = config.resolveEngineUrl(
+    config.ENGINE_URL_SETTING,
+    engineAuth.auth,
+  );
+
   const roles = [
     config.PUBLISH.length > 0 ? 'publishing' : undefined,
     config.SUBSCRIBE.length > 0
       ? `subscribed to ${config.SUBSCRIBE.length}`
       : undefined,
-    config.ENGINE_URL !== undefined ? 'BitTorrent on' : 'HTTP only',
+    engineUrl !== undefined ? 'BitTorrent on' : 'HTTP only',
   ].filter((s) => s !== undefined);
   section('Sidecar', [
     sidecarText === undefined
@@ -687,10 +701,10 @@ async function main(): Promise<void> {
     );
   }
 
-  if (config.ENGINE_URL !== undefined) {
+  if (engineUrl !== undefined) {
     const transport = new QBittorrentTransport({
-      url: config.ENGINE_URL,
-      ...(config.ENGINE_AUTH ?? {}),
+      url: engineUrl,
+      ...(engineAuth.auth ?? {}),
     });
     const available = await transport.isAvailable();
     const engine: {

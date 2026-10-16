@@ -27,7 +27,8 @@ find_service() {
 SIDECAR="$(find_service index-swarm)"
 if [[ -z "${SIDECAR}" ]]; then
   echo "The index-swarm sidecar is not running in $(pwd)." >&2
-  echo "Set it up and start it: ./tools/index-swarm-setup --help" >&2
+  echo "It runs by default; start it: docker compose up -d --no-deps index-swarm-engine-init index-swarm-engine index-swarm" >&2
+  echo "(with this gateway's -f files). To configure it further: ./tools/index-swarm-setup --help" >&2
   exit 1
 fi
 

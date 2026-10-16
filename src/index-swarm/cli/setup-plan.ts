@@ -4,13 +4,17 @@
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
-import { DEFAULT_CDB64_ROOT_TX_INDEX_SOURCES } from '../../lib/root-tx-defaults.js';
+import {
+  DEFAULT_CDB64_ROOT_TX_INDEX_SOURCES,
+  INSTALLED_ROOT_TX_INDEX_SOURCE,
+} from '../../lib/root-tx-defaults.js';
 import { parsePublicOrigin } from '../../lib/public-origin.js';
 import {
   DEFAULT_ENGINE_URL,
+  DEFAULT_MAX_DISK_BYTES,
   parseEngineAuth,
   parsePublish,
-  parseSubscribe,
+  resolveSubscribe,
 } from '../config.js';
 
 /**
@@ -22,15 +26,14 @@ import {
 /** The only index the gateway can load from the sidecar today. */
 export const ROOT_TX_INDEX = 'root-tx-index';
 /** Where the sidecar installs it, as the gateway's CDB64 source names it. */
-export const INSTALLED_ROOT_TX_SOURCE = 'data/indexes/installed/root-tx-index';
+export const INSTALLED_ROOT_TX_SOURCE = INSTALLED_ROOT_TX_INDEX_SOURCE;
 /** The lookup order a subscriber wants: the installed bands right after the local DB. */
 export const SUBSCRIBER_LOOKUP_ORDER = 'db,cdb,gateways,graphql';
 /**
- * Disk for installed bands when the operator names none. Twice the size of the
- * full index published today (about 21 GB), because a band being replaced stays
- * installed until its successor is, so both copies are on disk for a while.
+ * Disk for installed bands when the operator names none: the sidecar's own
+ * default (64 GiB), so setup writes no budget for root-TX bands alone.
  */
-export const DEFAULT_MAX_DISK_GIB = 50;
+export const DEFAULT_MAX_DISK_GIB = DEFAULT_MAX_DISK_BYTES / 1024 ** 3;
 /**
  * The budget with L1 bands as well: the whole chain is about 15 GB of
  * them today, beside a root-TX index of about 20 GB, and both grow.
@@ -39,9 +42,10 @@ export const DEFAULT_MAX_DISK_GIB_WITH_L1 = 100;
 /** The index name L1 bands are published under. */
 export const L1_INDEX = 'parquet-l1';
 const TRACKER_PORT_DEFAULT = '6969';
+/** The host address compose publishes the direct tracker port on, unset. */
+const TRACKER_HOST_IP_DEFAULT = '127.0.0.1';
 /** Where the gateway's Envoy forwards announces to the sidecar's tracker. */
 export const GATEWAY_ANNOUNCE_PATH = '/ar-io/indexes/announce';
-const ENGINE_USER = 'swarm';
 
 export interface SetupOptions {
   /** Publishers to subscribe to, by registered gateway wallet. */
@@ -150,7 +154,10 @@ export function subscriberLookupOrder(current: string | undefined): string {
   return order.join(',');
 }
 
-/** `CDB64_ROOT_TX_INDEX_SOURCES` with the installed bands searched first. */
+/**
+ * `CDB64_ROOT_TX_INDEX_SOURCES` with the installed bands searched first.
+ * Unset, that is the gateway's default, which already starts with them.
+ */
 export function subscriberSources(current: string | undefined): string {
   const sources = splitList(current ?? DEFAULT_CDB64_ROOT_TX_INDEX_SOURCES);
   const rest = sources.filter(
@@ -165,11 +172,7 @@ export function subscriberSources(current: string | undefined): string {
  * `env` and writes nothing. Errors stop setup before anything is written;
  * warnings and notes are said and the plan goes ahead.
  */
-export function planSetup(
-  env: EnvReader,
-  options: SetupOptions,
-  randomPassword: () => string,
-): SetupPlan {
+export function planSetup(env: EnvReader, options: SetupOptions): SetupPlan {
   const plan: SetupPlan = {
     changes: [],
     warnings: [],
@@ -188,14 +191,23 @@ export function planSetup(
     });
   };
 
+  // Unset, the sidecar subscribes to the ar.io publisher by default; only an
+  // explicit empty list leaves it nothing to do. One that does not parse is
+  // reported where it is parsed again.
+  let subscribing = true;
+  try {
+    subscribing = resolveSubscribe(env.get('INDEX_SWARM_SUBSCRIBE')).length > 0;
+  } catch {
+    // Reported below.
+  }
   const hasRole =
     options.subscribe.length > 0 ||
     options.publish ||
-    env.get('INDEX_SWARM_SUBSCRIBE') !== undefined ||
+    subscribing ||
     env.get('INDEX_SWARM_PUBLISH') !== undefined;
   if (!hasRole) {
     plan.errors.push(
-      'Nothing to set up: pass --subscribe <publisher wallet>, --publish, or both.',
+      'Nothing to set up: INDEX_SWARM_SUBSCRIBE is [] (subscribed to nothing). Pass --subscribe <publisher wallet>, --publish, or both.',
     );
     return plan;
   }
@@ -235,9 +247,11 @@ export function planSetup(
 
   // Subscribing.
   if (options.subscribe.length > 0) {
-    let current: ReturnType<typeof parseSubscribe>;
+    // Unset means the default subscription, which is kept: adding a
+    // publisher must not drop the one the sidecar already follows.
+    let current: ReturnType<typeof resolveSubscribe>;
     try {
-      current = parseSubscribe(env.get('INDEX_SWARM_SUBSCRIBE'));
+      current = resolveSubscribe(env.get('INDEX_SWARM_SUBSCRIBE'));
     } catch (error: any) {
       plan.errors.push(
         `The existing INDEX_SWARM_SUBSCRIBE is invalid (${error.message}); fix or remove it, then run this again.`,
@@ -278,11 +292,14 @@ export function planSetup(
       reason: 'the publishers to subscribe to',
     });
 
+    // Root-TX bands alone fit the sidecar's own default budget, so only
+    // L1 bands need one written.
     if (
+      l1 &&
       options.maxDiskGiB === undefined &&
       env.get('INDEX_SWARM_MAX_DISK_BYTES') === undefined
     ) {
-      const gib = l1 ? DEFAULT_MAX_DISK_GIB_WITH_L1 : DEFAULT_MAX_DISK_GIB;
+      const gib = DEFAULT_MAX_DISK_GIB_WITH_L1;
       set({
         key: 'INDEX_SWARM_MAX_DISK_BYTES',
         value: String(gib * 1024 ** 3),
@@ -311,14 +328,17 @@ export function planSetup(
     }
 
     if (options.gateway) {
-      const sources = subscriberSources(env.get('CDB64_ROOT_TX_INDEX_SOURCES'));
+      const currentSources = env.get('CDB64_ROOT_TX_INDEX_SOURCES');
       const order = subscriberLookupOrder(env.get('ROOT_TX_LOOKUP_ORDER'));
       const before = plan.changes.length;
-      set({
-        key: 'CDB64_ROOT_TX_INDEX_SOURCES',
-        value: sources,
-        reason: 'the gateway loads installed bands first',
-      });
+      // Unset, the gateway's default already searches them first.
+      if (currentSources !== undefined) {
+        set({
+          key: 'CDB64_ROOT_TX_INDEX_SOURCES',
+          value: subscriberSources(currentSources),
+          reason: 'the gateway loads installed bands first',
+        });
+      }
       set({
         key: 'ROOT_TX_LOOKUP_ORDER',
         value: order,
@@ -426,9 +446,10 @@ export function planSetup(
     }
   }
 
-  // The torrent engine. Like --max-disk-gib, its address and port apply
-  // without --torrent, so an operator can move an engine that already runs;
-  // with the engine off they wait in .env until it is turned on.
+  // The torrent engine runs by default: its init generates a password into
+  // data/indexes/engine-auth when INDEX_SWARM_ENGINE_AUTH is unset, so
+  // --torrent no longer writes one. Its address and port apply on their own,
+  // so an operator can move an engine that already runs.
   if (options.publicHost !== undefined) {
     set({
       key: 'INDEX_SWARM_ENGINE_PUBLIC_HOST',
@@ -444,23 +465,16 @@ export function planSetup(
     });
   }
   const auth = env.get('INDEX_SWARM_ENGINE_AUTH');
-  if (options.torrent) {
-    if (auth === undefined) {
-      set({
-        key: 'INDEX_SWARM_ENGINE_AUTH',
-        value: `${ENGINE_USER}:${randomPassword()}`,
-        display: `${ENGINE_USER}:<generated, not shown>`,
-        reason: 'the torrent engine’s password; setting it turns the engine on',
-      });
-    } else {
-      try {
-        parseEngineAuth(auth);
-      } catch (error: any) {
-        plan.errors.push(
-          `The existing INDEX_SWARM_ENGINE_AUTH is unusable (${error.message}); remove it to have one generated, then run this again.`,
-        );
-      }
+  if (auth !== undefined) {
+    try {
+      parseEngineAuth(auth);
+    } catch (error: any) {
+      plan.errors.push(
+        `The existing INDEX_SWARM_ENGINE_AUTH is unusable (${error.message}); remove it to have the engine's init generate one, then run this again.`,
+      );
     }
+  }
+  {
     const url = env.get('INDEX_SWARM_ENGINE_URL');
     if (url !== undefined && url !== DEFAULT_ENGINE_URL) {
       plan.warnings.push(
@@ -505,6 +519,16 @@ export function planSetup(
           value: `http://${urlHost(host)}:${port}/announce`,
           reason: 'this node’s closed tracker, written into its torrents',
         });
+        // Compose publishes the direct port on loopback unless told
+        // otherwise; announcing to it needs it on every address.
+        if (env.get('INDEX_SWARM_TRACKER_HOST_IP') === undefined) {
+          set({
+            key: 'INDEX_SWARM_TRACKER_HOST_IP',
+            value: '0.0.0.0',
+            reason:
+              'publish the direct tracker port on every address, so peers reach it',
+          });
+        }
       } else {
         plan.warnings.push(
           'Publishing torrents without a tracker: pass --public-url <this gateway’s https URL> (or --public-host <this node’s public IP>) so peers can find this node’s tracker. Without one they find each other only through DHT and the WebSeed.',
@@ -513,12 +537,11 @@ export function planSetup(
     }
   }
 
-  // With errors nothing is written or restarted, so this matters only
-  // for a plan that goes ahead.
-  const engineOn =
-    auth !== undefined ||
-    plan.changes.some((c) => c.key === 'INDEX_SWARM_ENGINE_AUTH');
-  if (engineOn) {
+  // The engine runs by default, so it is recreated with the sidecar.
+  // docker-compose.yaml no longer needs the profile names; passing them is
+  // harmless. With errors nothing is written or restarted, so this matters
+  // only for a plan that goes ahead.
+  {
     plan.profiles.push('index-swarm-torrent');
     // The engine first (its init runs before it), then what was planned.
     plan.services = [
@@ -549,7 +572,16 @@ export function planSetup(
         }
       })
     ) {
-      plan.notes.push(`Open the tracker port ${trackerPort} (TCP) too.`);
+      const hostIp =
+        plan.changes.find((c) => c.key === 'INDEX_SWARM_TRACKER_HOST_IP')
+          ?.value ??
+        env.get('INDEX_SWARM_TRACKER_HOST_IP') ??
+        TRACKER_HOST_IP_DEFAULT;
+      plan.notes.push(
+        hostIp.startsWith('127.') || hostIp === '::1'
+          ? `Torrents announce to the tracker port ${trackerPort} directly, but compose publishes it on ${hostIp} only: set INDEX_SWARM_TRACKER_HOST_IP=0.0.0.0 and open ${trackerPort} (TCP).`
+          : `Open the tracker port ${trackerPort} (TCP) too.`,
+      );
     }
   }
 

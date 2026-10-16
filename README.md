@@ -205,11 +205,13 @@ sources, set `CDB64_ROOT_TX_INDEX_SOURCES`. See
 [docs/cdb64.md](docs/cdb64.md) for configuration and operation.
 
 Gateways can also share fresher indexes with each other through Index
-Sharing: the optional `index-swarm` sidecar publishes this gateway's bands,
-signed with its observer key, and subscribes to other gateways' bands. Bands
-move over the publisher's metered HTTP routes, and, with the optional torrent
-engine (compose profile `index-swarm-torrent`), peer to peer as well, every
-subscriber seeding what it installs. Peers announce to a publisher's tracker
+Sharing, which is on by default: the `index-swarm` sidecar publishes this
+gateway's bands, signed with its observer key, and subscribes to other
+gateways' bands; unconfigured, it takes the ar.io publisher's root-TX bands
+(about 22 GB), which the gateway then searches first. Bands move over the
+publisher's metered HTTP routes and, through the torrent engine that runs
+beside it (peer port 6881), peer to peer as well, every subscriber seeding
+what it installs. `INDEX_SWARM_SUBSCRIBE=[]` opts out. Peers announce to a publisher's tracker
 through its HTTPS, each index has an RSS feed of its torrents, and each
 `.torrent` names the gateway as a WebSeed, so a stock BitTorrent client can
 follow a publisher too. Two kinds of band are shared:

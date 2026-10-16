@@ -7,7 +7,6 @@
 import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
 
-import { DEFAULT_CDB64_ROOT_TX_INDEX_SOURCES } from '../../lib/root-tx-defaults.js';
 import { EnvFile } from './env-file.js';
 import {
   INSTALLED_ROOT_TX_SOURCE,
@@ -29,13 +28,15 @@ const options = (o: Partial<SetupOptions>): SetupOptions => ({
 });
 
 const plan = (text: string, o: Partial<SetupOptions>) =>
-  planSetup(new EnvFile(text), options(o), () => 'p'.repeat(48));
+  planSetup(new EnvFile(text), options(o));
+
+/** The engine runs by default, so it is always recreated with the sidecar. */
+const ENGINE_SERVICES = ['index-swarm-engine-init', 'index-swarm-engine'];
 
 /** Apply a plan to the text, as the CLI does. */
 const apply = (text: string, o: Partial<SetupOptions>) => {
   const env = new EnvFile(text);
-  for (const change of planSetup(env, options(o), () => 'p'.repeat(48))
-    .changes) {
+  for (const change of planSetup(env, options(o)).changes) {
     env.set(change.key, change.value, 'added');
   }
   return env.toString();
@@ -45,42 +46,56 @@ const valueOf = (p: ReturnType<typeof plan>, key: string) =>
   p.changes.find((c) => c.key === key)?.value;
 
 describe('planSetup', () => {
-  it('sets up a subscriber on a fresh .env: subscription, disk, sources, lookup order', () => {
+  it('sets up a subscriber on a fresh .env: subscription and lookup order, leaving the defaults that already fit', () => {
     const p = plan('', { subscribe: [TURBO] });
     assert.deepEqual(p.errors, []);
     assert.equal(
       valueOf(p, 'INDEX_SWARM_SUBSCRIBE'),
       JSON.stringify([{ publisher: TURBO, name: 'root-tx-index' }]),
     );
-    assert.equal(
-      valueOf(p, 'INDEX_SWARM_MAX_DISK_BYTES'),
-      String(50 * 1024 ** 3),
-    );
-    assert.equal(
-      valueOf(p, 'CDB64_ROOT_TX_INDEX_SOURCES'),
-      `${INSTALLED_ROOT_TX_SOURCE},${DEFAULT_CDB64_ROOT_TX_INDEX_SOURCES}`,
-    );
+    // The sidecar's default budget (64 GiB) fits root-TX bands, and the
+    // gateway's default sources already search the installed bands first.
+    assert.equal(valueOf(p, 'INDEX_SWARM_MAX_DISK_BYTES'), undefined);
+    assert.equal(valueOf(p, 'CDB64_ROOT_TX_INDEX_SOURCES'), undefined);
     assert.equal(valueOf(p, 'ROOT_TX_LOOKUP_ORDER'), 'db,cdb,gateways,graphql');
+    // No password is written: the engine's init generates one.
+    assert.equal(valueOf(p, 'INDEX_SWARM_ENGINE_AUTH'), undefined);
     assert.equal(p.restartCore, true);
-    assert.deepEqual(p.services, ['index-swarm']);
-    assert.deepEqual(p.profiles, ['index-swarm']);
+    assert.deepEqual(p.services, [...ENGINE_SERVICES, 'index-swarm']);
+  });
+
+  it('keeps the default subscription when adding another publisher to an unset one', () => {
+    const p = plan('', { subscribe: [OTHER] });
+    assert.deepEqual(p.errors, []);
+    assert.equal(
+      valueOf(p, 'INDEX_SWARM_SUBSCRIBE'),
+      JSON.stringify([
+        { publisher: TURBO, name: 'root-tx-index' },
+        { publisher: OTHER, name: 'root-tx-index' },
+      ]),
+    );
+  });
+
+  it('adds a publisher to an explicit opt-out without bringing the default back', () => {
+    const p = plan('INDEX_SWARM_SUBSCRIBE=[]', { subscribe: [OTHER] });
+    assert.equal(
+      valueOf(p, 'INDEX_SWARM_SUBSCRIBE'),
+      JSON.stringify([{ publisher: OTHER, name: 'root-tx-index' }]),
+    );
   });
 
   it("raises an existing subscriber's budget with --max-disk-gib alone, without restarting the gateway", () => {
-    const existing = apply('', { subscribe: [TURBO] });
-    const p = plan(
-      existing.replace(String(50 * 1024 ** 3), String(25 * 1024 ** 3)),
-      {
-        maxDiskGiB: 60,
-      },
-    );
+    const existing = apply('', { subscribe: [TURBO], maxDiskGiB: 25 });
+    const p = plan(existing, {
+      maxDiskGiB: 60,
+    });
     assert.deepEqual(p.errors, []);
     assert.deepEqual(
       p.changes.map((c) => [c.key, c.value]),
       [['INDEX_SWARM_MAX_DISK_BYTES', String(60 * 1024 ** 3)]],
     );
     assert.equal(p.restartCore, false);
-    assert.deepEqual(p.services, ['index-swarm']);
+    assert.deepEqual(p.services, [...ENGINE_SERVICES, 'index-swarm']);
   });
 
   it("moves an existing engine's peer port with --engine-port alone, restarting the engine but not the gateway", () => {
@@ -161,7 +176,16 @@ describe('planSetup', () => {
       );
       assert.equal(valueOf(p, 'L1_BAND_IMPORT_ENABLED'), 'true');
       assert.equal(p.restartCore, true);
-      // The budget was set by the first run; a short one is only warned about.
+      // Root-TX alone wrote no budget, so the L1 one is written now.
+      assert.equal(
+        valueOf(p, 'INDEX_SWARM_MAX_DISK_BYTES'),
+        String(100 * 1024 ** 3),
+      );
+    });
+
+    it('only warns about an existing budget too small for L1 bands', () => {
+      const once = apply('', { subscribe: [TURBO], maxDiskGiB: 50 });
+      const p = plan(once, { subscribe: [TURBO], l1: true });
       assert.equal(valueOf(p, 'INDEX_SWARM_MAX_DISK_BYTES'), undefined);
       assert.ok(p.warnings.some((w) => /under 100 GiB/.test(w)));
     });
@@ -212,13 +236,12 @@ describe('planSetup', () => {
     assert.equal(p.restartCore, false);
   });
 
-  it('turns on torrents with a generated password it never displays', () => {
+  it('takes --torrent for older instructions, writing no password (the engine init generates one)', () => {
     const p = plan(`INDEX_SWARM_SUBSCRIBE='[{"publisher":"${TURBO}"}]'`, {
       torrent: true,
     });
-    const auth = p.changes.find((c) => c.key === 'INDEX_SWARM_ENGINE_AUTH');
-    assert.equal(auth?.value, `swarm:${'p'.repeat(48)}`);
-    assert.equal(auth?.display?.includes('p'.repeat(8)), false);
+    assert.deepEqual(p.errors, []);
+    assert.equal(valueOf(p, 'INDEX_SWARM_ENGINE_AUTH'), undefined);
     assert.equal(valueOf(p, 'INDEX_SWARM_ENGINE_URL'), undefined, 'defaults');
     assert.deepEqual(p.profiles, ['index-swarm', 'index-swarm-torrent']);
     assert.deepEqual(p.services, [
@@ -231,7 +254,7 @@ describe('planSetup', () => {
 
   it('refuses to replace an unusable engine password', () => {
     const p = plan(
-      'INDEX_SWARM_SUBSCRIBE=[]\nINDEX_SWARM_ENGINE_AUTH=swarm:short',
+      `INDEX_SWARM_SUBSCRIBE='[{"publisher":"${TURBO}"}]'\nINDEX_SWARM_ENGINE_AUTH=swarm:short`,
       {
         torrent: true,
       },
@@ -257,7 +280,9 @@ describe('planSetup', () => {
       'http://[2001:db8::1]:6969/announce',
     );
     assert.equal(valueOf(p, 'INDEX_SWARM_ENGINE_PUBLIC_HOST'), '2001:db8::1');
-    assert.match(p.notes.join('\n'), /tracker port 6969/);
+    // Compose publishes the direct port on loopback unless told otherwise.
+    assert.equal(valueOf(p, 'INDEX_SWARM_TRACKER_HOST_IP'), '0.0.0.0');
+    assert.match(p.notes.join('\n'), /Open the tracker port 6969/);
   });
 
   it('announces through the gateway’s HTTPS when it knows its public URL, with no tracker port to open', () => {
@@ -275,6 +300,7 @@ describe('planSetup', () => {
     );
     // The engine is still listed at the node's own address.
     assert.equal(valueOf(p, 'INDEX_SWARM_ENGINE_PUBLIC_HOST'), '203.0.113.7');
+    assert.equal(valueOf(p, 'INDEX_SWARM_TRACKER_HOST_IP'), undefined);
     assert.doesNotMatch(p.notes.join('\n'), /tracker port/);
     assert.doesNotMatch(p.notes.join('\n'), /INDEXES_PUBLIC_URL/);
     assert.doesNotMatch(p.notes.join('\n'), /lists this node's engine/);
@@ -360,7 +386,27 @@ describe('planSetup', () => {
       'INDEX_SWARM_OBSERVER_KEYPAIR_FILE=/k.json\nAR_IO_WALLET=W\nARNS_ROOT_HOST=gateway.example\nINDEX_SWARM_TRACKERS=http://203.0.113.7:6969/announce';
     const p = plan(base, { publish: true, torrent: true });
     assert.equal(valueOf(p, 'INDEX_SWARM_TRACKERS'), undefined);
-    assert.match(p.notes.join('\n'), /tracker port 6969/);
+    // It names the loopback binding rather than change an existing setup.
+    assert.equal(valueOf(p, 'INDEX_SWARM_TRACKER_HOST_IP'), undefined);
+    assert.match(
+      p.notes.join('\n'),
+      /tracker port 6969 directly.*INDEX_SWARM_TRACKER_HOST_IP=0\.0\.0\.0/,
+    );
+    const open = plan(`${base}\nINDEX_SWARM_TRACKER_HOST_IP=0.0.0.0`, {
+      publish: true,
+    });
+    assert.match(open.notes.join('\n'), /Open the tracker port 6969/);
+  });
+
+  it('sets the publisher tracker up without --torrent, since the engine runs by default', () => {
+    const p = plan(
+      'INDEX_SWARM_OBSERVER_KEYPAIR_FILE=/k.json\nAR_IO_WALLET=W\nARNS_ROOT_HOST=gateway.example',
+      { publish: true },
+    );
+    assert.equal(
+      valueOf(p, 'INDEX_SWARM_TRACKERS'),
+      'https://gateway.example/ar-io/indexes/announce',
+    );
   });
 
   it('notes that the feed needs a public URL when the gateway has none', () => {
@@ -392,7 +438,11 @@ describe('planSetup', () => {
       'https://turbo-gateway.com',
     );
     assert.equal(valueOf(p, 'INDEX_EXPORT_START_HEIGHT'), '1950000');
-    assert.deepEqual(p.warnings, []);
+    // Torrents are on by default, and nothing names this gateway's address.
+    assert.deepEqual(
+      p.warnings.filter((w) => !/without a tracker/.test(w)),
+      [],
+    );
     assert.match(p.notes.join('\n'), /--once --dry-run/);
     assert.equal(p.restartCore, false, 'index-export needs nothing of core');
   });
@@ -458,9 +508,10 @@ describe('planSetup', () => {
     assert.match(both.errors.join('\n'), /not both|Keep one/);
   });
 
-  it('asks for a role when there is none', () => {
+  it('asks for a role only when the operator opted out of the default subscription', () => {
+    assert.deepEqual(plan('', { torrent: true }).errors, []);
     assert.match(
-      plan('', { torrent: true }).errors.join('\n'),
+      plan('INDEX_SWARM_SUBSCRIBE=[]', { torrent: true }).errors.join('\n'),
       /Nothing to set up/,
     );
   });

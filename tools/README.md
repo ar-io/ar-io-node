@@ -5,14 +5,14 @@ This directory contains development and documentation tools for the AR.IO Node p
 ## Tools
 
 ### `index-swarm-setup` and `index-swarm-status`
-Set up Index Sharing (the `index-swarm` sidecar, optionally over BitTorrent) and check it works. `index-swarm-setup` edits `.env` idempotently (backing it up first) and, with `--restart`, recreates only what the changes need, by service name, using the running gateway's own compose files. `index-swarm-status` runs inside the sidecar and reports each check as ok/WARN/FAIL with the fix; it exits 1 on a failure. Both need only Docker: they run in the core image. See [Quick start](../docs/index-swarm.md#quick-start) and [setup and status scripts](../docs/index-swarm.md#setup-and-status-scripts).
+Set up Index Sharing (the `index-swarm` sidecar and its torrent engine, which run by default subscribed to the ar.io publisher's root-TX bands) further, and check it works. `index-swarm-setup` edits `.env` idempotently (backing it up first) and, with `--restart`, recreates only what the changes need, by service name, using the running gateway's own compose files. `index-swarm-status` runs inside the sidecar and reports each check as ok/WARN/FAIL with the fix; it exits 1 on a failure. Both need only Docker: they run in the core image. See [Quick start](../docs/index-swarm.md#quick-start) and [setup and status scripts](../docs/index-swarm.md#setup-and-status-scripts).
 
 **Usage:**
 ```bash
-./tools/index-swarm-setup --subscribe <publisher wallet> --torrent --dry-run
-./tools/index-swarm-setup --subscribe <publisher wallet> --torrent --restart
-./tools/index-swarm-setup --subscribe <publisher wallet> --l1 --torrent --restart   # L1 bands too, filled into core.db
-./tools/index-swarm-setup --publish --torrent --public-host <public IP> --restart
+./tools/index-swarm-setup --subscribe <publisher wallet> --dry-run
+./tools/index-swarm-setup --subscribe <publisher wallet> --restart
+./tools/index-swarm-setup --subscribe <publisher wallet> --l1 --restart   # L1 bands too, filled into core.db
+./tools/index-swarm-setup --publish --public-host <public IP> --restart
 ./tools/index-swarm-status
 ```
 
