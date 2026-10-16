@@ -76,6 +76,12 @@ async function main(): Promise<void> {
   buildInfo.set({ version: release, node_version: process.version }, 1);
   configuredIndexes.set({ role: 'publish' }, config.PUBLISH.length);
   configuredIndexes.set({ role: 'subscribe' }, config.SUBSCRIBE.length);
+  if (config.SUBSCRIBE_SKIPPED_SELF) {
+    log.info(
+      'Default subscription skipped: this gateway is the default publisher (AR_IO_WALLET), and does not subscribe to itself. Set INDEX_SWARM_SUBSCRIBE to subscribe explicitly.',
+      { wallet: config.AR_IO_WALLET },
+    );
+  }
 
   // The engine password: the setting, else the one the compose engine's init
   // generated. Never logged.

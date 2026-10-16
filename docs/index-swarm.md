@@ -48,18 +48,24 @@ From Release 85, a gateway shares indexes without any setting:
   The engine's own container does not mount that directory. Set
   `INDEX_SWARM_ENGINE_AUTH` to choose one instead; a set value always wins.
   The engine never runs without a password.
+- **Its own wallet.** A gateway whose `AR_IO_WALLET` is the ar.io publisher
+  never subscribes to itself: its default is no subscription, and the
+  sidecar logs that at startup. An explicit `INDEX_SWARM_SUBSCRIBE` is used
+  as given.
 - **Port 6881.** The engine publishes its peer port, 6881 TCP and UDP. Open it
   to the internet if you can: a subscriber behind NAT still downloads and
   seeds to the peers it connects to, so this is recommended, not required. If
   another program holds 6881, set `INDEX_SWARM_ENGINE_PORT` to a free port
-  below 32768. Nothing else is exposed: the tracker's port is published on
-  `127.0.0.1` only (see [the tracker](#the-tracker)).
+  below 32768. Two gateways on one host must each use a different
+  `INDEX_SWARM_ENGINE_PORT`, or the second engine does not start. Nothing
+  else is exposed: the tracker's port is published on `127.0.0.1` only (see
+  [the tracker](#the-tracker)).
 
 What it costs, measured on a live gateway in 2026-10:
 
 | Resource | Use |
 |---|---|
-| Disk | About 22 GB of installed root-TX bands, under `data/indexes/` (with torrents, a band being fetched needs its size again while it is copied out of `swarm/`). Capped by `INDEX_SWARM_MAX_DISK_BYTES`, 64 GiB by default |
+| Disk | About 22 GB of installed root-TX bands, under `data/indexes/` (with torrents, a band being fetched needs its size again while it is copied out of `swarm/`). Capped by `INDEX_SWARM_MAX_DISK_BYTES`: 64 GiB by default with the default subscription, no ceiling by default with an explicit `INDEX_SWARM_SUBSCRIBE` |
 | Memory | About 90 MB for the sidecar and about 300 MB for the engine (see [the engine's memory note](#running-the-engine) for mapped file pages) |
 | Upload | Peers fetching from this node, capped at `INDEX_SWARM_UPLOAD_LIMIT_BYTES_PER_SEC` (10 MB/s) and `INDEX_SWARM_UPLOAD_DAILY_LIMIT_BYTES` (100 GB a day) |
 | Download | The first pull of about 22 GB takes minutes to hours; after that, only new bands |
@@ -75,9 +81,17 @@ unless it is listed too. To stop sharing altogether, see
 **Upgrading.** A gateway that already sets `INDEX_SWARM_SUBSCRIBE`,
 `INDEX_SWARM_ENGINE_AUTH`, `CDB64_ROOT_TX_INDEX_SOURCES` or
 `INDEX_SWARM_MAX_DISK_BYTES` keeps its values: the defaults apply only when a
-variable is unset or empty. Names given to `docker compose --profile
-index-swarm` and `--profile index-swarm-torrent` are still accepted, and no
-longer needed.
+variable is unset or empty. The 64 GiB disk ceiling applies only to the
+default subscription, so a gateway that already subscribes explicitly and
+sets no budget still has no ceiling. Names given to `docker compose
+--profile index-swarm` and `--profile index-swarm-torrent` are still
+accepted, and no longer needed.
+
+A sidecar that ran over HTTP only on purpose, with no engine password set,
+now gets the torrent engine as well: the engine services run by default and
+the init generates a password. To keep HTTP only, turn the engine off as
+described in [turning it off](#turning-it-off). Two gateways on one host now
+each run an engine, so give each its own `INDEX_SWARM_ENGINE_PORT`.
 
 ### Setting it up further
 
@@ -185,13 +199,13 @@ A gateway can do both: pass `--subscribe` and `--publish` together.
 
 | Flag | Effect |
 |---|---|
-| `--subscribe <wallet>` | Adds the publisher to `INDEX_SWARM_SUBSCRIBE` (repeatable; existing entries are kept, and so is the default subscription when the variable is unset). Puts `cdb` right after `db` in `ROOT_TX_LOOKUP_ORDER`, and, when `CDB64_ROOT_TX_INDEX_SOURCES` is set, the installed directory first in it (unset, the default already has it first). See [pointing the gateway at installed bands](#pointing-the-gateway-at-installed-bands) and [lookup order](#lookup-order) |
+| `--subscribe <wallet>` | Adds the publisher to `INDEX_SWARM_SUBSCRIBE` (repeatable; existing entries are kept, and so is the default subscription when the variable is unset). Never adds this gateway's own wallet through the default. Writes `INDEX_SWARM_MAX_DISK_BYTES` (64 GiB) when the subscription was unset and no budget is set, since the sidecar's default ceiling applies only to the default subscription. Leaves an unset `ROOT_TX_LOOKUP_ORDER` unset (the default is right); in a set one, puts `cdb` right after `db`, keeps every other entry, `hyperbeam` included, and adds `cdb-remote` last if missing, so `cdb` stays local-only. And, when `CDB64_ROOT_TX_INDEX_SOURCES` is set, the installed directory first in it (unset, the default already has it first). See [pointing the gateway at installed bands](#pointing-the-gateway-at-installed-bands) and [lookup order](#lookup-order) |
 | `--publish` | Adds `root-tx-index` to `INDEX_SWARM_PUBLISH` and starts `index-export`. Sets `INDEX_EXPORT_HEADER_CHECK_URL` (default `https://turbo-gateway.com`). Refuses, writing nothing, without a registered key or `AR_IO_WALLET`. Sets `INDEX_SWARM_TRACKERS` (if unset) to this node's tracker: through the gateway, `<public URL>/ar-io/indexes/announce`, or with no public URL, `http://<public host>:6969/announce` and `INDEX_SWARM_TRACKER_HOST_IP=0.0.0.0` |
 | `--start-height <n>`, `--header-check-url <url>` | With `--publish`: `INDEX_EXPORT_START_HEIGHT` and `INDEX_EXPORT_HEADER_CHECK_URL` |
 | `--torrent` | Accepted for older instructions. The engine runs by default and its init generates its password, so nothing is written; an existing `INDEX_SWARM_ENGINE_AUTH` is checked |
 | `--public-host <addr>`, `--engine-port <n>` | `INDEX_SWARM_ENGINE_PUBLIC_HOST`, `INDEX_SWARM_ENGINE_PORT`. Work on their own, to move an engine that already runs (with `--restart`, the engine is recreated on the new port) |
 | `--public-url <origin>` | The gateway's public origin, such as `https://gateway.example`, for the tracker URL. Defaults to `INDEXES_PUBLIC_URL`, then `https://<ARNS_ROOT_HOST>`. To change the feeds' origin too, set `INDEXES_PUBLIC_URL` |
-| `--l1` | With `--subscribe`: takes the publishers' L1 bands as well (`"name": ["root-tx-index", "parquet-l1"]`) and sets `L1_BAND_IMPORT_ENABLED=true`, so the gateway fills its L1 history from them while it runs. Core picks it up when it is next created: `--restart` does that. Sets the disk budget to 100 GiB if unset (the default, 64 GiB, is sized for root-TX bands), and warns if an existing one is lower |
+| `--l1` | With `--subscribe`: takes the publishers' L1 bands as well (`"name": ["root-tx-index", "parquet-l1"]`) and sets `L1_BAND_IMPORT_ENABLED=true`, so the gateway fills its L1 history from them while it runs. Core picks it up when it is next created: `--restart` does that. Sets the disk budget to 100 GiB if unset or exactly the 64 GiB default (which is sized for root-TX bands), and warns if an existing one is lower |
 | `--max-disk-gib <n>` | `INDEX_SWARM_MAX_DISK_BYTES`. Works on its own, to change an existing subscriber's budget |
 | `--no-gateway` | Leaves the two gateway keys alone |
 | `--dry-run` | Shows the changes and writes nothing |
@@ -234,12 +248,16 @@ directly:
 
 ```bash
 INDEX_SWARM_SUBSCRIBE='[{"publisher":"34LYvMptiDvBP5sqfh1oAd6Q4qFsy4PWaZ1HTFmML7h5","name":"root-tx-index"},{"publisher":"<publisher gateway wallet>","name":"root-tx-index"}]'
-ROOT_TX_LOOKUP_ORDER=db,cdb,gateways,graphql
+ROOT_TX_LOOKUP_ORDER=db,cdb,gateways,graphql,cdb-remote
 # Only if CDB64_ROOT_TX_INDEX_SOURCES is already set; its default has this first.
 CDB64_ROOT_TX_INDEX_SOURCES=data/indexes/installed/root-tx-index,<previous sources>
 ```
 
-`INDEX_SWARM_MAX_DISK_BYTES` defaults to 64 GiB, and the engine's password
+`INDEX_SWARM_MAX_DISK_BYTES` defaults to 64 GiB only while
+`INDEX_SWARM_SUBSCRIBE` is unset, so setup writes it
+(`INDEX_SWARM_MAX_DISK_BYTES=68719476736`) when it sets the subscription.
+`ROOT_TX_LOOKUP_ORDER` is written only if it is already set; the line above
+is what an order set by hand should look like. The engine's password
 is generated; set `INDEX_SWARM_ENGINE_AUTH=swarm:<openssl rand -hex 24>` only
 to choose your own.
 
@@ -792,13 +810,23 @@ lets bands come and go without a restart. Changing
 ### Lookup order
 
 `ROOT_TX_LOOKUP_ORDER` decides which root-TX sources are asked, and in what
-order, until one gives a usable answer. Its default,
-`db,cdb,gateways,graphql,hyperbeam`, asks the installed bands right after
-the local index. An order set by hand that puts `cdb` after network sources
-gets little from them; put `cdb` right after `db`:
+order, until one gives a usable answer. Its default is
+`db,cdb,gateways,graphql,hyperbeam,cdb-remote`:
+
+- `cdb` asks CDB64 sources on local disk, which includes the installed bands,
+  right after the local index.
+- `cdb-remote` asks CDB64 sources read over the network, last. By default
+  these are the three shipped indexes, whose partitions are read from
+  Arweave. An item the bands do not hold, such as one newer than the newest
+  band, goes to `gateways` without waiting on those reads first.
+
+The split applies only when the order lists `cdb-remote`. In an order
+without it, `cdb` asks every CDB64 source, local and remote, as it did
+before Release 85. An order set by hand should put `cdb` right after `db`
+and `cdb-remote` at the end:
 
 ```bash
-ROOT_TX_LOOKUP_ORDER=db,cdb,gateways,graphql
+ROOT_TX_LOOKUP_ORDER=db,cdb,gateways,graphql,cdb-remote
 ```
 
 An installed band answers from local disk, in milliseconds, against hundreds
@@ -812,7 +840,8 @@ clients use to locate an item without a retrieval. It asks the local index,
 then CDB64 sources on local disk only; remote sources are never fetched for
 it. An answer from a band carries no `dataSize` or `contentType`, so a
 consumer verifies the item before serving it. This needs `cdb` in
-`ROOT_TX_LOOKUP_ORDER` (it is in the default).
+`ROOT_TX_LOOKUP_ORDER` (it is in the default); `cdb-remote` does not change
+it.
 
 ### What the gateway serves
 
@@ -1155,7 +1184,9 @@ Subscription results that need attention:
   bands, the default subscription, are about 22 GB and its L1 bands about
   15 GB; the three older snapshots shipped as the gateway's defaults are 122,
   150 and 245 GB (read from Arweave, not stored). `INDEX_SWARM_MAX_DISK_BYTES`
-  is 64 GiB unless set (`0` is no ceiling), and counts installed bands (retired ones too,
+  is 64 GiB unless set while the subscription is the default one, and no
+  ceiling unless set with an explicit `INDEX_SWARM_SUBSCRIBE` (`0` is no
+  ceiling either way). It counts installed bands (retired ones too,
   until swept), `incoming/`, and every torrent download at its full size
   from the start. A band that may come over the swarm needs its size twice,
   for the copy out of `swarm/`. The copy a band replaces is left out, so a
@@ -1184,7 +1215,28 @@ Subscribers see that document age and, once it expires, alarm.
 
 To stop taking bands but keep the services, set `INDEX_SWARM_SUBSCRIBE=[]`
 and recreate the sidecar; installed bands from publishers no longer listed
-are retired. To remove the feature:
+are retired.
+
+To keep sharing but over HTTP only, without the torrent engine (as a sidecar
+ran before Release 85 when no engine password was set), put just the two
+engine services behind an unused profile in `docker-compose.override.yaml`:
+
+```yaml
+services:
+  index-swarm-engine-init:
+    profiles: [disabled]
+  index-swarm-engine:
+    profiles: [disabled]
+```
+
+Then `docker compose --profile disabled stop index-swarm-engine`,
+`docker compose --profile disabled rm -f index-swarm-engine index-swarm-engine-init`,
+remove `INDEX_SWARM_ENGINE_AUTH` from `.env` if set, delete
+`data/indexes/engine-auth` (root-owned, so with `sudo`) and recreate the
+sidecar (`docker compose up -d --no-deps index-swarm`). With no password the
+sidecar does not look for an engine and moves bands over HTTP only.
+
+To remove the feature:
 
 1. The services run by default, so keep a plain `docker compose up -d` from
    starting them again with a `docker-compose.override.yaml` that puts them

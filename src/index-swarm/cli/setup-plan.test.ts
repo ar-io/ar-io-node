@@ -46,21 +46,27 @@ const valueOf = (p: ReturnType<typeof plan>, key: string) =>
   p.changes.find((c) => c.key === key)?.value;
 
 describe('planSetup', () => {
-  it('sets up a subscriber on a fresh .env: subscription and lookup order, leaving the defaults that already fit', () => {
+  it('sets up a subscriber on a fresh .env: subscription and budget, leaving the defaults that already fit', () => {
     const p = plan('', { subscribe: [TURBO] });
     assert.deepEqual(p.errors, []);
     assert.equal(
       valueOf(p, 'INDEX_SWARM_SUBSCRIBE'),
       JSON.stringify([{ publisher: TURBO, name: 'root-tx-index' }]),
     );
-    // The sidecar's default budget (64 GiB) fits root-TX bands, and the
-    // gateway's default sources already search the installed bands first.
-    assert.equal(valueOf(p, 'INDEX_SWARM_MAX_DISK_BYTES'), undefined);
+    // The sidecar applies its 64 GiB default only to the default
+    // subscription, so the explicit one written here carries it. The
+    // gateway's default sources and lookup order already ask the installed
+    // bands first, so neither is written.
+    assert.equal(
+      valueOf(p, 'INDEX_SWARM_MAX_DISK_BYTES'),
+      String(64 * 1024 ** 3),
+    );
     assert.equal(valueOf(p, 'CDB64_ROOT_TX_INDEX_SOURCES'), undefined);
-    assert.equal(valueOf(p, 'ROOT_TX_LOOKUP_ORDER'), 'db,cdb,gateways,graphql');
+    assert.equal(valueOf(p, 'ROOT_TX_LOOKUP_ORDER'), undefined);
     // No password is written: the engine's init generates one.
     assert.equal(valueOf(p, 'INDEX_SWARM_ENGINE_AUTH'), undefined);
-    assert.equal(p.restartCore, true);
+    // Nothing the gateway reads changed, so it is not restarted.
+    assert.equal(p.restartCore, false);
     assert.deepEqual(p.services, [...ENGINE_SERVICES, 'index-swarm']);
   });
 
@@ -74,6 +80,44 @@ describe('planSetup', () => {
         { publisher: OTHER, name: 'root-tx-index' },
       ]),
     );
+  });
+
+  it('never adds the default publisher to its own gateway', () => {
+    const p = plan(`AR_IO_WALLET=${TURBO}`, { subscribe: [OTHER] });
+    assert.deepEqual(p.errors, []);
+    assert.equal(
+      valueOf(p, 'INDEX_SWARM_SUBSCRIBE'),
+      JSON.stringify([{ publisher: OTHER, name: 'root-tx-index' }]),
+    );
+  });
+
+  it('adds no budget to a subscription that was already explicit', () => {
+    const p = plan(
+      `INDEX_SWARM_SUBSCRIBE='[{"publisher":"${TURBO}","name":"root-tx-index"}]'`,
+      { subscribe: [OTHER] },
+    );
+    assert.deepEqual(p.errors, []);
+    assert.equal(valueOf(p, 'INDEX_SWARM_MAX_DISK_BYTES'), undefined);
+  });
+
+  it('writes no lookup order when it is unset, and keeps a set one whole', () => {
+    assert.equal(
+      valueOf(plan('', { subscribe: [OTHER] }), 'ROOT_TX_LOOKUP_ORDER'),
+      undefined,
+    );
+    const p = plan('ROOT_TX_LOOKUP_ORDER=db,gateways,graphql,hyperbeam', {
+      subscribe: [OTHER],
+    });
+    assert.equal(
+      valueOf(p, 'ROOT_TX_LOOKUP_ORDER'),
+      'db,cdb,gateways,graphql,hyperbeam,cdb-remote',
+    );
+    // The default order, written out, is left as it is.
+    const q = plan(
+      'ROOT_TX_LOOKUP_ORDER=db,cdb,gateways,graphql,hyperbeam,cdb-remote',
+      { subscribe: [OTHER] },
+    );
+    assert.equal(valueOf(q, 'ROOT_TX_LOOKUP_ORDER'), undefined);
   });
 
   it('adds a publisher to an explicit opt-out without bringing the default back', () => {
@@ -176,7 +220,7 @@ describe('planSetup', () => {
       );
       assert.equal(valueOf(p, 'L1_BAND_IMPORT_ENABLED'), 'true');
       assert.equal(p.restartCore, true);
-      // Root-TX alone wrote no budget, so the L1 one is written now.
+      // Root-TX alone wrote the 64 GiB default, so the L1 one replaces it.
       assert.equal(
         valueOf(p, 'INDEX_SWARM_MAX_DISK_BYTES'),
         String(100 * 1024 ** 3),
@@ -214,7 +258,10 @@ describe('planSetup', () => {
       valueOf(p, 'CDB64_ROOT_TX_INDEX_SOURCES'),
       `${INSTALLED_ROOT_TX_SOURCE},data/my-index`,
     );
-    assert.equal(valueOf(p, 'ROOT_TX_LOOKUP_ORDER'), 'db,cdb,gateways,turbo');
+    assert.equal(
+      valueOf(p, 'ROOT_TX_LOOKUP_ORDER'),
+      'db,cdb,gateways,turbo,cdb-remote',
+    );
     assert.equal(valueOf(p, 'INDEX_SWARM_MAX_DISK_BYTES'), undefined, 'kept');
   });
 
@@ -224,7 +271,7 @@ describe('planSetup', () => {
     });
     assert.equal(
       valueOf(p, 'ROOT_TX_LOOKUP_ORDER'),
-      'db,cdb,gateways,hyperbeam',
+      'db,cdb,gateways,hyperbeam,cdb-remote',
     );
     assert.match(p.warnings.join('\n'), /hyperbeam/);
   });
@@ -524,14 +571,77 @@ describe('planSetup', () => {
 });
 
 describe('subscriberLookupOrder', () => {
+  it('leaves an unset or blank order alone: the default is already right', () => {
+    assert.equal(subscriberLookupOrder(undefined), undefined);
+    assert.equal(subscriberLookupOrder(''), undefined);
+    assert.equal(subscriberLookupOrder('  '), undefined);
+  });
+
+  it('keeps every other token, hyperbeam included', () => {
+    assert.equal(
+      subscriberLookupOrder('db,gateways,graphql,hyperbeam,cdb-remote'),
+      'db,cdb,gateways,graphql,hyperbeam,cdb-remote',
+    );
+    assert.equal(
+      subscriberLookupOrder('turbo,db,peers,gateways,hyperbeam'),
+      'turbo,db,cdb,peers,gateways,hyperbeam,cdb-remote',
+    );
+  });
+
   it('puts cdb right after db, or first without db', () => {
-    assert.equal(subscriberLookupOrder(undefined), 'db,cdb,gateways,graphql');
-    assert.equal(subscriberLookupOrder('db,cdb,x'), 'db,cdb,x');
-    assert.equal(subscriberLookupOrder('gateways,db'), 'gateways,db,cdb');
+    assert.equal(subscriberLookupOrder('db,cdb,x'), 'db,cdb,x,cdb-remote');
+    assert.equal(
+      subscriberLookupOrder('gateways,db'),
+      'gateways,db,cdb,cdb-remote',
+    );
     assert.equal(
       subscriberLookupOrder('gateways,graphql'),
-      'cdb,gateways,graphql',
+      'cdb,gateways,graphql,cdb-remote',
     );
+  });
+
+  it('keeps cdb-remote where the order already has it', () => {
+    assert.equal(
+      subscriberLookupOrder('db,gateways,cdb-remote,graphql'),
+      'db,cdb,gateways,cdb-remote,graphql',
+    );
+    // The gateway's own default is left exactly as it is.
+    assert.equal(
+      subscriberLookupOrder('db,cdb,gateways,graphql,hyperbeam,cdb-remote'),
+      'db,cdb,gateways,graphql,hyperbeam,cdb-remote',
+    );
+  });
+
+  it('adds cdb-remote last when the order lacks it, so cdb stays local', () => {
+    // Without cdb-remote, cdb would also ask the shipped indexes (read from
+    // Arweave) right after db.
+    assert.equal(
+      subscriberLookupOrder('db,gateways,graphql'),
+      'db,cdb,gateways,graphql,cdb-remote',
+    );
+  });
+
+  it('never repeats or drops cdb or cdb-remote', () => {
+    assert.equal(
+      subscriberLookupOrder('cdb-remote,db,cdb,gateways,cdb,cdb-remote'),
+      'cdb-remote,db,cdb,gateways',
+    );
+    // Case does not matter to the gateway, so it does not here either.
+    assert.equal(
+      subscriberLookupOrder('DB,Gateways,CDB,CDB-Remote'),
+      'DB,cdb,Gateways,CDB-Remote',
+    );
+  });
+
+  it('is unchanged when applied twice', () => {
+    for (const start of [
+      'db,gateways',
+      'gateways,graphql,cdb-remote,db',
+      'db,cdb,gateways,graphql,hyperbeam,cdb-remote',
+    ]) {
+      const once = subscriberLookupOrder(start);
+      assert.equal(subscriberLookupOrder(once!), once);
+    }
   });
 });
 

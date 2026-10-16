@@ -13,6 +13,8 @@ import {
   DEFAULT_MAX_DISK_BYTES,
   DEFAULT_SUBSCRIBE,
   parseEngineAuth,
+  isDefaultSubscribe,
+  isSelfDefaultSubscription,
   parseMaxDiskBytes,
   parsePublish,
   parseSubscribe,
@@ -188,6 +190,35 @@ describe('index-swarm config', () => {
       assert.throws(() => resolveSubscribe('not-json'), /not valid JSON/);
     });
 
+    it('never subscribes the default publisher to itself', () => {
+      // The ar.io publisher's own sidecar: the default resolves to nothing.
+      assert.deepEqual(resolveSubscribe(undefined, AR_IO_INDEX_PUBLISHER), []);
+      assert.deepEqual(resolveSubscribe('', AR_IO_INDEX_PUBLISHER), []);
+      assert.equal(
+        isSelfDefaultSubscription(undefined, AR_IO_INDEX_PUBLISHER),
+        true,
+      );
+      // Any other gateway keeps the default.
+      assert.deepEqual(resolveSubscribe(undefined, 'OtherWallet'), DEFAULT);
+      assert.equal(isSelfDefaultSubscription(undefined, 'OtherWallet'), false);
+      assert.equal(isSelfDefaultSubscription(undefined, undefined), false);
+    });
+
+    it('uses an explicit value naming its own wallet as given', () => {
+      const raw = `[{"publisher":"${AR_IO_INDEX_PUBLISHER}","name":"root-tx-index"}]`;
+      assert.deepEqual(resolveSubscribe(raw, AR_IO_INDEX_PUBLISHER), DEFAULT);
+      assert.equal(
+        isSelfDefaultSubscription(raw, AR_IO_INDEX_PUBLISHER),
+        false,
+      );
+    });
+
+    it('tells the default subscription from an explicit one', () => {
+      assert.equal(isDefaultSubscribe(undefined), true);
+      assert.equal(isDefaultSubscribe(' '), true);
+      assert.equal(isDefaultSubscribe('[]'), false);
+    });
+
     it('hands out copies, so the default cannot be changed through them', () => {
       const first = resolveSubscribe(undefined);
       first[0].publisher = 'changed';
@@ -197,24 +228,38 @@ describe('index-swarm config', () => {
   });
 
   describe('parseMaxDiskBytes', () => {
-    it('defaults to 64 GiB when unset or empty', () => {
+    it('defaults to 64 GiB when unset or empty, with the default subscription', () => {
       assert.equal(DEFAULT_MAX_DISK_BYTES, 68_719_476_736);
-      assert.equal(parseMaxDiskBytes(undefined), 68_719_476_736);
-      assert.equal(parseMaxDiskBytes(''), 68_719_476_736);
+      assert.equal(parseMaxDiskBytes(undefined, true), 68_719_476_736);
+      assert.equal(parseMaxDiskBytes('', true), 68_719_476_736);
     });
 
-    it('keeps an explicit value, larger or smaller', () => {
-      assert.equal(parseMaxDiskBytes('53687091200'), 53_687_091_200);
-      assert.equal(parseMaxDiskBytes('1000'), 1000);
+    it('has no ceiling when unset with an explicit subscription, as before', () => {
+      assert.equal(parseMaxDiskBytes(undefined, false), undefined);
+      assert.equal(parseMaxDiskBytes(' ', false), undefined);
+    });
+
+    it('keeps an explicit value, larger or smaller, whatever the subscription', () => {
+      for (const defaultSubscription of [true, false]) {
+        assert.equal(
+          parseMaxDiskBytes('53687091200', defaultSubscription),
+          53_687_091_200,
+        );
+        assert.equal(parseMaxDiskBytes('1000', defaultSubscription), 1000);
+      }
     });
 
     it('takes 0 as no ceiling', () => {
-      assert.equal(parseMaxDiskBytes('0'), undefined);
+      assert.equal(parseMaxDiskBytes('0', true), undefined);
+      assert.equal(parseMaxDiskBytes('0', false), undefined);
     });
 
     it('refuses what is not a whole number of bytes', () => {
       for (const raw of ['-1', '1.5', 'lots', '64GiB']) {
-        assert.throws(() => parseMaxDiskBytes(raw), /whole number of bytes/);
+        assert.throws(
+          () => parseMaxDiskBytes(raw, true),
+          /whole number of bytes/,
+        );
       }
     });
   });

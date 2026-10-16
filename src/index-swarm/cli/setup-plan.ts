@@ -5,6 +5,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import {
+  CDB_REMOTE_LOOKUP_SOURCE,
   DEFAULT_CDB64_ROOT_TX_INDEX_SOURCES,
   INSTALLED_ROOT_TX_INDEX_SOURCE,
 } from '../../lib/root-tx-defaults.js';
@@ -12,6 +13,7 @@ import { parsePublicOrigin } from '../../lib/public-origin.js';
 import {
   DEFAULT_ENGINE_URL,
   DEFAULT_MAX_DISK_BYTES,
+  isDefaultSubscribe,
   parseEngineAuth,
   parsePublish,
   resolveSubscribe,
@@ -27,11 +29,11 @@ import {
 export const ROOT_TX_INDEX = 'root-tx-index';
 /** Where the sidecar installs it, as the gateway's CDB64 source names it. */
 export const INSTALLED_ROOT_TX_SOURCE = INSTALLED_ROOT_TX_INDEX_SOURCE;
-/** The lookup order a subscriber wants: the installed bands right after the local DB. */
-export const SUBSCRIBER_LOOKUP_ORDER = 'db,cdb,gateways,graphql';
 /**
  * Disk for installed bands when the operator names none: the sidecar's own
- * default (64 GiB), so setup writes no budget for root-TX bands alone.
+ * default (64 GiB). The sidecar applies it only while `INDEX_SWARM_SUBSCRIBE`
+ * is unset, so setup writes it when it turns an unset subscription into an
+ * explicit one.
  */
 export const DEFAULT_MAX_DISK_GIB = DEFAULT_MAX_DISK_BYTES / 1024 ** 3;
 /**
@@ -113,6 +115,19 @@ const splitList = (value: string) =>
     .map((s) => s.trim())
     .filter((s) => s.length > 0);
 
+/**
+ * This gateway's wallet, so the default subscription is resolved as the
+ * sidecar resolves it: never to itself.
+ */
+const ownWallet = (env: EnvReader): string | undefined => {
+  const wallet = env.get('AR_IO_WALLET')?.trim();
+  return wallet !== undefined && wallet !== '' ? wallet : undefined;
+};
+
+/** Whether a variable is unset or blank, as the sidecar reads it. */
+const isUnset = (value: string | undefined): boolean =>
+  value === undefined || value.trim() === '';
+
 const normalizeSource = (source: string) =>
   source.replace(/^\.\//, '').replace(/\/+$/, '');
 
@@ -145,12 +160,38 @@ export function gatewayOrigin(
   return root !== undefined ? `https://${root}` : undefined;
 }
 
-/** `ROOT_TX_LOOKUP_ORDER` with `cdb` right after `db` (or first). */
-export function subscriberLookupOrder(current: string | undefined): string {
-  if (current === undefined) return SUBSCRIBER_LOOKUP_ORDER;
-  const order = splitList(current).filter((s) => s !== 'cdb');
-  const db = order.indexOf('db');
+/**
+ * The `ROOT_TX_LOOKUP_ORDER` a subscriber wants, or undefined to leave it
+ * unset: unset or blank, the gateway's default
+ * (`db,cdb,gateways,graphql,hyperbeam,cdb-remote`) is already right.
+ *
+ * A value that is set gets `cdb` right after `db` (or first), with every
+ * other token kept, `hyperbeam` included. `cdb-remote` is kept where it is,
+ * or added last when missing: without it, `cdb` would also ask the CDB64
+ * sources read over the network (the shipped indexes) right after `db`,
+ * before any other source. Each of the two appears once.
+ */
+export function subscriberLookupOrder(
+  current: string | undefined,
+): string | undefined {
+  if (current === undefined || current.trim() === '') return undefined;
+  // The gateway reads tokens without regard to case, so match them that way.
+  const is = (token: string, name: string) => token.toLowerCase() === name;
+  const order: string[] = [];
+  let hasRemote = false;
+  for (const token of splitList(current)) {
+    if (is(token, 'cdb')) continue;
+    if (is(token, CDB_REMOTE_LOOKUP_SOURCE)) {
+      if (hasRemote) continue;
+      hasRemote = true;
+    }
+    order.push(token);
+  }
+  const db = order.findIndex((token) => is(token, 'db'));
   order.splice(db + 1, 0, 'cdb');
+  if (!hasRemote) {
+    order.push(CDB_REMOTE_LOOKUP_SOURCE);
+  }
   return order.join(',');
 }
 
@@ -196,7 +237,9 @@ export function planSetup(env: EnvReader, options: SetupOptions): SetupPlan {
   // reported where it is parsed again.
   let subscribing = true;
   try {
-    subscribing = resolveSubscribe(env.get('INDEX_SWARM_SUBSCRIBE')).length > 0;
+    subscribing =
+      resolveSubscribe(env.get('INDEX_SWARM_SUBSCRIBE'), ownWallet(env))
+        .length > 0;
   } catch {
     // Reported below.
   }
@@ -251,7 +294,10 @@ export function planSetup(env: EnvReader, options: SetupOptions): SetupPlan {
     // publisher must not drop the one the sidecar already follows.
     let current: ReturnType<typeof resolveSubscribe>;
     try {
-      current = resolveSubscribe(env.get('INDEX_SWARM_SUBSCRIBE'));
+      current = resolveSubscribe(
+        env.get('INDEX_SWARM_SUBSCRIBE'),
+        ownWallet(env),
+      );
     } catch (error: any) {
       plan.errors.push(
         `The existing INDEX_SWARM_SUBSCRIBE is invalid (${error.message}); fix or remove it, then run this again.`,
@@ -292,12 +338,32 @@ export function planSetup(env: EnvReader, options: SetupOptions): SetupPlan {
       reason: 'the publishers to subscribe to',
     });
 
-    // Root-TX bands alone fit the sidecar's own default budget, so only
-    // L1 bands need one written.
+    // The sidecar's 64 GiB default budget applies only while the
+    // subscription is the default one. Writing an explicit subscription over
+    // an unset one would drop that ceiling, so keep it by writing it. A
+    // subscription that was already explicit had no default ceiling, and
+    // gets none added here.
+    if (
+      !l1 &&
+      options.maxDiskGiB === undefined &&
+      isUnset(env.get('INDEX_SWARM_MAX_DISK_BYTES')) &&
+      isDefaultSubscribe(env.get('INDEX_SWARM_SUBSCRIBE'))
+    ) {
+      set({
+        key: 'INDEX_SWARM_MAX_DISK_BYTES',
+        value: String(DEFAULT_MAX_DISK_BYTES),
+        reason: `${DEFAULT_MAX_DISK_GIB} GiB for installed bands, the ceiling the default subscription had (change with --max-disk-gib)`,
+      });
+    }
+
+    // Root-TX bands alone fit the default budget written above, so only L1
+    // bands need a larger one. A budget of exactly that default is taken as
+    // the one setup wrote, and raised; any other is the operator's own.
+    const budget = env.get('INDEX_SWARM_MAX_DISK_BYTES')?.trim();
     if (
       l1 &&
       options.maxDiskGiB === undefined &&
-      env.get('INDEX_SWARM_MAX_DISK_BYTES') === undefined
+      (isUnset(budget) || budget === String(DEFAULT_MAX_DISK_BYTES))
     ) {
       const gib = DEFAULT_MAX_DISK_GIB_WITH_L1;
       set({
@@ -308,8 +374,8 @@ export function planSetup(env: EnvReader, options: SetupOptions): SetupPlan {
     } else if (
       l1 &&
       options.maxDiskGiB === undefined &&
-      Number(env.get('INDEX_SWARM_MAX_DISK_BYTES')) <
-        DEFAULT_MAX_DISK_GIB_WITH_L1 * 1024 ** 3
+      budget !== '0' &&
+      Number(budget) < DEFAULT_MAX_DISK_GIB_WITH_L1 * 1024 ** 3
     ) {
       plan.warnings.push(
         `INDEX_SWARM_MAX_DISK_BYTES is under ${DEFAULT_MAX_DISK_GIB_WITH_L1} GiB. L1 bands are about 15 GB today beside a root-TX index of about 20 GB; raise it with --max-disk-gib if bands stop installing.`,
@@ -339,15 +405,19 @@ export function planSetup(env: EnvReader, options: SetupOptions): SetupPlan {
           reason: 'the gateway loads installed bands first',
         });
       }
-      set({
-        key: 'ROOT_TX_LOOKUP_ORDER',
-        value: order,
-        reason: 'installed bands answer right after the local database',
-      });
+      // Unset, the gateway's default already asks the installed bands right
+      // after the local database.
+      if (order !== undefined) {
+        set({
+          key: 'ROOT_TX_LOOKUP_ORDER',
+          value: order,
+          reason: 'installed bands answer right after the local database',
+        });
+      }
       if (plan.changes.length > before) plan.restartCore = true;
       if (
-        env.get('ROOT_TX_LOOKUP_ORDER') !== undefined &&
-        splitList(order).includes('hyperbeam')
+        order !== undefined &&
+        splitList(order).some((token) => token.toLowerCase() === 'hyperbeam')
       ) {
         plan.warnings.push(
           'ROOT_TX_LOOKUP_ORDER includes hyperbeam. Keep it only if the hb profile runs; otherwise every lookup that reaches it waits on a dead endpoint.',

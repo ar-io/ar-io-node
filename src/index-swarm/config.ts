@@ -164,15 +164,49 @@ export const DEFAULT_SUBSCRIBE: readonly SubscribeConfig[] = Object.freeze([
 ]);
 
 /**
- * The subscriptions in effect: {@link DEFAULT_SUBSCRIBE} when `raw` is unset
- * or blank (compose passes `''` for an unset variable), else `raw` parsed by
- * {@link parseSubscribe}, so `[]` means "subscribe to nothing".
+ * Whether `INDEX_SWARM_SUBSCRIBE` leaves the subscription to the default:
+ * unset or blank (compose passes `''` for an unset variable).
  */
-export function resolveSubscribe(raw: string | undefined): SubscribeConfig[] {
-  if (raw === undefined || raw.trim() === '') {
-    return DEFAULT_SUBSCRIBE.map((entry) => ({ ...entry }));
+export function isDefaultSubscribe(raw: string | undefined): boolean {
+  return raw === undefined || raw.trim() === '';
+}
+
+/**
+ * The subscriptions in effect: {@link DEFAULT_SUBSCRIBE} when `raw` is unset
+ * or blank, else `raw` parsed by {@link parseSubscribe}, so `[]` means
+ * "subscribe to nothing".
+ *
+ * The default never subscribes a gateway to itself: when `ownWallet` (this
+ * gateway's `AR_IO_WALLET`) is a default publisher, that entry is left out,
+ * so the ar.io publisher's own sidecar subscribes to nothing by default. An
+ * explicit value is used as given, even one naming this gateway's wallet
+ * (a fleet node may subscribe to its own fleet's publication on purpose).
+ */
+export function resolveSubscribe(
+  raw: string | undefined,
+  ownWallet?: string,
+): SubscribeConfig[] {
+  if (isDefaultSubscribe(raw)) {
+    return DEFAULT_SUBSCRIBE.filter(
+      (entry) => ownWallet === undefined || entry.publisher !== ownWallet,
+    ).map((entry) => ({ ...entry }));
   }
-  return parseSubscribe(raw);
+  return parseSubscribe(raw as string);
+}
+
+/**
+ * True when the default subscription was dropped because it names this
+ * gateway's own wallet; the sidecar logs it once at startup.
+ */
+export function isSelfDefaultSubscription(
+  raw: string | undefined,
+  ownWallet: string | undefined,
+): boolean {
+  return (
+    isDefaultSubscribe(raw) &&
+    ownWallet !== undefined &&
+    DEFAULT_SUBSCRIBE.some((entry) => entry.publisher === ownWallet)
+  );
 }
 
 /** Root of the shared volume the gateway also reads. */
@@ -206,8 +240,21 @@ export const STATE_FILE = path.join(DATA_DIR, 'state.json');
 export const PUBLISH: PublishConfig[] = parsePublish(
   env.varOrUndefined('INDEX_SWARM_PUBLISH'),
 );
+/** True when `INDEX_SWARM_SUBSCRIBE` is unset or blank. */
+export const SUBSCRIBE_IS_DEFAULT = isDefaultSubscribe(
+  process.env.INDEX_SWARM_SUBSCRIBE,
+);
+/**
+ * True when the default subscription was skipped because this gateway is
+ * the default publisher (see {@link resolveSubscribe}).
+ */
+export const SUBSCRIBE_SKIPPED_SELF = isSelfDefaultSubscription(
+  process.env.INDEX_SWARM_SUBSCRIBE,
+  env.varOrUndefined('AR_IO_WALLET'),
+);
 export const SUBSCRIBE: SubscribeConfig[] = resolveSubscribe(
   process.env.INDEX_SWARM_SUBSCRIBE,
+  env.varOrUndefined('AR_IO_WALLET'),
 );
 
 /** How often to look for new or changed bands. */
@@ -259,7 +306,8 @@ export const DOWNLOAD_CONCURRENCY = env.positiveIntOrDefault(
 );
 
 /**
- * The disk budget when `INDEX_SWARM_MAX_DISK_BYTES` is unset: 64 GiB. The
+ * The disk budget when `INDEX_SWARM_MAX_DISK_BYTES` is unset and
+ * `INDEX_SWARM_SUBSCRIBE` is left to the default: 64 GiB. The
  * root-TX bands a default subscriber takes were 22 GB on a live node in
  * 2026-10, and a band being replaced stays on disk until its successor is
  * installed, so this leaves room for growth and one replacement.
@@ -267,12 +315,23 @@ export const DOWNLOAD_CONCURRENCY = env.positiveIntOrDefault(
 export const DEFAULT_MAX_DISK_BYTES = 64 * 1024 ** 3;
 
 /**
- * Parse `INDEX_SWARM_MAX_DISK_BYTES`: unset or blank is
- * {@link DEFAULT_MAX_DISK_BYTES}, `0` is no ceiling (`undefined`), and any
- * other value must be a positive whole number of bytes.
+ * Parse `INDEX_SWARM_MAX_DISK_BYTES`. Unset or blank is
+ * {@link DEFAULT_MAX_DISK_BYTES} when the subscription is the default one
+ * (`INDEX_SWARM_SUBSCRIBE` unset or blank), and no ceiling otherwise, so a
+ * gateway that already subscribed explicitly before the default existed
+ * gets no new limit. `0` is no ceiling (`undefined`), and any other value
+ * must be a positive whole number of bytes, used as given.
+ *
+ * @param defaultSubscription - whether `INDEX_SWARM_SUBSCRIBE` is unset or
+ *   blank; see {@link isDefaultSubscribe}.
  */
-export function parseMaxDiskBytes(raw: string | undefined): number | undefined {
-  if (raw === undefined || raw.trim() === '') return DEFAULT_MAX_DISK_BYTES;
+export function parseMaxDiskBytes(
+  raw: string | undefined,
+  defaultSubscription: boolean,
+): number | undefined {
+  if (raw === undefined || raw.trim() === '') {
+    return defaultSubscription ? DEFAULT_MAX_DISK_BYTES : undefined;
+  }
   const value = Number(raw);
   if (!Number.isSafeInteger(value) || value < 0) {
     throw new Error(
@@ -285,10 +344,12 @@ export function parseMaxDiskBytes(raw: string | undefined): number | undefined {
 /**
  * Ceiling on what installed bands may occupy. A band that would take the
  * total past this is skipped and counted rather than filling the volume the
- * gateway serves from. `undefined` (set with `0`) means no ceiling.
+ * gateway serves from. `undefined` (set with `0`, or unset with an explicit
+ * `INDEX_SWARM_SUBSCRIBE`) means no ceiling.
  */
 export const MAX_DISK_BYTES = parseMaxDiskBytes(
   process.env.INDEX_SWARM_MAX_DISK_BYTES,
+  SUBSCRIBE_IS_DEFAULT,
 );
 
 /**

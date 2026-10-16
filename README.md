@@ -197,10 +197,15 @@ The gateway ships with three pre-built CDB64 indexes that resolve data item
 IDs to their containing L1 Arweave transactions, up to block height
 1,820,000. They cover non-AO, non-Redstone data items with a content type
 (about 964 million) and without one (about 1.24 billion), and AO data items
-(about 1.63 billion). They are enabled by default, read from Arweave on demand, and
-asked last in the default `ROOT_TX_LOOKUP_ORDER`.
+(about 1.63 billion). They are enabled by default and read from Arweave on
+demand. They are asked through the `cdb-remote` entry, which is last in the
+default `ROOT_TX_LOOKUP_ORDER`; the `cdb` entry, right after `db`, asks only
+indexes on local disk, such as bands installed by Index Sharing. An order
+without `cdb-remote` keeps the old behaviour: `cdb` asks every index, local
+and remote.
 
-To disable them, remove `cdb` from `ROOT_TX_LOOKUP_ORDER`. To use other index
+To disable the shipped indexes, remove `cdb-remote` from
+`ROOT_TX_LOOKUP_ORDER` (in an order without `cdb-remote`, remove `cdb`). To use other index
 sources, set `CDB64_ROOT_TX_INDEX_SOURCES`. See
 [docs/cdb64.md](docs/cdb64.md) for configuration and operation.
 

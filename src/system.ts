@@ -68,9 +68,15 @@ import {
   TurboRootTxIndex,
   CachedTurboOffsets,
   Cdb64RootTxIndex,
+  Cdb64LocalRootTxIndex,
+  Cdb64RemoteRootTxIndex,
   HyperBeamRootTxIndex,
   CachedHyperBeamOffsets,
 } from './discovery/index.js';
+import {
+  CDB_REMOTE_LOOKUP_SOURCE,
+  cdbLookupScope,
+} from './lib/root-tx-defaults.js';
 import { LRUCache } from 'lru-cache';
 import { makeContiguousMetadataStore } from './init/metadata-store.js';
 import { currentUnixTimestamp } from './lib/time.js';
@@ -1287,7 +1293,44 @@ const cdb64HttpSemaphore = new Semaphore(
 metrics.registerSemaphoreMetrics('cdb64_remote', cdb64HttpSemaphore);
 
 // Build root TX indexes based on configuration
+//
+// One Cdb64RootTxIndex serves both `cdb` and `cdb-remote`, so every CDB64
+// file is opened and every directory watched once. Without `cdb-remote` in
+// the order, `cdb` is that index itself and asks every source, local and
+// remote, as it always has. With it, `cdb` asks only local-disk sources and
+// `cdb-remote` the ones read over the network (see cdb64SourceLocality).
 let cdb64RootTxIndex: Cdb64RootTxIndex | undefined;
+const cdbScope = cdbLookupScope(config.ROOT_TX_LOOKUP_ORDER);
+
+/**
+ * The shared CDB64 index, created on first use with its cleanup handler.
+ */
+function getCdb64RootTxIndex(): Cdb64RootTxIndex {
+  if (cdb64RootTxIndex === undefined) {
+    const index = new Cdb64RootTxIndex({
+      log,
+      sources: config.CDB64_ROOT_TX_INDEX_SOURCES,
+      watch: config.CDB64_ROOT_TX_INDEX_WATCH,
+      contiguousDataSource: cdb64BaseDataSource,
+      remoteCacheMaxRegions: config.CDB64_REMOTE_CACHE_MAX_REGIONS,
+      remoteCacheTtlMs: config.CDB64_REMOTE_CACHE_TTL_MS,
+      remoteRequestTimeoutMs: config.CDB64_REMOTE_REQUEST_TIMEOUT_MS,
+      remoteSemaphore: cdb64HttpSemaphore,
+      remoteSemaphoreTimeoutMs: config.CDB64_REMOTE_SEMAPHORE_TIMEOUT_MS,
+    });
+    registerCleanupHandler('cdb64-root-tx-index', async () => {
+      await index.close();
+    });
+    cdb64RootTxIndex = index;
+  }
+  return cdb64RootTxIndex;
+}
+
+/**
+ * The CDB64 index the `/ar-io/offsets/:id` route reads, set only when `cdb`
+ * is in `ROOT_TX_LOOKUP_ORDER` (a `cdb-remote`-only order leaves it unset).
+ */
+let offsetsCdb64RootTxIndex: Cdb64RootTxIndex | undefined;
 
 /**
  * Looks an ID up in the CDB64 index's sources on local disk only, with no
@@ -1297,7 +1340,7 @@ let cdb64RootTxIndex: Cdb64RootTxIndex | undefined;
 export const lookupLocalCdb64RootTx = async (
   id: string,
 ): Promise<RootTxLookupResult | undefined> =>
-  cdb64RootTxIndex?.getLocalRootTx(id);
+  offsetsCdb64RootTxIndex?.getLocalRootTx(id);
 const rootTxIndexes: DataItemRootIndex[] = [];
 
 for (const sourceName of config.ROOT_TX_LOOKUP_ORDER) {
@@ -1389,22 +1432,17 @@ for (const sourceName of config.ROOT_TX_LOOKUP_ORDER) {
       rootTxIndexes.push(db as DataItemRootIndex);
       break;
 
-    case 'cdb':
-      cdb64RootTxIndex = new Cdb64RootTxIndex({
-        log,
-        sources: config.CDB64_ROOT_TX_INDEX_SOURCES,
-        watch: config.CDB64_ROOT_TX_INDEX_WATCH,
-        contiguousDataSource: cdb64BaseDataSource,
-        remoteCacheMaxRegions: config.CDB64_REMOTE_CACHE_MAX_REGIONS,
-        remoteCacheTtlMs: config.CDB64_REMOTE_CACHE_TTL_MS,
-        remoteRequestTimeoutMs: config.CDB64_REMOTE_REQUEST_TIMEOUT_MS,
-        remoteSemaphore: cdb64HttpSemaphore,
-        remoteSemaphoreTimeoutMs: config.CDB64_REMOTE_SEMAPHORE_TIMEOUT_MS,
-      });
-      rootTxIndexes.push(cdb64RootTxIndex);
-      registerCleanupHandler('cdb64-root-tx-index', async () => {
-        await cdb64RootTxIndex!.close();
-      });
+    case 'cdb': {
+      const index = getCdb64RootTxIndex();
+      offsetsCdb64RootTxIndex = index;
+      rootTxIndexes.push(
+        cdbScope === 'all' ? index : new Cdb64LocalRootTxIndex(index),
+      );
+      break;
+    }
+
+    case CDB_REMOTE_LOOKUP_SOURCE:
+      rootTxIndexes.push(new Cdb64RemoteRootTxIndex(getCdb64RootTxIndex()));
       break;
 
     default:
