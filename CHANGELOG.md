@@ -456,7 +456,11 @@ with core**).
     `cdb` asks every CDB64 source, local and remote. Lookups are counted as
     `root_tx_lookup_total{source="cdb64"}` and `{source="cdb64-remote"}`,
     and each has its own circuit breaker, so slow remote reads cannot open
-    the breaker for the installed bands.
+    the breaker for the installed bands (`circuit_breaker_state` labels
+    `cdb64-local-root-tx-index` and `cdb64-remote-root-tx-index`; an order
+    without `cdb-remote` keeps `cdb64-root-tx-index`). To stop using the
+    shipped indexes, leave them out of `CDB64_ROOT_TX_INDEX_SOURCES`;
+    removing `cdb-remote` from the order moves them up instead.
   - `INDEX_SWARM_MAX_DISK_BYTES` defaults to 64 GiB when
     `INDEX_SWARM_SUBSCRIBE` is also unset (the default subscription). With an
     explicit `INDEX_SWARM_SUBSCRIBE` and no budget set, there is still no

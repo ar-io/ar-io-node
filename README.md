@@ -204,9 +204,12 @@ indexes on local disk, such as bands installed by Index Sharing. An order
 without `cdb-remote` keeps the old behaviour: `cdb` asks every index, local
 and remote.
 
-To disable the shipped indexes, remove `cdb-remote` from
-`ROOT_TX_LOOKUP_ORDER` (in an order without `cdb-remote`, remove `cdb`). To use other index
-sources, set `CDB64_ROOT_TX_INDEX_SOURCES`. See
+To stop using the shipped indexes, leave them out of
+`CDB64_ROOT_TX_INDEX_SOURCES` (for example,
+`CDB64_ROOT_TX_INDEX_SOURCES=data/indexes/installed/root-tx-index`). Do not
+remove `cdb-remote` from `ROOT_TX_LOOKUP_ORDER` for this: without it, `cdb`
+asks every index, so the shipped indexes move up to right after `db`. To use
+other index sources, set `CDB64_ROOT_TX_INDEX_SOURCES`. See
 [docs/cdb64.md](docs/cdb64.md) for configuration and operation.
 
 Gateways can also share fresher indexes with each other through Index
