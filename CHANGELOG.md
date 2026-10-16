@@ -21,7 +21,7 @@ the `index-export` service, which builds a gateway's index bands, and the
 `Content-Encoding`, and for uploads of the same bytes served with each other's
 `Content-Type`; chunk fetches that learn which preferred nodes serve each
 gateway, ahead of the observer's offset checks, which are back and fail
-gateways by default (the default observer image moves to `8e7f4d53`); GraphQL
+gateways by default (the default observer image moves to `c5e98ddc`); GraphQL
 pages from ClickHouse no longer cut short; and peers announcing to a
 publisher's tracker through the gateway's HTTPS (**upgrade the Envoy image
 with core**).
@@ -467,11 +467,12 @@ with core**).
   requests. Set the variable to keep the old value.
 
 - **Offset (chunk-proof) checks are back in the observer, and fail gateways
-  by default.** A share of gateways (`OFFSET_OBSERVATION_SAMPLE_RATE`, default
-  0.20), chosen identically by every observer each epoch, must serve
-  `/chunk/<offset>` with a Merkle proof that validates against the chain. A
-  sampled gateway fails only if all `OFFSET_SAMPLE_COUNT` (default 4)
-  offsets fail; timeouts, error statuses and bad proofs all count. With
+  by default.** Every gateway (`OFFSET_OBSERVATION_SAMPLE_RATE`, default
+  1.0; a lower rate samples a share, chosen identically by every observer
+  each epoch) must serve `/chunk/<offset>` with a Merkle proof that
+  validates against the chain. A checked gateway fails only if all
+  `OFFSET_SAMPLE_COUNT` (default 4) offsets fail; timeouts, error
+  statuses and bad proofs all count. With
   `OFFSET_OBSERVATION_ENFORCEMENT_ENABLED=true` (the default) that fails the
   observation, and the epoch result is still a 2-of-3 majority. A check the
   observer could not judge itself (its own chain lookups failed) is
@@ -488,16 +489,20 @@ with core**).
   `docs/envs.md` gives the real defaults (it said 0.10 and `false`)
   (ar-io/ar-io-observer#145).
 
-- **Default observer image bumped to `8e7f4d53`** — `OBSERVER_IMAGE_TAG` moves
+- **Default observer image bumped to `c5e98ddc`** — `OBSERVER_IMAGE_TAG` moves
   from `fe159f5a` to the `ar-io-observer` build carrying the offset checks
-  above and the reference fix under Fixed. Operators who pin
+  above (every gateway by default, ar-io/ar-io-observer#148) and the
+  reference fix under Fixed. Operators who pin
   `OBSERVER_IMAGE_TAG` in `.env` must update it there too, since that
   shadows the compose default.
 
-- **Observer updated to `@ar.io/sdk` 4.5.1.** The observer's epoch crank
+- **Observer updated to `@ar.io/sdk` 4.5.2.** The observer's epoch crank
   now finds delegations to compound once per epoch instead of on every
   tick, which removes a pair of full-registry scans per tick from the
-  window after each distribution (ar-io/ar-io-observer#146).
+  window after each distribution (ar-io/ar-io-observer#146). A delegation
+  whose compound reverts on every send is retried once and then skipped
+  for the epoch, so the sweep always ends and the crank always reaches
+  `create_epoch` (ar-io/ar-io-observer#147).
 
 - **`@ar.io/sdk` updated from 4.0.0 to 4.5.0.** The hourly refresh of the
   gateway registry now reads only the registry's slot window and retries a
