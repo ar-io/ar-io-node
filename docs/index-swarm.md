@@ -1241,7 +1241,10 @@ remove `INDEX_SWARM_ENGINE_AUTH` from `.env` if set, delete
 sidecar (`docker compose up -d --no-deps --force-recreate index-swarm`: it
 reads the password only at startup, and deleting the file changes nothing
 compose can see). With no password the sidecar does not look for an engine
-and moves bands over HTTP only.
+and moves bands over HTTP only. Do not use `tools/index-swarm-setup
+--restart` on such a gateway: it names the engine services, and Compose
+starts a service named on the command line even when its profile is off.
+Run setup without `--restart` and recreate what it lists, engine excluded.
 
 To remove the feature:
 
