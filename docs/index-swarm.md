@@ -1238,8 +1238,10 @@ Then `docker compose --profile disabled stop index-swarm-engine`,
 `docker compose --profile disabled rm -f index-swarm-engine index-swarm-engine-init`,
 remove `INDEX_SWARM_ENGINE_AUTH` from `.env` if set, delete
 `data/indexes/engine-auth` (root-owned, so with `sudo`) and recreate the
-sidecar (`docker compose up -d --no-deps index-swarm`). With no password the
-sidecar does not look for an engine and moves bands over HTTP only.
+sidecar (`docker compose up -d --no-deps --force-recreate index-swarm`: it
+reads the password only at startup, and deleting the file changes nothing
+compose can see). With no password the sidecar does not look for an engine
+and moves bands over HTTP only.
 
 To remove the feature:
 
