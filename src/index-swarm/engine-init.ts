@@ -11,9 +11,12 @@
  *
  * It writes the settings the swarm depends on into qBittorrent's config
  * (see `engine-config.ts`) and hands `swarm/` to the engine's user, then
- * exits. The engine waits for it to succeed, so a missing credential stops
- * the engine with a message here instead of starting one nobody can log in
- * to. It runs as root in the core image; the engine never does.
+ * exits. The engine waits for it to succeed, so a credential that cannot be
+ * had stops the engine with a message here instead of starting one nobody
+ * can log in to. The password is `INDEX_SWARM_ENGINE_AUTH` when set; else
+ * one generated on the first start and kept on the index volume, where the
+ * sidecar reads it (see `engine-auth.ts`). It runs as root in the core
+ * image; the engine never does.
  */
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
@@ -21,21 +24,34 @@ import * as path from 'node:path';
 import * as env from '../lib/env.js';
 import { PRIVATE_RANGES_DAT, renderEngineConfig } from './engine-config.js';
 import { parseEngineAuth } from './config.js';
+import { loadOrCreateEngineAuthFile } from './engine-auth.js';
 import log from './log.js';
 
 async function run(): Promise<void> {
-  const auth = parseEngineAuth(env.varOrUndefined('INDEX_SWARM_ENGINE_AUTH'));
-  if (auth === undefined) {
-    throw new Error(
-      'INDEX_SWARM_ENGINE_AUTH (user:password) is required to run the torrent engine: ' +
-        'without it the engine invents a password on every start that the sidecar cannot know',
-    );
-  }
   const configDir = env.varOrDefault(
     'INDEX_SWARM_ENGINE_CONFIG_DIR',
     '/config',
   );
   const dataDir = env.varOrDefault('INDEX_SWARM_DATA_DIR', '/app/data/indexes');
+  // The setting wins. Without one, a password generated once and kept where
+  // the sidecar reads it: without either, the engine would invent a password
+  // on every start that the sidecar could not know.
+  const authFile = path.join(dataDir, 'engine-auth');
+  const fromEnv = parseEngineAuth(
+    env.varOrUndefined('INDEX_SWARM_ENGINE_AUTH'),
+  );
+  let auth = fromEnv;
+  if (auth === undefined) {
+    const loaded = await loadOrCreateEngineAuthFile(authFile);
+    auth = loaded.auth;
+    // The path only: the password is never logged.
+    log.info(
+      loaded.generated
+        ? 'Generated the torrent engine password'
+        : 'Using the torrent engine password generated earlier',
+      { file: authFile },
+    );
+  }
   const uid = env.positiveIntOrDefault('INDEX_SWARM_ENGINE_UID', 1000);
   const gid = env.positiveIntOrDefault('INDEX_SWARM_ENGINE_GID', 1000);
   const uploadLimit = Number(
@@ -97,6 +113,7 @@ async function run(): Promise<void> {
   log.info('Torrent engine configured', {
     configFile: file,
     changed: rendered !== existing,
+    passwordFrom: fromEnv !== undefined ? 'INDEX_SWARM_ENGINE_AUTH' : authFile,
     swarm,
     uploadLimitBytesPerSec: uploadLimit,
   });

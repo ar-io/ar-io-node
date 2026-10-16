@@ -32,6 +32,7 @@ import { Publisher, loadPublisherSigner } from './publisher.js';
 import { QBittorrentTransport } from './transport/qbittorrent.js';
 import { waitForEngine } from './transport/wait.js';
 import { EngineJanitor } from './engine-janitor.js';
+import { resolveEngineAuth } from './engine-auth.js';
 import { UploadBudget } from './upload-budget.js';
 import {
   ClosedTracker,
@@ -57,6 +58,15 @@ import {
 const ENGINE_STARTUP_WAIT_MS = 120_000;
 
 /**
+ * How long startup waits for the engine password the compose engine's init
+ * generates, when INDEX_SWARM_ENGINE_AUTH is unset. On a first
+ * `docker compose up` the init and the sidecar start together, and the init
+ * writes the file within seconds. A node that runs no engine waits this long
+ * once per start, then moves bands over HTTP only.
+ */
+const ENGINE_AUTH_FILE_WAIT_MS = 30_000;
+
+/**
  * Runs the sidecar: the subscriber, and with a publication the publisher,
  * its torrent engine and the closed tracker's two listeners, until a signal
  * stops them.
@@ -66,6 +76,50 @@ async function main(): Promise<void> {
   buildInfo.set({ version: release, node_version: process.version }, 1);
   configuredIndexes.set({ role: 'publish' }, config.PUBLISH.length);
   configuredIndexes.set({ role: 'subscribe' }, config.SUBSCRIBE.length);
+  if (config.SUBSCRIBE_SKIPPED_SELF) {
+    log.info(
+      'Default subscription skipped: this gateway is the default publisher (AR_IO_WALLET), and does not subscribe to itself. Set INDEX_SWARM_SUBSCRIBE to subscribe explicitly.',
+      { wallet: config.AR_IO_WALLET },
+    );
+  }
+
+  // The engine password: the setting, else the one the compose engine's init
+  // generated. Never logged.
+  // A password file that cannot be used costs the swarm, not the sidecar:
+  // bands still move over HTTP, and the engine's init, which fails on the
+  // same file, says how to fix it.
+  const engineAuth = await resolveEngineAuth({
+    fromEnv: config.ENGINE_AUTH_SETTING,
+    engineUrl: config.ENGINE_URL_SETTING,
+    defaultEngineUrl: config.DEFAULT_ENGINE_URL,
+    file: config.ENGINE_AUTH_FILE,
+    waitMs: ENGINE_AUTH_FILE_WAIT_MS,
+  }).catch((error: any) => {
+    log.error('Could not read the torrent engine password; HTTP only', {
+      error: error?.message,
+    });
+    return { auth: undefined, source: 'none' as const };
+  });
+  const engineUrl = config.resolveEngineUrl(
+    config.ENGINE_URL_SETTING,
+    engineAuth.auth,
+  );
+  if (engineUrl === undefined) {
+    log.info(
+      'No torrent engine password (INDEX_SWARM_ENGINE_AUTH, or the file the engine init generates); bands move over HTTP only',
+      { file: config.ENGINE_AUTH_FILE },
+    );
+  } else {
+    log.info('Torrent engine configured', {
+      engineUrl,
+      passwordFrom:
+        engineAuth.source === 'env'
+          ? 'INDEX_SWARM_ENGINE_AUTH'
+          : engineAuth.source === 'file'
+            ? config.ENGINE_AUTH_FILE
+            : 'none',
+    });
+  }
 
   // Create the volume layout up front so a misconfigured mount fails here,
   // with a clear message, rather than mid-install.
@@ -73,9 +127,7 @@ async function main(): Promise<void> {
     config.PUBLISHED_DIR,
     config.INCOMING_DIR,
     config.INSTALLED_DIR,
-    ...(config.ENGINE_URL !== undefined
-      ? [config.SWARM_DIR, config.TORRENTS_DIR]
-      : []),
+    ...(engineUrl !== undefined ? [config.SWARM_DIR, config.TORRENTS_DIR] : []),
   ]) {
     await fs.mkdir(dir, { recursive: true });
   }
@@ -91,10 +143,10 @@ async function main(): Promise<void> {
   // One client for the torrent engine, shared by both loops. Unset means
   // bands move over HTTP only.
   const engine =
-    config.ENGINE_URL !== undefined
+    engineUrl !== undefined
       ? new QBittorrentTransport({
-          url: config.ENGINE_URL,
-          ...(config.ENGINE_AUTH ?? {}),
+          url: engineUrl,
+          ...(engineAuth.auth ?? {}),
           log,
         })
       : undefined;
@@ -255,7 +307,7 @@ async function main(): Promise<void> {
         );
       }
       if (available !== last) {
-        const fields = { engineUrl: config.ENGINE_URL };
+        const fields = { engineUrl };
         if (available) log.info('Torrent engine is available', fields);
         else log.warn('Torrent engine is not answering', fields);
       }
@@ -364,6 +416,26 @@ async function main(): Promise<void> {
         ],
       }),
     );
+    // Compose publishes the direct port on loopback unless told otherwise,
+    // so a torrent announcing to it reaches no peer.
+    const loopbackOnly =
+      config.TRACKER_HOST_IP !== undefined &&
+      (net.isIP(config.TRACKER_HOST_IP) !== 0
+        ? /^(127\.|::1$)/.test(config.TRACKER_HOST_IP)
+        : config.TRACKER_HOST_IP === 'localhost');
+    const direct = config.TRACKERS.filter((url) => {
+      try {
+        return new URL(url).port === String(config.TRACKER_PORT);
+      } catch {
+        return false;
+      }
+    });
+    if (loopbackOnly && direct.length > 0) {
+      log.warn(
+        `These trackers announce to the direct tracker port, which compose publishes on ${config.TRACKER_HOST_IP} only, so peers cannot reach it. Set INDEX_SWARM_TRACKER_HOST_IP=0.0.0.0 and recreate the sidecar, or announce through the gateway: https://<gateway>/ar-io/indexes/announce`,
+        { trackers: direct },
+      );
+    }
     if (config.TRACKERS.length === 0) {
       log.warn(
         'Publishing torrents with no INDEX_SWARM_TRACKERS; peers can then find one another only through DHT and the WebSeed. Point it at this tracker through the gateway, e.g. https://<gateway>/ar-io/indexes/announce',

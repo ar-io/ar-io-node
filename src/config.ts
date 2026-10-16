@@ -800,7 +800,14 @@ export const MANIFEST_RESOLUTION_CACHE_SIZE = env.positiveIntOrDefault(
 
 // Root TX index lookup order configuration.
 // Available sources: 'db', 'peers', 'gateways', 'graphql', 'hyperbeam', 'cdb',
-// 'turbo'. Sources are probed in order and the first actionable result wins.
+// 'cdb-remote', 'turbo'. Sources are probed in order and the first actionable
+// result wins.
+// - 'cdb':        CDB64 indexes (CDB64_ROOT_TX_INDEX_SOURCES). Without
+//                 'cdb-remote' in the order it asks every CDB64 source, local
+//                 and remote, as it always has; with it, only those read from
+//                 local disk (such as installed Index Sharing bands).
+// - 'cdb-remote': CDB64 sources read over the network, including the shipped
+//                 resources/ indexes (partitions on Arweave).
 // - 'peers':    GET /ar-io/offsets/:id against peer AR.IO nodes. One indexed
 //               read on the peer; cheap whether it hits or misses.
 // - 'gateways': HEAD /raw/:id against peer AR.IO gateways, harvesting

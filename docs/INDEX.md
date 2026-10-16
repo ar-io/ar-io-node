@@ -28,7 +28,7 @@ Gateways publish signed index bands and subscribe to each other's.
 
 | Document | Description |
 |----------|-------------|
-| [Index Sharing: the `index-swarm` sidecar](index-swarm.md) | Publishing and subscribing over HTTP and BitTorrent: setup and status scripts (`--l1` to fill L1 history from bands), the tracker through the gateway's HTTPS, RSS feeds and WebSeeds, lookup order, running behind nginx, the torrent engine, metrics |
+| [Index Sharing: the `index-swarm` sidecar](index-swarm.md) | On by default (the ar.io publisher's root-TX bands; how to opt out, the generated engine password, resource use). Publishing and subscribing over HTTP and BitTorrent: setup and status scripts (`--l1` to fill L1 history from bands), the tracker through the gateway's HTTPS, RSS feeds and WebSeeds, lookup order, running behind nginx, the torrent engine, metrics |
 | [Index export](index-export.md) | Building root-TX and L1 bands with the `index-export` service: checks, running it, L1 layouts and lookup files, adoption, alerting |
 | [Index Sharing: the publication protocol](index-publication.md) | Discovering, verifying and reading bands without the sidecar: the signed document, byte routes, following an index in a BitTorrent client through its RSS feed, L1 bands, lookup files, querying over HTTP, a reference client |
 

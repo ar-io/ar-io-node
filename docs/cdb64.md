@@ -28,18 +28,41 @@ Related pages:
 
 A request for a data item needs the item's root transaction and its offsets.
 `ROOT_TX_LOOKUP_ORDER` lists the sources asked for them, in order: `db` (the
-local index), `cdb` (CDB64 indexes), `gateways`, `graphql`, `hyperbeam` and
-others. The default is `db,gateways,graphql,hyperbeam,cdb`, so CDB64 is
-enabled but asked last. A gateway with local indexes, such as installed
-bands, gains most with `cdb` right after `db` (see
-[lookup order](index-swarm.md#lookup-order)):
+local index), `cdb` and `cdb-remote` (CDB64 indexes), `gateways`, `graphql`,
+`hyperbeam` and others.
+
+CDB64 sources are split by where their data is read from:
+
+- **`cdb`** asks the sources on local disk: local `.cdb` files and local
+  directories whose partitions are local files, such as the bands Index
+  Sharing installs in `data/indexes/installed/root-tx-index`. A lookup takes
+  a few milliseconds.
+- **`cdb-remote`** asks the sources read over the network: HTTP URLs,
+  Arweave transactions and byte ranges, and local manifests whose partitions
+  are stored elsewhere. The three shipped `resources/` indexes are this kind:
+  their manifests are on disk, but every partition is an Arweave byte range.
+  A manifest that mixes local and remote partitions counts as remote.
+
+The default is `db,cdb,gateways,graphql,hyperbeam,cdb-remote`. Installed
+bands answer right after the local index (see
+[lookup order](index-swarm.md#lookup-order)). An ID they do not hold, such as
+an item newer than the newest band, goes on to `gateways` without first
+waiting on Arweave reads of the shipped indexes, which are asked last.
+
+**Compatibility.** The split applies only when the order lists
+`cdb-remote`. An order without it keeps the old meaning: `cdb` asks every
+CDB64 source, local and remote, in configured order. So an order set by hand
+before Release 85, such as `db,gateways,graphql,hyperbeam,cdb`, behaves as it
+did. An order with `cdb-remote` but no `cdb` asks only the remote sources.
+To get the split in an order of your own, list both:
 
 ```bash
-ROOT_TX_LOOKUP_ORDER=db,cdb,gateways,graphql
+ROOT_TX_LOOKUP_ORDER=db,cdb,gateways,graphql,cdb-remote
 ```
 
-Drop `hyperbeam` unless the `hb` profile runs. Removing `cdb` turns CDB64
-lookups off. Changing the order needs a gateway restart.
+Drop `hyperbeam` unless the `hb` profile runs. Removing both `cdb` and
+`cdb-remote` turns CDB64 lookups off. Changing the order needs a gateway
+restart.
 
 Each entry can carry:
 
@@ -58,7 +81,12 @@ match wins.
 
 The composite root TX index (`ROOT_TX_LOOKUP_ORDER`) stops probing sources as
 soon as one returns an **actionable** result, so a CDB64 hit early in the order
-avoids the remaining (often remote and expensive) sources such as GraphQL. A
+avoids the remaining (often remote and expensive) sources such as GraphQL.
+Lookups are counted in `root_tx_lookup_total{source}`: `cdb64` for `cdb`
+(split or not) and `cdb64-remote` for `cdb-remote`. When split, each has its
+own circuit breaker, so slow remote reads that open the `cdb-remote` breaker
+never stop `cdb` from answering from local disk. Without `cdb-remote` in the
+order, `cdb` keeps its single breaker, as before. A
 result is actionable when the caller can proceed without further lookups:
 
 | Exit reason        | Condition                                             | Notes                                             |
@@ -87,8 +115,9 @@ terminate with the `offsets` (or `path`) reason rather than `complete_offsets`.
 `GET /ar-io/offsets/:id` tells a peer or client where an item sits in its
 root transaction without a retrieval. It asks the local index, then CDB64
 sources on local disk only, such as bands installed by Index Sharing; remote
-sources are never fetched for it, and it needs `cdb` in
-`ROOT_TX_LOOKUP_ORDER` (it is in the default). An answer from a CDB64 index
+sources, and the remote partitions of a local manifest such as the shipped
+indexes, are never fetched for it. It needs `cdb` in `ROOT_TX_LOOKUP_ORDER`
+(it is in the default); `cdb-remote` makes no difference to it. An answer from a CDB64 index
 carries no `dataSize` or `contentType`. Answers are counted in
 `offsets_lookup_total{source}` (`db`, `cdb64`, or `none` for a 404). The
 route is in [the OpenAPI spec](openapi.yaml).
@@ -141,9 +170,9 @@ recorded root up as a bundle (its stored attributes, then the root TX index)
 and adds the bundle's payload offset. It then checks the header again at the
 resulting location in the enclosing root, walking up to 10 enclosing
 bundles. The root
-TX index lookup follows `ROOT_TX_LOOKUP_ORDER`: with `cdb` early in the order,
-CDB64 answers it locally; with the default order it reaches remote sources
-first. The recovery runs at most once per location per request. It also runs
+TX index lookup follows `ROOT_TX_LOOKUP_ORDER`: with the default order, local
+CDB64 sources (`cdb`) answer it right after the local index, and remote ones
+(`cdb-remote`) are asked only after `gateways`, `graphql` and `hyperbeam`. The recovery runs at most once per location per request. It also runs
 when a correctly rooted item's header read fails (an upstream outage), where
 it costs one root TX lookup for the root; roots that were read but hold the
 wrong header never take it.
@@ -191,9 +220,9 @@ Observability (per-node Prometheus metrics):
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `CDB64_ROOT_TX_INDEX_SOURCES` | The three shipped indexes in `resources/` (below) | Comma-separated sources, searched in order |
+| `CDB64_ROOT_TX_INDEX_SOURCES` | `data/indexes/installed/root-tx-index`, then the three shipped indexes in `resources/` (below) | Comma-separated sources, searched in order |
 | `CDB64_ROOT_TX_INDEX_WATCH` | `true` | Load and unload local indexes as they change, without a restart |
-| `ROOT_TX_LOOKUP_ORDER` | `db,gateways,graphql,hyperbeam,cdb` | Order of root-TX sources; `cdb` is CDB64 |
+| `ROOT_TX_LOOKUP_ORDER` | `db,cdb,gateways,graphql,hyperbeam,cdb-remote` | Order of root-TX sources. `cdb` is CDB64 on local disk and `cdb-remote` CDB64 read over the network; without `cdb-remote` in the order, `cdb` asks both |
 | `CDB64_REMOTE_RETRIEVAL_ORDER` | `chunks` | How Arweave-hosted index files are fetched: `gateways`, `chunks`, `tx-data` |
 | `CDB64_REMOTE_CACHE_MAX_REGIONS` | `100` | Cached byte ranges per remote source |
 | `CDB64_REMOTE_CACHE_TTL_MS` | `300000` | How long a cached byte range is kept (5 minutes) |
@@ -201,33 +230,47 @@ Observability (per-node Prometheus metrics):
 | `CDB64_REMOTE_MAX_CONCURRENT_REQUESTS` | `4` | Concurrent remote reads: one limit shared by every remote source |
 | `CDB64_REMOTE_SEMAPHORE_TIMEOUT_MS` | `5000` | How long a remote read waits for a free slot |
 
-The shipped default is three indexes up to height 1,820,000. Their manifests
-are in `resources/`, and their partitions are read from Arweave on demand.
-They cover non-AO, non-Redstone data items with a content type, the same
-without one, and AO data items. They carry no offsets.
+The default searches first the root-TX bands the
+[`index-swarm` sidecar](index-swarm.md) installs (it runs by default), a
+[collection](#collection-directory) that may not exist yet (a missing
+directory is waited for, and a lookup skips it without any read), then three
+shipped indexes up to height 1,820,000. With the default
+`ROOT_TX_LOOKUP_ORDER`, only the installed bands are asked before the network
+sources (`cdb`); the shipped indexes are asked last (`cdb-remote`). So a
+gateway with no bands installed reads nothing extra before `gateways`. In an
+order without `cdb-remote`, `cdb` asks the shipped indexes too, and a miss
+there costs Arweave reads before the next source is asked. Their manifests are in `resources/`, and
+their partitions are read from Arweave on demand. They cover non-AO,
+non-Redstone data items with a content type, the same without one, and AO
+data items. They carry no offsets.
 
 ```text
-resources/cdb64-root-tx-index-non-ao-non-redstone-with-content-type-to-height-1820000,resources/cdb64-root-tx-index-non-ao-non-redstone-without-content-type-to-height-1820000,resources/cdb64-root-tx-index-ao-to-height-1820000
+data/indexes/installed/root-tx-index,resources/cdb64-root-tx-index-non-ao-non-redstone-with-content-type-to-height-1820000,resources/cdb64-root-tx-index-non-ao-non-redstone-without-content-type-to-height-1820000,resources/cdb64-root-tx-index-ao-to-height-1820000
 ```
 
 Setting `CDB64_ROOT_TX_INDEX_SOURCES` replaces this list. To add a source and
-keep the shipped indexes, write them out after it. Compose mounts
+keep the defaults, write them out after it. Compose mounts
 `./data/cdb64-root-tx-index` (`CDB64_ROOT_TX_INDEX_DATA_PATH`) into the
 container at `data/cdb64-root-tx-index`; it is searched only when listed.
 
 ## Source types
 
-| Source | Example |
-| --- | --- |
-| Local file | `/path/to/index.cdb` |
-| Local directory of `.cdb` files | `/path/to/indexes/` |
-| Local partitioned index (`manifest.json` and its partitions) | `/path/to/partitioned-index/` |
-| Local collection (a directory of partitioned indexes) | `data/indexes/installed/root-tx-index` |
-| HTTP file | `https://example.com/indexes/root-tx.cdb` |
-| HTTP partitioned index | `https://example.com/indexes/manifest.json` |
-| Arweave transaction | `<43-character transaction ID>` |
-| Arweave byte range (a file inside a bundle) | `<root TX ID>:<offset>:<size>` |
-| Arweave partitioned index | `<manifest TX ID>:manifest`, or `<root TX ID>:<offset>:<size>:manifest` |
+| Source | Example | Read from (token when split) |
+| --- | --- | --- |
+| Local file | `/path/to/index.cdb` | Local disk (`cdb`) |
+| Local directory of `.cdb` files | `/path/to/indexes/` | Local disk (`cdb`) |
+| Local partitioned index (`manifest.json` and its partitions) | `/path/to/partitioned-index/` | Local disk (`cdb`) if every partition is a local file, otherwise network (`cdb-remote`) |
+| Local collection (a directory of partitioned indexes) | `data/indexes/installed/root-tx-index` | Each band on its own, as a local partitioned index |
+| HTTP file | `https://example.com/indexes/root-tx.cdb` | Network (`cdb-remote`) |
+| HTTP partitioned index | `https://example.com/indexes/manifest.json` | Network (`cdb-remote`) |
+| Arweave transaction | `<43-character transaction ID>` | Network (`cdb-remote`) |
+| Arweave byte range (a file inside a bundle) | `<root TX ID>:<offset>:<size>` | Network (`cdb-remote`) |
+| Arweave partitioned index | `<manifest TX ID>:manifest`, or `<root TX ID>:<offset>:<size>:manifest` | Network (`cdb-remote`) |
+
+The last column applies only when `ROOT_TX_LOOKUP_ORDER` lists `cdb-remote`;
+without it, `cdb` asks every source. The shipped `resources/` indexes are
+local partitioned indexes whose partitions are Arweave byte ranges, so they
+are read from the network.
 
 A local directory loads every `.cdb` and `.cdb64` file in it. A directory
 holding `manifest.json` is loaded as one partitioned index. HTTP sources must
@@ -316,7 +359,8 @@ not `false`, and the file extension. The logs show
 
 **Installed bands are loaded but lookups still go to the network.** `cdb`
 comes after the network sources in `ROOT_TX_LOOKUP_ORDER`; put it right after
-`db`. `composite_root_tx_exit_reason_total{winning_source}` shows which
+`db`. If the order has `cdb` early but no `cdb-remote`, `cdb` also asks the
+shipped indexes on Arweave before moving on; add `cdb-remote` at the end. `composite_root_tx_exit_reason_total{winning_source}` shows which
 source answers.
 
 **Timeouts or connection errors on remote sources.** Check the network path

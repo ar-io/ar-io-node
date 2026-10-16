@@ -831,7 +831,9 @@ services:
 
   # Publishes the index artifacts this gateway offers, and subscribes to those
   # published by other gateways, installing and retiring bands under the
-  # running node. Off unless the index-swarm profile is enabled.
+  # running node. Runs by default: with INDEX_SWARM_SUBSCRIBE unset it takes
+  # the ar.io publisher's root-TX bands (INDEX_SWARM_SUBSCRIBE=[] opts out).
+  # The old `--profile index-swarm` flag is still accepted, and does nothing.
   #
   # Runs the core image rather than one of its own: the sidecar is compiled
   # into the same dist/ tree and needs no dependency core does not already
@@ -842,8 +844,6 @@ services:
     build:
       context: .
     entrypoint: ['/nodejs/bin/node', 'dist/index-swarm/main.js']
-    profiles:
-      - index-swarm
     restart: unless-stopped
     # Proper PID 1, so signals reach the process and exited children are
     # reaped. Without it a wedged process cannot be stopped without a kill,
@@ -853,10 +853,15 @@ services:
     # Deliberately no depends_on. The sidecar shares only a volume with the
     # gateway and works whether or not it is up, and a dependency here would
     # mean bringing this profile up could start or recreate core.
-    # The closed tracker, which a publisher of torrents runs. Nothing listens
-    # on a node that does not publish them.
+    # The closed tracker's direct port, which only a publisher of torrents
+    # listens on. Published on loopback by default, so a subscriber (the
+    # default role) exposes nothing: announces normally reach the tracker
+    # through the gateway's HTTPS (/ar-io/indexes/announce, forwarded by Envoy
+    # to INDEX_SWARM_TRACKER_PROXY_PORT, which is never published). A
+    # publisher whose torrents announce to this port directly sets
+    # INDEX_SWARM_TRACKER_HOST_IP=0.0.0.0.
     ports:
-      - '${INDEX_SWARM_TRACKER_PORT:-6969}:${INDEX_SWARM_TRACKER_PORT:-6969}/tcp'
+      - '${INDEX_SWARM_TRACKER_HOST_IP:-127.0.0.1}:${INDEX_SWARM_TRACKER_PORT:-6969}:${INDEX_SWARM_TRACKER_PORT:-6969}/tcp'
     volumes:
       - ${INDEX_SWARM_DATA_PATH:-./data/indexes}:/app/data/indexes
       # Only the observer keypair, and only when it is kept in a file: the
@@ -880,18 +885,22 @@ services:
       - INDEX_SWARM_MANIFEST_FETCH_TIMEOUT_MS=${INDEX_SWARM_MANIFEST_FETCH_TIMEOUT_MS:-}
       - INDEX_SWARM_DOWNLOAD_STALL_TIMEOUT_SECONDS=${INDEX_SWARM_DOWNLOAD_STALL_TIMEOUT_SECONDS:-}
       - INDEX_SWARM_DOWNLOAD_CONCURRENCY=${INDEX_SWARM_DOWNLOAD_CONCURRENCY:-}
+      # Unset: 64 GiB with the default subscription (INDEX_SWARM_SUBSCRIBE
+      # unset), no ceiling with an explicit one (see envs.md); 0 is no ceiling.
       - INDEX_SWARM_MAX_DISK_BYTES=${INDEX_SWARM_MAX_DISK_BYTES:-}
       - INDEX_SWARM_DOWNLOAD_RATE_LIMIT_BYTES_PER_SEC=${INDEX_SWARM_DOWNLOAD_RATE_LIMIT_BYTES_PER_SEC:-}
       - INDEX_SWARM_REGISTRY_CACHE_TTL_SECONDS=${INDEX_SWARM_REGISTRY_CACHE_TTL_SECONDS:-}
-      # The swarm tier: on when INDEX_SWARM_ENGINE_AUTH is set (the URL then
-      # defaults to the compose engine) and the index-swarm-torrent profile
-      # runs the engine.
+      # The swarm tier, on by default: the URL defaults to the compose engine
+      # once there is a password, INDEX_SWARM_ENGINE_AUTH or, unset, the one
+      # index-swarm-engine-init generates into data/indexes/engine-auth.
       - INDEX_SWARM_ENGINE_URL=${INDEX_SWARM_ENGINE_URL:-}
       - INDEX_SWARM_ENGINE_AUTH=${INDEX_SWARM_ENGINE_AUTH:-}
       - INDEX_SWARM_TRACKERS=${INDEX_SWARM_TRACKERS:-}
       - INDEX_SWARM_ALLOWED_TRACKERS=${INDEX_SWARM_ALLOWED_TRACKERS:-}
       - INDEX_SWARM_ENGINE_BLOCK_PRIVATE=${INDEX_SWARM_ENGINE_BLOCK_PRIVATE:-true}
       - INDEX_SWARM_TRACKER_PORT=${INDEX_SWARM_TRACKER_PORT:-6969}
+      # Read only to warn when torrents announce to a port bound to loopback.
+      - INDEX_SWARM_TRACKER_HOST_IP=${INDEX_SWARM_TRACKER_HOST_IP:-127.0.0.1}
       - INDEX_SWARM_TRACKER_PROXY_PORT=${INDEX_SWARM_TRACKER_PROXY_PORT:-6970}
       - INDEX_SWARM_TRACKER_TRUSTED_PROXIES=${INDEX_SWARM_TRACKER_TRUSTED_PROXIES:-}
       - INDEX_SWARM_TRACKER_PROXY_TRUSTED_PROXIES=${INDEX_SWARM_TRACKER_PROXY_TRUSTED_PROXIES:-}
@@ -1050,15 +1059,19 @@ services:
   # Writes the settings the swarm depends on into the torrent engine's config
   # before each engine start, then exits. The engine image has no way to take
   # a Web UI password from the environment; without this it would invent one
-  # per start that the sidecar could never know. Fails, and so keeps the
-  # engine down, when INDEX_SWARM_ENGINE_AUTH is unset.
+  # per start that the sidecar could never know. The password is
+  # INDEX_SWARM_ENGINE_AUTH when set; else one generated on the first start
+  # and kept, root-owned and mode 0600, in data/indexes/engine-auth, which
+  # the sidecar reads. Fails, and so keeps the engine down, when it cannot
+  # have one: the engine never runs without a password. Runs by default; the
+  # old `--profile index-swarm-torrent` flag is still accepted.
   index-swarm-engine-init:
     image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-a6118d44a68b8945b23684fff0a2aedff4756fb0}
     entrypoint: ['/nodejs/bin/node', 'dist/index-swarm/engine-init.js']
-    profiles:
-      - index-swarm-torrent
     restart: 'no'
     volumes:
+      # Also where the generated password is kept: the sidecar mounts the
+      # same directory, the engine does not.
       - ${INDEX_SWARM_DATA_PATH:-./data/indexes}:/app/data/indexes
       - ${INDEX_SWARM_ENGINE_CONFIG_PATH:-./data/index-swarm-engine}:/config
     environment:
@@ -1081,8 +1094,6 @@ services:
   # paths as the sidecar, because the sidecar hands it paths.
   index-swarm-engine:
     image: qbittorrentofficial/qbittorrent-nox:5.2.3-lt2-1@sha256:f269c2aae56f1bf8caddd77a59e7ba2a278919d8401213266b8fe154c6ac1043
-    profiles:
-      - index-swarm-torrent
     restart: unless-stopped
     depends_on:
       index-swarm-engine-init:
@@ -1105,7 +1116,8 @@ services:
       - PUID=${INDEX_SWARM_ENGINE_UID:-1000}
       - PGID=${INDEX_SWARM_ENGINE_GID:-1000}
       - UMASK=022
-    # Only the peer port reaches the host. The Web API stays on the engine's
+    # Only the peer port reaches the host; open it (TCP and UDP) to the
+    # internet so peers can connect in. The Web API stays on the engine's
     # own network, where the sidecar reaches it as index-swarm-engine:8080;
     # it must be reached at that same port, because qBittorrent refuses a
     # Host header naming another.

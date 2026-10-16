@@ -388,6 +388,12 @@ describe('CompositeRootTxIndex source naming', () => {
     assert.equal(sourceNameMap['PeersRootTxIndex'], 'peers');
   });
 
+  it('labels cdb as cdb64 whether or not it is split, and cdb-remote apart', () => {
+    assert.equal(sourceNameMap['Cdb64RootTxIndex'], 'cdb64');
+    assert.equal(sourceNameMap['Cdb64LocalRootTxIndex'], 'cdb64');
+    assert.equal(sourceNameMap['Cdb64RemoteRootTxIndex'], 'cdb64-remote');
+  });
+
   it('never lets a mapped source fall through to the lowercased class name', () => {
     for (const [className, sourceName] of Object.entries(sourceNameMap)) {
       assert.notEqual(

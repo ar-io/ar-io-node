@@ -197,19 +197,29 @@ The gateway ships with three pre-built CDB64 indexes that resolve data item
 IDs to their containing L1 Arweave transactions, up to block height
 1,820,000. They cover non-AO, non-Redstone data items with a content type
 (about 964 million) and without one (about 1.24 billion), and AO data items
-(about 1.63 billion). They are enabled by default, read from Arweave on demand, and
-asked last in the default `ROOT_TX_LOOKUP_ORDER`.
+(about 1.63 billion). They are enabled by default and read from Arweave on
+demand. They are asked through the `cdb-remote` entry, which is last in the
+default `ROOT_TX_LOOKUP_ORDER`; the `cdb` entry, right after `db`, asks only
+indexes on local disk, such as bands installed by Index Sharing. An order
+without `cdb-remote` keeps the old behaviour: `cdb` asks every index, local
+and remote.
 
-To disable them, remove `cdb` from `ROOT_TX_LOOKUP_ORDER`. To use other index
-sources, set `CDB64_ROOT_TX_INDEX_SOURCES`. See
+To stop using the shipped indexes, leave them out of
+`CDB64_ROOT_TX_INDEX_SOURCES` (for example,
+`CDB64_ROOT_TX_INDEX_SOURCES=data/indexes/installed/root-tx-index`). Do not
+remove `cdb-remote` from `ROOT_TX_LOOKUP_ORDER` for this: without it, `cdb`
+asks every index, so the shipped indexes move up to right after `db`. To use
+other index sources, set `CDB64_ROOT_TX_INDEX_SOURCES`. See
 [docs/cdb64.md](docs/cdb64.md) for configuration and operation.
 
 Gateways can also share fresher indexes with each other through Index
-Sharing: the optional `index-swarm` sidecar publishes this gateway's bands,
-signed with its observer key, and subscribes to other gateways' bands. Bands
-move over the publisher's metered HTTP routes, and, with the optional torrent
-engine (compose profile `index-swarm-torrent`), peer to peer as well, every
-subscriber seeding what it installs. Peers announce to a publisher's tracker
+Sharing, which is on by default: the `index-swarm` sidecar publishes this
+gateway's bands, signed with its observer key, and subscribes to other
+gateways' bands; unconfigured, it takes the ar.io publisher's root-TX bands
+(about 22 GB), which the gateway then searches first. Bands move over the
+publisher's metered HTTP routes and, through the torrent engine that runs
+beside it (peer port 6881), peer to peer as well, every subscriber seeding
+what it installs. `INDEX_SWARM_SUBSCRIBE=[]` opts out. Peers announce to a publisher's tracker
 through its HTTPS, each index has an RSS feed of its torrents, and each
 `.torrent` names the gateway as a WebSeed, so a stock BitTorrent client can
 follow a publisher too. Two kinds of band are shared:

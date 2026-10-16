@@ -4,7 +4,6 @@
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
-import crypto from 'node:crypto';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { parseArgs } from 'node:util';
@@ -23,10 +22,13 @@ import { parsePublicOrigin } from '../../lib/public-origin.js';
 const HELP = `Usage: tools/index-swarm-setup [options]
 
 Sets up index sharing in .env, idempotently. Run it again to add a
-publisher or turn on torrents; it only changes what is missing.
+publisher; it only changes what is missing. Index sharing is on by
+default (the ar.io publisher's root-TX bands, over HTTP and BitTorrent),
+so a plain subscriber needs none of this.
 
   --subscribe <wallet>   Subscribe to a publisher's root-TX index, by its
-                         registered gateway wallet. Repeatable.
+                         registered gateway wallet. Repeatable. The
+                         default subscription is kept.
   --l1                   With --subscribe: take the publishers' L1 bands
                          too, and have the gateway fill its L1 history
                          from them while it runs. On a new gateway, it
@@ -39,8 +41,9 @@ publisher or turn on torrents; it only changes what is missing.
                          read from before publishing (default
                          https://turbo-gateway.com; http://core:4000 only
                          if this gateway holds the root data).
-  --torrent              Move bands over BitTorrent too (generates the
-                         engine password).
+  --torrent              Accepted for older instructions: the torrent
+                         engine now runs by default, and its init
+                         generates its password.
   --public-url <url>     This gateway's public origin (https://gateway.example).
                          When publishing torrents, peers announce to its
                          tracker through it, so no tracker port needs
@@ -48,7 +51,8 @@ publisher or turn on torrents; it only changes what is missing.
   --public-host <addr>   This node's public IP, where peers reach its engine
                          (and, without a public URL, its tracker).
   --engine-port <n>      The engine's peer port (default 6881).
-  --max-disk-gib <n>     Disk for installed bands (default 50 GiB).
+  --max-disk-gib <n>     Disk for installed bands (default 64 GiB;
+                         100 GiB written with --l1).
   --no-gateway           Leave CDB64_ROOT_TX_INDEX_SOURCES and
                          ROOT_TX_LOOKUP_ORDER alone.
   --dry-run              Show the changes; write nothing.
@@ -184,9 +188,7 @@ async function main(): Promise<void> {
     }
   }
   const env = new EnvFile(text);
-  const plan = planSetup(env, options, () =>
-    crypto.randomBytes(24).toString('hex'),
-  );
+  const plan = planSetup(env, options);
 
   const say = (line = '') => process.stderr.write(`${line}\n`);
   for (const warning of plan.warnings) say(`warning: ${warning}`);

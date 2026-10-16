@@ -241,6 +241,15 @@ the partitions and sources of a partitioned CDB64 index.
 be loaded from: local file, local directory, HTTP URL, Arweave transaction, or
 Arweave byte-range.
 
+<a id="cdb-remote"></a> **cdb / cdb-remote** — The two
+`ROOT_TX_LOOKUP_ORDER` entries for [CDB64 sources](#cdb64-source). When the
+order lists `cdb-remote`, `cdb` asks only sources read from local disk (local
+files, and partitioned indexes whose partitions are all local files, such as
+installed bands) and `cdb-remote` asks the ones read over the network (HTTP,
+Arweave, and local manifests with any remote partition, such as the shipped
+`resources/` indexes). When it does not, `cdb` asks every CDB64 source, as
+before Release 85.
+
 ## Index Distribution
 
 <a id="index-sharing"></a> **Index Sharing** — The feature by which gateways
@@ -312,9 +321,18 @@ source that is a directory *of* indexes rather than one index: each
 subdirectory holding a `manifest.json` becomes its own reader, added and
 removed at runtime without a gateway restart.
 
-<a id="index-swarm"></a> **`index-swarm` Sidecar** — The optional compose
-service, running the core image with its own entrypoint, that publishes this
-gateway's bands and subscribes to other gateways'. It never touches the
+<a id="index-swarm"></a> **`index-swarm` Sidecar** — The compose service,
+running the core image with its own entrypoint, that publishes this gateway's
+bands and subscribes to other gateways'. It runs by default, subscribed to the
+ar.io publisher's root-TX bands unless `INDEX_SWARM_SUBSCRIBE` says otherwise.
+
+<a id="default-subscription"></a> **Default Subscription** — What the
+[`index-swarm` sidecar](#index-swarm) subscribes to when
+`INDEX_SWARM_SUBSCRIBE` is unset or empty: the root-TX bands of the ar.io
+publisher, gateway wallet `34LYvMptiDvBP5sqfh1oAd6Q4qFsy4PWaZ1HTFmML7h5`.
+Documents are still verified against that wallet's registered observer key.
+Any explicit value replaces it; `[]` subscribes to nothing. See
+[index-swarm.md](index-swarm.md#on-by-default). It never touches the
 gateway's databases or the chain. See [index-swarm.md](index-swarm.md).
 
 <a id="index-export"></a> **Index Export** (`index-export`) — The optional
