@@ -412,7 +412,9 @@ export class CompositeArNSResolver implements NameResolver {
       }
 
       span.addEvent('Unable to resolve name');
-      this.log.warn('Unable to resolve name against all resolvers', { name });
+      // Info, not warn: this is mostly unregistered names. A resolver that
+      // failed has already logged its own error above.
+      this.log.info('Unable to resolve name against all resolvers', { name });
     } catch (e: any) {
       const error = e as Error;
       this.log.error('Error resolving name:', {

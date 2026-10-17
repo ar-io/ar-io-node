@@ -112,16 +112,14 @@ export const chunkServeLocalOnlyCounter = new promClient.Counter({
 
 // What enforcing CHUNK_PEER_ORIGIN_MODE would have done to a peer-origin
 // chunk request, recorded while `audit` leaves behavior unchanged.
-// `boundary` is whether offset resolution stayed local (the DB source) or
-// needed the network; `bytes` is whether the chunk came off local disk or a
-// remote source.
+// `boundary` is how the offset was resolved: a forwarded request is resolved
+// from the local database only, in every mode, so it is `local` or `none`
+// (no row). `bytes` is whether the chunk came off local disk or a remote
+// source.
 //
-// **`bytes="local"` is the cost of enforcing**, whatever the boundary label:
-// this gateway held the chunk and served it. `boundary="local"` means
-// enforcing would still have served it; `boundary="remote"` means it would
-// not, because the bytes were only locatable through a network offset
-// lookup that enforcing declines. Sum both when deciding whether a gateway
-// can enforce, and do not read `boundary="local",bytes="local"` alone.
+// **`bytes="remote"` is the cost of enforcing**: those are the requests
+// `enforce` would refuse, because the chunk was only reachable from an
+// Arweave node. `bytes="local"` would be served under `enforce` as well.
 //
 // `cancelled` means the retrieval was aborted, either by the caller
 // disconnecting or by an internal timeout. The service sees a merged signal

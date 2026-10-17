@@ -226,8 +226,9 @@ export class ChunkRetrievalService {
       // resolves the boundary, which is why the local index stays in play.
       //
       // `skipRemoteForwarding` covers the AR.IO peer sources, which already
-      // honor it. `localSourcesOnly` covers the Arweave node path and the
-      // remote boundary sources, which do not.
+      // honor it. `localSourcesOnly` covers the Arweave node path, which does
+      // not. The boundary lookup is already database-only for any forwarded
+      // request, whatever the mode.
       const effectiveAttributes: RequestAttributes | undefined = enforcing
         ? {
             ...(requestAttributes ?? { hops: 1, clientIps: [] }),
@@ -350,14 +351,14 @@ export class ChunkRetrievalService {
   /**
    * Records what enforcing would have done to one peer-origin request.
    *
-   * `boundary` says whether offset resolution stayed local (`db`) or needed
-   * the network; `bytes` says whether the chunk itself came off local disk or
-   * a remote source.
+   * `boundary` says how the offset was resolved. A forwarded request is
+   * resolved from the local database only (CompositeTxBoundarySource), so in
+   * practice it is `local` or `none`; `remote` stays in the type for a
+   * boundary source that ever reports otherwise.
    *
-   * `bytes=local` is the cost of enforcing: this gateway held the chunk and
-   * served it. With `boundary=remote` it would no longer be served, because
-   * the bytes were locatable only through a network offset lookup that
-   * enforcing declines. Both cells count.
+   * `bytes` says whether the chunk came off local disk or a remote source.
+   * `bytes=remote` is the cost of enforcing: `enforce` declines the Arweave
+   * node path, so those requests would get a 404.
    */
   private recordAuditOutcome(
     boundary: 'local' | 'remote' | 'none' | 'cancelled',
