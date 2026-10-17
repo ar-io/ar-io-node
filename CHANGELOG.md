@@ -18,8 +18,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   resolution" is logged only when a resolver timed out or was aborted, not
   when every resolver simply found no record. A resolver that throws still
   logs its own error.
+- **Opting out of Index Sharing stops seeding.** With
+  `INDEX_SWARM_SUBSCRIBE=[]` (or on the default publisher, whose default
+  subscription skips itself) the `index-swarm` sidecar now takes the
+  subscriber's torrents out of the engine once per start, files kept:
+  installed bands stay installed and the gateway still searches them, but
+  they are no longer seeded, and a download in progress stops. Torrents a
+  publisher seeds from `published/` are unaffected. Subscribing again seeds
+  the installed bands from their kept `.torrent` files, nothing fetched
+  again. Previously the engine went on seeding installed bands after an
+  opt-out.
 
 ### Fixed
+
+- **`tools/index-swarm-setup --restart` brought back a torrent engine that
+  had been turned off.** It named `index-swarm-engine-init` and
+  `index-swarm-engine` on the `docker compose up` command line, and Compose
+  starts a service named there even when its profile is off, so a gateway
+  sharing over HTTP only (engine behind an unused profile in
+  `docker-compose.override.yaml`) got the engine again. Setup now names only
+  the services a plain `docker compose up` enables (`docker compose config
+  --services`, with `COMPOSE_PROFILES` honoured and the legacy profile names
+  it passes not counted), reading `docker-compose.override.yaml` even when
+  the running gateway was started before it existed, for `--restart` and for
+  the commands it prints without it.
 
 - **A chunk-metadata anchor probe kept running after every caller had given
   up on it.** Concurrent lookups of one offset share a single probe of the
