@@ -75,6 +75,19 @@ export class CompositeTxBoundarySource implements TxBoundarySource {
     // depends on.
     const localOnly = requestAttributes?.localSourcesOnly === true;
 
+    // A request another gateway forwarded (hops >= 1) is answered from what
+    // this gateway already knows (its database), as is one that asks not to
+    // be forwarded. Resolving it over the network would spend this
+    // gateway's anchor probe, AR.IO peer fetches and chain-search slots on
+    // the asker's behalf: the anchor and tx_path re-enter the AR.IO network
+    // past the one-hop limit, and the chain fallback's few slots are then
+    // taken from this gateway's own clients. The asker does its own chain
+    // lookup on a miss.
+    const forwarded =
+      (requestAttributes?.hops ?? 0) >= 1 ||
+      requestAttributes?.skipRemoteForwarding === true;
+    const networkAllowed = !localOnly && !forwarded;
+
     // Check for abort before starting
     signal?.throwIfAborted();
 
@@ -109,7 +122,7 @@ export class CompositeTxBoundarySource implements TxBoundarySource {
     // 2. Try chunk-metadata anchor — HEAD a peer's /chunk/{offset}/data
     //    and cross-check the headers against the chain. Cheaper than the
     //    binary search below for any tx covered by a reachable peer.
-    if (this.anchorSource && !localOnly) {
+    if (this.anchorSource && networkAllowed) {
       try {
         log.debug('Attempting chunk-metadata anchor');
         // The request's attributes go along: the anchor declines a
@@ -141,7 +154,7 @@ export class CompositeTxBoundarySource implements TxBoundarySource {
     signal?.throwIfAborted();
 
     // 3. Try tx_path validation (for unindexed data)
-    if (this.txPathSource && !localOnly) {
+    if (this.txPathSource && networkAllowed) {
       try {
         log.debug('Attempting tx_path validation');
         // With the request's attributes, so its peer fetch keeps the
@@ -172,7 +185,7 @@ export class CompositeTxBoundarySource implements TxBoundarySource {
     signal?.throwIfAborted();
 
     // 4. Try chain fallback (slowest) with concurrency limit
-    if (this.chainSource && !localOnly) {
+    if (this.chainSource && networkAllowed) {
       // Check concurrency limit before attempting chain fallback
       if (this.activeChainFallbackCount >= this.chainFallbackConcurrencyLimit) {
         log.debug('Skipping chain fallback - concurrency limit reached', {

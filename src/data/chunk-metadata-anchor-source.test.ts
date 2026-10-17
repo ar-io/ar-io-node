@@ -110,7 +110,6 @@ function makeSource({
   peerUrls = ['https://ref.example'],
   cacheTtlMs = 60_000,
   missCacheTtlMs = 0,
-  nodeRelease,
 }: {
   axiosInstance: AxiosInstance;
   fetchTxOffset?: (
@@ -124,7 +123,6 @@ function makeSource({
   peerUrls?: string[];
   cacheTtlMs?: number;
   missCacheTtlMs?: number;
-  nodeRelease?: string;
 }): ChunkMetadataAnchorSource {
   return new ChunkMetadataAnchorSource({
     log,
@@ -133,7 +131,6 @@ function makeSource({
     cacheSize: 32,
     cacheTtlMs,
     missCacheTtlMs,
-    nodeRelease,
     fetchTxOffset,
     fetchTransaction,
     axiosInstance,
@@ -453,19 +450,32 @@ describe('ChunkMetadataAnchorSource', () => {
       assert.equal(stub.calls.length, 0, 'no request to the reference peer');
     });
 
-    it('marks its own probe as a gateway one hop on', async () => {
+    it('does not probe for a request that asks not to be forwarded', async () => {
       const stub = makeAxiosStub();
       stub.setNextHead(200, chunkHeaders());
-      const source = makeSource({
-        axiosInstance: stub.axios,
-        nodeRelease: '85',
-      });
-      await source.getTxBoundary(inRangeOffset, undefined, {
+      const source = makeSource({ axiosInstance: stub.axios });
+      const result = await source.getTxBoundary(inRangeOffset, undefined, {
         hops: 0,
         clientIps: [],
+        skipRemoteForwarding: true,
       });
-      assert.equal(stub.sentHeaders[0]?.['X-AR-IO-Hops'], '1');
-      assert.equal(stub.sentHeaders[0]?.['X-AR-IO-Node-Release'], '85');
+      assert.equal(result, null);
+      assert.equal(stub.calls.length, 0);
+    });
+
+    it("sends only the hop count, none of the client's request", async () => {
+      const stub = makeAxiosStub();
+      stub.setNextHead(200, chunkHeaders());
+      const source = makeSource({ axiosInstance: stub.axios });
+      await source.getTxBoundary(inRangeOffset, undefined, {
+        hops: 0,
+        clientIps: ['203.0.113.9'],
+        arnsName: 'someone',
+        origin: 'client.example',
+        rootTransactionIdHint: txId,
+      });
+      // No X-AR-IO-Node-Release either: peers' nginx limits key on it.
+      assert.deepEqual(stub.sentHeaders[0], { 'X-AR-IO-Hops': '1' });
     });
 
     it('marks the probe one hop on with no request attributes, and on the GET fallback', async () => {
@@ -521,6 +531,51 @@ describe('ChunkMetadataAnchorSource', () => {
       });
       assert.notEqual(await source.getTxBoundary(inRangeOffset), null);
       assert.notEqual(await source.getTxBoundary(inRangeOffset), null);
+    });
+
+    it('shares one probe between concurrent lookups of an offset', async () => {
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => (release = resolve));
+      const calls: string[] = [];
+      const axiosInstance = {
+        head: async (url: string) => {
+          calls.push(url);
+          await gate;
+          return { status: 404, headers: {} };
+        },
+        get: async () => {
+          throw new Error('no GET expected');
+        },
+      } as unknown as AxiosInstance;
+      const source = makeSource({ axiosInstance });
+      const lookups = Array.from({ length: 10 }, () =>
+        source.getTxBoundary(inRangeOffset),
+      );
+      release();
+      assert.deepEqual(await Promise.all(lookups), Array(10).fill(null));
+      assert.equal(calls.length, 1, 'one probe for ten lookups');
+    });
+
+    it("lets a caller stop waiting without failing the others' shared probe", async () => {
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => (release = resolve));
+      const axiosInstance = {
+        head: async () => {
+          await gate;
+          return { status: 200, headers: chunkHeaders() };
+        },
+        get: async () => {
+          throw new Error('no GET expected');
+        },
+      } as unknown as AxiosInstance;
+      const source = makeSource({ axiosInstance });
+      const controller = new AbortController();
+      const first = source.getTxBoundary(inRangeOffset, controller.signal);
+      const second = source.getTxBoundary(inRangeOffset);
+      controller.abort();
+      await assert.rejects(first, { name: 'AbortError' });
+      release();
+      assert.notEqual(await second, null, 'the other caller still gets it');
     });
   });
 

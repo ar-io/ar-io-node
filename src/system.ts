@@ -1126,11 +1126,20 @@ export const chunkMetadataStore = new FsChunkMetadataStore({
 // → chain (slowest).
 const dbBoundarySource = new DatabaseTxBoundarySource({ log, db });
 
-const txPathBoundarySource = new TxPathValidationSource({
-  log,
-  unvalidatedChunkSource: arIOChunkSource,
-  arweaveClient,
-});
+// tx_path validation fetches its chunk from AR.IO peers, so it follows the
+// operator's choice of chunk metadata sources: a gateway that takes
+// `ar-io-network` out of CHUNK_METADATA_RETRIEVAL_ORDER asks no AR.IO peer
+// for an offset at all. (It did regardless, which kept a loop between
+// gateways open after the operator had closed the obvious path.)
+const txPathBoundarySource = config.CHUNK_METADATA_RETRIEVAL_ORDER.includes(
+  'ar-io-network',
+)
+  ? new TxPathValidationSource({
+      log,
+      unvalidatedChunkSource: arIOChunkSource,
+      arweaveClient,
+    })
+  : undefined;
 
 const chainBoundarySource = config.CHUNK_OFFSET_CHAIN_FALLBACK_ENABLED
   ? new ChainTxBoundarySource({ log, arweaveClient })
@@ -1164,7 +1173,6 @@ const chunkMetadataAnchorSource =
         cacheTtlMs: config.CHUNK_METADATA_ANCHOR_TX_CACHE_TTL_SECONDS * 1000,
         missCacheTtlMs:
           config.CHUNK_METADATA_ANCHOR_MISS_CACHE_TTL_SECONDS * 1000,
-        nodeRelease: config.AR_IO_NODE_RELEASE,
         // Wrap the chain client to match anchorChunkMetadata's string-typed
         // contract — weave-scale offsets need to round-trip through BigInt
         // without Number.MAX_SAFE_INTEGER loss.

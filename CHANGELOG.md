@@ -613,26 +613,40 @@ with core**).
 ### Fixed
 
 - **Gateways missing the same chunks asked each other without end, through
-  the chunk-metadata anchor.** A chunk request another gateway forwards
-  carries `X-AR-IO-Hops`, and the chunk sources never pass it to an AR.IO
-  peer again (one hop at most). The offset lookup did not keep that limit.
-  The anchor probed its reference peer, which every gateway on the defaults
-  shares (`GATEWAYS_ROOT_TX_URLS`, `https://turbo-gateway.com`), with no
-  `X-AR-IO-*` headers, so the peer saw a new client. The tx_path check
-  fetched a chunk from AR.IO peers without the request's hop count. A chunk
-  that gateway A forwarded to B, and that B lacked, made B ask the reference
-  peer, which asked its peers, A among them, again. On 2026-10-17 the
-  gateways of a few large operators asked for offsets none of them held.
-  Both turbo-gateway.com nodes stopped answering for six hours. In 32
-  minutes one of them made 563,600 peer chunk requests that found 7 chunks.
-  Now the anchor does not probe for a request another gateway forwarded.
-  Its own probe carries `X-AR-IO-Hops` and `X-AR-IO-Node-Release`, so the
-  peer's hop limit and its limits for gateways apply. The tx_path check
-  passes the request's attributes, so its peer fetch keeps the limit. An
-  offset the anchor could not resolve is not probed again for
-  `CHUNK_METADATA_ANCHOR_MISS_CACHE_TTL_SECONDS` (default 60; `0` turns it
-  off). Outcomes are counted as `peer_origin` and `miss_cached` in
-  `ario_chunk_metadata_anchor_total`.
+  the offset lookup.** A chunk request another gateway forwards carries
+  `X-AR-IO-Hops`, and the chunk sources never pass it to an AR.IO peer again
+  (one hop at most). The offset lookup did not keep that limit:
+  - the chunk-metadata anchor probed its reference peer (every gateway on the
+    defaults shares one, `GATEWAYS_ROOT_TX_URLS`: `https://turbo-gateway.com`)
+    with no `X-AR-IO-*` headers, so the peer saw a new client;
+  - the tx_path check fetched a chunk from AR.IO peers without the request's
+    hop count, and did so even with `ar-io-network` taken out of the
+    retrieval orders.
+  So a chunk that gateway A forwarded to B, and that B lacked, sent B back
+  into the network, and from there back to A. On 2026-10-17 the gateways of a
+  few large operators asked for offsets none of them held, and both
+  turbo-gateway.com nodes stopped answering for six hours: in 32 minutes one
+  made 563,600 peer chunk requests that found 7 chunks. Now:
+  - a forwarded request (`X-AR-IO-Hops` of 1 or more, or one that asks not to
+    be forwarded) has its offset resolved from this gateway's own database
+    only: no anchor probe, no AR.IO peer, and no chain search, whose few
+    slots belong to this gateway's own clients. The asking gateway does its
+    own chain lookup on a miss;
+  - the anchor's probe sends `X-AR-IO-Hops` (and nothing else of the client's
+    request), so the peer treats it as forwarded;
+  - the tx_path check passes the request's hop count, and asks AR.IO peers
+    only when `CHUNK_METADATA_RETRIEVAL_ORDER` includes `ar-io-network`;
+  - concurrent lookups of one offset share one anchor probe, and an offset
+    the anchor could not resolve is not probed again for
+    `CHUNK_METADATA_ANCHOR_MISS_CACHE_TTL_SECONDS` (default 60; `0` turns it
+    off);
+  - a negative `X-AR-IO-Hops` is read as 0.
+  A gateway's probes carry the hop count once it runs this release; until
+  then, the gateway it asks can stop the chain on its side by leaving
+  `ar-io-network` out of `CHUNK_METADATA_RETRIEVAL_ORDER` and
+  `CHUNK_DATA_RETRIEVAL_ORDER`, as turbo-gateway.com does. Outcomes are
+  counted in `ario_chunk_metadata_anchor_total` as `peer_origin`,
+  `miss_cached` and `probe_shared`.
 
 - **JSON data was served as `application/json; charset=utf-8`.** Express
   appended the charset to every JSON, JavaScript and text type, so a client

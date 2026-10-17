@@ -200,8 +200,10 @@ describe('CompositeTxBoundarySource', () => {
         anchorSource,
       });
 
+      // hops 0: a client's request. (A forwarded one, hops >= 1, is local
+      // only regardless of the flag; see 'forwarded requests'.)
       const result = await composite.getTxBoundary(OFFSET, undefined, {
-        hops: 1,
+        hops: 0,
         clientIps: [],
       });
 
@@ -210,11 +212,53 @@ describe('CompositeTxBoundarySource', () => {
     });
   });
 
-  describe('request attributes', () => {
-    it('hands the request attributes to the anchor and tx_path sources', async () => {
-      // They decline or limit a request another gateway forwarded (the
-      // one-hop limit), so they must see where the request came from.
-      const forwarded = { hops: 1, clientIps: [] };
+  describe('forwarded requests', () => {
+    it('answers a request another gateway forwarded from the database only', async () => {
+      // Resolving it over the network would spend this gateway's anchor
+      // probe, AR.IO peer fetches and chain-search slots for the asker, and
+      // the first two re-enter the AR.IO network past the one-hop limit.
+      for (const attributes of [
+        { hops: 1, clientIps: [] },
+        { hops: 0, clientIps: [], skipRemoteForwarding: true },
+      ]) {
+        const anchorSource = sourceReturning(boundary('anchor-tx'));
+        const txPathSource = sourceReturning(boundary('txpath-tx'));
+        const chainSource = sourceReturning(boundary('chain-tx'));
+        const dbSource = sourceReturning(null);
+        const composite = new CompositeTxBoundarySource({
+          log,
+          dbSource,
+          anchorSource,
+          txPathSource,
+          chainSource,
+        });
+
+        assert.equal(
+          await composite.getTxBoundary(OFFSET, undefined, attributes),
+          null,
+        );
+        assert.equal((dbSource.getTxBoundary as any).mock.callCount(), 1);
+        for (const remote of [anchorSource, txPathSource, chainSource]) {
+          assert.equal((remote.getTxBoundary as any).mock.callCount(), 0);
+        }
+      }
+    });
+
+    it('still answers a forwarded request the database knows', async () => {
+      const composite = new CompositeTxBoundarySource({
+        log,
+        dbSource: sourceReturning(boundary('db-tx')),
+        anchorSource: sourceReturning(boundary('anchor-tx')),
+      });
+      const result = await composite.getTxBoundary(OFFSET, undefined, {
+        hops: 1,
+        clientIps: [],
+      });
+      assert.equal(result?.source, 'db');
+    });
+
+    it("hands a client's request attributes to the network sources", async () => {
+      const client = { hops: 0, clientIps: [] };
       const anchorSource = sourceReturning(null);
       const txPathSource = sourceReturning(null);
       const composite = new CompositeTxBoundarySource({
@@ -224,12 +268,12 @@ describe('CompositeTxBoundarySource', () => {
         txPathSource,
       });
 
-      await composite.getTxBoundary(OFFSET, undefined, forwarded);
+      await composite.getTxBoundary(OFFSET, undefined, client);
 
       for (const source of [anchorSource, txPathSource]) {
         const calls = (source.getTxBoundary as any).mock.calls;
         assert.equal(calls.length, 1);
-        assert.equal(calls[0].arguments[2], forwarded);
+        assert.equal(calls[0].arguments[2], client);
       }
     });
   });

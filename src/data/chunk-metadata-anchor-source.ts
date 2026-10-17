@@ -46,6 +46,7 @@ const MAX_SAFE_OFFSET_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
  *                        not probed, so a peer's miss is never forwarded on
  * - `miss_cached`      — this offset missed within the miss cache's TTL:
  *                        not probed again
+ * - `probe_shared`     — joined a probe of the same offset already in flight
  */
 type AnchorResult =
   | 'hit'
@@ -55,7 +56,8 @@ type AnchorResult =
   | 'peer_refused'
   | 'error'
   | 'peer_origin'
-  | 'miss_cached';
+  | 'miss_cached'
+  | 'probe_shared';
 
 /**
  * Thrown when the reference peer answered HEAD with a status that a ranged GET
@@ -101,7 +103,8 @@ export class ChunkMetadataAnchorSource implements TxBoundarySource {
   private cache: LRUCache<string, AnchoredChunkMetadata>;
   /** Offsets that just missed, so they are not probed again at once. */
   private misses: LRUCache<string, true> | undefined;
-  private nodeRelease: string | undefined;
+  /** Probes in flight, by offset: concurrent lookups share one. */
+  private inFlight = new Map<string, Promise<TxBoundary | null>>();
   private fetchTxOffset: (
     txId: string,
     signal?: AbortSignal,
@@ -119,7 +122,6 @@ export class ChunkMetadataAnchorSource implements TxBoundarySource {
     cacheTtlMs,
     missCacheSize = 10_000,
     missCacheTtlMs = 60_000,
-    nodeRelease,
     fetchTxOffset,
     fetchTransaction,
     axiosInstance,
@@ -142,8 +144,6 @@ export class ChunkMetadataAnchorSource implements TxBoundarySource {
      */
     missCacheSize?: number;
     missCacheTtlMs?: number;
-    /** Sent as `X-AR-IO-Node-Release`, so the peer sees a gateway asking. */
-    nodeRelease?: string;
     /**
      * Chain `/tx/{id}/offset` fetcher. Returns `{ size, offset }` as
      * strings so they can round-trip through {@link BigInt} without
@@ -181,7 +181,6 @@ export class ChunkMetadataAnchorSource implements TxBoundarySource {
             ttl: missCacheTtlMs,
           })
         : undefined;
-    this.nodeRelease = nodeRelease;
     this.axiosInstance =
       axiosInstance ??
       axios.create({
@@ -213,7 +212,10 @@ export class ChunkMetadataAnchorSource implements TxBoundarySource {
     // uses the same one, so probing here on a peer's behalf re-enters the
     // network past the one-hop limit the chunk sources keep: two gateways
     // missing the same chunk ask each other through the anchor without end.
-    if ((requestAttributes?.hops ?? 0) >= 1) {
+    if (
+      (requestAttributes?.hops ?? 0) >= 1 ||
+      requestAttributes?.skipRemoteForwarding === true
+    ) {
       this.recordResult('peer_origin');
       return null;
     }
@@ -236,15 +238,24 @@ export class ChunkMetadataAnchorSource implements TxBoundarySource {
       this.recordResult('miss_cached');
       return null;
     }
-    const boundary = await this.probe(
-      offsetNum,
-      absoluteOffset,
-      signal,
-      requestAttributes,
-      log,
-    );
-    if (boundary === null) this.misses?.set(offsetKey, true);
-    return boundary;
+    // Concurrent lookups of one offset share a probe: the incident's
+    // pattern was the same missing offset asked for many times at once.
+    // The shared probe takes no caller's signal, so one caller cancelling
+    // does not fail the others; its own timeouts bound it, and each caller
+    // stops waiting when its own signal aborts.
+    let probing = this.inFlight.get(offsetKey);
+    if (probing === undefined) {
+      probing = this.probe(offsetNum, absoluteOffset, undefined, log)
+        .then((boundary) => {
+          if (boundary === null) this.misses?.set(offsetKey, true);
+          return boundary;
+        })
+        .finally(() => this.inFlight.delete(offsetKey));
+      this.inFlight.set(offsetKey, probing);
+    } else {
+      this.recordResult('probe_shared');
+    }
+    return signal === undefined ? probing : raceAbort(probing, signal);
   }
 
   /** One probe of the reference peer; null on any miss. */
@@ -252,21 +263,19 @@ export class ChunkMetadataAnchorSource implements TxBoundarySource {
     offsetNum: number,
     absoluteOffset: bigint,
     signal: AbortSignal | undefined,
-    requestAttributes: RequestAttributes | undefined,
     log: winston.Logger,
   ): Promise<TxBoundary | null> {
     const peer = this.peerUrls[0];
     const url = `${peer}/chunk/${absoluteOffset}/data`;
-    // Identify the probe as a gateway's, one hop on, as the chunk sources
-    // do: the peer then applies its hop limit and its limits for gateways.
-    const requestHeaders: Record<string, string> = {
-      ...(this.nodeRelease !== undefined
-        ? { 'X-AR-IO-Node-Release': this.nodeRelease }
-        : {}),
-      ...(generateRequestAttributes(
-        requestAttributes ?? { hops: 0, clientIps: [] },
-      )?.headers ?? {}),
-    };
+    // Only the hop count, one on: the peer then keeps its one-hop limit
+    // and makes no network request for this probe. Only reached at hop 0
+    // (forwarded requests return above), so this is always `1`. Nothing
+    // else of the client's request (ArNS name, root hints, via) is sent,
+    // and deliberately no X-AR-IO-Node-Release: peers' nginx limits key on
+    // that header, and turbo-gateway.com's was one bucket for the whole
+    // network, which would have refused nearly every anchor probe.
+    const requestHeaders: Record<string, string> =
+      generateRequestAttributes({ hops: 0, clientIps: [] })?.headers ?? {};
 
     let headers: Record<string, string | string[] | undefined>;
     try {
@@ -472,6 +481,29 @@ export class ChunkMetadataAnchorSource implements TxBoundarySource {
       weaveOffset: anchored.txEndOffset,
     };
   }
+}
+
+/** `promise`, or an AbortError as soon as `signal` aborts. */
+function raceAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  signal.throwIfAborted();
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => {
+      const error = new Error('The operation was aborted');
+      error.name = 'AbortError';
+      reject(error);
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener('abort', onAbort);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener('abort', onAbort);
+        reject(error);
+      },
+    );
+  });
 }
 
 function hasAnyChunkHeader(headers: unknown): boolean {
