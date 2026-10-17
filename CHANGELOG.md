@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A chunk-metadata anchor probe kept running after every caller had given
+  up on it.** Concurrent lookups of one offset share a single probe of the
+  reference peer (a `HEAD /chunk/{offset}/data`, then the chain cross-checks),
+  and that probe took no signal, so when every caller's request was cancelled
+  it still ran to completion. Waiters are now counted: a caller that aborts
+  while others wait rejects only its own lookup, and when the last one aborts
+  the probe's requests are aborted and the probe is dropped, so a later lookup
+  of the offset starts a fresh one. An aborted probe is not remembered as a
+  miss (`CHUNK_METADATA_ANCHOR_MISS_CACHE_TTL_SECONDS`).
+
 ## [Release 85] - 2026-10-17
 
 This is a **recommended release** focused on **the Arweave base layer as a
