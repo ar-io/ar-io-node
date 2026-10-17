@@ -14,9 +14,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   and that probe took no signal, so when every caller's request was cancelled
   it still ran to completion. Waiters are now counted: a caller that aborts
   while others wait rejects only its own lookup, and when the last one aborts
-  the probe's requests are aborted and the probe is dropped, so a later lookup
-  of the offset starts a fresh one. An aborted probe is not remembered as a
-  miss (`CHUNK_METADATA_ANCHOR_MISS_CACHE_TTL_SECONDS`).
+  the probe is aborted and dropped, so a later lookup of the offset starts a
+  fresh one. The abort reaches the peer `HEAD` (or ranged `GET`) and the
+  chain `/tx/{id}/offset` request; the chain `/tx/{id}` request does not take
+  a signal yet, so one already started still runs to completion. An aborted
+  probe is not remembered as a miss
+  (`CHUNK_METADATA_ANCHOR_MISS_CACHE_TTL_SECONDS`).
 
 ## [Release 85] - 2026-10-17
 
