@@ -643,6 +643,11 @@ with core**).
     `CHUNK_METADATA_ANCHOR_MISS_CACHE_TTL_SECONDS` (default 60; `0` turns it
     off);
   - a negative `X-AR-IO-Hops` is read as 0.
+  This holds for every `CHUNK_PEER_ORIGIN_MODE`, including the default
+  `off`: a peer's request no longer has its offset found through the anchor
+  or the chain on its behalf, so `audit` no longer records
+  `boundary="remote"`. `enforce` still differs from `off` by also declining
+  Arweave nodes for the chunk itself.
   A gateway's probes carry the hop count once it runs this release; until
   then, the gateway it asks can stop the chain on its side by leaving
   `ar-io-network` out of `CHUNK_METADATA_RETRIEVAL_ORDER` and
