@@ -164,6 +164,36 @@ describe('lookup engine', () => {
     );
   });
 
+  it('refuses a lookup that holds one of its rows twice', async () => {
+    const out = path.join(dir, 'dup');
+    await fs.mkdir(out);
+    const file = path.join(out, spec.file);
+    // Every row the tables give, and one of them again: a set of rows would
+    // match, the rows don't.
+    await duck.exec(
+      `COPY (SELECT k8, grp FROM (
+               SELECT * FROM (${spec.derive(tables)})
+               UNION ALL (SELECT * FROM (${spec.derive(tables)}) ORDER BY k8, grp LIMIT 1))
+             ORDER BY k8, grp)
+       TO ${sqlPath(file)} (FORMAT PARQUET)`,
+    );
+    const forged = await digestLookup(duck, spec, file, ORDER);
+    assert.equal(forged.rows, 1001);
+    const problems = await verifyLookup(
+      duck,
+      spec,
+      file,
+      tables,
+      forged,
+      ORDER,
+    );
+    assert.equal(problems.length, 1);
+    assert.match(
+      problems[0],
+      /1 rows that its tables do not give, and 0 of theirs missing/,
+    );
+  });
+
   it('digests in numeric order, or in the text order l1-3 used', async () => {
     // One UBIGINT column, 9, 10 and 100: as text, 10 < 100 < 9. Under
     // `legacy-text` the digest query's text alias "v" shadowed the column

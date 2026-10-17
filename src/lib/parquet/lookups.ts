@@ -136,6 +136,21 @@ export async function digestLookup(
   duck: Database,
   spec: LookupSpec,
   file: string,
+  options: LookupDigestOptions,
+): Promise<LookupDescription> {
+  return digestRows(duck, spec, `read_parquet(${sqlPath(file)})`, options);
+}
+
+/**
+ * The row count and row digest of the spec's columns of `from` (a table
+ * expression), as {@link digestLookup} takes a file's. Streamed in the
+ * spec's order: DuckDB sorts out of core, so memory stays bounded however
+ * many rows there are.
+ */
+async function digestRows(
+  duck: Database,
+  spec: LookupSpec,
+  from: string,
   { order }: LookupDigestOptions,
 ): Promise<LookupDescription> {
   const digest = new RowDigest(spec.columns);
@@ -143,7 +158,7 @@ export async function digestLookup(
   // Under `legacy-text` a column read as text is selected under its own
   // name, so ORDER BY names the text; under `numeric`, the column.
   const stream = await duck.stream(
-    `SELECT ${spec.columns.map((c) => selectColumn(c, order)).join(', ')} FROM read_parquet(${sqlPath(file)}) ORDER BY ${spec.orderBy.map((c) => `"${c}"`).join(', ')}`,
+    `SELECT ${spec.columns.map((c) => selectColumn(c, order)).join(', ')} FROM ${from} ORDER BY ${spec.orderBy.map((c) => `"${c}"`).join(', ')}`,
   );
   for await (const row of stream) {
     digest.add(names.map((n) => (row as Record<string, unknown>)[n]));
@@ -158,7 +173,11 @@ export async function digestLookup(
  *    band is honest about the file.
  * 2. It holds exactly the rows its spec derives from the tables, no more and
  *    no fewer: the file is honest about the tables. Row by row, not by bytes,
- *    so a file another DuckDB version wrote passes when its rows agree.
+ *    so a file another DuckDB version wrote passes when its rows agree. The
+ *    derived rows are digested as the file's are, in the spec's order, which
+ *    is total over the columns: the same rows give the same digest, and a
+ *    set comparison (which DuckDB holds in memory, and which ran a 1.6M
+ *    `parquet-l2` band out of it) is made only to say how they differ.
  *
  * @returns what is wrong, empty when it matches.
  */
@@ -183,25 +202,41 @@ export async function verifyLookup(
         `${spec.file}: holds ${found.rows} rows with digest ${found.rowDigest}, its band says ${declared.rows} rows with digest ${declared.rowDigest}`,
       );
     }
-    const columns = spec.columns.map((c) => `"${c.name}"`).join(', ');
-    const have = `SELECT ${columns} FROM read_parquet(${sqlPath(file)})`;
-    const want = `SELECT ${columns} FROM (${spec.derive(tables)})`;
-    const [diff] = (await duck.all(
-      `SELECT
-         (SELECT count(*) FROM (${have} EXCEPT ALL ${want})) AS extra,
-         (SELECT count(*) FROM (${want} EXCEPT ALL ${have})) AS missing`,
-    )) as Array<{ extra: bigint | number; missing: bigint | number }>;
-    const extra = Number(diff.extra);
-    const missing = Number(diff.missing);
-    if (extra > 0 || missing > 0) {
-      problems.push(
-        `${spec.file}: ${extra} rows that its tables do not give, and ${missing} of theirs missing`,
-      );
+    const derived = await digestRows(
+      duck,
+      spec,
+      `(${spec.derive(tables)})`,
+      options,
+    );
+    if (derived.rows !== found.rows || derived.rowDigest !== found.rowDigest) {
+      problems.push(await describeDifference(duck, spec, file, tables));
     }
     return problems;
   } catch (error) {
     return [
       `${spec.file}: could not be read (${error instanceof Error ? error.message : String(error)})`,
     ];
+  }
+}
+
+/** How a lookup file's rows differ from its tables', once they are known to. */
+async function describeDifference(
+  duck: Database,
+  spec: LookupSpec,
+  file: string,
+  tables: TableFiles,
+): Promise<string> {
+  const columns = spec.columns.map((c) => `"${c.name}"`).join(', ');
+  const have = `SELECT ${columns} FROM read_parquet(${sqlPath(file)})`;
+  const want = `SELECT ${columns} FROM (${spec.derive(tables)})`;
+  try {
+    const [diff] = (await duck.all(
+      `SELECT
+         (SELECT count(*) FROM (${have} EXCEPT ALL ${want})) AS extra,
+         (SELECT count(*) FROM (${want} EXCEPT ALL ${have})) AS missing`,
+    )) as Array<{ extra: bigint | number; missing: bigint | number }>;
+    return `${spec.file}: ${Number(diff.extra)} rows that its tables do not give, and ${Number(diff.missing)} of theirs missing`;
+  } catch (error) {
+    return `${spec.file}: its rows are not the ones its tables give (counting the difference failed: ${error instanceof Error ? error.message : String(error)})`;
   }
 }
