@@ -154,7 +154,8 @@ export const AR_IO_INDEX_PUBLISHER =
  * empty: the ar.io publisher's root-TX bands. Root-TX only: L1 bands are
  * several times larger and stay opt-in (`"name": ["root-tx-index",
  * "parquet-l1"]`). An explicit value, `[]` included, replaces this, so an
- * operator opts out with `INDEX_SWARM_SUBSCRIBE=[]`.
+ * operator opts out with `INDEX_SWARM_SUBSCRIBE=[]`. Opted out, bands already
+ * installed stay installed but are no longer seeded (see `opt-out.ts`).
  *
  * Trust is unchanged by the default: documents are still checked against the
  * observer key the gateway registry names for this wallet.
