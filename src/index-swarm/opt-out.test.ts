@@ -10,7 +10,10 @@ import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
-import { stopSubscriberTorrents } from './opt-out.js';
+import {
+  stopSubscriberTorrents,
+  SubscriberTorrentsStopper,
+} from './opt-out.js';
 import { seedingKey, StateStore } from './state.js';
 import { buildTorrent } from './torrent.js';
 import { MemorySwarm, MemoryTransport } from './transport/memory.js';
@@ -219,6 +222,47 @@ describe('stopSubscriberTorrents', () => {
     ]);
   });
 
+  it('leaves a torrent the subscriber added first when the publisher also seeds it', async () => {
+    const transport = new RecordingTransport(new MemorySwarm());
+    // Same bytes installed and published, the subscriber first: the engine's
+    // one copy runs from installed/, and the publisher's record names it too.
+    const installedDir = path.join(installed, 'root-tx-index', 'band-a', 'g1');
+    const torrent = await torrentIn(installedDir, 'shared-first');
+    const { id } = await transport.seed({ torrent, dir: installedDir });
+    const publishedDir = path.join(published, '.seed', 'p');
+    await torrentIn(publishedDir, 'shared-first');
+    await state.update((draft) => {
+      draft.seeding[seedingKey('subscriber', id)] = {
+        id,
+        index: 'root-tx-index',
+        band: 'band-a',
+        dir: installedDir,
+        owner: 'subscriber',
+      };
+      draft.seeding[seedingKey('publisher', id)] = {
+        id,
+        index: 'root-tx-index',
+        band: 'band-a',
+        dir: publishedDir,
+        owner: 'publisher',
+      };
+    });
+
+    const result = await stopSubscriberTorrents({
+      log,
+      state,
+      transport,
+      swarmDir,
+    });
+
+    assert.deepEqual(result, { engineAvailable: true, removed: 0, failed: 0 });
+    assert.deepEqual(transport.removed, []);
+    assert.equal(transport.entry(id)?.state, 'seeding', 'still seeded');
+    assert.deepEqual(Object.keys((await state.load()).seeding), [
+      seedingKey('publisher', id),
+    ]);
+  });
+
   it('changes nothing while the engine is down, and finishes once it answers', async () => {
     const transport = new RecordingTransport(new MemorySwarm());
     const { sub } = await setUp(transport);
@@ -268,6 +312,19 @@ describe('stopSubscriberTorrents', () => {
     );
   });
 
+  it('remembers which torrents it warned about, so a retry does not warn again', async () => {
+    const transport = new RecordingTransport(new MemorySwarm());
+    const { sub, dl } = await setUp(transport);
+    transport.isAvailable = async () => true;
+    transport.available = false;
+    const warned = new Set<string>();
+
+    await stopSubscriberTorrents({ log, state, transport, swarmDir, warned });
+    assert.deepEqual([...warned].sort(), [sub, dl].sort());
+    await stopSubscriberTorrents({ log, state, transport, swarmDir, warned });
+    assert.equal(warned.size, 2);
+  });
+
   it('drops records of torrents the engine no longer holds', async () => {
     const transport = new RecordingTransport(new MemorySwarm());
     const { sub, dl } = await setUp(transport);
@@ -289,5 +346,88 @@ describe('stopSubscriberTorrents', () => {
       ['publisher'],
     );
     assert.deepEqual(current.downloads, {});
+  });
+});
+
+describe('SubscriberTorrentsStopper', () => {
+  let tempDir: string;
+  let state: StateStore;
+
+  beforeEach(async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'index-swarm-stopper-'));
+    state = new StateStore({ log, filePath: path.join(tempDir, 'state.json') });
+  });
+
+  afterEach(async () => {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  it('never runs two passes at once, and stops once one completes', async () => {
+    const transport = new MemoryTransport(new MemorySwarm());
+    let checks = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    // A slow engine: the first pass waits here while another check fires.
+    transport.isAvailable = async () => {
+      checks++;
+      await gate;
+      return true;
+    };
+    const stopper = new SubscriberTorrentsStopper({
+      log,
+      state,
+      transport,
+      swarmDir: path.join(tempDir, 'swarm'),
+    });
+
+    const first = stopper.runIfPending();
+    const overlapping = await stopper.runIfPending();
+    assert.equal(overlapping, undefined, 'skipped while one runs');
+    release();
+    assert.deepEqual(await first, {
+      engineAvailable: true,
+      removed: 0,
+      failed: 0,
+    });
+    assert.equal(checks, 1);
+    assert.equal(stopper.isPending, false);
+
+    assert.equal(await stopper.runIfPending(), undefined, 'done for good');
+    assert.equal(checks, 1);
+  });
+
+  it('stays pending while the engine is down', async () => {
+    const transport = new MemoryTransport(new MemorySwarm());
+    transport.available = false;
+    const stopper = new SubscriberTorrentsStopper({
+      log,
+      state,
+      transport,
+      swarmDir: path.join(tempDir, 'swarm'),
+    });
+
+    assert.equal((await stopper.runIfPending())?.engineAvailable, false);
+    assert.equal(stopper.isPending, true);
+    transport.available = true;
+    assert.equal((await stopper.runIfPending())?.engineAvailable, true);
+    assert.equal(stopper.isPending, false);
+  });
+
+  it('does not throw when the state cannot be read, and retries', async () => {
+    const transport = new MemoryTransport(new MemorySwarm());
+    const broken = {
+      load: async () => {
+        throw new Error('disk gone');
+      },
+    } as unknown as StateStore;
+    const stopper = new SubscriberTorrentsStopper({
+      log,
+      state: broken,
+      transport,
+      swarmDir: path.join(tempDir, 'swarm'),
+    });
+
+    assert.equal(await stopper.runIfPending(), undefined);
+    assert.equal(stopper.isPending, true);
   });
 });

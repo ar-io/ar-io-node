@@ -1225,7 +1225,11 @@ answers (checked every minute, so an engine that is down only delays it),
 the sidecar removes from the engine every torrent its subscriber records
 name, the installed bands' seeds and any download in progress, never with
 their files, and drops those records. Torrents the engine runs from
-`published/` are the publisher's and are left alone. The same applies to the
+`published/` are the publisher's and are left alone, as is a torrent the
+publisher also seeds even if the subscriber added it first. On a node with no
+engine configured (HTTP only) there is no engine to ask, so torrents an
+engine still holds from an earlier run are not removed: configure the engine,
+or remove them in its Web UI without deleting files. The same applies to the
 default publisher, whose default subscription skips itself: it subscribes to
 nothing, so it seeds only what it publishes. A partial download stays in
 `swarm/` until a subscriber's housekeeping, or the operator, removes it.

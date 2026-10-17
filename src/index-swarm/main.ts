@@ -32,7 +32,7 @@ import { Publisher, loadPublisherSigner } from './publisher.js';
 import { QBittorrentTransport } from './transport/qbittorrent.js';
 import { waitForEngine } from './transport/wait.js';
 import { EngineJanitor } from './engine-janitor.js';
-import { stopSubscriberTorrents } from './opt-out.js';
+import { SubscriberTorrentsStopper } from './opt-out.js';
 import { resolveEngineAuth } from './engine-auth.js';
 import { UploadBudget } from './upload-budget.js';
 import {
@@ -301,30 +301,17 @@ async function main(): Promise<void> {
     // publisher skipping itself): installed bands stay installed and read,
     // but the engine stops seeding them (see opt-out.ts). Done once the
     // engine answers, so an engine that is down at startup is handled on a
-    // later check instead of failing the sidecar.
-    let optOutPending = config.SUBSCRIBE.length === 0;
-    const stopSubscriberSeeding = async () => {
-      const result = await stopSubscriberTorrents({
-        log,
-        state,
-        transport: engine,
-        swarmDir: config.SWARM_DIR,
-      }).catch((error: any) => {
-        log.warn('Could not stop seeding installed bands; will retry', {
-          error: error?.message,
-        });
-        return undefined;
-      });
-      if (result?.engineAvailable === true && result.failed === 0) {
-        optOutPending = false;
-        if (result.removed > 0) {
-          log.info(
-            'Nothing is subscribed: stopped seeding installed bands, which stay installed',
-            { removed: result.removed },
-          );
-        }
-      }
-    };
+    // later check instead of failing the sidecar; a check that overlaps a
+    // pass still running does not start another.
+    const optOut =
+      config.SUBSCRIBE.length === 0
+        ? new SubscriberTorrentsStopper({
+            log,
+            state,
+            transport: engine,
+            swarmDir: config.SWARM_DIR,
+          })
+        : undefined;
     const checkEngine = async () => {
       const available = await engine.isAvailable();
       engineAvailable.set(available ? 1 : 0);
@@ -334,7 +321,7 @@ async function main(): Promise<void> {
             error: error?.message,
           }),
         );
-        if (optOutPending) await stopSubscriberSeeding();
+        if (optOut !== undefined) await optOut.runIfPending();
       }
       if (available !== last) {
         const fields = { engineUrl };
