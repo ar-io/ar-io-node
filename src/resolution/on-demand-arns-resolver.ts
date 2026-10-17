@@ -43,7 +43,9 @@ export class OnDemandArNSResolver implements NameResolver {
     try {
       const baseArNSRecord = await baseArNSRecordFn();
       if (!baseArNSRecord) {
-        this.log.warn('Base name not found in ArNS names cache', {
+        // Usually an unregistered name, which any visitor can request, so
+        // this is not worth a warning; arns_name_cache_miss_total counts it.
+        this.log.debug('Base name not found in ArNS names cache', {
           name,
         });
         metrics.arnsNameCacheMissCounter.inc();
