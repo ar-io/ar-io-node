@@ -76,6 +76,18 @@ function isReservedName(value: string): boolean {
  */
 export const PUBLISHED_TORRENT_DIR = '.torrents';
 
+/**
+ * A publisher's BEP 19 WebSeed, relative to its origin. A client appends
+ * `<torrent name>/<file>`; the gateway answers it from the band's files.
+ */
+export const WEBSEED_PATH = '/ar-io/indexes/webseed/';
+
+/**
+ * Where a gateway serves the RSS feed of each index it publishes, relative
+ * to its origin: `<INDEX_FEED_PATH><index>.xml`.
+ */
+export const INDEX_FEED_PATH = '/ar-io/indexes/feed/';
+
 export const INDEX_PUBLICATION_MAX_INDEXES = 64;
 export const INDEX_PUBLICATION_MAX_BANDS_PER_INDEX = 1024;
 export const INDEX_PUBLICATION_MAX_FILES_PER_BAND = 1024;
@@ -762,4 +774,82 @@ export function verifyIndexPublication(
   }
 
   return verified ? { ok: true } : { ok: false, reason: 'signature mismatch' };
+}
+
+/**
+ * The band ids a band says it supersedes, as its metadata claims them: one
+ * id or a list. Anything else in the claim is ignored. A claim, not a
+ * verdict: {@link honouredSupersessions} decides which claims a set honours.
+ */
+export function supersedesClaim(band: BandDescriptor): string[] {
+  const claim = band.metadata?.supersedes;
+  return (
+    typeof claim === 'string' ? [claim] : Array.isArray(claim) ? claim : []
+  ).filter((id): id is string => typeof id === 'string');
+}
+
+/**
+ * The claims of a set of bands that stand, by claiming band: what each band
+ * really supersedes.
+ *
+ * A self-reference is ignored, and so is every claim of a band on a cycle
+ * (A replaces B, B replaces A), whatever else it names: honouring them would
+ * retire, then delete, every band in it. A chain (C replaces B, B replaces A)
+ * stands as intended. A band whose claims all fall has no entry.
+ */
+export function honouredSupersessions(
+  bands: BandDescriptor[],
+  warn: (message: string, fields: Record<string, unknown>) => void = () =>
+    undefined,
+): Map<string, string[]> {
+  const ids = new Set(bands.map((band) => band.id));
+  const claims = new Map<string, string[]>();
+  for (const band of bands) {
+    const valid = supersedesClaim(band).filter((id) => {
+      if (id === band.id) {
+        warn('Band supersedes itself; ignoring that', { band: band.id });
+        return false;
+      }
+      return true;
+    });
+    if (valid.length > 0) claims.set(band.id, valid);
+  }
+
+  // Drop every claim on a cycle among bands present in this set.
+  const onCycle = new Set<string>();
+  for (const start of claims.keys()) {
+    const stack: Array<{ id: string; path: string[] }> = [
+      { id: start, path: [start] },
+    ];
+    while (stack.length > 0) {
+      const { id, path: trail } = stack.pop()!;
+      for (const next of claims.get(id) ?? []) {
+        if (next === start) {
+          for (const member of trail) onCycle.add(member);
+        } else if (ids.has(next) && !trail.includes(next)) {
+          stack.push({ id: next, path: [...trail, next] });
+        }
+      }
+    }
+  }
+  if (onCycle.size > 0) {
+    warn('Bands supersede each other in a cycle; ignoring those claims', {
+      bands: [...onCycle].sort(),
+    });
+  }
+
+  for (const claimer of onCycle) claims.delete(claimer);
+  return claims;
+}
+
+/**
+ * The band ids that other bands in the set supersede: the targets of
+ * {@link honouredSupersessions}.
+ */
+export function supersededBands(
+  bands: BandDescriptor[],
+  warn: (message: string, fields: Record<string, unknown>) => void = () =>
+    undefined,
+): Set<string> {
+  return new Set([...honouredSupersessions(bands, warn).values()].flat());
 }

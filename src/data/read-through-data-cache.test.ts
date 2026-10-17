@@ -17,7 +17,10 @@ import {
   DataAttributesSource,
   RequestAttributes,
 } from '../types.js';
-import { ReadThroughDataCache } from './read-through-data-cache.js';
+import {
+  ReadThroughDataCache,
+  itemContentTypeToRecord,
+} from './read-through-data-cache.js';
 import * as metrics from '../metrics.js';
 import { TestDestroyedReadable } from './test-utils.js';
 import {
@@ -2486,6 +2489,342 @@ describe('ReadThroughDataCache', function () {
       });
     }
 
+    describe('ranged misses with background range caching', () => {
+      const payload = 'range then whole item payload';
+
+      /**
+       * An upstream that serves ranges at once and holds every full fetch
+       * until `release` is called, counting each kind.
+       */
+      function makeGatedSource() {
+        const counts = { ranged: 0, full: 0 };
+        let release!: () => void;
+        const gate = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        const dataSource: ContiguousDataSource = {
+          getData: async ({ region }) => {
+            if (region !== undefined) {
+              counts.ranged++;
+              const slice = payload.slice(
+                region.offset,
+                region.offset + region.size,
+              );
+              return {
+                stream: Readable.from([Buffer.from(slice)]),
+                size: region.size,
+                totalSize: payload.length,
+                verified: false,
+                trusted: true,
+                cached: false,
+              };
+            }
+            counts.full++;
+            await gate;
+            return {
+              stream: Readable.from([Buffer.from(payload)]),
+              size: payload.length,
+              verified: false,
+              trusted: true,
+              cached: false,
+            };
+          },
+        };
+        return { dataSource, counts, release: () => release() };
+      }
+
+      async function until(condition: () => boolean) {
+        for (let i = 0; i < 200 && !condition(); i++) {
+          await new Promise((resolve) => setTimeout(resolve, 5));
+        }
+        assert.ok(condition(), 'condition not reached');
+      }
+
+      async function drain(stream: Readable) {
+        let received = '';
+        for await (const chunk of stream) {
+          received += chunk;
+        }
+        return received;
+      }
+
+      function setup(
+        overrides: Record<string, unknown> = {},
+        source = makeGatedSource(),
+      ) {
+        const { store, counters } = makeStatefulStore();
+        const { store: attributesStore, attributes } =
+          makeStatefulAttributesStore();
+        for (const id of ['range-id', 'other-id']) {
+          attributes.set(id, {
+            size: payload.length,
+            contentType: 'text/plain',
+            isManifest: false,
+            stable: false,
+            verified: false,
+          });
+        }
+        const cache = makeCache({
+          dataSource: source.dataSource,
+          dataStore: store,
+          dataAttributesStore: attributesStore,
+          backgroundCacheRangeMaxSize: 1000,
+          backgroundCacheRangeConcurrency: 4,
+          ...overrides,
+        });
+        mock.method(metrics.backgroundRangeCacheTriggeredTotal, 'inc');
+        mock.method(metrics.backgroundRangeCacheCompletedTotal, 'inc');
+        mock.method(metrics.backgroundRangeCacheFailedTotal, 'inc');
+        mock.method(metrics.backgroundRangeCacheSkippedTotal, 'inc');
+        return { cache, counters, ...source };
+      }
+
+      it('starts one background fetch, which a concurrent full GET shares', async () => {
+        const { cache, counters, counts, release } = setup();
+
+        const ranged = await cache.getData({
+          id: 'range-id',
+          requestAttributes,
+          region: { offset: 6, size: 4 },
+        });
+        assert.equal(await drain(ranged.stream), 'then');
+        assert.equal(ranged.cached, false);
+
+        // The background fetch is now the in-flight leader for the item.
+        await until(() => counts.full === 1);
+
+        const full = cache.getData({ id: 'range-id', requestAttributes });
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        release();
+        const result = await full;
+
+        assert.equal(await drain(result.stream), payload);
+        // Served from the blob the background fetch wrote.
+        assert.equal(result.cached, true);
+        await until(
+          () =>
+            (
+              metrics.backgroundRangeCacheCompletedTotal.inc as any
+            ).mock.callCount() === 1,
+        );
+        assert.equal(counts.ranged, 1);
+        assert.equal(counts.full, 1);
+        assert.equal(counters.createWriteStream, 1);
+        assert.equal(counters.finalize, 1);
+        assert.equal(
+          (
+            metrics.backgroundRangeCacheTriggeredTotal.inc as any
+          ).mock.callCount(),
+          1,
+        );
+      });
+
+      it('starts one background fetch for concurrent ranged misses', async () => {
+        const { cache, counters, counts, release } = setup();
+
+        const results = await Promise.all(
+          [
+            { offset: 0, size: 5 },
+            { offset: 6, size: 4 },
+            { offset: 11, size: 5 },
+          ].map(async (region) => {
+            const data = await cache.getData({
+              id: 'range-id',
+              requestAttributes,
+              region,
+            });
+            return drain(data.stream);
+          }),
+        );
+        assert.deepEqual(results, ['range', 'then', 'whole']);
+
+        release();
+        await until(
+          () =>
+            (
+              metrics.backgroundRangeCacheCompletedTotal.inc as any
+            ).mock.callCount() === 1,
+        );
+
+        assert.equal(counts.ranged, 3);
+        assert.equal(counts.full, 1);
+        assert.equal(counters.finalize, 1);
+        assert.equal(
+          (
+            metrics.backgroundRangeCacheTriggeredTotal.inc as any
+          ).mock.callCount(),
+          1,
+        );
+        const pendingSkips = (
+          metrics.backgroundRangeCacheSkippedTotal.inc as any
+        ).mock.calls.filter(
+          (call: any) => call.arguments[0]?.reason === 'already_pending',
+        );
+        assert.equal(pendingSkips.length, 2);
+      });
+
+      describe('a stalled background fetch', () => {
+        const callCount = (counter: any) =>
+          (counter.inc as any).mock.callCount();
+
+        async function rangedMiss(cache: ReadThroughDataCache, id: string) {
+          const data = await cache.getData({
+            id,
+            requestAttributes,
+            region: { offset: 0, size: 5 },
+          });
+          await drain(data.stream);
+        }
+
+        it('releases its permit when the fetch never starts streaming', async () => {
+          // The gate is never released: the full fetch hangs.
+          const { cache, counts } = setup({
+            backgroundCacheRangeConcurrency: 1,
+            backgroundCacheStallTimeoutMs: 30,
+          });
+
+          await rangedMiss(cache, 'range-id');
+          await until(() => counts.full === 1);
+          await until(
+            () => callCount(metrics.backgroundRangeCacheFailedTotal) === 1,
+          );
+
+          // The only permit is free again.
+          await rangedMiss(cache, 'other-id');
+          assert.equal(
+            callCount(metrics.backgroundRangeCacheTriggeredTotal),
+            2,
+          );
+          const atCapacity = (
+            metrics.backgroundRangeCacheSkippedTotal.inc as any
+          ).mock.calls.filter(
+            (call: any) => call.arguments[0]?.reason === 'at_capacity',
+          );
+          assert.equal(atCapacity.length, 0);
+          // Let the second hung fetch stall too, so it cannot count in the
+          // next test's metrics.
+          await until(
+            () => callCount(metrics.backgroundRangeCacheFailedTotal) === 2,
+          );
+        });
+
+        it('aborts the upstream fetch it abandons', async () => {
+          let fullSignal: AbortSignal | undefined;
+          let fullStream: Readable | undefined;
+          const source = makeGatedSource();
+          const ranged = source.dataSource.getData.bind(source.dataSource);
+          source.dataSource.getData = async (args) => {
+            if (args.region !== undefined) {
+              return ranged(args);
+            }
+            source.counts.full++;
+            fullSignal = args.signal;
+            // Never sends a byte, never ends, never errors.
+            fullStream = new Readable({ read() {} });
+            return {
+              stream: fullStream,
+              size: payload.length,
+              verified: false,
+              trusted: true,
+              cached: false,
+            };
+          };
+          const { cache } = setup(
+            {
+              backgroundCacheRangeConcurrency: 1,
+              backgroundCacheStallTimeoutMs: 30,
+            },
+            source,
+          );
+
+          await rangedMiss(cache, 'range-id');
+          await until(
+            () => callCount(metrics.backgroundRangeCacheFailedTotal) === 1,
+          );
+
+          assert.notEqual(fullSignal, undefined);
+          assert.equal(fullSignal?.aborted, true);
+          fullStream?.destroy();
+        });
+
+        it('releases its permit when the stream stops between chunks', async () => {
+          let fullStream: Readable | undefined;
+          const source = makeGatedSource();
+          const ranged = source.dataSource.getData.bind(source.dataSource);
+          source.dataSource.getData = async (args) => {
+            if (args.region !== undefined) {
+              return ranged(args);
+            }
+            source.counts.full++;
+            // One chunk, then silence: never ends, never errors.
+            let sent = false;
+            fullStream = new Readable({
+              read() {
+                if (!sent) {
+                  sent = true;
+                  this.push(Buffer.from(payload.slice(0, 5)));
+                }
+              },
+            });
+            return {
+              stream: fullStream,
+              size: payload.length,
+              verified: false,
+              trusted: true,
+              cached: false,
+            };
+          };
+          const { cache } = setup(
+            {
+              backgroundCacheRangeConcurrency: 1,
+              backgroundCacheStallTimeoutMs: 30,
+            },
+            source,
+          );
+
+          await rangedMiss(cache, 'range-id');
+          await until(
+            () => callCount(metrics.backgroundRangeCacheFailedTotal) === 1,
+          );
+          assert.equal(
+            callCount(metrics.backgroundRangeCacheCompletedTotal),
+            0,
+          );
+
+          await rangedMiss(cache, 'other-id');
+          assert.equal(
+            callCount(metrics.backgroundRangeCacheTriggeredTotal),
+            2,
+          );
+          fullStream?.destroy();
+          await until(
+            () => callCount(metrics.backgroundRangeCacheFailedTotal) === 2,
+          );
+        });
+      });
+
+      it('starts none when the caller opts out', async () => {
+        const { cache, counts } = setup();
+
+        const ranged = await cache.getData({
+          id: 'range-id',
+          requestAttributes,
+          region: { offset: 0, size: 5 },
+          backgroundCacheOnRangeMiss: false,
+        });
+        assert.equal(await drain(ranged.stream), 'range');
+        await new Promise((resolve) => setTimeout(resolve, 20));
+
+        assert.equal(counts.full, 0);
+        assert.equal(
+          (
+            metrics.backgroundRangeCacheTriggeredTotal.inc as any
+          ).mock.callCount(),
+          0,
+        );
+      });
+    });
+
     it('runs one upstream fetch and one staging file for N concurrent requests', async () => {
       const { store, counters } = makeStatefulStore();
       const { store: attributesStore } = makeStatefulAttributesStore();
@@ -3195,6 +3534,283 @@ describe('ReadThroughDataCache', function () {
         .map((c: any) => c.arguments[0]?.reason)
         .filter((r: string) => r === 'exceeds_max_size');
       assert.equal(reasons.length, 1);
+    });
+
+    // Upstream data fetches do not decode, so bytes that arrive with a
+    // Content-Encoding are the encoded bytes. An encoding this item is not yet
+    // known by is recorded with the cached data when it came from the item's
+    // signed tags or a trusted upstream; from anywhere else the bytes are
+    // served but not cached, so neither an unlabelled copy nor a peer's claim
+    // outlives the request.
+    // An unindexed item's content type used to be recorded only per data
+    // hash, shared by every byte-identical upload. It is now also recorded
+    // per ID, ranked by where it came from (see itemContentTypeToRecord).
+    describe('upstream Content-Type', () => {
+      const MANIFEST = 'application/x.arweave-manifest+json';
+      const typedSource = (
+        contentType: string | undefined,
+        origin: 'item' | 'upstream' | undefined,
+        trusted = true,
+      ) =>
+        ({
+          getData: async () => ({
+            stream: Readable.from([Buffer.from('{"manifest":1}')]),
+            size: 14,
+            verified: false,
+            trusted,
+            cached: false,
+            sourceContentType: contentType,
+            sourceContentTypeOrigin: origin,
+          }),
+        }) as ContiguousDataSource;
+      const recorded = () =>
+        (
+          mockDataContentAttributeImporter.queueDataContentAttributes as any
+        ).mock.calls.map((c: any) => [
+          c.arguments[0].contentType,
+          c.arguments[0].itemContentType,
+          c.arguments[0].itemContentTypeSource,
+        ]);
+      const readAll = async (stream: NodeJS.ReadableStream) => {
+        for await (const _ of stream) {
+          // drain
+        }
+      };
+      const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
+      const setup = (source: ContiguousDataSource) => {
+        mock.method(
+          mockDataContentAttributeImporter,
+          'queueDataContentAttributes',
+        );
+        const { store } = makeStatefulStore();
+        const { store: attributesStore, attributes } =
+          makeStatefulAttributesStore();
+        const cache = makeCache({
+          dataSource: source,
+          dataStore: store,
+          dataAttributesStore: attributesStore,
+          dataContentAttributeImporter: mockDataContentAttributeImporter,
+        });
+        return { cache, attributes };
+      };
+
+      it("records the item's own type per ID, ranked item", async () => {
+        const { cache, attributes } = setup(typedSource(MANIFEST, 'item'));
+
+        const result = await cache.getData({
+          id: 'item-id',
+          requestAttributes,
+        });
+        await readAll(result.stream);
+        await settle();
+
+        assert.deepEqual(recorded(), [[MANIFEST, MANIFEST, 'item']]);
+        assert.equal(
+          attributes.get('item-id')?.contentTypeSource,
+          'item',
+          'ranked in memory too',
+        );
+      });
+
+      it("records a trusted gateway's type ranked upstream", async () => {
+        const { cache } = setup(typedSource('text/html', 'upstream'));
+
+        const result = await cache.getData({
+          id: 'item-id',
+          requestAttributes,
+        });
+        await readAll(result.stream);
+        await settle();
+
+        assert.deepEqual(recorded(), [['text/html', 'text/html', 'upstream']]);
+      });
+
+      it('records only the per-hash type for a type of unknown origin', async () => {
+        // For example a type a source took from this gateway's own attributes.
+        const { cache } = setup(typedSource('text/html', undefined));
+
+        const result = await cache.getData({
+          id: 'item-id',
+          requestAttributes,
+        });
+        await readAll(result.stream);
+        await settle();
+
+        assert.deepEqual(recorded(), [['text/html', undefined, undefined]]);
+      });
+    });
+
+    describe('upstream Content-Encoding', () => {
+      const encodedSource = (
+        payload: string,
+        encoding?: string,
+        {
+          trusted = true,
+          fromTags = false,
+        }: { trusted?: boolean; fromTags?: boolean } = {},
+      ) =>
+        ({
+          getData: async () => ({
+            stream: new Readable({
+              read() {
+                this.push(payload);
+                this.push(null);
+              },
+            }),
+            size: payload.length,
+            verified: true,
+            trusted,
+            cached: false,
+            sourceContentEncoding: encoding,
+            sourceContentEncodingFromTags: fromTags,
+          }),
+        }) as ContiguousDataSource;
+      const skips = (reason: string) =>
+        (metrics.foregroundCacheSkippedTotal.inc as any).mock.calls.filter(
+          (c: any) => c.arguments[0]?.reason === reason,
+        ).length;
+      const recordedEncodings = () =>
+        (
+          mockDataContentAttributeImporter.queueDataContentAttributes as any
+        ).mock.calls.map((c: any) => c.arguments[0].contentEncoding);
+      const readAll = async (stream: NodeJS.ReadableStream) => {
+        let received = '';
+        for await (const chunk of stream) received += chunk;
+        return received;
+      };
+      const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
+      const setup = (source: ContiguousDataSource, known?: string) => {
+        mock.method(metrics.foregroundCacheSkippedTotal, 'inc');
+        mock.method(
+          mockDataContentAttributeImporter,
+          'queueDataContentAttributes',
+        );
+        const { store, counters } = makeStatefulStore();
+        const { store: attributesStore, attributes } =
+          makeStatefulAttributesStore();
+        if (known !== undefined) {
+          attributes.set('item-id', { contentEncoding: known });
+        }
+        const cache = makeCache({
+          dataSource: source,
+          dataStore: store,
+          dataAttributesStore: attributesStore,
+          dataContentAttributeImporter: mockDataContentAttributeImporter,
+        });
+        return { cache, counters, attributes };
+      };
+
+      it('records and caches an encoding from a trusted upstream', async () => {
+        const { cache, counters, attributes } = setup(
+          encodedSource('gzip bytes', 'gzip', { trusted: true }),
+        );
+
+        const result = await cache.getData({
+          id: 'item-id',
+          requestAttributes,
+        });
+
+        assert.equal(await readAll(result.stream), 'gzip bytes');
+        await settle();
+        assert.equal(result.sourceContentEncoding, 'gzip');
+        assert.equal(counters.createWriteStream, 1);
+        assert.deepEqual(recordedEncodings(), ['gzip']);
+        assert.equal(
+          attributes.get('item-id')?.contentEncoding,
+          'gzip',
+          'in memory too, so the next cache hit is labelled',
+        );
+      });
+
+      it("records and caches an encoding read from the item's signed tags, even from an untrusted source", async () => {
+        const { cache, counters } = setup(
+          encodedSource('gzip bytes', 'gzip', {
+            trusted: false,
+            fromTags: true,
+          }),
+        );
+
+        const result = await cache.getData({
+          id: 'item-id',
+          requestAttributes,
+        });
+
+        assert.equal(await readAll(result.stream), 'gzip bytes');
+        await settle();
+        assert.equal(counters.createWriteStream, 1);
+        assert.deepEqual(recordedEncodings(), ['gzip']);
+      });
+
+      it("serves but neither caches nor records an untrusted upstream's encoding", async () => {
+        const { cache, counters, attributes } = setup(
+          encodedSource('gzip bytes', 'gzip', { trusted: false }),
+        );
+
+        const result = await cache.getData({
+          id: 'item-id',
+          requestAttributes,
+        });
+
+        assert.equal(await readAll(result.stream), 'gzip bytes');
+        await settle();
+        assert.equal(result.sourceContentEncoding, 'gzip');
+        assert.equal(counters.createWriteStream, 0);
+        assert.equal(skips('encoding_unverified'), 1);
+        assert.deepEqual(recordedEncodings(), []);
+        assert.equal(attributes.get('item-id')?.contentEncoding, undefined);
+      });
+
+      it('caches bytes whose encoding matches the known one without recording it again', async () => {
+        // Indexed tag values are compared case-insensitively.
+        const { cache, counters } = setup(
+          encodedSource('gzip bytes', 'gzip'),
+          'GZIP',
+        );
+
+        const result = await cache.getData({
+          id: 'item-id',
+          requestAttributes,
+        });
+
+        assert.equal(await readAll(result.stream), 'gzip bytes');
+        await settle();
+        assert.equal(counters.createWriteStream, 1);
+        assert.deepEqual(recordedEncodings(), [undefined]);
+      });
+
+      it('does not cache bytes whose encoding conflicts with the known one', async () => {
+        const { cache, counters } = setup(
+          encodedSource('gzip bytes', 'gzip', { fromTags: true }),
+          'br',
+        );
+
+        const result = await cache.getData({
+          id: 'item-id',
+          requestAttributes,
+        });
+
+        assert.equal(await readAll(result.stream), 'gzip bytes');
+        assert.equal(counters.createWriteStream, 0);
+        assert.equal(skips('encoding_mismatch'), 1);
+      });
+
+      it('caches unencoded bytes as before', async () => {
+        const { cache, counters } = setup(encodedSource('plain bytes'));
+
+        const result = await cache.getData({
+          id: 'item-id',
+          requestAttributes,
+        });
+
+        assert.equal(await readAll(result.stream), 'plain bytes');
+        await settle();
+        assert.equal(counters.createWriteStream, 1);
+        assert.equal(
+          skips('encoding_mismatch') + skips('encoding_unverified'),
+          0,
+        );
+        assert.deepEqual(recordedEncodings(), [undefined]);
+      });
     });
 
     it('serves the data but skips the cache write at foregroundCacheConcurrency', async () => {
@@ -4047,6 +4663,92 @@ describe('ReadThroughDataCache short-read rejection', () => {
       counters.finalize,
       1,
       'a lookup failure must not block caching',
+    );
+  });
+});
+
+describe('itemContentTypeToRecord', () => {
+  const MANIFEST = 'application/x.arweave-manifest+json';
+
+  it("records the item's own type, even from an untrusted source", () => {
+    assert.deepStrictEqual(
+      itemContentTypeToRecord({
+        sourceContentType: MANIFEST,
+        sourceContentTypeOrigin: 'item',
+        trusted: false,
+      }),
+      { itemContentType: MANIFEST, itemContentTypeSource: 'item' },
+    );
+  });
+
+  it("records a trusted gateway's type at the upstream rank", () => {
+    assert.deepStrictEqual(
+      itemContentTypeToRecord({
+        sourceContentType: 'text/html',
+        sourceContentTypeOrigin: 'upstream',
+        trusted: true,
+      }),
+      { itemContentType: 'text/html', itemContentTypeSource: 'upstream' },
+    );
+  });
+
+  it("does not record an untrusted gateway's type", () => {
+    assert.equal(
+      itemContentTypeToRecord({
+        sourceContentType: 'text/html',
+        sourceContentTypeOrigin: 'upstream',
+        trusted: false,
+      }),
+      undefined,
+    );
+  });
+
+  it("does not record a gateway's octet-stream placeholder", () => {
+    for (const sourceContentType of [
+      'application/octet-stream',
+      'Application/Octet-Stream; charset=binary',
+    ]) {
+      assert.equal(
+        itemContentTypeToRecord({
+          sourceContentType,
+          sourceContentTypeOrigin: 'upstream',
+          trusted: true,
+        }),
+        undefined,
+      );
+    }
+  });
+
+  it("records an item's own octet-stream tag", () => {
+    assert.deepStrictEqual(
+      itemContentTypeToRecord({
+        sourceContentType: 'application/octet-stream',
+        sourceContentTypeOrigin: 'item',
+        trusted: true,
+      }),
+      {
+        itemContentType: 'application/octet-stream',
+        itemContentTypeSource: 'item',
+      },
+    );
+  });
+
+  it('does not record a type of unknown origin, or an empty one', () => {
+    assert.equal(
+      itemContentTypeToRecord({
+        sourceContentType: 'text/html',
+        sourceContentTypeOrigin: undefined,
+        trusted: true,
+      }),
+      undefined,
+    );
+    assert.equal(
+      itemContentTypeToRecord({
+        sourceContentType: ' ',
+        sourceContentTypeOrigin: 'item',
+        trusted: true,
+      }),
+      undefined,
     );
   });
 });

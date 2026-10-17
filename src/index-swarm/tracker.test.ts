@@ -9,6 +9,7 @@ import { describe, it } from 'node:test';
 import { AddressInfo } from 'node:net';
 
 import { bdecode } from '../lib/bencode.js';
+import { PRIVATE_NETWORK_RANGES } from '../lib/trusted-proxies.js';
 import { createTestLogger } from '../../test/test-logger.js';
 import {
   ClosedTracker,
@@ -16,7 +17,11 @@ import {
   torrentsByInfohash,
   trackedInfohashes,
 } from './tracker.js';
-import { trackerPeers } from './metrics.js';
+import {
+  trackerPeers,
+  trackerSeeders,
+  trackerSeedingHosts,
+} from './metrics.js';
 
 const log = createTestLogger({ suite: 'ClosedTracker' });
 
@@ -359,6 +364,106 @@ describe('ClosedTracker', () => {
     assert.equal((await trackerPeers.get()).values[0].value, 2);
   });
 
+  it('counts seeders once per torrent, and seeding hosts once overall', async () => {
+    const v1 = OURS.toString('hex');
+    const v2 = THEIRS.toString('hex');
+    const hybrid = [
+      { torrent: { infohashV1: v1, infohashV2: v2 + 'ff'.repeat(12) } },
+    ];
+    const t = tracker({
+      allowed: () => trackedInfohashes(hybrid),
+      torrentOf: () => torrentsByInfohash(hybrid),
+    });
+    // A seeds, announcing complete under v1 and still counting down under
+    // v2; B is downloading; C is complete.
+    t.announce(query(OURS, 1111, { left: '0' }), '203.0.113.1');
+    t.announce(query(THEIRS, 1111), '203.0.113.1');
+    t.announce(query(OURS, 2222), '203.0.113.2');
+    t.announce(query(OURS, 3333, { left: '0' }), '203.0.113.3');
+
+    assert.equal((await trackerPeers.get()).values[0].value, 3);
+    assert.equal((await trackerSeeders.get()).values[0].value, 2);
+    assert.equal((await trackerSeedingHosts.get()).values[0].value, 2);
+  });
+
+  it('counts a host seeding two bands as one seeding host', async () => {
+    const bands = [
+      {
+        torrent: {
+          infohashV1: OURS.toString('hex'),
+          infohashV2: 'aa'.repeat(32),
+        },
+      },
+      {
+        torrent: {
+          infohashV1: THEIRS.toString('hex'),
+          infohashV2: 'bb'.repeat(32),
+        },
+      },
+    ];
+    const t = tracker({
+      allowed: () => trackedInfohashes(bands),
+      torrentOf: () => torrentsByInfohash(bands),
+    });
+    t.announce(query(OURS, 1111, { left: '0' }), '203.0.113.1');
+    t.announce(query(THEIRS, 1111, { left: '0' }), '203.0.113.1');
+
+    assert.equal((await trackerSeeders.get()).values[0].value, 2);
+    assert.equal((await trackerSeedingHosts.get()).values[0].value, 1);
+
+    t.announce(query(OURS, 1111, { event: 'stopped' }), '203.0.113.1');
+    t.announce(query(THEIRS, 1111, { event: 'stopped' }), '203.0.113.1');
+    assert.equal((await trackerSeeders.get()).values[0].value, 0);
+    assert.equal((await trackerSeedingHosts.get()).values[0].value, 0);
+  });
+
+  it('stops counting peers that went quiet, without another announce', async () => {
+    let now = 0;
+    const t = tracker({ intervalSeconds: 60, now: () => now });
+    t.announce(query(OURS, 1111, { left: '0' }), '203.0.113.1');
+    t.announce(query(OURS, 2222), '203.0.113.2');
+    assert.equal((await trackerPeers.get()).values[0].value, 2);
+    assert.equal((await trackerSeedingHosts.get()).values[0].value, 1);
+
+    // Past two intervals and a minute, with nobody announcing since.
+    now += (60 * 2 + 61) * 1000;
+    assert.equal((await trackerPeers.get()).values[0].value, 0);
+    assert.equal((await trackerSeeders.get()).values[0].value, 0);
+    assert.equal((await trackerSeedingHosts.get()).values[0].value, 0);
+  });
+
+  it('stops counting a band as soon as it is withdrawn', async () => {
+    let offered = new Set([OURS.toString('hex')]);
+    const t = tracker({ allowed: () => offered });
+    t.announce(query(OURS, 1111, { left: '0' }), '203.0.113.1');
+    assert.equal((await trackerSeeders.get()).values[0].value, 1);
+
+    offered = new Set();
+    assert.equal((await trackerPeers.get()).values[0].value, 0);
+    assert.equal((await trackerSeeders.get()).values[0].value, 0);
+    assert.equal((await trackerSeedingHosts.get()).values[0].value, 0);
+  });
+
+  it('counts an IPv6 /64 as one seeding host', async () => {
+    const t = tracker();
+    t.announce(query(OURS, 1111, { left: '0' }), '2001:db8:1:2::1');
+    t.announce(query(OURS, 2222, { left: '0' }), '2001:db8:1:2::2');
+
+    assert.equal((await trackerSeeders.get()).values[0].value, 2);
+    assert.equal((await trackerSeedingHosts.get()).values[0].value, 1);
+  });
+
+  it("leaves this node's own engine out of the seeding hosts", async () => {
+    const t = tracker({
+      selfPeer: () => ({ ip: '203.0.113.9', port: 6881 }),
+    });
+    t.announce(query(OURS, 6881, { left: '0' }), '203.0.113.9');
+    t.announce(query(OURS, 1111, { left: '0' }), '203.0.113.1');
+
+    assert.equal((await trackerSeeders.get()).values[0].value, 2);
+    assert.equal((await trackerSeedingHosts.get()).values[0].value, 1);
+  });
+
   it('stops tracking a band once it is no longer offered', () => {
     let offered = new Set([OURS.toString('hex')]);
     const t = tracker({ allowed: () => offered });
@@ -404,6 +509,143 @@ describe('ClosedTracker', () => {
     } finally {
       server.closeAllConnections();
       await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+});
+
+describe('ClosedTracker behind the gateway', () => {
+  const listening = async (
+    t: ClosedTracker,
+    options?: { trustedProxies?: readonly string[] },
+  ) => {
+    const server = await t.listen('127.0.0.1', 0, options);
+    return {
+      base: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+      close: async () => {
+        server.closeAllConnections();
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+      },
+    };
+  };
+  const announce = async (
+    base: string,
+    port: number,
+    forwardedFor?: string,
+  ) => {
+    const res = await fetch(`${base}/announce?${query(OURS, port)}`, {
+      headers:
+        forwardedFor !== undefined ? { 'X-Forwarded-For': forwardedFor } : {},
+    });
+    return { res, body: decode(Buffer.from(await res.arrayBuffer())) };
+  };
+
+  it('marks every response no-store, so no cache on the path keeps one', async () => {
+    const { base, close } = await listening(tracker());
+    try {
+      const ok = await fetch(`${base}/announce?${query(OURS, 1111)}`);
+      assert.equal(ok.status, 200);
+      assert.equal(ok.headers.get('cache-control'), 'no-store');
+      const missing = await fetch(`${base}/scrape`);
+      assert.equal(missing.status, 404);
+      assert.equal(missing.headers.get('cache-control'), 'no-store');
+    } finally {
+      await close();
+    }
+  });
+
+  it('refuses an announce a web page makes, so a page cannot list its visitors', async () => {
+    const t = tracker();
+    const { base, close } = await listening(t, {
+      trustedProxies: PRIVATE_NETWORK_RANGES,
+    });
+    try {
+      const pages: Array<Record<string, string>> = [
+        { 'Sec-Fetch-Site': 'cross-site', 'Sec-Fetch-Dest': 'image' },
+        { 'Sec-Fetch-Dest': 'empty' },
+        { Origin: 'https://evil.example' },
+        // An older browser's image request: no Fetch Metadata, no Origin.
+        {
+          Referer: 'https://evil.example/',
+          Accept: 'image/webp,image/apng,image/*,*/*;q=0.8',
+        },
+        { Accept: 'text/html,application/xhtml+xml' },
+      ];
+      for (const headers of pages) {
+        const res = await fetch(`${base}/announce?${query(OURS, 4444)}`, {
+          headers,
+        });
+        assert.equal(res.status, 403, JSON.stringify(headers));
+        assert.equal(res.headers.get('cache-control'), 'no-store');
+      }
+      // Nothing was recorded; a client (Node's fetch sends Sec-Fetch-Mode,
+      // which is no sign of a browser) still gets its answer.
+      const { res, body } = await announce(base, 5555);
+      assert.equal(res.status, 200);
+      assert.equal(body.incomplete, 1, 'only the client, none of the pages');
+    } finally {
+      await close();
+    }
+  });
+
+  it('records a peer behind private proxies at its own address, on the listener that believes them', async () => {
+    const t = tracker();
+    const proxied = await listening(t, {
+      trustedProxies: PRIVATE_NETWORK_RANGES,
+    });
+    try {
+      // As Envoy forwards it: the client, then the front proxy, then the
+      // edge, all appended to the right.
+      await announce(
+        proxied.base,
+        1111,
+        '93.184.216.34, 192.168.2.195, 172.18.0.1',
+      );
+      const { body } = await announce(
+        proxied.base,
+        2222,
+        '93.184.216.35, 192.168.2.195',
+      );
+      assert.deepEqual(peersOf(body), ['93.184.216.34:1111']);
+    } finally {
+      await proxied.close();
+    }
+  });
+
+  it('takes the nearest untrusted hop, so a client cannot forge its address', async () => {
+    const t = tracker();
+    const proxied = await listening(t, {
+      trustedProxies: PRIVATE_NETWORK_RANGES,
+    });
+    try {
+      // The client claims 6.6.6.6; the front proxy appends what it saw.
+      await announce(
+        proxied.base,
+        1111,
+        '6.6.6.6, 93.184.216.36, 192.168.2.195',
+      );
+      const { body } = await announce(proxied.base, 2222, '93.184.216.37');
+      assert.deepEqual(peersOf(body), ['93.184.216.36:1111']);
+    } finally {
+      await proxied.close();
+    }
+  });
+
+  it('keeps ignoring X-Forwarded-For on the published listener', async () => {
+    const t = tracker();
+    const published = await listening(t);
+    const proxied = await listening(t, {
+      trustedProxies: PRIVATE_NETWORK_RANGES,
+    });
+    try {
+      // Straight in from loopback with a header naming a public address:
+      // recorded at the private socket address, which no peer on the
+      // internet is handed.
+      await announce(published.base, 1111, '93.184.216.38');
+      const { body } = await announce(proxied.base, 2222, '93.184.216.39');
+      assert.deepEqual(peersOf(body), []);
+    } finally {
+      await published.close();
+      await proxied.close();
     }
   });
 });

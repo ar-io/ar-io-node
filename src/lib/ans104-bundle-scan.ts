@@ -67,8 +67,18 @@ export interface DecodedDataItemHeader {
   headerSize: number;
   /** First `Content-Type` tag value (tag name matched case-insensitively) */
   contentType?: string;
+  /** First `Content-Encoding` tag value (tag name matched case-insensitively) */
+  contentEncoding?: string;
   /** True when tagged `Bundle-Format: binary` and `Bundle-Version: 2.0.0` */
   isBundle: boolean;
+  /**
+   * Set only when decoded with `allowTagCountMismatch` and the header's tag
+   * count field disagrees with the tags its tag bytes hold: `declared` from
+   * the field, `decoded` from the bytes. The header still ends where the tag
+   * bytes' length says (some early bundlers wrote that length into both
+   * fields).
+   */
+  tagCountMismatch?: { declared: number; decoded: number };
 }
 
 /**
@@ -152,11 +162,19 @@ export class UnsupportedDataItemError extends BundleScanError {
  * how many bytes are needed to make progress (the full header size once the
  * tag section length has been read).
  *
+ * With `allowTagCountMismatch`, a tag count field that disagrees with the
+ * tags decoded from the tag bytes is reported in `tagCountMismatch` rather
+ * than thrown: for a caller that only needs where the header ends and whose
+ * signature it carries (a location check), not the tags themselves.
+ *
  * @throws UnsupportedSignatureTypeError when the signature type has no known
  *   layout
  * @throws Error on a malformed header
  */
-export function decodeDataItemHeader(buf: Buffer): DataItemHeaderDecodeResult {
+export function decodeDataItemHeader(
+  buf: Buffer,
+  { allowTagCountMismatch = false }: { allowTagCountMismatch?: boolean } = {},
+): DataItemHeaderDecodeResult {
   const incomplete = (needBytes: number): DataItemHeaderDecodeResult => ({
     complete: false,
     needBytes,
@@ -204,7 +222,11 @@ export function decodeDataItemHeader(buf: Buffer): DataItemHeaderDecodeResult {
     tagsCount > 0 && tagsBytesLength > 0
       ? deserializeTags(Buffer.from(buf.subarray(pos, headerSize)))
       : [];
-  if (tags.length !== tagsCount) {
+  const tagCountMismatch =
+    tags.length !== tagsCount
+      ? { declared: tagsCount, decoded: tags.length }
+      : undefined;
+  if (tagCountMismatch !== undefined && !allowTagCountMismatch) {
     throw new Error(
       `Tag count ${tagsCount} does not match ${tags.length} decoded tags`,
     );
@@ -218,6 +240,9 @@ export function decodeDataItemHeader(buf: Buffer): DataItemHeaderDecodeResult {
       headerSize,
       contentType: tags.find((tag) => tag.name.toLowerCase() === 'content-type')
         ?.value,
+      contentEncoding: tags.find(
+        (tag) => tag.name.toLowerCase() === 'content-encoding',
+      )?.value,
       isBundle:
         tags.some(
           (tag) => tag.name === 'Bundle-Format' && tag.value === 'binary',
@@ -225,6 +250,7 @@ export function decodeDataItemHeader(buf: Buffer): DataItemHeaderDecodeResult {
         tags.some(
           (tag) => tag.name === 'Bundle-Version' && tag.value === '2.0.0',
         ),
+      ...(tagCountMismatch !== undefined ? { tagCountMismatch } : {}),
     },
   };
 }

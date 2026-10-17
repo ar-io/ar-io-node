@@ -9,7 +9,7 @@ import https from 'node:https';
 import { performance } from 'node:perf_hooks';
 import winston from 'winston';
 
-import * as config from '../config.js';
+import * as config from './outbound-http-config.js';
 import * as metrics from '../metrics.js';
 
 /**

@@ -28,6 +28,7 @@ if (config.ARNS_ROOT_HOSTS.length > 0) {
   arnsRouter.use(
     createSandboxMiddleware({
       sandboxProtocol: config.SANDBOX_PROTOCOL,
+      dataBlockListValidator: system.dataBlockListValidator,
     }),
   );
 }

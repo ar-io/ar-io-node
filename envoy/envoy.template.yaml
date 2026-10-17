@@ -135,6 +135,29 @@ static_resources:
                             retry_policy:
                               retry_on: '5xx,reset'
                               num_retries: 5
+                        #! Index Sharing: the closed tracker of a gateway that
+                        #! publishes torrents, announced to over the gateway's
+                        #! own HTTPS like any other route, so no tracker port
+                        #! needs opening. Under /ar-io/indexes so a fleet that
+                        #! pins that prefix to its signing node routes it there,
+                        #! and an edge with proxy_cache off for the prefix leaves
+                        #! it uncached. Exact path (the query is not part of
+                        #! it). The sidecar's listener on this port is never
+                        #! published and believes X-Forwarded-For from private
+                        #! addresses, which Envoy appends to. No retries: an
+                        #! announce is cheap, and the client repeats it. Only on
+                        #! the gateway's own host: ArNS subdomains keep their
+                        #! paths.
+                        - match: { path: '/ar-io/indexes/announce' }
+                          response_headers_to_add:
+                            - header:
+                                key: 'Cache-Control'
+                                value: 'no-store'
+                              append: false
+                          route:
+                            cluster: index_swarm_tracker
+                            prefix_rewrite: '/announce'
+                            timeout: 10s
                         - match: { prefix: '/info' }
                           response_headers_to_add:
                             - header:
@@ -657,6 +680,21 @@ static_resources:
             - trusted_arweave_nodes_fallback
             #@ end
     #@ end
+
+    - name: index_swarm_tracker
+      connect_timeout: 1s
+      type: STRICT_DNS
+      lb_policy: LEAST_REQUEST
+      load_assignment:
+        cluster_name: index_swarm_tracker
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: #@ data.values.INDEX_SWARM_TRACKER_HOST
+                      port_value: #@ data.values.INDEX_SWARM_TRACKER_PORT
+                      ipv4_compat: true
 
     - name: upload_service_cluster
       connect_timeout: 1s

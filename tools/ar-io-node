@@ -1,0 +1,263 @@
+#!/usr/bin/env bash
+#
+# AR.IO Gateway
+# Copyright (C) 2022-2025 Permanent Data Solutions, Inc. All Rights Reserved.
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Run the ar-io-node CLI in the core image (CORE_IMAGE_TAG), so the host needs
+# only Docker. Any command it doesn't own runs as the ar.io CLI from
+# @ar.io/sdk, with the same arguments.
+#
+# Usage (from the gateway's directory, where .env and docker-compose.yaml are):
+#   ./tools/ar-io-node --help
+#   ./tools/ar-io-node index-band-build --publisher <wallet> --kind d \
+#     --height-range 2010500,tip --gateway-url http://core:4000 --input - < records.csv
+#   ./tools/ar-io-node index-band-verify --band-dir data/indexes/published/root-tx-index/<band> \
+#     --gateway-url http://core:4000
+#   ./tools/ar-io-node index-band-export --from 2010000 --to 2011000 \
+#     --output data/indexes/export/records.csv
+#   ./tools/ar-io-node index-l1-verify --bands-dir data/indexes/installed/parquet-l1
+#   ./tools/ar-io-node index-l1-import --bands-dir data/indexes/installed/parquet-l1 \
+#     --core-db data/sqlite/core.db
+#   ./tools/ar-io-node get-gateway --address <wallet>
+#
+# Mounts only what a command needs: data/indexes for index-band-* commands
+# (built under data/indexes/export, beside the publish directory, so the final
+# rename stays on one filesystem), plus for index-band-export the SQLite
+# directory read-only and the ClickHouse settings; for index-l1-* commands
+# data/indexes read-only and the SQLite directory, read-write for
+# index-l1-import and read-only otherwise; for any other command only the file
+# a --wallet-file names, read-only. Band commands never take a key. It runs as
+# your user, so data/indexes/published/<index> must be writable by you;
+# index-l1-import runs as the owner of the core.db it writes, which on a
+# Docker install is root, so the files it adds beside it match.
+# Prefer --wallet-file to --private-key: an inline key shows in `ps` and
+# `docker inspect`.
+
+set -euo pipefail
+
+# Paths given on the command line are relative to where it was run.
+CALLER_DIR="$(pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "${SCRIPT_DIR}/.."
+
+# A setting as compose sees it: the shell's value, else the last one in .env
+# (quotes and an inline comment stripped, as in tools/index-swarm-setup).
+setting() {
+  if [[ -n "${!1:-}" ]]; then
+    echo "${!1}"
+    return
+  fi
+  [[ -f .env ]] || return 0
+  sed -n "s/^$1=//p" .env | tail -n1 |
+    sed -E "s/^'(.*)'[[:space:]]*$/\1/; t; s/^\"(.*)\"[[:space:]]*$/\1/; t; s/[[:space:]]+#.*$//"
+}
+
+TAG="$(setting CORE_IMAGE_TAG)"
+IMAGE="${AR_IO_NODE_CLI_IMAGE:-ghcr.io/ar-io/ar-io-core:${TAG:-latest}}"
+
+if ! probe="$(docker run --rm --entrypoint /nodejs/bin/node "${IMAGE}" \
+  -e "require('fs').accessSync('/app/dist/cli/cli.js')" 2>&1)"; then
+  if grep -q "no such file or directory, access" <<<"${probe}"; then
+    echo "ar-io-node: ${IMAGE} predates this tool." >&2
+    echo "Set CORE_IMAGE_TAG to a release that has it, or run with AR_IO_NODE_CLI_IMAGE=<image>." >&2
+  else
+    echo "ar-io-node: could not run ${IMAGE}:" >&2
+    echo "${probe}" >&2
+  fi
+  exit 1
+fi
+
+# --init so Ctrl-C and SIGTERM reach the command (node as PID 1 ignores
+# them); --user so what it writes belongs to you, as with index-swarm-setup;
+# -i so stdin (records, confirmation prompts) reaches it, since without it the
+# SDK's prompts exit silently; -t only when all three streams are a terminal.
+DOCKER_ARGS=(--rm -i --init --no-healthcheck --user "$(id -u):$(id -g)"
+  -w /app --entrypoint /nodejs/bin/node)
+if [[ -t 0 && -t 1 && -t 2 ]]; then
+  DOCKER_ARGS+=(-t)
+fi
+
+# The command is the first argument that isn't an option, as the CLI sees it.
+COMMAND=""
+for arg in "$@"; do
+  if [[ "${arg}" != -* ]]; then
+    COMMAND="${arg}"
+    break
+  fi
+done
+
+ARGS=("$@")
+
+# Host directories mounted into the container, and where: a path given on the
+# command line inside one of them, absolute or relative to where this was run,
+# is rewritten to the path the container sees. Anything else is passed as given.
+MOUNT_HOSTS=()
+MOUNT_TARGETS=()
+to_container() {
+  local value="$1" host i
+  if [[ "${value}" == "-" ]]; then
+    echo "${value}"
+    return
+  fi
+  host="$(cd "${CALLER_DIR}" && realpath -m -- "${value}")"
+  # The most specific mount wins, so a SQLite directory inside the data
+  # directory still maps to its own (writable) mount.
+  local best=-1 best_len=-1
+  for i in "${!MOUNT_HOSTS[@]}"; do
+    if [[ "${host}" == "${MOUNT_HOSTS[$i]}" || "${host}" == "${MOUNT_HOSTS[$i]}/"* ]]; then
+      if (( ${#MOUNT_HOSTS[$i]} > best_len )); then
+        best=$i
+        best_len=${#MOUNT_HOSTS[$i]}
+      fi
+    fi
+  done
+  if (( best < 0 )); then
+    echo "${value}"
+  elif [[ "${host}" == "${MOUNT_HOSTS[$best]}" ]]; then
+    echo "${MOUNT_TARGETS[$best]}"
+  else
+    echo "${MOUNT_TARGETS[$best]}/${host#"${MOUNT_HOSTS[$best]}/"}"
+  fi
+}
+# Rewrite the values of the named path options in ARGS.
+rewrite_paths() {
+  local i next opt
+  for i in "${!ARGS[@]}"; do
+    for opt in "$@"; do
+      if [[ "${ARGS[$i]}" == "${opt}" ]]; then
+        next=$((i + 1))
+        if [[ -n "${ARGS[$next]:-}" ]]; then
+          ARGS[$next]="$(to_container "${ARGS[$next]}")"
+        fi
+      elif [[ "${ARGS[$i]}" == "${opt}="* ]]; then
+        ARGS[$i]="${opt}=$(to_container "${ARGS[$i]#*=}")"
+      fi
+    done
+  done
+}
+# Join the gateway's network, so URLs such as http://core:4000 work.
+join_gateway_network() {
+  local network
+  network="$(setting DOCKER_NETWORK_NAME)"
+  network="${network:-ar-io-network}"
+  if docker network inspect "${network}" >/dev/null 2>&1; then
+    DOCKER_ARGS+=(--network "${network}")
+  fi
+}
+
+case "${COMMAND}" in
+  index-band-*)
+    DATA_PATH="$(setting INDEX_SWARM_DATA_PATH)"
+    DATA_PATH="$(realpath -m "${DATA_PATH:-./data/indexes}")"
+    mkdir -p "${DATA_PATH}"
+    # The CLI refuses to write anywhere this mount doesn't cover.
+    DOCKER_ARGS+=(-v "${DATA_PATH}:/app/data/indexes"
+      -e AR_IO_NODE_CLI_DATA_DIR=/app/data/indexes)
+    # So --input "$INDEX_SWARM_DATA_PATH/records.csv" and --band-dir from a
+    # build's "dir" both work.
+    MOUNT_HOSTS+=("${DATA_PATH}")
+    MOUNT_TARGETS+=("data/indexes")
+    rewrite_paths --input --band-dir --publish-dir --work-dir --output
+    if [[ "${COMMAND}" == "index-band-export" ]]; then
+      # The gateway's own index: its ClickHouse settings, passed by name so
+      # the password stays off the command line (out of `ps`; `docker
+      # inspect` on the running container still shows it), and its SQLite,
+      # read-only. A peer's password file comes from INDEX_EXPORT_SECRETS_DIR,
+      # at /run/secrets/index-export/<file>.
+      for name in CLICKHOUSE_URL CLICKHOUSE_USER CLICKHOUSE_PASSWORD; do
+        value="$(setting "${name}")"
+        if [[ -n "${value}" ]]; then
+          export "${name}=${value}"
+          DOCKER_ARGS+=(-e "${name}")
+        fi
+      done
+      SQLITE_PATH="$(setting SQLITE_DATA_PATH)"
+      SQLITE_PATH="$(realpath -m "${SQLITE_PATH:-./data/sqlite}")"
+      if [[ -d "${SQLITE_PATH}" ]]; then
+        DOCKER_ARGS+=(-v "${SQLITE_PATH}:/app/data/sqlite:ro")
+      fi
+      SECRETS_DIR="$(setting INDEX_EXPORT_SECRETS_DIR)"
+      if [[ -n "${SECRETS_DIR}" ]]; then
+        DOCKER_ARGS+=(-v "$(realpath -e "${SECRETS_DIR}"):/run/secrets/index-export:ro")
+      fi
+    fi
+    join_gateway_network
+    ;;
+  index-l1-*)
+    # Bands are only read. The gateway's SQLite is written by index-l1-import
+    # and only read by the other commands.
+    DATA_PATH="$(setting INDEX_SWARM_DATA_PATH)"
+    DATA_PATH="$(realpath -m "${DATA_PATH:-./data/indexes}")"
+    if [[ -d "${DATA_PATH}" ]]; then
+      DOCKER_ARGS+=(-v "${DATA_PATH}:/app/data/indexes:ro")
+      MOUNT_HOSTS+=("${DATA_PATH}")
+      MOUNT_TARGETS+=("data/indexes")
+    fi
+    SQLITE_PATH="$(setting SQLITE_DATA_PATH)"
+    SQLITE_PATH="$(realpath -m "${SQLITE_PATH:-./data/sqlite}")"
+    if [[ -d "${SQLITE_PATH}" ]]; then
+      if [[ "${COMMAND}" == "index-l1-import" ]]; then
+        DOCKER_ARGS+=(-v "${SQLITE_PATH}:/app/data/sqlite")
+        # As whoever owns the database, not the caller: the gateway's own
+        # files are root's on a Docker install, and the import adds its WAL,
+        # lock and spill files beside them.
+        owner_of="${SQLITE_PATH}/core.db"
+        for i in "${!ARGS[@]}"; do
+          if [[ "${ARGS[$i]}" == "--core-db" && -n "${ARGS[$((i + 1))]:-}" ]]; then
+            owner_of="$(cd "${CALLER_DIR}" && realpath -m -- "${ARGS[$((i + 1))]}")"
+          fi
+        done
+        [[ -e "${owner_of}" ]] || owner_of="${SQLITE_PATH}"
+        owner="$(stat -c '%u:%g' "${owner_of}")"
+        for i in "${!DOCKER_ARGS[@]}"; do
+          if [[ "${DOCKER_ARGS[$i]}" == "--user" ]]; then
+            DOCKER_ARGS[$((i + 1))]="${owner}"
+          fi
+        done
+      else
+        DOCKER_ARGS+=(-v "${SQLITE_PATH}:/app/data/sqlite:ro")
+      fi
+      MOUNT_HOSTS+=("${SQLITE_PATH}")
+      MOUNT_TARGETS+=("data/sqlite")
+    fi
+    rewrite_paths --bands-dir --core-db
+    # --data-from and --anchor-from may name http://core:4000.
+    join_gateway_network
+    ;;
+  *)
+    # The ar.io CLI reads a wallet file: mount just that file, read-only, and
+    # point the argument at it there.
+    mounts=0
+    mount_wallet() {
+      local file
+      file="$(cd "${CALLER_DIR}" && realpath -e -- "$1")"
+      mounts=$((mounts + 1))
+      DOCKER_ARGS+=(-v "${file}:/wallet/${mounts}/$(basename "${file}"):ro")
+      WALLET_IN_CONTAINER="/wallet/${mounts}/$(basename "${file}")"
+    }
+    for i in "${!ARGS[@]}"; do
+      case "${ARGS[$i]}" in
+        -w|--wallet-file)
+          next=$((i + 1))
+          if [[ -n "${ARGS[$next]:-}" ]]; then
+            mount_wallet "${ARGS[$next]}"
+            ARGS[$next]="${WALLET_IN_CONTAINER}"
+          fi
+          ;;
+        --wallet-file=*)
+          mount_wallet "${ARGS[$i]#--wallet-file=}"
+          ARGS[$i]="--wallet-file=${WALLET_IN_CONTAINER}"
+          ;;
+        -w?*)
+          mount_wallet "${ARGS[$i]#-w}"
+          ARGS[$i]="-w${WALLET_IN_CONTAINER}"
+          ;;
+      esac
+    done
+    ;;
+esac
+
+exec docker run "${DOCKER_ARGS[@]}" "${IMAGE}" /app/dist/cli/cli.js \
+  ${ARGS[@]+"${ARGS[@]}"}

@@ -12,6 +12,8 @@ import {
   parseMetrics,
   publisherChecks,
   subscriberChecks,
+  exportChecks,
+  l1ExportChecks,
 } from './status.js';
 
 const TURBO = '34LYvMptiDvBP5sqfh1oAd6Q4qFsy4PWaZ1HTFmML7h5';
@@ -60,6 +62,43 @@ describe('subscriberChecks', () => {
     assert.match(checks[0].text, /sequence 11, published 2\.0 h ago/);
     assert.match(checks[1].text, /5 bands installed \(19\.0 GB\)/);
     assert.match(checks[3].text, /found 30 of 100/);
+  });
+
+  it('compares only root-TX bands with what the gateway loads', () => {
+    // A subscriber that also installs parquet-l1 bands: the gateway never
+    // loads those, so they must not count as bands it failed to load.
+    const withL1 = parseMetrics(`
+index_swarm_installed_bands{index="root-tx-index"} 5
+index_swarm_installed_bands{index="parquet-l1"} 24
+index_subscription_sequence{publisher="${TURBO}",index="root-tx-index"} 11
+index_subscription_manifest_age_seconds{publisher="${TURBO}",index="root-tx-index"} 7200
+`);
+    const checks = subscriberChecks(
+      withL1,
+      gateway(),
+      [{ publisher: TURBO }],
+      undefined,
+    );
+    assert.match(checks[1].text, /29 bands installed/);
+    assert.equal(checks[2].level, 'ok');
+    assert.match(checks[2].text, /5 of 5 installed root-TX bands loaded/);
+  });
+
+  it('still warns when a root-TX band is not loaded', () => {
+    const behind = parseMetrics(`
+index_swarm_installed_bands{index="root-tx-index"} 6
+index_swarm_installed_bands{index="parquet-l1"} 24
+index_subscription_sequence{publisher="${TURBO}",index="root-tx-index"} 11
+index_subscription_manifest_age_seconds{publisher="${TURBO}",index="root-tx-index"} 7200
+`);
+    const checks = subscriberChecks(
+      behind,
+      gateway(),
+      [{ publisher: TURBO }],
+      undefined,
+    );
+    assert.equal(checks[2].level, 'warn');
+    assert.match(checks[2].text, /5 of 6 installed root-TX bands loaded/);
   });
 
   it('fails when the gateway does not read the installed directory, and says how to fix it', () => {
@@ -209,5 +248,196 @@ describe('engineChecks', () => {
     const [check] = engineChecks(sidecar, { available: false }, 6881, 1e11);
     assert.equal(check.level, 'fail');
     assert.match(check.fix ?? '', /index-swarm-engine-init index-swarm-engine/);
+  });
+});
+
+describe('exportChecks', () => {
+  const now = Date.parse('2026-10-05T12:00:00Z');
+  const hoursAgo = (hours: number) =>
+    new Date(now - hours * 3600_000).toISOString();
+  const levels = (checks: Array<{ level: string; text: string }>) =>
+    checks.map((c) => `${c.level}: ${c.text}`);
+
+  it('says when index-export has not run here, and warns a publisher', () => {
+    const checks = exportChecks({}, now);
+    assert.equal(checks.length, 1);
+    assert.equal(checks[0].level, 'info');
+    const publisher = exportChecks({ publishing: true }, now);
+    assert.equal(publisher[0].level, 'warn');
+    assert.match(publisher[0].fix ?? '', /docker compose logs index-export/);
+  });
+
+  it('warns when the service does not answer', () => {
+    const checks = exportChecks(
+      { state: { lastSuccess: { d: hoursAgo(2) } }, serviceUp: false },
+      now,
+    );
+    assert.equal(checks[0].level, 'warn');
+    assert.match(checks[0].text, /not answering/);
+  });
+
+  it('clears a rejection once that band has since succeeded', () => {
+    const checks = exportChecks(
+      {
+        state: {
+          lastSuccess: { d: hoursAgo(1) },
+          lastRejection: { at: hoursAgo(5), role: 'd', reasons: ['x'] },
+        },
+      },
+      now,
+    );
+    assert.ok(checks.every((c) => c.level !== 'fail'));
+  });
+
+  it('is fine with a fresh daily band and recent fold', () => {
+    const checks = exportChecks(
+      {
+        state: {
+          lastSuccess: { d: hoursAgo(8), r: hoursAgo(80) },
+          lastRun: { at: hoursAgo(8), outcome: 'unchanged' },
+        },
+      },
+      now,
+    );
+    assert.deepEqual(
+      checks.map((c) => c.level),
+      ['ok', 'ok', 'info'],
+    );
+  });
+
+  it('takes the tip as the daily band in the grid layout, whose d bands freeze weekly', () => {
+    const [grid] = exportChecks(
+      { state: { lastSuccess: { d: hoursAgo(24 * 6), tip: hoursAgo(3) } } },
+      now,
+    );
+    assert.equal(grid.level, 'ok');
+    assert.match(grid.text, /Daily band \(tip\)/);
+    const [late] = exportChecks(
+      { state: { lastSuccess: { d: hoursAgo(1), tip: hoursAgo(49) } } },
+      now,
+    );
+    assert.equal(late.level, 'fail');
+    assert.match(late.text, /daily band \(tip\)/);
+  });
+
+  it('fails a daily band over two days old, or never built', () => {
+    for (const lastSuccess of [{ d: hoursAgo(49) }, {}]) {
+      const [first] = exportChecks({ state: { lastSuccess } }, now);
+      assert.equal(first.level, 'fail');
+      assert.match(first.fix ?? '', /docker compose logs index-export/);
+    }
+  });
+
+  it('fails a recent rejection, warns of a retry, a stale lock and a stale overlay', () => {
+    const checks = exportChecks(
+      {
+        state: {
+          lastSuccess: { d: hoursAgo(20) },
+          lastRejection: {
+            at: hoursAgo(5),
+            role: 'd',
+            reasons: ['wrong_header', '1 of 150 checked entries are wrong'],
+          },
+          retry: { at: hoursAgo(-1), attempts: 2, reason: 'gate' },
+          overlayNewest: { bundler: hoursAgo(24 * 9), fresh: hoursAgo(10) },
+        },
+        lockAgeSeconds: 900,
+      },
+      now,
+    );
+    const text = levels(checks).join('\n');
+    assert.match(text, /fail: A d band was rejected 5\.0 h ago: wrong_header/);
+    assert.match(text, /warn: Couldn't check \(attempt 2\)/);
+    assert.match(text, /warn: A stale lock/);
+    assert.match(text, /warn: Overlay bundler: newest file 9\.0 days old/);
+    assert.match(text, /ok: Overlay fresh/);
+  });
+
+  it('forgets a rejection a week old', () => {
+    const checks = exportChecks(
+      {
+        state: {
+          lastSuccess: { d: hoursAgo(2) },
+          lastRejection: { at: hoursAgo(24 * 8), role: 'd', reasons: ['x'] },
+        },
+      },
+      now,
+    );
+    assert.ok(checks.every((c) => c.level !== 'fail'));
+  });
+});
+
+describe('l1ExportChecks', () => {
+  const now = Date.parse('2026-10-05T12:00:00Z');
+  const hoursAgo = (hours: number) =>
+    new Date(now - hours * 3600_000).toISOString();
+  const levels = (checks: Array<{ level: string; text: string }>) =>
+    checks.map((c) => c.level);
+
+  it('fails until a tip band is built, then while it is over two days old', () => {
+    assert.deepEqual(levels(l1ExportChecks({}, now)), ['fail']);
+    assert.match(l1ExportChecks({}, now)[0].fix ?? '', /several runs/);
+    assert.deepEqual(
+      levels(l1ExportChecks({ lastSuccess: { d: hoursAgo(49) } }, now)),
+      ['fail'],
+    );
+    assert.deepEqual(
+      levels(
+        l1ExportChecks(
+          {
+            lastSuccess: { d: hoursAgo(2), h: hoursAgo(30) },
+            lastRun: { at: hoursAgo(2), outcome: 'published' },
+          },
+          now,
+        ),
+      ),
+      ['ok', 'info', 'info'],
+    );
+  });
+
+  it('warns of a run that couldn’t check, saying why', () => {
+    const checks = l1ExportChecks(
+      {
+        lastRun: {
+          at: hoursAgo(1),
+          outcome: 'couldnt_check',
+          detail: 'incomplete; core.db starts at height 1500000',
+        },
+      },
+      now,
+    );
+    assert.deepEqual(levels(checks), ['fail', 'warn']);
+    assert.match(
+      checks[1].text,
+      /\(incomplete; core.db starts at height 1500000\)/,
+    );
+  });
+
+  it('fails a recent chain-check rejection until that band succeeds, and warns of a retry', () => {
+    const rejected = {
+      lastSuccess: { d: hoursAgo(2) },
+      lastRejection: {
+        at: hoursAgo(5),
+        role: 'h',
+        reasons: ['chain', 'Heights 600000-699999 fail at 612345 (tx_root)'],
+      },
+      retry: { at: hoursAgo(-1), attempts: 2, reason: 'l1 h: disk' },
+    };
+    const checks = l1ExportChecks(rejected, now);
+    assert.deepEqual(levels(checks), ['ok', 'warn', 'fail']);
+    assert.match(checks[2].text, /612345 \(tx_root\)/);
+    assert.deepEqual(
+      levels(
+        l1ExportChecks(
+          {
+            ...rejected,
+            retry: undefined,
+            lastSuccess: { d: hoursAgo(2), h: hoursAgo(1) },
+          },
+          now,
+        ),
+      ),
+      ['ok', 'info'],
+    );
   });
 });

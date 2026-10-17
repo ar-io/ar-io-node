@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Integration test for CLICKHOUSE_IMPORT_SKIP_UNCHANGED in
+# scripts/clickhouse-import (migrate_staging_to_final):
+#   1. A first import inserts the row.
+#   2. Re-importing the same staging content inserts nothing.
+#   3. A changed column (an L1 offset backfilled after the first export) is
+#      inserted, and the newest version wins under FINAL.
+#   4. With CLICKHOUSE_IMPORT_SKIP_UNCHANGED=false every re-import inserts a
+#      new version, as before.
+# Uses partition 9001 (heights 900100000+), well beyond any real Arweave
+# height, and drops it at the end.
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../../lib/common.sh"
+
+echo "Testing ClickHouse import skip-unchanged"
+echo "========================================"
+echo
+
+load_env
+load_clickhouse_config
+
+if ! command -v clickhouse >/dev/null 2>&1; then
+    echo "✗ clickhouse client not installed; cannot run this test"
+    exit 1
+fi
+
+ch_query() {
+    clickhouse client \
+        --host "$CLICKHOUSE_HOST" \
+        --port "$CLICKHOUSE_PORT" \
+        --user "$CLICKHOUSE_USER" \
+        --password "$CLICKHOUSE_PASSWORD" \
+        --query "$1"
+}
+
+TEST_HEIGHT=900100000
+TEST_PARTITION="9001"
+TEST_PARTITION_NAME="height=${TEST_HEIGHT}-${TEST_HEIGHT}"
+
+cleanup_skip_unchanged() {
+    ch_query "ALTER TABLE transactions DROP PARTITION ${TEST_PARTITION}" >/dev/null 2>&1 || true
+    ch_query "DELETE FROM staging_transactions WHERE height = ${TEST_HEIGHT}" >/dev/null 2>&1 || true
+    ch_query "DELETE FROM staging_blocks WHERE height = ${TEST_HEIGHT}" >/dev/null 2>&1 || true
+}
+trap cleanup_skip_unchanged EXIT
+cleanup_skip_unchanged
+
+stage_row() {
+    local offset=$1
+    ch_query "DELETE FROM staging_transactions WHERE height = ${TEST_HEIGHT}" >/dev/null 2>&1 || true
+    ch_query "INSERT INTO staging_transactions (id, indexed_at, block_transaction_index, is_data_item, target, quantity, reward, anchor, data_size, content_type, format, height, owner_address, data_root, parent, \"offset\", \"size\", data_offset, owner_offset, owner_size, owner, signature_offset, signature_size, signature_type, root_transaction_id, root_parent_offset) VALUES ('l1id',0,0,false,'',0,0,'',10,'',2,${TEST_HEIGHT},'','','',${offset},0,0,0,0,'',0,0,1,'',0)"
+}
+
+ch_query "INSERT INTO staging_blocks (indep_hash, height, previous_block, nonce, hash, block_timestamp, tx_count) VALUES ('','${TEST_HEIGHT}','','','',0,1)"
+
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/../../clickhouse-import" >/dev/null
+trap cleanup_skip_unchanged EXIT
+SHOW_TIMING=${SHOW_TIMING:-false}
+
+versions() { ch_query "SELECT count() FROM transactions WHERE height = ${TEST_HEIGHT}" | tr -d '[:space:]'; }
+newest_offset() { ch_query "SELECT \"offset\" FROM transactions FINAL WHERE height = ${TEST_HEIGHT}" | tr -d '[:space:]'; }
+expect() {
+    if [ "$2" = "$3" ]; then echo "✓ $1"; else echo "✗ $1: expected $3, got $2"; exit 1; fi
+}
+
+export CLICKHOUSE_IMPORT_SKIP_UNCHANGED=true
+stage_row 0
+migrate_staging_to_final "$TEST_PARTITION_NAME" >/dev/null
+expect "first import inserts the row" "$(versions)" 1
+
+sleep 1 # inserted_at has 1 s resolution
+migrate_staging_to_final "$TEST_PARTITION_NAME" >/dev/null
+expect "unchanged re-import inserts nothing" "$(versions)" 1
+
+sleep 1
+stage_row 4242
+migrate_staging_to_final "$TEST_PARTITION_NAME" >/dev/null
+expect "changed offset is inserted as a new version" "$(versions)" 2
+expect "newest version wins under FINAL" "$(newest_offset)" 4242
+
+sleep 1
+migrate_staging_to_final "$TEST_PARTITION_NAME" >/dev/null
+expect "re-import of the newest content inserts nothing" "$(versions)" 2
+
+sleep 1
+stage_row 0
+migrate_staging_to_final "$TEST_PARTITION_NAME" >/dev/null
+expect "content reverting to an older version is inserted" "$(versions)" 3
+expect "reverted content wins under FINAL" "$(newest_offset)" 0
+
+# A table left by a run killed over an hour ago is dropped; one from a run
+# that may still be going is kept.
+stale_table=staging_final_transactions_1000000000_1_1
+fresh_table=staging_final_transactions_$(date +%s)_1_1
+ch_query "CREATE TABLE ${stale_table} (x UInt8) ENGINE = Memory"
+ch_query "CREATE TABLE ${fresh_table} (x UInt8) ENGINE = Memory"
+migrate_staging_to_final "$TEST_PARTITION_NAME" >/dev/null
+expect "a stale per-run staging table is dropped" "$(ch_query "EXISTS TABLE ${stale_table}" | tr -d '[:space:]')" 0
+expect "a recent per-run staging table is kept" "$(ch_query "EXISTS TABLE ${fresh_table}" | tr -d '[:space:]')" 1
+ch_query "DROP TABLE IF EXISTS ${fresh_table}"
+
+leftover=$(ch_query "SELECT count() FROM system.tables WHERE database = currentDatabase() AND name LIKE 'staging_final_transactions%'" | tr -d '[:space:]')
+expect "no per-run staging table is left behind" "$leftover" 0
+
+export CLICKHOUSE_IMPORT_SKIP_UNCHANGED=false
+sleep 1
+migrate_staging_to_final "$TEST_PARTITION_NAME" >/dev/null
+expect "with skip disabled an unchanged re-import adds a version" "$(versions)" 4
+
+cleanup_skip_unchanged
+echo
+echo "All skip-unchanged tests passed."

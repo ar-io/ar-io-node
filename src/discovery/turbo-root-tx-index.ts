@@ -30,6 +30,68 @@ export type CachedTurboOffsets = {
 // Special symbol to indicate item was not found (vs being a root tx)
 const NOT_FOUND = Symbol('NOT_FOUND');
 
+/**
+ * A byte offset or length from Turbo as a number, or undefined when it is not
+ * a non-negative safe integer.
+ *
+ * Turbo's API documents these fields as integers, but it stores them in
+ * Postgres bigint columns, which its driver returns as strings, so they arrive
+ * as JSON strings ("startOffsetInRootBundle":"1102486"). Added as-is, a string
+ * concatenates: "1102486" + 221 gave a data offset of "1102486221".
+ */
+function turboInteger(value: unknown): number | undefined {
+  const parsed =
+    typeof value === 'number'
+      ? value
+      : typeof value === 'string' && /^\d+$/.test(value)
+        ? Number(value)
+        : NaN;
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
+/**
+ * Turbo's offsets response with every offset and length as a number, or
+ * undefined when a field is missing or malformed. Only the fields
+ * calculateRootPosition and the L1 branch read are checked; the optional
+ * offsets may be absent (null) but not malformed.
+ */
+function normalizeTurboOffsets(
+  data: TurboOffsetsResponse,
+): TurboOffsetsResponse | undefined {
+  const rawContentLength = turboInteger(data.rawContentLength);
+  const payloadDataStart = turboInteger(data.payloadDataStart);
+  const payloadContentLength = turboInteger(data.payloadContentLength);
+  if (
+    rawContentLength === undefined ||
+    payloadDataStart === undefined ||
+    payloadContentLength === undefined
+  ) {
+    return undefined;
+  }
+  const optional = (value: unknown): number | undefined | null =>
+    value === null || value === undefined
+      ? undefined
+      : (turboInteger(value) ?? null);
+  const startOffsetInRootBundle = optional(data.startOffsetInRootBundle);
+  const startOffsetInParentDataItemPayload = optional(
+    data.startOffsetInParentDataItemPayload,
+  );
+  if (
+    startOffsetInRootBundle === null ||
+    startOffsetInParentDataItemPayload === null
+  ) {
+    return undefined;
+  }
+  return {
+    ...data,
+    rawContentLength,
+    payloadDataStart,
+    payloadContentLength,
+    startOffsetInRootBundle,
+    startOffsetInParentDataItemPayload,
+  };
+}
+
 interface TurboOffsetsResponse {
   parentDataItemId?: string;
   rootBundleId?: string;
@@ -233,7 +295,20 @@ export class TurboRootTxIndex implements DataItemRootIndex {
         response.data !== null &&
         response.data !== undefined
       ) {
-        const offsets = response.data;
+        const offsets = normalizeTurboOffsets(response.data);
+        if (offsets === undefined) {
+          log.warn('Turbo offsets response has a malformed offset or length', {
+            id,
+            startOffsetInRootBundle: response.data.startOffsetInRootBundle,
+            startOffsetInParentDataItemPayload:
+              response.data.startOffsetInParentDataItemPayload,
+            rawContentLength: response.data.rawContentLength,
+            payloadDataStart: response.data.payloadDataStart,
+            payloadContentLength: response.data.payloadContentLength,
+          });
+          // Not cached: a corrected answer may follow.
+          return NOT_FOUND;
+        }
 
         // Cache the result
         if (this.cache) {

@@ -45,6 +45,8 @@ export interface InstalledBand {
    * remove the copy another publisher still offers.
    */
   publisher?: string;
+  /** The band's kind, so it is retired as one even once nobody offers it. */
+  kind?: string;
   /**
    * When the band stopped being readable, for one that has been retired but
    * whose files are still on disk. Held here rather than in a timer so the

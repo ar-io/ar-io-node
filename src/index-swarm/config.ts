@@ -20,6 +20,7 @@ import * as path from 'node:path';
 
 import * as env from '../lib/env.js';
 import { isValidIndexName } from '../lib/index-publication.js';
+import { PRIVATE_NETWORK_RANGES } from '../lib/trusted-proxies.js';
 
 /** One index this node publishes. */
 export interface PublishConfig {
@@ -35,8 +36,12 @@ export interface PublishConfig {
 export interface SubscribeConfig {
   /** The publishing gateway's wallet address, as registered. */
   publisher: string;
-  /** Restrict to one index name; all of the publisher's indexes when unset. */
-  name?: string;
+  /**
+   * The index names to take. Unset: every index the publisher offers whose
+   * kind isn't opt-in (`parquet-l1` and `parquet-l2` are), so a large
+   * dataset is never taken unasked.
+   */
+  name?: string | string[];
   /** Override the URL derived from the publisher's gateway record. */
   url?: string;
 }
@@ -105,9 +110,17 @@ export function parseSubscribe(raw: string | undefined): SubscribeConfig[] {
     }
     // A malformed name could never match a published index, so the
     // subscription would silently do nothing.
-    if (name !== undefined && !isValidIndexName(name)) {
+    if (
+      name !== undefined &&
+      !isValidIndexName(name) &&
+      !(
+        Array.isArray(name) &&
+        name.length > 0 &&
+        name.every((n) => isValidIndexName(n))
+      )
+    ) {
       throw new Error(
-        `INDEX_SWARM_SUBSCRIBE[${i}].name must match ^[a-z0-9-]{1,64}$`,
+        `INDEX_SWARM_SUBSCRIBE[${i}].name must be a name matching ^[a-z0-9-]{1,64}$, or a list of them`,
       );
     }
     if (url !== undefined && typeof url !== 'string') {
@@ -117,16 +130,83 @@ export function parseSubscribe(raw: string | undefined): SubscribeConfig[] {
     // would be silently ignored.
     if (seen.has(publisher)) {
       throw new Error(
-        `INDEX_SWARM_SUBSCRIBE[${i}] repeats publisher ${publisher}; list it once, and omit name to take all of its indexes`,
+        `INDEX_SWARM_SUBSCRIBE[${i}] repeats publisher ${publisher}; list it once, with name a list of the indexes to take`,
       );
     }
     seen.add(publisher);
     return {
       publisher,
-      ...(name !== undefined ? { name } : {}),
+      ...(name !== undefined ? { name: name as string | string[] } : {}),
       ...(url !== undefined ? { url } : {}),
     };
   });
+}
+
+/**
+ * The ar.io gateway wallet that publishes the root-TX index (it runs
+ * turbo-gateway.com), as registered.
+ */
+export const AR_IO_INDEX_PUBLISHER =
+  '34LYvMptiDvBP5sqfh1oAd6Q4qFsy4PWaZ1HTFmML7h5';
+
+/**
+ * What a sidecar subscribes to when `INDEX_SWARM_SUBSCRIBE` is unset or
+ * empty: the ar.io publisher's root-TX bands. Root-TX only: L1 bands are
+ * several times larger and stay opt-in (`"name": ["root-tx-index",
+ * "parquet-l1"]`). An explicit value, `[]` included, replaces this, so an
+ * operator opts out with `INDEX_SWARM_SUBSCRIBE=[]`.
+ *
+ * Trust is unchanged by the default: documents are still checked against the
+ * observer key the gateway registry names for this wallet.
+ */
+export const DEFAULT_SUBSCRIBE: readonly SubscribeConfig[] = Object.freeze([
+  Object.freeze({ publisher: AR_IO_INDEX_PUBLISHER, name: 'root-tx-index' }),
+]);
+
+/**
+ * Whether `INDEX_SWARM_SUBSCRIBE` leaves the subscription to the default:
+ * unset or blank (compose passes `''` for an unset variable).
+ */
+export function isDefaultSubscribe(raw: string | undefined): boolean {
+  return raw === undefined || raw.trim() === '';
+}
+
+/**
+ * The subscriptions in effect: {@link DEFAULT_SUBSCRIBE} when `raw` is unset
+ * or blank, else `raw` parsed by {@link parseSubscribe}, so `[]` means
+ * "subscribe to nothing".
+ *
+ * The default never subscribes a gateway to itself: when `ownWallet` (this
+ * gateway's `AR_IO_WALLET`) is a default publisher, that entry is left out,
+ * so the ar.io publisher's own sidecar subscribes to nothing by default. An
+ * explicit value is used as given, even one naming this gateway's wallet
+ * (a fleet node may subscribe to its own fleet's publication on purpose).
+ */
+export function resolveSubscribe(
+  raw: string | undefined,
+  ownWallet?: string,
+): SubscribeConfig[] {
+  if (isDefaultSubscribe(raw)) {
+    return DEFAULT_SUBSCRIBE.filter(
+      (entry) => ownWallet === undefined || entry.publisher !== ownWallet,
+    ).map((entry) => ({ ...entry }));
+  }
+  return parseSubscribe(raw as string);
+}
+
+/**
+ * True when the default subscription was dropped because it names this
+ * gateway's own wallet; the sidecar logs it once at startup.
+ */
+export function isSelfDefaultSubscription(
+  raw: string | undefined,
+  ownWallet: string | undefined,
+): boolean {
+  return (
+    isDefaultSubscribe(raw) &&
+    ownWallet !== undefined &&
+    DEFAULT_SUBSCRIBE.some((entry) => entry.publisher === ownWallet)
+  );
 }
 
 /** Root of the shared volume the gateway also reads. */
@@ -160,8 +240,21 @@ export const STATE_FILE = path.join(DATA_DIR, 'state.json');
 export const PUBLISH: PublishConfig[] = parsePublish(
   env.varOrUndefined('INDEX_SWARM_PUBLISH'),
 );
-export const SUBSCRIBE: SubscribeConfig[] = parseSubscribe(
-  env.varOrUndefined('INDEX_SWARM_SUBSCRIBE'),
+/** True when `INDEX_SWARM_SUBSCRIBE` is unset or blank. */
+export const SUBSCRIBE_IS_DEFAULT = isDefaultSubscribe(
+  process.env.INDEX_SWARM_SUBSCRIBE,
+);
+/**
+ * True when the default subscription was skipped because this gateway is
+ * the default publisher (see {@link resolveSubscribe}).
+ */
+export const SUBSCRIBE_SKIPPED_SELF = isSelfDefaultSubscription(
+  process.env.INDEX_SWARM_SUBSCRIBE,
+  env.varOrUndefined('AR_IO_WALLET'),
+);
+export const SUBSCRIBE: SubscribeConfig[] = resolveSubscribe(
+  process.env.INDEX_SWARM_SUBSCRIBE,
+  env.varOrUndefined('AR_IO_WALLET'),
 );
 
 /** How often to look for new or changed bands. */
@@ -213,12 +306,50 @@ export const DOWNLOAD_CONCURRENCY = env.positiveIntOrDefault(
 );
 
 /**
+ * The disk budget when `INDEX_SWARM_MAX_DISK_BYTES` is unset and
+ * `INDEX_SWARM_SUBSCRIBE` is left to the default: 64 GiB. The
+ * root-TX bands a default subscriber takes were 22 GB on a live node in
+ * 2026-10, and a band being replaced stays on disk until its successor is
+ * installed, so this leaves room for growth and one replacement.
+ */
+export const DEFAULT_MAX_DISK_BYTES = 64 * 1024 ** 3;
+
+/**
+ * Parse `INDEX_SWARM_MAX_DISK_BYTES`. Unset or blank is
+ * {@link DEFAULT_MAX_DISK_BYTES} when the subscription is the default one
+ * (`INDEX_SWARM_SUBSCRIBE` unset or blank), and no ceiling otherwise, so a
+ * gateway that already subscribed explicitly before the default existed
+ * gets no new limit. `0` is no ceiling (`undefined`), and any other value
+ * must be a positive whole number of bytes, used as given.
+ *
+ * @param defaultSubscription - whether `INDEX_SWARM_SUBSCRIBE` is unset or
+ *   blank; see {@link isDefaultSubscribe}.
+ */
+export function parseMaxDiskBytes(
+  raw: string | undefined,
+  defaultSubscription: boolean,
+): number | undefined {
+  if (raw === undefined || raw.trim() === '') {
+    return defaultSubscription ? DEFAULT_MAX_DISK_BYTES : undefined;
+  }
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error(
+      `INDEX_SWARM_MAX_DISK_BYTES must be a whole number of bytes (0 for no ceiling), got: ${raw}`,
+    );
+  }
+  return value === 0 ? undefined : value;
+}
+
+/**
  * Ceiling on what installed bands may occupy. A band that would take the
  * total past this is skipped and counted rather than filling the volume the
- * gateway serves from. Unset means no ceiling.
+ * gateway serves from. `undefined` (set with `0`, or unset with an explicit
+ * `INDEX_SWARM_SUBSCRIBE`) means no ceiling.
  */
-export const MAX_DISK_BYTES = env.positiveIntOrUndefined(
-  'INDEX_SWARM_MAX_DISK_BYTES',
+export const MAX_DISK_BYTES = parseMaxDiskBytes(
+  process.env.INDEX_SWARM_MAX_DISK_BYTES,
+  SUBSCRIBE_IS_DEFAULT,
 );
 
 /**
@@ -360,25 +491,41 @@ export const MIN_ENGINE_PASSWORD_LENGTH = 16;
 /** The compose engine's Web API, as the sidecar reaches it. */
 export const DEFAULT_ENGINE_URL = 'http://index-swarm-engine:8080';
 
-export const ENGINE_AUTH = parseEngineAuth(
+/**
+ * Where `index-swarm-engine-init` keeps the engine password it generated
+ * when `INDEX_SWARM_ENGINE_AUTH` is unset: on the index volume, which the
+ * init and the sidecar both mount, root-owned and mode 0600 (see
+ * `engine-auth.ts`). The engine's own container does not mount this
+ * directory.
+ */
+export const ENGINE_AUTH_FILE = path.join(DATA_DIR, 'engine-auth');
+
+/**
+ * `INDEX_SWARM_ENGINE_AUTH`, parsed. When set it always wins over
+ * {@link ENGINE_AUTH_FILE}; when unset, the sidecar reads that file at
+ * startup (see `resolveEngineAuth` in `engine-auth.ts`).
+ */
+export const ENGINE_AUTH_SETTING = parseEngineAuth(
   env.varOrUndefined('INDEX_SWARM_ENGINE_AUTH'),
 );
+
+/**
+ * `INDEX_SWARM_ENGINE_URL` as set, or `undefined`. The URL in effect comes
+ * from {@link resolveEngineUrl}, once the password is known.
+ */
+export const ENGINE_URL_SETTING = env.varOrUndefined('INDEX_SWARM_ENGINE_URL');
 
 /**
  * The torrent engine's Web API. It must be the host name and port the engine
  * itself listens on; qBittorrent refuses a Host header that differs.
  *
- * Unset, it follows from `INDEX_SWARM_ENGINE_AUTH`: the compose engine will
- * not start without a password, so a password set means the compose engine
- * at {@link DEFAULT_ENGINE_URL}. With neither there is no swarm, and bands
- * move over HTTP only. An engine that is configured but not answering costs
+ * Unset, it follows from the engine password (`INDEX_SWARM_ENGINE_AUTH`, or
+ * the file the compose engine's init generates): the compose engine will not
+ * start without one, so a password means the compose engine at
+ * {@link DEFAULT_ENGINE_URL}. With neither there is no swarm, and bands move
+ * over HTTP only. An engine that is configured but not answering costs
  * nothing either: bands move over HTTP until it answers.
  */
-export const ENGINE_URL = resolveEngineUrl(
-  env.varOrUndefined('INDEX_SWARM_ENGINE_URL'),
-  ENGINE_AUTH,
-);
-
 export function resolveEngineUrl(
   explicit: string | undefined,
   auth: EngineAuth | undefined,
@@ -468,16 +615,35 @@ export const ENGINE_GID = env.positiveIntOrDefault(
 );
 
 /**
- * Port the closed tracker listens on, when this node publishes torrents.
- * Point INDEX_SWARM_TRACKERS at it by the address peers reach it on, e.g.
- * `http://gateway.example:6969/announce`.
- */
-/**
  * Proxies (IPs or CIDRs, comma separated) whose `X-Forwarded-For` the
- * closed tracker believes, when it is served behind a load balancer.
+ * closed tracker believes on its published port, when that port is served
+ * behind a load balancer. The listener behind the gateway's Envoy
+ * (INDEX_SWARM_TRACKER_PROXY_PORT) believes these too, beside
+ * TRACKER_PROXY_TRUSTED_PROXIES.
  */
 export const TRACKER_TRUSTED_PROXIES = env
   .varOrDefault('INDEX_SWARM_TRACKER_TRUSTED_PROXIES', '')
+  .split(',')
+  .map((entry) => entry.trim())
+  .filter((entry) => entry.length > 0);
+
+/**
+ * Hops (IPs or CIDRs, comma separated) the listener behind the gateway's
+ * Envoy believes added a true `X-Forwarded-For` entry: by default every
+ * private address, as core's TRUSTED_PROXIES does, so the usual nginx and
+ * Envoy in front of the gateway need no setting.
+ *
+ * That trusts any client that reaches Envoy from a private address (the LAN,
+ * a tailnet, another container, or IPv6 relayed by Docker's userland proxy)
+ * to say which address it announces from, so it can list any address as a
+ * peer. Where such clients can reach the gateway, name only the proxies,
+ * such as the Docker network and the nginx host.
+ */
+export const TRACKER_PROXY_TRUSTED_PROXIES = env
+  .varOrDefault(
+    'INDEX_SWARM_TRACKER_PROXY_TRUSTED_PROXIES',
+    PRIVATE_NETWORK_RANGES.join(','),
+  )
   .split(',')
   .map((entry) => entry.trim())
   .filter((entry) => entry.length > 0);
@@ -505,9 +671,40 @@ export const ENGINE_PORT = env.positiveIntOrDefault(
   6881,
 );
 
+/**
+ * Port the closed tracker listens on, when this node publishes torrents,
+ * for peers that reach it directly (published to the host). Point
+ * INDEX_SWARM_TRACKERS at it by the address peers reach it on, e.g.
+ * `http://gateway.example:6969/announce`, or use the gateway's HTTPS route
+ * instead (see INDEX_SWARM_TRACKER_PROXY_PORT).
+ */
 export const TRACKER_PORT = env.positiveIntOrDefault(
   'INDEX_SWARM_TRACKER_PORT',
   6969,
+);
+
+/**
+ * The host address compose publishes {@link TRACKER_PORT} on
+ * (`INDEX_SWARM_TRACKER_HOST_IP`, default `127.0.0.1`). The sidecar cannot
+ * change the binding; it reads the value only to warn when its torrents
+ * announce to the direct port while that port is reachable only from the
+ * host itself.
+ */
+export const TRACKER_HOST_IP = env.varOrUndefined(
+  'INDEX_SWARM_TRACKER_HOST_IP',
+);
+
+/**
+ * Port of the tracker's second listener, the one the gateway's Envoy
+ * forwards `https://<gateway>/ar-io/indexes/announce` to. Never published:
+ * only containers on the gateway's network reach it, which is what makes it
+ * safe for it to believe `X-Forwarded-For` from private addresses. Point
+ * INDEX_SWARM_TRACKERS at the gateway's HTTPS URL to use it, and no tracker
+ * port needs opening.
+ */
+export const TRACKER_PROXY_PORT = env.positiveIntOrDefault(
+  'INDEX_SWARM_TRACKER_PROXY_PORT',
+  6970,
 );
 
 /** True when this process has nothing configured to do. */

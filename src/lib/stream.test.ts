@@ -11,6 +11,7 @@ import {
   attachStallTimeout,
   ByteRangeTransform,
   pipeStreamToResponse,
+  peekLeadingBytes,
 } from './stream.js';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -300,5 +301,157 @@ describe('pipeStreamToResponse', () => {
     await new Promise<void>((resolve) => res.once('close', resolve));
 
     assert.equal(log.info.mock.calls.length, 0);
+  });
+});
+
+describe('peekLeadingBytes', () => {
+  const collect = async (stream: Readable) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of stream) chunks.push(chunk as Buffer);
+    return Buffer.concat(chunks);
+  };
+
+  it('returns the leading bytes without consuming them', async () => {
+    const stream = new PassThrough();
+    stream.write(Buffer.from([0x1f, 0x8b, 1, 2]));
+    stream.write(Buffer.from([3, 4]));
+    stream.end();
+
+    const peeked = await peekLeadingBytes(stream, 2, 1000);
+
+    assert.equal(peeked.stream, stream);
+    assert.deepEqual(peeked.head, Buffer.from([0x1f, 0x8b, 1, 2]));
+    assert.deepEqual(
+      await collect(peeked.stream),
+      Buffer.from([0x1f, 0x8b, 1, 2, 3, 4]),
+    );
+  });
+
+  it('collects a prefix split across chunks and restores them in order', async () => {
+    const stream = new PassThrough();
+    // Each write is read as its own chunk.
+    stream.write(Buffer.from([0x28]));
+    setImmediate(() => {
+      stream.write(Buffer.from([0xb5, 0x2f]));
+      setImmediate(() => stream.end(Buffer.from([0xfd, 9, 9])));
+    });
+
+    const peeked = await peekLeadingBytes(stream, 4, 1000);
+
+    assert.equal(peeked.stream, stream);
+    assert.deepEqual(
+      peeked.head.subarray(0, 4),
+      Buffer.from([0x28, 0xb5, 0x2f, 0xfd]),
+    );
+    assert.deepEqual(
+      await collect(peeked.stream),
+      Buffer.from([0x28, 0xb5, 0x2f, 0xfd, 9, 9]),
+    );
+  });
+
+  it('hands back a fresh stream of the whole body when it is shorter than asked', async () => {
+    const stream = new PassThrough();
+    stream.end(Buffer.from([0x1f]));
+
+    const peeked = await peekLeadingBytes(stream, 4, 1000);
+
+    assert.deepEqual(peeked.head, Buffer.from([0x1f]));
+    assert.notEqual(peeked.stream, stream);
+    assert.deepEqual(await collect(peeked.stream), Buffer.from([0x1f]));
+  });
+
+  it('hands back an empty stream when the body is empty', async () => {
+    const stream = new PassThrough();
+    stream.end();
+
+    const peeked = await peekLeadingBytes(stream, 2, 1000);
+
+    assert.equal(peeked.head.length, 0);
+    assert.equal((await collect(peeked.stream)).length, 0);
+  });
+
+  it('leaves the stream paused, so a later stall timeout loses no bytes', async () => {
+    const stream = new PassThrough();
+    const body = Buffer.alloc(256 * 1024, 7);
+    stream.end(body);
+
+    const peeked = await peekLeadingBytes(stream, 2, 1000);
+    assert.equal(peeked.stream.isPaused(), true);
+
+    const cleanup = attachStallTimeout(peeked.stream, 1000);
+    const sink = new PassThrough();
+    peeked.stream.pipe(sink);
+    const received = await collect(sink);
+    cleanup();
+
+    assert.equal(received.length, body.length);
+    assert.deepEqual(received, body);
+  });
+
+  it('starts a stream that was paused before the peek', async () => {
+    const stream = new PassThrough();
+    stream.pause();
+    setImmediate(() => stream.end(Buffer.from('abc')));
+
+    const peeked = await peekLeadingBytes(stream, 2, 1000);
+
+    assert.deepEqual(peeked.head, Buffer.from('abc'));
+    assert.deepEqual(await collect(peeked.stream), Buffer.from('abc'));
+  });
+
+  it('rejects and destroys the stream when the bytes do not arrive in time', async () => {
+    const stream = new PassThrough();
+    stream.write(Buffer.from([0x1f]));
+    // The peek's timer is unref'd, like the stall timer; hold the loop open.
+    const keepAlive = setTimeout(() => {}, 1000);
+
+    await assert.rejects(
+      peekLeadingBytes(stream, 2, 20),
+      /Received 1 of 2 leading bytes/,
+    );
+    clearTimeout(keepAlive);
+    assert.equal(stream.destroyed, true);
+  });
+
+  it('rejects with an AbortError and destroys the stream on abort', async () => {
+    const stream = new PassThrough();
+    const controller = new AbortController();
+    setImmediate(() => controller.abort());
+
+    await assert.rejects(
+      peekLeadingBytes(stream, 2, 10_000, controller.signal),
+      (error: Error) => error.name === 'AbortError',
+    );
+    assert.equal(stream.destroyed, true);
+  });
+
+  it('rejects at once for an already-aborted signal', async () => {
+    const stream = new PassThrough();
+    stream.write(Buffer.from('abc'));
+
+    await assert.rejects(
+      peekLeadingBytes(stream, 2, 10_000, AbortSignal.abort()),
+      (error: Error) => error.name === 'AbortError',
+    );
+    assert.equal(stream.destroyed, true);
+  });
+
+  it('stops listening for abort once the peek resolves', async () => {
+    const stream = new PassThrough();
+    const controller = new AbortController();
+    stream.end(Buffer.from('abc'));
+
+    const peeked = await peekLeadingBytes(stream, 2, 10_000, controller.signal);
+    controller.abort();
+
+    assert.equal(stream.destroyed, false);
+    assert.deepEqual(await collect(peeked.stream), Buffer.from('abc'));
+  });
+
+  it('rejects on a stream error', async () => {
+    const stream = new PassThrough();
+    setImmediate(() => stream.destroy(new Error('boom')));
+
+    await assert.rejects(peekLeadingBytes(stream, 2, 1000), /boom/);
   });
 });

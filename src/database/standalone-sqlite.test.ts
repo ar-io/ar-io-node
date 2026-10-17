@@ -36,7 +36,7 @@ import { ArweaveChainSourceStub, stubAns104Bundle } from '../../test/stubs.js';
 import { normalizeAns104DataItem } from '../lib/ans-104.js';
 import loadSql from './sql-loader.js';
 import log from '../log.js';
-import { BundleRecord } from '../types.js';
+import { BundleRecord, NormalizedDataItem } from '../types.js';
 import { processBundleStream } from '../lib/bundles.js';
 import wait from '../lib/wait.js';
 
@@ -907,6 +907,291 @@ describe('StandaloneSqliteDatabase', () => {
 
       const attrs = dbWorker.getDataAttributes(txId);
       assert.equal(attrs?.hash, toB64Url(realHash));
+    });
+  });
+
+  // An item's Content-Encoding learned when its data was cached (from its signed
+  // tags or a trusted upstream), for items whose tags are not indexed here.
+  describe('recorded content encoding', () => {
+    const itemId = toB64Url(Buffer.alloc(32, 0x31));
+    const otherItemId = toB64Url(Buffer.alloc(32, 0x32));
+    const txId = toB64Url(Buffer.alloc(32, 0x33));
+    const dataRoot = Buffer.alloc(32, 0x51);
+    // A fresh hash per test: the worker remembers hashes it has inserted
+    // (insertDataHashCache), and the suite truncates tables between tests, so
+    // a reused hash would leave no contiguous_data row to join.
+    let hashSeed = 0x60;
+    let hash = '';
+    beforeEach(() => {
+      hash = toB64Url(Buffer.alloc(32, hashSeed++));
+    });
+
+    const save = (id: string, contentEncoding?: string) =>
+      dbWorker.saveDataContentAttributes({
+        id,
+        hash,
+        dataSize: 17,
+        contentEncoding,
+      });
+
+    it('is recorded and returned when the item has no indexed tag', () => {
+      save(itemId, 'gzip');
+      assert.equal(dbWorker.getDataAttributes(itemId)?.contentEncoding, 'gzip');
+    });
+
+    it('is fill-once: a later value never overwrites it', () => {
+      save(itemId, 'gzip');
+      save(itemId, 'br');
+      save(itemId);
+      assert.equal(dbWorker.getDataAttributes(itemId)?.contentEncoding, 'gzip');
+    });
+
+    it('is recorded for an item whose row is already verified', () => {
+      // insertDataId skips verified rows; the encoding must still be recorded.
+      dataDb
+        .prepare(
+          `INSERT INTO contiguous_data_ids
+            (id, contiguous_data_hash, verified, indexed_at)
+           VALUES (@id, @hash, 1, 0)`,
+        )
+        .run({ id: fromB64Url(itemId), hash: fromB64Url(hash) });
+
+      save(itemId, 'gzip');
+
+      assert.equal(dbWorker.getDataAttributes(itemId)?.contentEncoding, 'gzip');
+    });
+
+    it("prefers the item's indexed tag", () => {
+      coreDb
+        .prepare(
+          `INSERT OR REPLACE INTO stable_transactions
+            (id, height, block_transaction_index, format, last_tx,
+             owner_address, quantity, reward, tag_count, data_size,
+             data_root, content_type, content_encoding)
+           VALUES (@id, 1, 0, 2, @zero, @zero, '0', '0', 0, 17,
+             @data_root, 'text/html', 'br')`,
+        )
+        .run({
+          id: fromB64Url(txId),
+          zero: Buffer.alloc(32),
+          data_root: dataRoot,
+        });
+      save(txId, 'gzip');
+
+      assert.equal(dbWorker.getDataAttributes(txId)?.contentEncoding, 'br');
+    });
+
+    it('is never borrowed from another item with the same bytes', () => {
+      // Another item with identical bytes was cached with an encoding.
+      save(otherItemId, 'gzip');
+      // This L1 transaction has the same data root, and so the same cached
+      // blob, but no encoding of its own.
+      coreDb
+        .prepare(
+          `INSERT OR REPLACE INTO stable_transactions
+            (id, height, block_transaction_index, format, last_tx,
+             owner_address, quantity, reward, tag_count, data_size,
+             data_root, content_type)
+           VALUES (@id, 1, 0, 2, @zero, @zero, '0', '0', 0, 17,
+             @data_root, 'application/gzip')`,
+        )
+        .run({
+          id: fromB64Url(txId),
+          zero: Buffer.alloc(32),
+          data_root: dataRoot,
+        });
+      dataDb
+        .prepare(
+          `INSERT OR REPLACE INTO data_roots
+            (data_root, contiguous_data_hash, verified, indexed_at)
+           VALUES (@data_root, @hash, 0, 0)`,
+        )
+        .run({ data_root: dataRoot, hash: fromB64Url(hash) });
+
+      const attrs = dbWorker.getDataAttributes(txId);
+      assert.equal(attrs?.hash, hash, 'found through the shared data root');
+      assert.equal(attrs?.contentEncoding, undefined);
+    });
+  });
+
+  // Byte-identical items with different Content-Type tags share one
+  // `contiguous_data` row, so a per-hash type made each copy look like
+  // whichever was written first (a path manifest served as the text/html page
+  // that shared its bytes). The item's own type is recorded per ID.
+  describe('recorded item content type', () => {
+    const itemId = toB64Url(Buffer.alloc(32, 0x41));
+    const otherItemId = toB64Url(Buffer.alloc(32, 0x42));
+    const txId = toB64Url(Buffer.alloc(32, 0x43));
+    const dataRoot = Buffer.alloc(32, 0x52);
+    const MANIFEST = 'application/x.arweave-manifest+json';
+    // A fresh hash per test, as in 'recorded content encoding'.
+    let hashSeed = 0x90;
+    let hash = '';
+    beforeEach(() => {
+      hash = toB64Url(Buffer.alloc(32, hashSeed++));
+    });
+
+    const save = (
+      id: string,
+      {
+        contentType,
+        itemContentType,
+        itemContentTypeSource,
+      }: {
+        contentType?: string;
+        itemContentType?: string;
+        itemContentTypeSource?: 'item' | 'upstream';
+      },
+    ) =>
+      dbWorker.saveDataContentAttributes({
+        id,
+        hash,
+        dataSize: 3761,
+        contentType,
+        itemContentType,
+        itemContentTypeSource,
+      });
+
+    const typeOf = (id: string) => {
+      const attrs = dbWorker.getDataAttributes(id);
+      return [attrs?.contentType, attrs?.contentTypeSource];
+    };
+
+    it('keeps each byte-identical item on its own tag', () => {
+      save(itemId, {
+        contentType: 'text/html',
+        itemContentType: 'text/html',
+        itemContentTypeSource: 'item',
+      });
+      save(otherItemId, {
+        contentType: MANIFEST,
+        itemContentType: MANIFEST,
+        itemContentTypeSource: 'item',
+      });
+
+      assert.deepEqual(typeOf(itemId), ['text/html', 'item']);
+      assert.deepEqual(typeOf(otherItemId), [MANIFEST, 'item']);
+    });
+
+    it('falls back to the per-hash type for an item with none recorded', () => {
+      // Cached before per-item types existed: only the per-hash value.
+      save(itemId, { contentType: 'text/html' });
+      save(otherItemId, {
+        contentType: MANIFEST,
+        itemContentType: MANIFEST,
+        itemContentTypeSource: 'item',
+      });
+
+      assert.deepEqual(typeOf(itemId), ['text/html', 'hash']);
+      assert.deepEqual(typeOf(otherItemId), [MANIFEST, 'item']);
+    });
+
+    it('never replaces an item value', () => {
+      save(itemId, {
+        itemContentType: MANIFEST,
+        itemContentTypeSource: 'item',
+      });
+      save(itemId, {
+        itemContentType: 'text/html',
+        itemContentTypeSource: 'item',
+      });
+      save(itemId, {
+        itemContentType: 'text/html',
+        itemContentTypeSource: 'upstream',
+      });
+
+      assert.deepEqual(typeOf(itemId), [MANIFEST, 'item']);
+    });
+
+    it('fills an upstream value once and lets only an item value replace it', () => {
+      save(itemId, {
+        itemContentType: 'text/html',
+        itemContentTypeSource: 'upstream',
+      });
+      save(itemId, {
+        itemContentType: 'text/plain',
+        itemContentTypeSource: 'upstream',
+      });
+      assert.deepEqual(typeOf(itemId), ['text/html', 'upstream']);
+
+      save(itemId, {
+        itemContentType: MANIFEST,
+        itemContentTypeSource: 'item',
+      });
+      assert.deepEqual(typeOf(itemId), [MANIFEST, 'item']);
+    });
+
+    it('is recorded for an item whose row is already verified', () => {
+      dataDb
+        .prepare(
+          `INSERT INTO contiguous_data_ids
+            (id, contiguous_data_hash, verified, indexed_at)
+           VALUES (@id, @hash, 1, 0)`,
+        )
+        .run({ id: fromB64Url(itemId), hash: fromB64Url(hash) });
+
+      save(itemId, {
+        itemContentType: MANIFEST,
+        itemContentTypeSource: 'item',
+      });
+
+      assert.deepEqual(typeOf(itemId), [MANIFEST, 'item']);
+    });
+
+    it("prefers the item's indexed tag", () => {
+      coreDb
+        .prepare(
+          `INSERT OR REPLACE INTO stable_transactions
+            (id, height, block_transaction_index, format, last_tx,
+             owner_address, quantity, reward, tag_count, data_size,
+             data_root, content_type)
+           VALUES (@id, 1, 0, 2, @zero, @zero, '0', '0', 0, 3761,
+             @data_root, 'text/html')`,
+        )
+        .run({
+          id: fromB64Url(txId),
+          zero: Buffer.alloc(32),
+          data_root: dataRoot,
+        });
+      save(txId, { itemContentType: MANIFEST, itemContentTypeSource: 'item' });
+
+      assert.deepEqual(typeOf(txId), ['text/html', 'indexed']);
+    });
+
+    it('is never borrowed from another item with the same bytes', () => {
+      // Another item with identical bytes, with its own recorded type and a
+      // different per-hash value.
+      save(otherItemId, {
+        contentType: 'text/plain',
+        itemContentType: MANIFEST,
+        itemContentTypeSource: 'item',
+      });
+      // An L1 transaction found through the same data root, untagged.
+      coreDb
+        .prepare(
+          `INSERT OR REPLACE INTO stable_transactions
+            (id, height, block_transaction_index, format, last_tx,
+             owner_address, quantity, reward, tag_count, data_size,
+             data_root)
+           VALUES (@id, 1, 0, 2, @zero, @zero, '0', '0', 0, 3761,
+             @data_root)`,
+        )
+        .run({
+          id: fromB64Url(txId),
+          zero: Buffer.alloc(32),
+          data_root: dataRoot,
+        });
+      dataDb
+        .prepare(
+          `INSERT OR REPLACE INTO data_roots
+            (data_root, contiguous_data_hash, verified, indexed_at)
+           VALUES (@data_root, @hash, 0, 0)`,
+        )
+        .run({ data_root: dataRoot, hash: fromB64Url(hash) });
+
+      const attrs = dbWorker.getDataAttributes(txId);
+      assert.equal(attrs?.hash, hash, 'found through the shared data root');
+      assert.deepEqual(typeOf(txId), ['text/plain', 'hash']);
     });
   });
 
@@ -2272,6 +2557,55 @@ describe('StandaloneSqliteDatabase', () => {
     const INTERMEDIATE = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb0';
     const L1_ROOT = 'cccccccccccccccccccccccccccccccccccccccccc0';
 
+    it('lets a write that first learns the encoding through inside the dedupe window', async () => {
+      const ENC_ID = 'dddddddddddddddddddddddddddddddddddddddddd0';
+      // Its own hash: the worker skips hashes it has already inserted, and
+      // other tests here use 'hash'.
+      await db.saveDataContentAttributes({
+        id: ENC_ID,
+        hash: 'encoding-dedupe-hash',
+        dataSize: 94,
+      });
+      await db.saveDataContentAttributes({
+        id: ENC_ID,
+        hash: 'encoding-dedupe-hash',
+        dataSize: 94,
+        contentEncoding: 'gzip',
+      });
+
+      assert.equal(
+        (await db.getDataAttributes(ENC_ID))?.contentEncoding,
+        'gzip',
+      );
+    });
+
+    it("lets an item's own content type replace an upstream one inside the dedupe window", async () => {
+      const TYPE_ID = 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee0';
+      await db.saveDataContentAttributes({
+        id: TYPE_ID,
+        hash: 'content-type-dedupe-hash',
+        dataSize: 94,
+        contentType: 'text/html',
+        itemContentType: 'text/html',
+        itemContentTypeSource: 'upstream',
+      });
+      // Same value, better rank: the write that settles it must not be
+      // dropped as a duplicate.
+      await db.saveDataContentAttributes({
+        id: TYPE_ID,
+        hash: 'content-type-dedupe-hash',
+        dataSize: 94,
+        contentType: 'text/html',
+        itemContentType: 'text/html',
+        itemContentTypeSource: 'item',
+      });
+
+      assert.equal(
+        (await db.getDataAttributes(TYPE_ID))?.contentTypeSource,
+        'item',
+      );
+    });
+
     it('lets a corrected root through inside the dedupe window', async () => {
       await db.saveDataContentAttributes({
         id: ID,
@@ -2887,6 +3221,83 @@ describe('StandaloneSqliteDatabase', () => {
       assert.equal(row.owner_offset, 50);
       assert.equal(row.owner_size, 32);
       assert.equal(row.signature_type, 1);
+    });
+
+    const readAtom = (id: string) =>
+      bundlesDb
+        .prepare(
+          `SELECT parent_id, root_transaction_id, data_offset,
+                  root_parent_offset, "offset", size,
+                  signature_offset, signature_size,
+                  owner_offset, owner_size, signature_type
+           FROM new_data_items WHERE id = @id`,
+        )
+        .get({ id: fromB64Url(id) }) as Record<string, number | Buffer | null>;
+
+    it('replaces the whole root atom when a write names a different root (#937)', async () => {
+      // A second copy of the item in ANOTHER bundle, written without header
+      // offsets (a partial write). Pre-fix, COALESCE kept the first copy's
+      // offset/size/signature/owner offsets under the second copy's root:
+      // a header offset that frames nothing there, served as verified.
+      const id = 'Issue937RootChangeIssue937RootChangeAAAAAAA';
+      const otherRootTxId = '4444444444444444444444444444444444444444444';
+      const otherParentId = '5555555555555555555555555555555555555555555';
+      await db.saveDataItem({
+        ...bundleBackfillItem,
+        id,
+      } as unknown as NormalizedDataItem);
+      await db.saveDataItem({
+        ...bundleBackfillItem,
+        id,
+        root_tx_id: otherRootTxId,
+        parent_id: otherParentId,
+        data_offset: 900,
+        offset: null,
+        size: null,
+        root_parent_offset: null,
+        signature_offset: null,
+        signature_size: null,
+        owner_offset: null,
+        owner_size: null,
+        signature_type: null,
+      } as unknown as NormalizedDataItem);
+
+      const row = readAtom(id);
+      assert.deepEqual(row.root_transaction_id, fromB64Url(otherRootTxId));
+      assert.deepEqual(row.parent_id, fromB64Url(otherParentId));
+      assert.equal(row.data_offset, 900);
+      // Nothing from the first root survives under the second.
+      assert.equal(row.offset, null);
+      assert.equal(row.size, null);
+      assert.equal(row.root_parent_offset, null);
+      assert.equal(row.signature_offset, null);
+      assert.equal(row.signature_size, null);
+      assert.equal(row.owner_offset, null);
+      assert.equal(row.owner_size, null);
+      assert.equal(row.signature_type, null);
+    });
+
+    it('keeps the stored atom when a partial write names the SAME root', async () => {
+      const id = 'Issue937SameRootIssue937SameRootAAAAAAAAAAA';
+      await db.saveDataItem({
+        ...bundleBackfillItem,
+        id,
+      } as unknown as NormalizedDataItem);
+      await db.saveDataItem({
+        ...bundleBackfillItem,
+        id,
+        offset: null,
+        size: null,
+        signature_offset: null,
+        owner_offset: null,
+      } as unknown as NormalizedDataItem);
+
+      const row = readAtom(id);
+      assert.deepEqual(row.root_transaction_id, fromB64Url(bundleRootTxId));
+      assert.equal(row.offset, 200);
+      assert.equal(row.size, 1234);
+      assert.equal(row.signature_offset, 60);
+      assert.equal(row.owner_offset, 50);
     });
   });
 

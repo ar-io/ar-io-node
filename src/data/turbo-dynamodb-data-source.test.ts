@@ -117,6 +117,7 @@ describe('TurboDynamoDbDataSource', () => {
       assert.equal(result.buffer.toString(), 'test data');
       assert.equal(result.info.payloadDataStart, 0);
       assert.equal(result.info.payloadContentType, 'image/png');
+      assert.equal(result.info.payloadContentTypeKnown, true);
     });
 
     it('should return undefined when item not found', async () => {
@@ -170,6 +171,8 @@ describe('TurboDynamoDbDataSource', () => {
       assert.equal(result.buffer.toString(), 'test data');
       assert.equal(result.info.payloadDataStart, 0);
       assert.equal(result.info.payloadContentType, 'application/octet-stream');
+      // The fallback is not the item's own type.
+      assert.equal(result.info.payloadContentTypeKnown, false);
     });
 
     it('should handle parent data item that contains nested data', async () => {
@@ -310,6 +313,113 @@ describe('TurboDynamoDbDataSource', () => {
         testDataId,
       );
       assert.equal(result, undefined);
+    });
+  });
+
+  describe("getData: recording the content type as the item's own", () => {
+    const payload = 'payload';
+    // Only the cache table answers: the raw-data path.
+    const cacheOnly = (contentType?: string) => {
+      mockDynamoClient.send = mock.fn(async (command: any) =>
+        command.input.TableName === CACHE_TABLE
+          ? {
+              Item: {
+                D: { B: gzipSync(Buffer.from(payload)) },
+                P: { N: '0' },
+                ...(contentType !== undefined ? { C: { S: contentType } } : {}),
+              },
+            }
+          : { Item: null },
+      );
+    };
+    // The offsets table names a root parent; the cache table holds the data.
+    const withOffsets = (contentType?: string) => {
+      mockDynamoClient.send = mock.fn(async (command: any) => {
+        if (command.input.TableName === OFFSETS_TABLE) {
+          return {
+            Item: {
+              RId: { B: Buffer.from('SomeRootParentId', 'base64url') },
+              SR: { N: '0' },
+              S: { N: `${payload.length}` },
+              ...(contentType !== undefined ? { C: { S: contentType } } : {}),
+              P: { N: '0' },
+            },
+          };
+        }
+        if (command.input.TableName === CACHE_TABLE) {
+          return {
+            Item: {
+              D: { B: gzipSync(Buffer.from(payload)) },
+              P: { N: '0' },
+              ...(contentType !== undefined ? { C: { S: contentType } } : {}),
+            },
+          };
+        }
+        return { Item: null };
+      });
+    };
+    const storedAttributes = async () => {
+      // setDataAttributes is not awaited by the source.
+      await new Promise((resolve) => setImmediate(resolve));
+      return mockDataAttributesStore.setDataAttributes.mock.calls.map(
+        (call: any) => call.arguments[1],
+      );
+    };
+
+    it("marks Turbo's recorded type as the item's own", async () => {
+      cacheOnly('text/html');
+
+      const result = await turboDynamoDbDataSource.getData({ id: testDataId });
+
+      assert.equal(result.sourceContentType, 'text/html');
+      assert.equal(result.sourceContentTypeOrigin, 'item');
+      for (const attributes of await storedAttributes()) {
+        assert.equal(attributes.contentTypeSource, 'item');
+      }
+    });
+
+    it("serves the octet-stream fallback but never marks it as the item's own", async () => {
+      // A missing type recorded as final would outrank a correct one for good.
+      for (const missing of [undefined, '']) {
+        mockDataAttributesStore.setDataAttributes.mock.resetCalls();
+        cacheOnly(missing);
+
+        const result = await turboDynamoDbDataSource.getData({
+          id: testDataId,
+        });
+
+        assert.equal(result.sourceContentType, 'application/octet-stream');
+        assert.equal(result.sourceContentTypeOrigin, undefined);
+        for (const attributes of await storedAttributes()) {
+          assert.equal(attributes.contentTypeSource, undefined);
+        }
+      }
+    });
+
+    it('does not mark the fallback from the offsets table either', async () => {
+      withOffsets(undefined);
+
+      const result = await turboDynamoDbDataSource.getData({ id: testDataId });
+
+      assert.equal(result.sourceContentTypeOrigin, undefined);
+      const stored = await storedAttributes();
+      assert.ok(stored.length > 0);
+      for (const attributes of stored) {
+        assert.equal(attributes.contentTypeSource, undefined);
+      }
+    });
+
+    it("marks a recorded type from the offsets table as the item's own", async () => {
+      withOffsets('application/x.arweave-manifest+json');
+
+      const result = await turboDynamoDbDataSource.getData({ id: testDataId });
+
+      assert.equal(result.sourceContentTypeOrigin, 'item');
+      const stored = await storedAttributes();
+      assert.ok(stored.length > 0);
+      for (const attributes of stored) {
+        assert.equal(attributes.contentTypeSource, 'item');
+      }
     });
   });
 

@@ -21,7 +21,8 @@ import {
   supersededBands,
 } from './publisher.js';
 import { MemorySwarm, MemoryTransport } from './transport/memory.js';
-import { torrentIds } from './torrent.js';
+import { DEFAULT_PIECE_LENGTH, torrentIds } from './torrent.js';
+import { bdecode, BencodeValue } from '../lib/bencode.js';
 import { publishTotal } from './metrics.js';
 import { seedingKey, StateStore } from './state.js';
 import { createKindRegistry } from './kinds/registry.js';
@@ -726,6 +727,7 @@ describe('Publisher', () => {
         transport?: MemoryTransport;
         trackers?: string[];
         log?: Logger;
+        pieceLength?: number;
       } = {},
     ) => {
       const dir = opts.dir ?? publishedDir;
@@ -746,6 +748,9 @@ describe('Publisher', () => {
             ? { transport: opts.transport }
             : {}),
           trackers: opts.trackers ?? ['http://tracker.example/announce'],
+          ...(opts.pieceLength !== undefined
+            ? { pieceLength: opts.pieceLength }
+            : {}),
         },
       });
     };
@@ -1013,6 +1018,58 @@ describe('Publisher', () => {
       clock = new Date(clock.getTime() + 60_000);
       await makeTorrentPublisher({ transport, store: reloaded }).scanOnce();
       assert.deepEqual(Object.keys((await reloaded.load()).seeding), firstIds);
+    });
+
+    it('moves every band to a torrent of the current piece length, keeping its files and pieces roots', async () => {
+      await makeBand('band-a');
+      const transport = new MemoryTransport(new MemorySwarm());
+      // A band published before the piece length changed.
+      await makeTorrentPublisher({
+        transport,
+        pieceLength: 4 * 1024 * 1024,
+      }).scanOnce();
+      const before = (await readDoc()).indexes[0].bands[0];
+      const oldFile = await torrentFileOf('band-a');
+      const oldTorrent = await fs.readFile(oldFile);
+
+      clock = new Date(clock.getTime() + 60_000);
+      await makeTorrentPublisher({ transport }).scanOnce();
+      const after = (await readDoc()).indexes[0].bands[0];
+      const newTorrent = await fs.readFile(await torrentFileOf('band-a'));
+
+      assert.equal(after.id, before.id);
+      assert.deepEqual(after.files, before.files);
+      assert.notEqual(after.torrent!.infohashV1, before.torrent!.infohashV1);
+      assert.notEqual(after.torrent!.infohashV2, before.torrent!.infohashV2);
+      assert.equal(existsSync(oldFile), false, 'the old .torrent is gone');
+      assert.deepEqual(
+        Object.values((await state.load()).seeding).map((s) => s.infohashV1),
+        [after.torrent!.infohashV1],
+        'seeding the new torrent only',
+      );
+
+      const info = (torrent: Buffer) =>
+        (bdecode(torrent) as { [key: string]: BencodeValue }).info as {
+          [key: string]: BencodeValue;
+        };
+      // BEP 52 roots do not depend on the piece length: a file's signed
+      // root survives the move, only the layer under it changes size.
+      const roots = (torrent: Buffer) => {
+        const found: string[] = [];
+        const walk = (node: BencodeValue) => {
+          if (node === null || typeof node !== 'object') return;
+          if (Buffer.isBuffer(node) || Array.isArray(node)) return;
+          const root = node['pieces root'];
+          if (Buffer.isBuffer(root)) found.push(root.toString('hex'));
+          for (const child of Object.values(node)) walk(child);
+        };
+        walk(info(torrent)['file tree']);
+        return found.sort();
+      };
+      assert.equal(info(newTorrent)['piece length'], DEFAULT_PIECE_LENGTH);
+      assert.equal(info(oldTorrent)['piece length'], 4 * 1024 * 1024);
+      assert.ok(roots(newTorrent).length > 0);
+      assert.deepEqual(roots(newTorrent), roots(oldTorrent));
     });
 
     it('stops seeding, and deletes the .torrent of, a band it no longer offers', async () => {

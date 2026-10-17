@@ -11,10 +11,11 @@ import { existsSync, readFileSync } from 'node:fs';
 import { createFilter } from './filters.js';
 import { assertMonotoneFilter } from './database/gql-l1-routing.js';
 import * as env from './lib/env.js';
+import { PRIVATE_NETWORK_RANGES } from './lib/trusted-proxies.js';
+import { parsePublicOrigin } from './lib/public-origin.js';
 import { resolveFacilitatorKeyId } from './payments/facilitator-utils.js';
 import { initHttpSig } from './lib/httpsig.js';
 import type { HttpSigSignerContext } from './lib/httpsig.js';
-import { release } from './version.js';
 import logger from './log.js';
 import { verificationPriorities } from './constants.js';
 import {
@@ -120,7 +121,10 @@ export const TRUSTED_NODE_URL = env.varOrDefault(
   'https://arweave.net',
 );
 
-// Default preferred chunk GET nodes (data-1 through data-17 and tip-1 through tip-5.arweave.xyz)
+// Default preferred chunk GET nodes (data-1 through data-17 and tip-1 through
+// tip-4.arweave.xyz). tip-5 is left out: on 2026-10-10 its port 1984 was closed
+// from two separate networks, it served none of 60 random offsets, and tip-1's
+// own peer list no longer carried it, so it only spent chunk attempts.
 const DEFAULT_PREFERRED_CHUNK_GET_NODE_URLS = [
   'http://data-1.arweave.xyz:1984',
   'http://data-2.arweave.xyz:1984',
@@ -143,7 +147,6 @@ const DEFAULT_PREFERRED_CHUNK_GET_NODE_URLS = [
   'http://tip-2.arweave.xyz:1984',
   'http://tip-3.arweave.xyz:1984',
   'http://tip-4.arweave.xyz:1984',
-  'http://tip-5.arweave.xyz:1984',
 ];
 
 // Preferred URLs for chunk GET requests (comma-separated URLs)
@@ -262,29 +265,29 @@ export const TRUSTED_GATEWAYS_REQUEST_TIMEOUT_MS = +env.varOrDefault(
   '10000',
 );
 
-// Idle-socket timeout (ms) for the outbound trusted-gateway keep-alive agent.
-// MUST be strictly less than the peer gateway's server keep-alive timeout
-// (HTTP_KEEP_ALIVE_TIMEOUT_MS, default 60000). Equal timeouts cause a keep-alive
-// reuse race: the client reuses an idle socket at the same moment the server
-// sends its idle-close FIN, and the request stalls until the teardown resolves
-// (observed as ~8-10s peer stalls that sometimes exceed
-// TRUSTED_GATEWAYS_REQUEST_TIMEOUT_MS and are canceled before the request is
-// ever sent). Keeping the client's idle timeout below the server's guarantees
-// the client retires a socket before the server closes it.
-export const GATEWAY_AGENT_IDLE_SOCKET_TIMEOUT_MS = env.positiveIntOrDefault(
-  'GATEWAY_AGENT_IDLE_SOCKET_TIMEOUT_MS',
-  50_000,
+// A trusted gateway answering 429 is skipped until its Retry-After has passed,
+// instead of every request queueing for one of its sockets and getting another
+// 429 (see GatewayThrottle). The cooldown is the response's Retry-After, capped
+// at GATEWAYS_THROTTLE_BACKOFF_MAX_MS; without a usable Retry-After it is
+// GATEWAYS_THROTTLE_BACKOFF_DEFAULT_MS.
+export const GATEWAYS_THROTTLE_BACKOFF_ENABLED =
+  env.varOrDefault('GATEWAYS_THROTTLE_BACKOFF_ENABLED', 'true') === 'true';
+export const GATEWAYS_THROTTLE_BACKOFF_DEFAULT_MS = env.nonNegativeIntOrDefault(
+  'GATEWAYS_THROTTLE_BACKOFF_DEFAULT_MS',
+  30_000,
+);
+export const GATEWAYS_THROTTLE_BACKOFF_MAX_MS = env.nonNegativeIntOrDefault(
+  'GATEWAYS_THROTTLE_BACKOFF_MAX_MS',
+  300_000,
 );
 
-// Outbound gateway socket acquisitions (time from a request needing a socket to
-// a socket being assigned) at or above this threshold are logged at `warn`.
-// Surfaces keep-alive pool waits and socket-reuse stalls that are invisible in
-// request/response timing (the request hasn't hit the wire yet).
-export const GATEWAY_SLOW_SOCKET_ACQUISITION_LOG_THRESHOLD_MS =
-  env.positiveIntOrDefault(
-    'GATEWAY_SLOW_SOCKET_ACQUISITION_LOG_THRESHOLD_MS',
-    1000,
-  );
+// The outbound agents' settings live with the agents (see the module).
+export {
+  GATEWAY_AGENT_IDLE_SOCKET_TIMEOUT_MS,
+  GATEWAY_SLOW_SOCKET_ACQUISITION_LOG_THRESHOLD_MS,
+  OUTBOUND_MAX_FREE_SOCKETS_PER_HOST,
+  OUTBOUND_MAX_SOCKETS_PER_HOST,
+} from './lib/outbound-http-config.js';
 
 /**
  * A socket-cap setting: either a single positive integer applied to every host,
@@ -400,30 +403,6 @@ export const GATEWAY_UNTRUSTED_MAX_SOCKETS_PER_HOST: PerHostNumber =
 export const GATEWAY_MAX_FREE_SOCKETS_PER_HOST = parsePerHostNumber(
   'GATEWAY_MAX_FREE_SOCKETS_PER_HOST',
   4,
-);
-
-// Socket caps for the non-data outbound clients — root TX discovery sources and
-// the GraphQL fan-out. These are low-volume metadata lookups against a handful
-// of upstreams, so the caps are modest; the point of pooling here is not
-// throughput but avoiding a per-request `dns.lookup()`, which queues on the
-// libuv threadpool behind filesystem I/O (see src/lib/http-agent.ts). Node's
-// Agent keys its pool by host:port, so these apply per origin.
-export const OUTBOUND_MAX_SOCKETS_PER_HOST = env.positiveIntOrDefault(
-  'OUTBOUND_MAX_SOCKETS_PER_HOST',
-  16,
-);
-// Defaults to the same value as OUTBOUND_MAX_SOCKETS_PER_HOST, deliberately.
-// maxFreeSockets bounds *idle* sockets: any concurrency above it means the
-// excess sockets are destroyed once they go idle and reopened on the next
-// request — and every reopen is a fresh `dns.lookup()`, the exact cost this
-// pooling exists to avoid. The data path caps free sockets well below max
-// because its objective is throughput management against many hosts; here the
-// objective is maximizing reuse across a handful of upstreams, so holding the
-// full set idle is the point. Cost is a few idle sockets per origin, retired
-// anyway by the agent's idle timeout.
-export const OUTBOUND_MAX_FREE_SOCKETS_PER_HOST = env.positiveIntOrDefault(
-  'OUTBOUND_MAX_FREE_SOCKETS_PER_HOST',
-  OUTBOUND_MAX_SOCKETS_PER_HOST,
 );
 
 // Kill-switch for the untrusted-gateway provenance-param omission. By default
@@ -749,17 +728,19 @@ Object.entries(PEERS_ROOT_TX_URLS).forEach(([url, priority]) => {
 });
 
 // Peer root TX lookup request configuration. The default is aggressive
-// relative to the `gateways` source (10s) because this endpoint is a single
-// indexed read on the peer — a slow response means the peer is unhealthy, not
-// that the work is genuinely expensive, so failing over quickly is correct.
+// relative to the `gateways` source (10s) because this endpoint only reads the
+// peer's local disk (its index, then any local CDB64 indexes) — a slow
+// response means the peer is unhealthy, not that the work is genuinely
+// expensive, so failing over quickly is correct.
 export const PEERS_ROOT_TX_REQUEST_TIMEOUT_MS = +env.varOrDefault(
   'PEERS_ROOT_TX_REQUEST_TIMEOUT_MS',
   '2000',
 );
 
 // Peer root TX lookup rate limiting. Far more permissive than the `gateways`
-// source for the same reason: the peer answers from its index, so this is not
-// a probe that needs throttling to protect the remote node.
+// source for the same reason: the peer answers from local disk, never with a
+// retrieval. A miss is the costliest answer, a read or two for each local
+// CDB64 source the peer has, which is still far cheaper than a HEAD probe.
 export const PEERS_ROOT_TX_RATE_LIMIT_BURST_SIZE = +env.varOrDefault(
   'PEERS_ROOT_TX_RATE_LIMIT_BURST_SIZE',
   '100',
@@ -808,6 +789,16 @@ export const CHUNK_METADATA_ANCHOR_TX_CACHE_TTL_SECONDS =
     300,
   );
 
+// How long (seconds) an offset the anchor could not resolve is left
+// unprobed. Every gateway on the defaults shares one reference peer, so a
+// chunk none of them holds is otherwise re-probed on every request for it.
+// 0 turns the miss cache off.
+export const CHUNK_METADATA_ANCHOR_MISS_CACHE_TTL_SECONDS =
+  env.nonNegativeIntOrDefault(
+    'CHUNK_METADATA_ANCHOR_MISS_CACHE_TTL_SECONDS',
+    60,
+  );
+
 // LRU cache size for resolved manifest paths. Keyed by (manifest id, path);
 // values are immutable per manifest transaction, so no TTL is needed. Caching
 // resolutions lets repeat requests for the same manifest path skip re-fetching
@@ -819,7 +810,14 @@ export const MANIFEST_RESOLUTION_CACHE_SIZE = env.positiveIntOrDefault(
 
 // Root TX index lookup order configuration.
 // Available sources: 'db', 'peers', 'gateways', 'graphql', 'hyperbeam', 'cdb',
-// 'turbo'. Sources are probed in order and the first actionable result wins.
+// 'cdb-remote', 'turbo'. Sources are probed in order and the first actionable
+// result wins.
+// - 'cdb':        CDB64 indexes (CDB64_ROOT_TX_INDEX_SOURCES). Without
+//                 'cdb-remote' in the order it asks every CDB64 source, local
+//                 and remote, as it always has; with it, only those read from
+//                 local disk (such as installed Index Sharing bands).
+// - 'cdb-remote': CDB64 sources read over the network, including the shipped
+//                 resources/ indexes (partitions on Arweave).
 // - 'peers':    GET /ar-io/offsets/:id against peer AR.IO nodes. One indexed
 //               read on the peer; cheap whether it hits or misses.
 // - 'gateways': HEAD /raw/:id against peer AR.IO gateways, harvesting
@@ -1035,13 +1033,14 @@ export const GATEWAY_PEERS_REQUEST_WINDOW_COUNT = +env.varOrDefault(
 export const ARWEAVE_NODE_IGNORE_URLS: string[] =
   env.varOrUndefined('ARWEAVE_NODE_IGNORE_URLS')?.split(',') ?? [];
 
-// Default preferred chunk POST nodes (tip-1 through tip-5.arweave.xyz)
+// Default preferred chunk POST nodes (tip-1 through tip-4.arweave.xyz; tip-5 is
+// unreachable, see DEFAULT_PREFERRED_CHUNK_GET_NODE_URLS). Four still meet
+// CHUNK_POST_MIN_PREFERRED_SUCCESS_COUNT (2) and CHUNK_POST_MIN_SUCCESS_COUNT (3).
 const DEFAULT_PREFERRED_CHUNK_POST_NODE_URLS = [
   'http://tip-1.arweave.xyz:1984',
   'http://tip-2.arweave.xyz:1984',
   'http://tip-3.arweave.xyz:1984',
   'http://tip-4.arweave.xyz:1984',
-  'http://tip-5.arweave.xyz:1984',
 ];
 
 // Preferred chunk POST URLs (prioritized over discovered peers)
@@ -1169,9 +1168,13 @@ export const CHUNK_GET_BASE64_SIZE_BYTES = +env.varOrDefault(
 // Maximum raw chunk size (256 KiB) - used for raw binary chunk endpoint rate limiting
 export const MAX_CHUNK_SIZE = 256 * 1024;
 
-// The maximum number of peers to attempt when fetching a chunk via GET
+// The maximum number of peers to attempt when fetching a chunk via GET.
+// Each attempt is capped at PEER_CHUNK_REQUEST_TIMEOUT_MS (500 ms). On the older
+// half of the weave a chunk is often held by only one of the preferred tip
+// nodes, so 5 weighted-random attempts regularly ran out before reaching it; 8
+// covers all the preferred tips plus fallbacks. A miss costs at most 4 s.
 export const ARWEAVE_PEER_CHUNK_GET_MAX_PEER_ATTEMPT_COUNT =
-  env.positiveIntOrDefault('ARWEAVE_PEER_CHUNK_GET_MAX_PEER_ATTEMPT_COUNT', 5);
+  env.positiveIntOrDefault('ARWEAVE_PEER_CHUNK_GET_MAX_PEER_ATTEMPT_COUNT', 8);
 
 // How many candidate peers to select from each pool for chunk GET requests
 export const ARWEAVE_PEER_CHUNK_GET_PEER_SELECTION_COUNT =
@@ -1691,7 +1694,42 @@ export const START_WRITERS =
 
 // Indexing range
 export const START_HEIGHT = +env.varOrDefault('START_HEIGHT', '0');
+/** Whether START_HEIGHT was set, so an explicit 0 is told from the default. */
+export const START_HEIGHT_SET =
+  env.varOrUndefined('START_HEIGHT') !== undefined;
 export const STOP_HEIGHT = +env.varOrDefault('STOP_HEIGHT', 'Infinity');
+
+//
+// L1 band import
+//
+
+/**
+ * Fill the L1 history beneath this gateway from installed `parquet-l1`
+ * bands (subscribe to them with the index-swarm sidecar), while it runs.
+ * With an empty `core.db` and no START_HEIGHT, the block importer then
+ * starts at the chain tip instead of 0, and the history beneath arrives
+ * from the bands.
+ */
+export const L1_BAND_IMPORT_ENABLED =
+  env.varOrDefault('L1_BAND_IMPORT_ENABLED', 'false') === 'true';
+
+/** Where the index-swarm sidecar installs `parquet-l1` bands. */
+export const L1_BAND_IMPORT_BANDS_DIR = env.varOrDefault(
+  'L1_BAND_IMPORT_BANDS_DIR',
+  'data/indexes/installed/parquet-l1',
+);
+
+/** Seconds between fill runs, counted from the end of the last. */
+export const L1_BAND_IMPORT_INTERVAL_SECONDS = +env.varOrDefault(
+  'L1_BAND_IMPORT_INTERVAL_SECONDS',
+  '600',
+);
+
+/** SQLite page cache for a fill run, in MiB, in a process of its own. */
+export const L1_BAND_IMPORT_CACHE_MIB = +env.varOrDefault(
+  'L1_BAND_IMPORT_CACHE_MIB',
+  '512',
+);
 
 //
 // Verification
@@ -2322,16 +2360,12 @@ export const CLICKHOUSE_GQL_MAX_ROWS_TO_READ = env.positiveIntOrDefault(
 // it). The outer `LIMIT 1 BY` then dedupes unmerged
 // ReplacingMergeTree versions.
 //
-// Pagination correctness caveat: this multiplier must be at least as
-// large as the table's effective duplicate factor. If a region of the
-// table has more unmerged versions per PK than this headroom covers,
-// the deduped inner window can yield fewer than `pageSize + 1` unique
-// rows even when more unique matches exist further on — the result
-// will be a short page with `hasNextPage: false` and rows past the
-// window will be silently skipped. Regular background merges keep
-// the duplicate factor at 1-2 in practice, so 4 leaves comfortable
-// headroom; raise this if operators observe short pages (e.g. during
-// a heavy ingest that produces many unmerged parts).
+// When a region of the table has more unmerged versions per PK than this
+// covers, the deduped inner window yields fewer than `pageSize + 1` unique
+// rows even though more matches exist. The query detects that (the inner
+// window came back full) and continues from the last unique row's cursor;
+// id lookups, which have no order to continue from, retry with 4x the
+// headroom instead (see queryChTransactionRows).
 export const CLICKHOUSE_GQL_DEDUPE_HEADROOM = env.positiveIntOrDefault(
   'CLICKHOUSE_GQL_DEDUPE_HEADROOM',
   4,
@@ -2607,10 +2641,7 @@ export const SANDBOX_PROTOCOL = env.varOrUndefined('SANDBOX_PROTOCOL');
 // The wallet for this gateway
 export const AR_IO_WALLET = env.varOrUndefined('AR_IO_WALLET');
 
-export const AR_IO_NODE_RELEASE = env.varOrDefault(
-  'AR_IO_NODE_RELEASE',
-  release,
-);
+export { AR_IO_NODE_RELEASE } from './release.js';
 
 //
 // Apex domain customization
@@ -3384,15 +3415,27 @@ export const TRUSTED_CACHE_RETRY_RATE = +env.varOrDefault(
   '0.0',
 );
 
-// Background caching for range request cache misses
+// Background caching for range request cache misses.
+//
+// A single-range GET of an uncached item fetches only the range (see
+// serveUncachedRange in routes/data/handlers.ts), so this background fetch is
+// what fills the cache with the whole item. Before that, the data handlers
+// fetched the whole item first and kept downloading it into the cache after
+// the range was served, for any size, so these defaults keep range-only
+// traffic (video, SQLite-over-HTTP) filling the cache: 10 GiB covers nearly
+// every item, and 4 fetches at once keep one long download from holding the
+// only permit. The foreground write guards (FOREGROUND_CACHE_MAX_SIZE and
+// FOREGROUND_CACHE_CONCURRENCY) apply to these fetches too. Signature and
+// owner reads from a parent bundle opt out (backgroundCacheOnRangeMiss), so
+// they never download a whole bundle. 0 disables.
 export const BACKGROUND_CACHE_RANGE_MAX_SIZE = env.nonNegativeIntOrDefault(
   'BACKGROUND_CACHE_RANGE_MAX_SIZE',
-  0,
+  10 * 1024 * 1024 * 1024,
 );
 
 export const BACKGROUND_CACHE_RANGE_CONCURRENCY = env.positiveIntOrDefault(
   'BACKGROUND_CACHE_RANGE_CONCURRENCY',
-  1,
+  4,
 );
 
 // Guards on the foreground (on-demand) full-item cache write path. Both
@@ -3535,6 +3578,58 @@ export const INDEXES_PUBLISHED_DIR = env.varOrDefault(
   'data/indexes/published',
 );
 
+/**
+ * For a node that serves an operator's indexes but does not sign them: the
+ * base URL of the gateway that does (e.g. `http://10.0.0.1:4000`). This node
+ * then advertises that gateway's publication in /ar-io/info, so every node
+ * behind a load balancer answers alike. Unset on the signing node and on a
+ * gateway that runs alone.
+ */
+export const INDEXES_ADVERTISE_FROM_URL = env.varOrUndefined(
+  'INDEXES_ADVERTISE_FROM_URL',
+);
+
+/**
+ * This gateway's public origin (`https://gateway.example`): the base of the
+ * absolute URLs in its index feeds (`/ar-io/indexes/feed/<index>.xml`) and of
+ * the WebSeed each served `.torrent` names. From configuration, never from a
+ * request's Host header, which whoever sends the request controls. Defaults
+ * to `https://<ARNS_ROOT_HOST>`; with neither, the feeds answer 404 and
+ * torrents are served without a WebSeed. An origin only (scheme, host and
+ * port): a value that is not one stops the gateway at startup, as an explicit
+ * setting that is wrong would otherwise publish broken links.
+ */
+export const INDEXES_PUBLIC_URL = (() => {
+  const value = env.varOrUndefined('INDEXES_PUBLIC_URL');
+  if (value !== undefined && value.trim() !== '') {
+    try {
+      return parsePublicOrigin(value);
+    } catch (error: any) {
+      throw new Error(`INDEXES_PUBLIC_URL: ${error.message}`);
+    }
+  }
+  if (ARNS_ROOT_HOST === undefined) return undefined;
+  // A default must not stop a gateway that started before: an
+  // ARNS_ROOT_HOST that makes no origin just means no feeds.
+  try {
+    return parsePublicOrigin(`https://${ARNS_ROOT_HOST}`);
+  } catch {
+    return undefined;
+  }
+})();
+
+/**
+ * Whether each served `.torrent` names this gateway as its WebSeed, so a
+ * stock BitTorrent client can finish a band no peer is delivering, while the
+ * gateway still offers the band and within its allowance where the byte
+ * routes are metered. Such a client draws part
+ * of every band from it even while peers could serve it, through the byte
+ * routes' meter when that is on; `false` serves torrents as the publisher
+ * wrote them, for peers only.
+ */
+export const INDEXES_TORRENT_WEBSEED =
+  env.varOrDefault('INDEXES_TORRENT_WEBSEED', 'true') === 'true';
+
 export const ENABLE_RATE_LIMITER =
   env.varOrDefault('ENABLE_RATE_LIMITER', 'false') === 'true';
 
@@ -3578,7 +3673,7 @@ export const RATE_LIMITER_IP_REFILL_PER_SEC = +env.varOrDefault(
  */
 const TRUSTED_PROXIES_VALUE = env.varOrDefault(
   'TRUSTED_PROXIES',
-  '127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10,169.254.0.0/16,::1/128,fc00::/7,fe80::/10',
+  PRIVATE_NETWORK_RANGES.join(','),
 );
 export const TRUSTED_PROXIES =
   TRUSTED_PROXIES_VALUE.trim() === 'none'

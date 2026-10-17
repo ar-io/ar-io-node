@@ -50,6 +50,7 @@ import { PartitionedCdb64Reader } from '../lib/partitioned-cdb64-reader.js';
 import {
   Cdb64Manifest,
   isCdb64TempDirName,
+  isLocalPartitionLocation,
   parseManifest,
 } from '../lib/cdb64-manifest.js';
 import * as metrics from '../metrics.js';
@@ -164,12 +165,74 @@ function parseSourceSpec(spec: string): ParsedSource {
   return { type: 'file', path: spec };
 }
 
+/**
+ * Source types read from local disk. Every other type is fetched over the
+ * network (HTTP or Arweave).
+ */
+const LOCAL_SOURCE_TYPES: ReadonlySet<string> = new Set([
+  'file',
+  'partitioned-directory',
+]);
+
+/**
+ * Where a CDB64 source's lookups read from. `local`: only local disk.
+ * `remote`: at least some reads go over the network (HTTP or Arweave).
+ */
+export type Cdb64SourceLocality = 'local' | 'remote';
+
+/**
+ * Classifies one loaded source by where its lookups actually read, not by how
+ * its spec is spelled.
+ *
+ * - A local `.cdb` file, or the files of a local directory: `local`.
+ * - A local directory holding a `manifest.json` (a partitioned index, such
+ *   as an installed band): `local` only when every partition is a local
+ *   file. The shipped `resources/` indexes are local manifests whose
+ *   partitions are all Arweave byte ranges, so they are `remote`. A
+ *   manifest that mixes local and remote partitions is `remote` as a whole.
+ * - Every other type (`http`, `partitioned-http`, `arweave-tx`,
+ *   `arweave-byte-range`, `partitioned-arweave-*`): `remote`.
+ *
+ * @param sourceType - the parsed source type (see `parseSourceSpec`).
+ * @param manifest - the manifest, for a partitioned source.
+ */
+export function cdb64SourceLocality(
+  sourceType: string,
+  manifest?: Cdb64Manifest,
+): Cdb64SourceLocality {
+  if (!LOCAL_SOURCE_TYPES.has(sourceType)) return 'remote';
+  if (
+    manifest !== undefined &&
+    !manifest.partitions.every((p) => isLocalPartitionLocation(p.location))
+  ) {
+    return 'remote';
+  }
+  return 'local';
+}
+
+/**
+ * What a lookup in this index returns. `dataSize` and `contentType` are never
+ * set: the index doesn't store a content type, and a location with
+ * `dataSize` is served without verifying the item's signature.
+ */
+export interface Cdb64RootTxLookupResult {
+  rootTxId: string;
+  path?: string[];
+  rootOffset?: number;
+  rootDataOffset?: number;
+  size?: number;
+  dataSize?: never;
+  contentType?: never;
+}
+
 /** Reader entry with metadata for logging (supports both single-file and partitioned readers) */
 interface ReaderEntry {
   reader: Cdb64Reader | PartitionedCdb64Reader;
   sourceSpec: string;
   sourceType: string;
   isPartitioned: boolean;
+  /** Where this source's lookups read from; see {@link cdb64SourceLocality}. */
+  locality: Cdb64SourceLocality;
   /**
    * Lookups currently inside this reader. A reader being retired is dropped
    * from the lookup list immediately but closed only once this reaches zero,
@@ -248,6 +311,14 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
   private sources: string[];
   private initialized = false;
   private initializationPromise: Promise<void> | null = null;
+  /**
+   * True once every source given as a local path is loaded. Initialization
+   * loads those first, so a lookup limited to local sources never waits on a
+   * remote source's manifest or header fetch.
+   */
+  private localInitialized = false;
+  /** Settles when the initialization in progress has loaded local paths. */
+  private localInitializationPromise: Promise<void> | null = null;
   private watchEnabled: boolean;
   /**
    * Active watchers, keyed `<kind>:<path>`. Every configured directory gets
@@ -446,6 +517,7 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
       sourceSpec,
       sourceType: parsed.type,
       isPartitioned: false,
+      locality: cdb64SourceLocality(parsed.type),
       inFlight: 0,
     };
   }
@@ -850,6 +922,7 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
         sourceSpec: filePath,
         sourceType: 'file',
         isPartitioned: false,
+        locality: 'local',
         inFlight: 0,
       };
       this.readerMap.set(filePath, entry);
@@ -976,13 +1049,31 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
       return this.initializationPromise;
     }
 
-    this.initializationPromise = this.doInitialize();
+    let markLocalReady: () => void = () => undefined;
+    this.localInitializationPromise = new Promise<void>((resolve) => {
+      markLocalReady = resolve;
+    });
+    this.initializationPromise = this.doInitialize(markLocalReady);
 
     try {
       await this.initializationPromise;
     } finally {
       this.initializationPromise = null;
+      this.localInitializationPromise = null;
     }
+  }
+
+  /**
+   * Waits only until the sources given as local paths are loaded, starting
+   * initialization if needed. Remote sources keep loading in the background.
+   */
+  private async ensureLocalInitialized(): Promise<void> {
+    if (this.initialized || this.localInitialized) {
+      return;
+    }
+    const full = this.ensureInitialized();
+    const local = this.localInitializationPromise;
+    await (local === null ? full : Promise.race([full, local]));
   }
 
   /**
@@ -1235,6 +1326,7 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
       sourceSpec,
       sourceType: parsed.type,
       isPartitioned: true,
+      locality: cdb64SourceLocality(parsed.type, manifest),
       inFlight: 0,
     };
     const heightRange = manifestHeightRange(manifest);
@@ -1318,6 +1410,7 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
           sourceSpec: filePath,
           sourceType: 'file',
           isPartitioned: false,
+          locality: 'local',
           inFlight: 0,
         });
       } catch (fileError: any) {
@@ -1346,80 +1439,106 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
   }
 
   /**
-   * Performs the actual initialization work.
+   * Loads one configured source: a remote partitioned manifest, a local
+   * directory (flat, collection or partitioned), a directory that does not
+   * exist yet, or a single local or remote file. Errors for the source are
+   * logged and it is skipped.
    */
-  private async doInitialize(): Promise<void> {
+  private async initializeSource(sourceSpec: string): Promise<void> {
+    const parsed = parseSourceSpec(sourceSpec);
+
+    // Handle partitioned remote sources
+    if (
+      parsed.type === 'partitioned-http' ||
+      parsed.type === 'partitioned-arweave-tx' ||
+      parsed.type === 'partitioned-arweave-byte-range'
+    ) {
+      try {
+        const entry = await this.createPartitionedReader(sourceSpec, parsed);
+        this.readerMap.set(sourceSpec, entry);
+        this.log.info('Partitioned CDB64 source initialized', {
+          source: sourceSpec,
+          type: entry.sourceType,
+          partitionCount: (
+            entry.reader as PartitionedCdb64Reader
+          ).getTotalPartitionCount(),
+        });
+      } catch (error: any) {
+        this.log.error('Failed to initialize partitioned CDB64 source', {
+          source: sourceSpec,
+          error: error.message,
+        });
+      }
+      return;
+    }
+
+    // Check if this is a local directory
+    const dirPath = await this.checkIfDirectory(sourceSpec);
+    if (dirPath !== undefined) {
+      // Check if it's a partitioned directory (has manifest.json)
+      const isPartitioned = await this.isPartitionedDirectory(dirPath);
+      if (isPartitioned) {
+        await this.initializePartitionedDirectory(dirPath);
+      } else {
+        await this.initializeDirectory(dirPath);
+      }
+      return;
+    }
+
+    // A local path that does not exist and is not named like a CDB64
+    // file is a directory nothing has created yet. Wait for it.
+    if (
+      parsed.type === 'file' &&
+      !isCdb64File(parsed.path) &&
+      (await this.pathIsMissing(parsed.path))
+    ) {
+      this.waitForDirectory(parsed.path);
+      return;
+    }
+
+    // Single file or remote source
     try {
-      for (const sourceSpec of this.sources) {
-        const parsed = parseSourceSpec(sourceSpec);
+      const entry = await this.createReader(sourceSpec);
+      this.readerMap.set(sourceSpec, entry);
+      this.log.info('CDB64 source initialized', {
+        source: sourceSpec,
+        type: entry.sourceType,
+      });
+    } catch (error: any) {
+      this.log.error('Failed to initialize CDB64 source', {
+        source: sourceSpec,
+        error: error.message,
+      });
+      // Continue with other sources - don't fail completely
+    }
+  }
 
-        // Handle partitioned remote sources
-        if (
-          parsed.type === 'partitioned-http' ||
-          parsed.type === 'partitioned-arweave-tx' ||
-          parsed.type === 'partitioned-arweave-byte-range'
-        ) {
-          try {
-            const entry = await this.createPartitionedReader(
-              sourceSpec,
-              parsed,
-            );
-            this.readerMap.set(sourceSpec, entry);
-            this.log.info('Partitioned CDB64 source initialized', {
-              source: sourceSpec,
-              type: entry.sourceType,
-              partitionCount: (
-                entry.reader as PartitionedCdb64Reader
-              ).getTotalPartitionCount(),
-            });
-          } catch (error: any) {
-            this.log.error('Failed to initialize partitioned CDB64 source', {
-              source: sourceSpec,
-              error: error.message,
-            });
-          }
-          continue;
-        }
+  /**
+   * Performs the actual initialization work, in two passes: sources given as
+   * local paths first, then remote ones. Local paths never need the network
+   * to load (a local manifest's remote partitions are opened lazily, on
+   * lookup), so lookups limited to local sources can start after the first
+   * pass, before any remote manifest or header has been fetched. Search order
+   * is unaffected: it always follows the configured order.
+   *
+   * @param onLocalReady - called once the local paths are loaded.
+   */
+  private async doInitialize(onLocalReady: () => void): Promise<void> {
+    try {
+      const isLocalPath = (spec: string) =>
+        parseSourceSpec(spec).type === 'file';
+      const localSpecs = this.sources.filter(isLocalPath);
+      const remoteSpecs = this.sources.filter((spec) => !isLocalPath(spec));
 
-        // Check if this is a local directory
-        const dirPath = await this.checkIfDirectory(sourceSpec);
-        if (dirPath !== undefined) {
-          // Check if it's a partitioned directory (has manifest.json)
-          const isPartitioned = await this.isPartitionedDirectory(dirPath);
-          if (isPartitioned) {
-            await this.initializePartitionedDirectory(dirPath);
-          } else {
-            await this.initializeDirectory(dirPath);
-          }
-          continue;
-        }
+      for (const sourceSpec of localSpecs) {
+        await this.initializeSource(sourceSpec);
+      }
+      this.rebuildReaderList();
+      this.localInitialized = true;
+      onLocalReady();
 
-        // A local path that does not exist and is not named like a CDB64
-        // file is a directory nothing has created yet. Wait for it.
-        if (
-          parsed.type === 'file' &&
-          !isCdb64File(parsed.path) &&
-          (await this.pathIsMissing(parsed.path))
-        ) {
-          this.waitForDirectory(parsed.path);
-          continue;
-        }
-
-        // Single file or remote source
-        try {
-          const entry = await this.createReader(sourceSpec);
-          this.readerMap.set(sourceSpec, entry);
-          this.log.info('CDB64 source initialized', {
-            source: sourceSpec,
-            type: entry.sourceType,
-          });
-        } catch (error: any) {
-          this.log.error('Failed to initialize CDB64 source', {
-            source: sourceSpec,
-            error: error.message,
-          });
-          // Continue with other sources - don't fail completely
-        }
+      for (const sourceSpec of remoteSpecs) {
+        await this.initializeSource(sourceSpec);
       }
 
       this.rebuildReaderList();
@@ -1439,6 +1558,7 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
       );
       this.readerMap.clear();
       this.readers = [];
+      this.localInitialized = false;
 
       this.log.error('Failed to initialize CDB64 root TX index', {
         error: error.message,
@@ -1450,24 +1570,77 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
   /**
    * Looks up a data item ID and returns its root transaction information.
    */
-  async getRootTx(id: string): Promise<
-    | {
-        rootTxId: string;
-        path?: string[];
-        rootOffset?: number;
-        rootDataOffset?: number;
-        contentType?: string;
-        size?: number;
-        dataSize?: number;
-      }
-    | undefined
-  > {
+  async getRootTx(id: string): Promise<Cdb64RootTxLookupResult | undefined> {
     try {
       await this.ensureInitialized();
     } catch {
       return undefined;
     }
+    return this.lookup(id, { localOnly: false });
+  }
 
+  /**
+   * Like {@link getRootTx}, but searches only the sources of one locality
+   * (see {@link cdb64SourceLocality}), in configured order. This is what the
+   * `cdb` and `cdb-remote` tokens of `ROOT_TX_LOOKUP_ORDER` ask when both are
+   * used: `local` reads only local disk; `remote` asks the sources that read
+   * over the network.
+   *
+   * A `local` lookup waits only for the sources given as local paths to
+   * load, never for a remote manifest or header fetch.
+   */
+  async getRootTxFrom(
+    id: string,
+    locality: Cdb64SourceLocality,
+  ): Promise<Cdb64RootTxLookupResult | undefined> {
+    try {
+      if (locality === 'local') {
+        await this.ensureLocalInitialized();
+      } else {
+        await this.ensureInitialized();
+      }
+    } catch {
+      return undefined;
+    }
+    return this.lookup(id, { localOnly: false, locality });
+  }
+
+  /**
+   * Like {@link getRootTx}, but answers only from sources on local disk and
+   * never makes a network request: remote sources, and remote partitions of a
+   * local manifest (the shipped `resources/` indexes are all Arweave byte
+   * ranges), are skipped without being opened.
+   *
+   * It never waits for initialization either, since initializing can fetch
+   * remote manifests and headers. Until the sources given as local paths are
+   * loaded it starts initialization in the background and answers with a
+   * miss.
+   *
+   * Unlike `getRootTxFrom(id, 'local')`, it still reads the local partitions
+   * of a manifest that mixes local and remote partitions.
+   *
+   * For callers that must stay cheap on arbitrary IDs, such as the public
+   * `/ar-io/offsets/:id` route.
+   */
+  async getLocalRootTx(
+    id: string,
+  ): Promise<Cdb64RootTxLookupResult | undefined> {
+    if (!this.initialized && !this.localInitialized) {
+      this.ensureInitialized().catch(() => {
+        // Logged by doInitialize; the next call retries.
+      });
+      return undefined;
+    }
+    return this.lookup(id, { localOnly: true });
+  }
+
+  private async lookup(
+    id: string,
+    {
+      localOnly,
+      locality,
+    }: { localOnly: boolean; locality?: Cdb64SourceLocality },
+  ): Promise<Cdb64RootTxLookupResult | undefined> {
     // Convert base64url ID to 32-byte binary key
     let keyBuffer: Buffer;
     try {
@@ -1490,9 +1663,18 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
 
     // Search through all readers in order (first match wins)
     for (const entry of currentReaders) {
+      if (localOnly && !LOCAL_SOURCE_TYPES.has(entry.sourceType)) {
+        continue;
+      }
+      if (locality !== undefined && entry.locality !== locality) {
+        continue;
+      }
       entry.inFlight += 1;
       try {
-        const valueBuffer = await entry.reader.get(keyBuffer);
+        const valueBuffer =
+          entry.reader instanceof PartitionedCdb64Reader
+            ? await entry.reader.get(keyBuffer, { localOnly })
+            : await entry.reader.get(keyBuffer);
 
         if (valueBuffer !== undefined) {
           const value = decodeCdb64Value(valueBuffer);
@@ -1506,11 +1688,12 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
           //
           // When the value records the item size it is returned as `size` (the
           // whole item, header + payload). `dataSize` is deliberately left
-          // unset even though it could be derived: a result carrying
-          // `dataSize` is treated as ready to serve with no header read, but
-          // the index does not store the item's content type, and only reading
-          // the item header recovers it (and confirms the offset belongs to
-          // the requested ID).
+          // unset even though it could be derived: a location carrying
+          // `dataSize` is served without verifying the item's signature,
+          // while one without it goes through signature-verified serving.
+          // An index is a publisher's claim, so its answers take the
+          // verified path. The index also stores no content type; reading
+          // the item header recovers it.
           if (isPathCompleteValue(value) || isCompleteValue(value)) {
             return {
               rootTxId,
@@ -1574,5 +1757,35 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
     this.readerMap.clear();
     this.readers = [];
     this.initialized = false;
+    this.localInitialized = false;
+  }
+}
+
+/**
+ * The `cdb` token of `ROOT_TX_LOOKUP_ORDER` when `cdb-remote` is also listed:
+ * the CDB64 sources read from local disk only (installed bands, local files).
+ * A view of a shared {@link Cdb64RootTxIndex}, so files are opened and
+ * directories watched once. Reported as source `cdb64` in metrics.
+ */
+export class Cdb64LocalRootTxIndex implements DataItemRootIndex {
+  constructor(private readonly index: Cdb64RootTxIndex) {}
+
+  getRootTx(id: string): Promise<Cdb64RootTxLookupResult | undefined> {
+    return this.index.getRootTxFrom(id, 'local');
+  }
+}
+
+/**
+ * The `cdb-remote` token of `ROOT_TX_LOOKUP_ORDER`: the CDB64 sources whose
+ * reads go over the network, such as the shipped `resources/` indexes
+ * (partitions stored on Arweave), HTTP sources and Arweave transactions. A
+ * view of a shared {@link Cdb64RootTxIndex}. Reported as source
+ * `cdb64-remote` in metrics.
+ */
+export class Cdb64RemoteRootTxIndex implements DataItemRootIndex {
+  constructor(private readonly index: Cdb64RootTxIndex) {}
+
+  getRootTx(id: string): Promise<Cdb64RootTxLookupResult | undefined> {
+    return this.index.getRootTxFrom(id, 'remote');
   }
 }

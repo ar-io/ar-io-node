@@ -36,6 +36,7 @@ import {
   manifestSha256,
   parseIndexPublicationDocument,
   verifyIndexPublication,
+  WEBSEED_PATH,
 } from '../lib/index-publication.js';
 import { publicKeyFromSolanaAddress } from '../lib/httpsig.js';
 import {
@@ -119,7 +120,7 @@ const UNTRACKED_MIN_AGE_MS = 10 * 60_000;
  * Separates a band id from its generation in an installed directory name.
  * A band id can't contain it, so no directory name is ambiguous.
  */
-const GENERATION_SEPARATOR = '~';
+export const GENERATION_SEPARATOR = '~';
 
 /** A short digest of a band's files: its identity on disk. */
 export function bandGeneration(band: BandDescriptor): string {
@@ -354,6 +355,22 @@ type TorrentOutcome =
   | { kind: 'pending' }
   | { kind: 'fallback' }
   | { kind: 'done'; dir: string };
+
+/**
+ * Whether a subscription takes an index: the indexes it names, or, naming
+ * none, every one whose kind isn't opt-in (large datasets the gateway
+ * doesn't serve from are taken only when asked for).
+ */
+export function takesIndex(
+  subscription: Pick<SubscribeConfig, 'name'>,
+  indexName: string,
+  kind: Pick<ArtifactKind, 'optIn'> | undefined,
+): boolean {
+  if (subscription.name !== undefined) {
+    return [subscription.name].flat().includes(indexName);
+  }
+  return kind?.optIn !== true;
+}
 
 export class Subscriber {
   private readonly log: Logger;
@@ -735,10 +752,8 @@ export class Subscriber {
     // band of any of its indexes starts another until the next poll.
     const meter: PollMeter = { refused: false };
     for (const index of document.indexes) {
-      if (subscription.name !== undefined && subscription.name !== index.name) {
-        continue;
-      }
       const kind = this.kinds.get(index.kind);
+      if (!takesIndex(subscription, index.name, kind)) continue;
       if (kind === undefined) {
         // A publisher offering a kind this node does not understand is
         // normal; take the kinds that are usable and move on.
@@ -757,22 +772,22 @@ export class Subscriber {
       }
     }
 
-    // An index the publisher has dropped altogether never reaches
-    // reconcileIndex, so its bands are retired here.
-    const published = new Set(document.indexes.map((index) => index.name));
-    const fallbackKind = this.kinds.values().next().value;
-    if (fallbackKind !== undefined) {
-      for (const indexName of Object.keys(
-        (await this.state.load()).installed,
-      )) {
-        if (published.has(indexName)) continue;
-        await this.retireUnoffered(
-          publisher,
-          indexName,
-          new Set(),
-          fallbackKind,
-        );
-      }
+    // An index the publisher has dropped altogether, or this subscription
+    // no longer takes, never reaches reconcileIndex, so its bands are
+    // retired here.
+    const taken = new Set(
+      document.indexes
+        .filter((index) =>
+          takesIndex(subscription, index.name, this.kinds.get(index.kind)),
+        )
+        .map((index) => index.name),
+    );
+    const installed = (await this.state.load()).installed;
+    for (const indexName of Object.keys(installed)) {
+      if (taken.has(indexName)) continue;
+      const kind = this.kindOf(installed[indexName] ?? {});
+      if (kind === undefined) continue;
+      await this.retireUnoffered(publisher, indexName, new Set(), kind);
     }
 
     await this.state.update((draft) => {
@@ -949,7 +964,7 @@ export class Subscriber {
         sameFiles(existing.files, band.files) &&
         // The record can outlive its files (a crash, an operator's rm);
         // reinstall rather than trust a record the gateway can't serve.
-        existsSync(path.join(existing.dir, 'manifest.json'))
+        existsSync(path.join(existing.dir, kind.liveFile))
       ) {
         // However it was installed (over HTTP, adopted from disk), a band
         // the swarm can have is seeded once its torrent is kept.
@@ -1208,14 +1223,21 @@ export class Subscriber {
     // A copy already on disk (state lost, or a crash between install and
     // the state write) is adopted rather than fetched again.
     const adopted = await this.adoptInstalledCopy(
-      index.name,
+      index,
       band,
       targetDir,
       claimed,
       kind,
     );
     if (adopted !== undefined) {
-      await this.recordInstall(publisher, index.name, band, adopted, live);
+      await this.recordInstall(
+        publisher,
+        index.name,
+        kind.kind,
+        band,
+        adopted,
+        live,
+      );
       this.log.info('Adopted a band already on disk', {
         publisher,
         index: index.name,
@@ -1426,7 +1448,7 @@ export class Subscriber {
     transport: 'http' | 'torrent';
   }): Promise<boolean> {
     try {
-      await kind.validate(band, sourceDir);
+      await kind.validate(band, sourceDir, index);
     } catch (error: any) {
       // Bytes that match their digests but are not the shape this kind can
       // serve must not reach the gateway, and must not be resumed onto.
@@ -1460,6 +1482,7 @@ export class Subscriber {
     next[band.id] = {
       ...next[band.id],
       publisher,
+      kind: kind.kind,
       ...(keptInfohash !== undefined ? { infohashV1: keptInfohash } : {}),
     };
     this.addPendingRetire(next, band.id, live, targetDir);
@@ -1485,7 +1508,7 @@ export class Subscriber {
    * Returns its directory, or undefined.
    */
   private async adoptInstalledCopy(
-    indexName: string,
+    index: IndexEntry,
     band: BandDescriptor,
     targetDir: string,
     claimed: ReadonlySet<string>,
@@ -1493,7 +1516,7 @@ export class Subscriber {
   ): Promise<string | undefined> {
     // This generation's directory under any suffix, and the layout from
     // before generations, in that order.
-    const indexDir = path.join(this.installedDir, indexName);
+    const indexDir = path.join(this.installedDir, index.name);
     const prefix = `${band.id}${GENERATION_SEPARATOR}${bandGeneration(band)}`;
     const onDisk = (await fs.readdir(indexDir).catch(() => [] as string[]))
       .filter((name) => name === prefix || name.startsWith(`${prefix}.`))
@@ -1520,10 +1543,10 @@ export class Subscriber {
       // The same gate a download passes: what is on disk is not trusted
       // for being there.
       try {
-        await kind.validate(band, dir);
+        await kind.validate(band, dir, index);
       } catch (error: any) {
         this.log.warn('A copy on disk failed validation; not adopting it', {
-          index: indexName,
+          index: index.name,
           band: band.id,
           dir,
           error: error?.message,
@@ -2104,7 +2127,7 @@ export class Subscriber {
       ) {
         try {
           await transport.setWebSeeds(pending.id, [
-            new URL('/ar-io/indexes/webseed/', origin).toString(),
+            new URL(WEBSEED_PATH, origin).toString(),
           ]);
           pending.webSeeded = true;
           pending.webSeededAt = now;
@@ -2491,10 +2514,29 @@ export class Subscriber {
     }
   }
 
+  /**
+   * The kind a band was installed as, or, without a band, the one its
+   * index's bands record. Bands installed before kinds were recorded are
+   * root-TX bands: the first kind.
+   */
+  private kindOf(
+    bands: Record<string, InstalledBand>,
+    band?: InstalledBand,
+  ): ArtifactKind | undefined {
+    const recorded =
+      band?.kind ??
+      Object.values(bands).find((b) => b.kind !== undefined)?.kind;
+    return (
+      (recorded !== undefined ? this.kinds.get(recorded) : undefined) ??
+      this.kinds.values().next().value
+    );
+  }
+
   /** Record an install of `band` at `dir`, retiring the copy it replaces. */
   private async recordInstall(
     publisher: string,
     indexName: string,
+    kind: string,
     band: BandDescriptor,
     dir: string,
     replaced: InstalledBand | undefined,
@@ -2506,6 +2548,7 @@ export class Subscriber {
         files: band.files,
         installedAt: this.now().toISOString(),
         publisher,
+        kind,
       };
       this.addPendingRetire(map, band.id, replaced, dir);
     });
@@ -2553,8 +2596,6 @@ export class Subscriber {
    * what the gateway serves; its bands should not outlive that.
    */
   private async retireUnsubscribed(): Promise<void> {
-    const kind = this.kinds.values().next().value;
-    if (kind === undefined) return;
     const state = await this.state.load();
     for (const [indexName, live] of Object.entries(state.installed)) {
       for (const [key, band] of Object.entries({ ...live })) {
@@ -2570,6 +2611,8 @@ export class Subscriber {
         const current = {
           ...((await this.state.load()).installed[indexName] ?? {}),
         };
+        const kind = this.kindOf(current, band);
+        if (kind === undefined) continue;
         const next = await kind.retire({ bandId: key, dir: band.dir, current });
         await this.state.update((draft) => {
           applyBandChanges(draft.installed, indexName, current, next);
@@ -2588,8 +2631,6 @@ export class Subscriber {
 
   /** Retire replaced copies whose overlap has passed. */
   private async retireDue(): Promise<void> {
-    const kind = this.kinds.values().next().value;
-    if (kind === undefined) return;
     const now = this.now().getTime();
     const state = await this.state.load();
     for (const [indexName, live] of Object.entries(state.installed)) {
@@ -2602,6 +2643,8 @@ export class Subscriber {
         const current = {
           ...((await this.state.load()).installed[indexName] ?? {}),
         };
+        const kind = this.kindOf(current, band);
+        if (kind === undefined) continue;
         const next = await kind.retire({ bandId: key, dir: band.dir, current });
         const { retireAfter: _done, ...retired } = next[key];
         next[key] = { ...retired, files: band.files };
@@ -2620,8 +2663,6 @@ export class Subscriber {
    * never mistaken for an orphan.
    */
   private async retireUntracked(): Promise<void> {
-    const kind = this.kinds.values().next().value;
-    if (kind === undefined) return;
     for (const publisher of this.subscribedPublishers) {
       if (!this.reconciledSinceStart.has(publisher)) return;
     }
@@ -2671,6 +2712,9 @@ export class Subscriber {
         const current = {
           ...((await this.state.load()).installed[indexName] ?? {}),
         };
+        // No record of its own: the kind the index's other bands record.
+        const kind = this.kindOf(current);
+        if (kind === undefined) continue;
         const next = await kind.retire({ bandId: key, dir, current });
         await this.state.update((draft) => {
           applyBandChanges(draft.installed, indexName, current, next);
@@ -2784,13 +2828,11 @@ export class Subscriber {
   private async sweep(): Promise<void> {
     const state = await this.state.load();
     for (const [indexName, live] of Object.entries(state.installed)) {
-      // Any kind can sweep, but the entries were installed by one; use the
-      // first that recognises the index rather than guessing.
-      const kind = this.kinds.values().next().value;
-      if (kind === undefined) continue;
       // Snapshot before awaiting: the sweep's deletes take time, and polls
       // install into this map meanwhile.
       const current = { ...live };
+      const kind = this.kindOf(current);
+      if (kind === undefined) continue;
 
       const next = await kind.sweepRetired({
         current,

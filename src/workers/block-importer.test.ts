@@ -335,6 +335,44 @@ describe('BlockImporter', () => {
     });
   });
 
+  describe('start with startAtTip', () => {
+    afterEach(() => {
+      chainSource.setHeight(10000000);
+    });
+
+    it('starts an empty index at the chain tip', async () => {
+      chainSource.setHeight(982575);
+      blockImporter = new BlockImporter({
+        log,
+        chainSource,
+        chainIndex: db,
+        eventEmitter,
+        startAtTip: true,
+        stopHeight: 982575,
+      });
+      await blockImporter.start();
+      assert.equal(await db.getMaxHeight(), 982575);
+    });
+
+    it('carries on from what an index already holds', async () => {
+      chainSource.setHeight(982575);
+      blockImporter = new BlockImporter({
+        log,
+        chainSource,
+        chainIndex: db,
+        eventEmitter,
+        startHeight: 1,
+        startAtTip: true,
+        stopHeight: 2,
+      });
+      await blockImporter.importBlock(1);
+      await blockImporter.start();
+      // It went on from height 1, and never jumped to the tip.
+      assert.ok((await db.getMaxHeight()) <= 2);
+      assert.equal(await db.getBlockHashByHeight(982575), undefined);
+    });
+  });
+
   describe('stop', () => {
     beforeEach(async () => {
       blockImporter = createBlockImporter({ startHeight: 0, stopHeight: 1 });

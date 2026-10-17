@@ -11,6 +11,7 @@ import { Logger } from 'winston';
 import * as config from '../../config.js';
 import { headerNames } from '../../constants.js';
 import { formatContentDigest } from '../../lib/digest.js';
+import { dataEtag } from '../../lib/http-utils.js';
 import { pipeStreamToResponse } from '../../lib/stream.js';
 import * as metrics from '../../metrics.js';
 import { ContiguousData } from '../../types.js';
@@ -260,7 +261,7 @@ export async function sendBodyWithOptionalDigest({
     const hashB64Url = hasher.digest('base64url');
     res.setHeader(headerNames.digest, hashB64Url);
     res.setHeader(headerNames.contentDigest, formatContentDigest(hashB64Url));
-    res.setHeader('ETag', `"${hashB64Url}"`);
+    res.setHeader('ETag', `"${dataEtag(res, hashB64Url)}"`);
     res.setHeader('Content-Length', String(total));
     metrics.incHttpSigContentDigest({
       source: 'computed_buffered',

@@ -24,6 +24,17 @@ const DEFAULT_BUCKET_REFRESH_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 const BUCKET_SIZE = 10 * 1024 * 1024 * 1024; // 10GB bucket size
 
 /**
+ * Preferred chunk GET peers are ordered by a learned cost: an exponentially
+ * weighted average of time-to-success (ms), where a miss of any kind (404,
+ * error, timeout, invalid chunk) costs the full per-peer timeout. A peer not
+ * yet measured starts at {@link CHUNK_GET_NEUTRAL_COST_MS}, between a fast hit
+ * and a miss, so it is tried before peers known to miss and after ones known
+ * to serve quickly.
+ */
+const CHUNK_GET_COST_ALPHA = 0.2;
+const CHUNK_GET_NEUTRAL_COST_MS = 250;
+
+/**
  * Represents an Arweave peer node with its metadata
  */
 interface ArweavePeer {
@@ -88,6 +99,8 @@ export class ArweavePeerManager {
   private preferredChunkGetUrls: string[];
   private preferredChunkPostUrls: string[];
   private resolvedChunkGetUrls: string[] = [];
+  // Learned chunk GET cost per preferred peer; see CHUNK_GET_COST_ALPHA.
+  private chunkGetCosts = new Map<string, number>();
   private resolvedChunkPostUrls: string[] = [];
 
   // Configuration
@@ -733,6 +746,46 @@ export class ArweavePeerManager {
    */
   isPreferredChunkGetPeer(peerUrl: string): boolean {
     return this.resolvedChunkGetUrls.includes(peerUrl);
+  }
+
+  /**
+   * Record what one chunk GET from a preferred peer cost: its response time
+   * when it returned a valid chunk, or the full per-peer timeout for a miss of
+   * any kind. Ignored for non-preferred peers, whose order comes from bucket
+   * claims and weights instead.
+   */
+  recordChunkGetCost(peerUrl: string, costMs: number): void {
+    if (!this.isPreferredChunkGetPeer(peerUrl) || !Number.isFinite(costMs)) {
+      return;
+    }
+    const previous =
+      this.chunkGetCosts.get(peerUrl) ?? CHUNK_GET_NEUTRAL_COST_MS;
+    this.chunkGetCosts.set(
+      peerUrl,
+      previous * (1 - CHUNK_GET_COST_ALPHA) + costMs * CHUNK_GET_COST_ALPHA,
+    );
+  }
+
+  /**
+   * Preferred chunk GET peers, cheapest learned cost first.
+   *
+   * The preferred list mixes nodes in different regions and with different
+   * coverage, and a peer gets only a short timeout, so the order decides
+   * whether a fetch succeeds at all: from far away, a node that holds the
+   * chunk but answers slowly is as useless as one that does not hold it.
+   * Ordering by measured cost lets each gateway find the nodes that serve it
+   * well from where it is, without per-region configuration. Ties (unmeasured
+   * peers, chiefly) are broken at random so load spreads across them.
+   */
+  getPreferredChunkGetPeersByCost(): string[] {
+    const peers = [...new Set(this.resolvedChunkGetUrls)];
+    for (let i = peers.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [peers[i], peers[j]] = [peers[j], peers[i]];
+    }
+    const cost = (peer: string) =>
+      this.chunkGetCosts.get(peer) ?? CHUNK_GET_NEUTRAL_COST_MS;
+    return peers.sort((a, b) => cost(a) - cost(b));
   }
 
   /**

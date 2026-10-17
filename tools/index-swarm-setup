@@ -5,13 +5,13 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
-# Set up index sharing (the index-swarm sidecar, and optionally BitTorrent)
-# in .env, then optionally restart what the changes need. Idempotent: run it
-# again to add a publisher or turn on torrents.
+# Set up index sharing (the index-swarm sidecar and its torrent engine, which
+# run by default) further in .env, then optionally restart what the changes
+# need. Idempotent: run it again to add a publisher.
 #
 # Usage (from the gateway's directory, where .env and docker-compose.yaml are):
-#   ./tools/index-swarm-setup --subscribe <publisher wallet> --torrent --restart
-#   ./tools/index-swarm-setup --publish --torrent --public-host <ip> --restart
+#   ./tools/index-swarm-setup --subscribe <publisher wallet> --restart
+#   ./tools/index-swarm-setup --publish --public-host <ip> --restart
 #   ./tools/index-swarm-setup --help
 #
 # The .env logic runs in the core image (CORE_IMAGE_TAG), so the host needs
@@ -112,7 +112,7 @@ env_value() {
 }
 if [[ -n "${CORE_CONTAINER}" && "${RESTART_CORE}" != 1 ]]; then
   RUNNING_ENV="$(docker inspect -f '{{ range .Config.Env }}{{ println . }}{{ end }}' "${CORE_CONTAINER}")"
-  for key in CDB64_ROOT_TX_INDEX_SOURCES ROOT_TX_LOOKUP_ORDER; do
+  for key in CDB64_ROOT_TX_INDEX_SOURCES ROOT_TX_LOOKUP_ORDER L1_BAND_IMPORT_ENABLED; do
     running="$(sed -n "s/^${key}=//p" <<<"${RUNNING_ENV}" | tail -n1)"
     if [[ "${running}" != "$(env_value "${key}")" ]]; then RESTART_CORE=1; fi
   done

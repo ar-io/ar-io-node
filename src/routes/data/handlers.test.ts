@@ -7,8 +7,10 @@
 import { strict as assert } from 'node:assert';
 import { afterEach, beforeEach, describe, it, mock } from 'node:test';
 import express from 'express';
+import * as http from 'node:http';
 import { Readable } from 'node:stream';
 import { default as request } from 'supertest';
+import { gzipSync } from 'node:zlib';
 
 import { headerNames } from '../../constants.js';
 import * as config from '../../config.js';
@@ -26,6 +28,7 @@ import {
 } from '../../types.js';
 import {
   createDataHandler,
+  createRawDataHandler,
   getRequestAttributes,
   matchContentTypePattern,
   shouldUsePrivateCacheControl,
@@ -106,6 +109,7 @@ describe('Data routes', () => {
             resolvedId: 'not-a-real-id',
             complete: false,
           }),
+        resolveFromTrustedCache: () => undefined,
       };
     });
 
@@ -131,6 +135,558 @@ describe('Data routes', () => {
         .then((res: any) => {
           assert.equal(res.body.toString(), 'testing...');
         });
+    });
+
+    describe('Content-Encoding', () => {
+      const body = Buffer.from('{"compressed":"on chain"}');
+      const gzipped = gzipSync(body);
+      // superagent decodes a gzip response before this parser sees it, so an
+      // encoding header that does not match the bytes fails the request.
+      const bufferBody = (res: any, callback: any) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (chunk: Buffer) => chunks.push(chunk));
+        res.on('end', () => callback(null, Buffer.concat(chunks)));
+      };
+      const get = () =>
+        request(app)
+          .get('/not-a-real-id')
+          .buffer(true)
+          .parse(bufferBody)
+          .expect(200);
+      const serve = (sourceContentEncoding?: string) => {
+        dataSource = {
+          getData: () =>
+            Promise.resolve({
+              stream: Readable.from(
+                sourceContentEncoding !== undefined ? gzipped : body,
+              ),
+              size:
+                sourceContentEncoding !== undefined
+                  ? gzipped.length
+                  : body.length,
+              verified: false,
+              trusted: true,
+              cached: false,
+              sourceContentEncoding,
+            }),
+        };
+        app.get(
+          '/:id',
+          createDataHandler({
+            log,
+            dataAttributesSource,
+            dataSource,
+            dataBlockListValidator,
+            manifestPathResolver,
+          }),
+        );
+      };
+
+      it('labels bytes its upstream reports as gzip-encoded when the item is not indexed', async () => {
+        serve('gzip');
+
+        const res = await get();
+
+        assert.equal(res.headers['content-encoding'], 'gzip');
+        assert.equal(res.headers['content-length'], String(gzipped.length));
+        // Decoded by the client: fails if the header does not fit the bytes.
+        assert.deepEqual(res.body, body);
+      });
+
+      it("uses the item's indexed encoding", async () => {
+        dataAttributesSource = {
+          getDataAttributes: () =>
+            Promise.resolve({ contentEncoding: 'gzip' } as any),
+        };
+        serve('gzip');
+
+        const res = await get();
+
+        assert.equal(res.headers['content-encoding'], 'gzip');
+        assert.deepEqual(res.body, body);
+      });
+
+      it('normalizes an indexed tag value', async () => {
+        dataAttributesSource = {
+          getDataAttributes: () =>
+            Promise.resolve({ contentEncoding: ' GZIP ' } as any),
+        };
+        serve('gzip');
+
+        const res = await get();
+
+        assert.equal(res.headers['content-encoding'], 'gzip');
+        assert.deepEqual(res.body, body);
+      });
+
+      it('names no coding a client may not decode', async () => {
+        // Stacked codings and unknown ones are served without the header, as
+        // before, rather than with one the client cannot decode.
+        for (const encoding of ['gzip, br', 'x-custom']) {
+          app = express();
+          dataAttributesSource = {
+            getDataAttributes: () =>
+              Promise.resolve({ contentEncoding: encoding } as any),
+          };
+          serve(undefined);
+
+          const res = await get();
+
+          assert.equal(res.headers['content-encoding'], undefined, encoding);
+        }
+      });
+
+      it('drops an indexed coding the bytes do not use', async () => {
+        // A Content-Encoding tag is the uploader's claim: an item can be
+        // tagged gzip and carry plain bytes.
+        dataAttributesSource = {
+          getDataAttributes: () =>
+            Promise.resolve({ contentEncoding: 'gzip' } as any),
+        };
+        serve(undefined);
+
+        const res = await get();
+
+        assert.equal(res.headers['content-encoding'], undefined);
+        assert.equal(res.headers['content-length'], String(body.length));
+        assert.deepEqual(res.body, body);
+      });
+
+      it('keeps gzip when the first chunk is shorter than its magic', async () => {
+        dataAttributesSource = {
+          getDataAttributes: () =>
+            Promise.resolve({ contentEncoding: 'gzip' } as any),
+        };
+        dataSource = {
+          getData: () =>
+            Promise.resolve({
+              stream: Readable.from([
+                gzipped.subarray(0, 1),
+                gzipped.subarray(1),
+              ]),
+              size: gzipped.length,
+              verified: false,
+              trusted: true,
+              cached: false,
+            }),
+        };
+        app.get(
+          '/:id',
+          createDataHandler({
+            log,
+            dataAttributesSource,
+            dataSource,
+            dataBlockListValidator,
+            manifestPathResolver,
+          }),
+        );
+
+        const res = await get();
+
+        assert.equal(res.headers['content-encoding'], 'gzip');
+        // Decoded by the client, so every byte survived the peek.
+        assert.deepEqual(res.body, body);
+      });
+
+      it('reads past a first chunk shorter than the magic', async () => {
+        // Plain bytes whose first byte happens to be gzip's first magic byte,
+        // arriving one byte at a time: the first chunk alone cannot rule gzip
+        // out.
+        const plain = Buffer.from([0x1f, ...Buffer.from(' plain text')]);
+        dataAttributesSource = {
+          getDataAttributes: () =>
+            Promise.resolve({ contentEncoding: 'gzip' } as any),
+        };
+        dataSource = {
+          getData: () =>
+            Promise.resolve({
+              stream: Readable.from([plain.subarray(0, 1), plain.subarray(1)]),
+              size: plain.length,
+              verified: false,
+              trusted: true,
+              cached: false,
+            }),
+        };
+        app.get(
+          '/:id',
+          createDataHandler({
+            log,
+            dataAttributesSource,
+            dataSource,
+            dataBlockListValidator,
+            manifestPathResolver,
+          }),
+        );
+
+        const res = await get();
+
+        assert.equal(res.headers['content-encoding'], undefined);
+        assert.deepEqual(res.body, plain);
+      });
+
+      describe('responses that do not send the body', () => {
+        const HASH = 'a'.repeat(43);
+        const mount = (stream: () => Readable, cached: boolean) => {
+          dataAttributesSource = {
+            getDataAttributes: () =>
+              Promise.resolve({ contentEncoding: 'gzip', hash: HASH } as any),
+          };
+          dataSource = {
+            getData: () =>
+              Promise.resolve({
+                stream: stream(),
+                size: gzipped.length,
+                verified: false,
+                trusted: true,
+                cached,
+              }),
+          };
+          app.get(
+            '/:id',
+            createDataHandler({
+              log,
+              dataAttributesSource,
+              dataSource,
+              dataBlockListValidator,
+              manifestPathResolver,
+            }),
+          );
+        };
+        // Fails as soon as it is read, as a broken cache file or upstream does.
+        const failing = () =>
+          new Readable({
+            read() {
+              this.destroy(new Error('read failed'));
+            },
+          });
+
+        it('checks cached bytes on HEAD', async () => {
+          mount(() => Readable.from([body]), true);
+
+          const res = await request(app).head('/not-a-real-id').expect(200);
+
+          assert.equal(res.headers['content-encoding'], undefined);
+        });
+
+        it('does not wait on an upstream for HEAD: declares the coding unchecked', async () => {
+          // Nothing reads an uncached stream for a response without a body.
+          mount(() => Readable.from([body]), false);
+
+          const res = await request(app).head('/not-a-real-id').expect(200);
+
+          assert.equal(res.headers['content-encoding'], 'gzip');
+        });
+
+        it('falls back to the declared coding when a cached read fails on HEAD', async () => {
+          mount(failing, true);
+
+          const res = await request(app).head('/not-a-real-id').expect(200);
+
+          assert.equal(res.headers['content-encoding'], 'gzip');
+        });
+
+        it('answers a matching If-None-Match with 304 when the read fails', async () => {
+          mount(failing, true);
+
+          await request(app)
+            .get('/not-a-real-id')
+            .set('If-None-Match', `"${HASH}"`)
+            .expect(304);
+        });
+
+        describe('when routed through an ArNS name', () => {
+          const RESOLVED_ID = 'd1FJ-x_35islazgNjqw54eKERvE78j8X2FntbALlkaM';
+          // As the ArNS middleware does before the data handler runs.
+          const routeThroughName = () =>
+            app.use((_req, res, next) => {
+              res.setHeader(headerNames.arnsResolvedId, RESOLVED_ID);
+              next();
+            });
+
+          it('answers its composite tag with 304 when the read fails', async () => {
+            // The stream prediction must use the tag the response sends, or
+            // it expects a body here and the failed read fails the 304.
+            routeThroughName();
+            mount(failing, true);
+
+            await request(app)
+              .get('/not-a-real-id')
+              .set('If-None-Match', `"${HASH}.${RESOLVED_ID}"`)
+              .expect(304);
+          });
+
+          it('answers the plain digest with a full response and the composite tag', async () => {
+            // A cache holding a copy from before the name was re-pointed (or
+            // before this tag format) gets fresh headers, not a 304.
+            routeThroughName();
+            mount(() => Readable.from([gzipped]), true);
+
+            const res = await request(app)
+              .get('/not-a-real-id')
+              .set('If-None-Match', `"${HASH}"`)
+              .expect(200);
+
+            assert.equal(res.headers['etag'], `"${HASH}.${RESOLVED_ID}"`);
+            assert.equal(res.headers['x-arns-resolved-id'], RESOLVED_ID);
+          });
+        });
+
+        it('fails a full GET when the read fails, since it sends the body', async () => {
+          mount(failing, true);
+
+          const res = await request(app).get('/not-a-real-id');
+
+          assert.notEqual(res.status, 200);
+        });
+      });
+
+      it('sends no Content-Encoding for unencoded bytes', async () => {
+        serve(undefined);
+
+        const res = await get();
+
+        assert.equal(res.headers['content-encoding'], undefined);
+        assert.deepEqual(res.body, body);
+      });
+
+      describe("the item's Content-Encoding tag on a hit with no recorded coding", () => {
+        const gzipTag = [{ name: 'Content-Encoding', value: 'gzip' }];
+        const serveTagged = ({
+          bytes,
+          cached = true,
+          tags = gzipTag,
+          viaResolver = false,
+          contentEncoding,
+        }: {
+          bytes: Buffer;
+          cached?: boolean;
+          tags?: { name: string; value: string }[];
+          viaResolver?: boolean;
+          contentEncoding?: string;
+        }) => {
+          if (contentEncoding !== undefined) {
+            dataAttributesSource = {
+              getDataAttributes: () =>
+                Promise.resolve({ contentEncoding } as any),
+            };
+          }
+          dataSource = {
+            getData: (params?: any) =>
+              Promise.resolve({
+                stream: Readable.from(
+                  params?.region !== undefined
+                    ? bytes.subarray(
+                        params.region.offset,
+                        params.region.offset + params.region.size,
+                      )
+                    : bytes,
+                ),
+                size: bytes.length,
+                verified: false,
+                trusted: true,
+                cached,
+                ...(viaResolver ? {} : { upstreamTags: tags }),
+              }),
+          };
+          const dataItemMetaResolver = viaResolver
+            ? ({
+                resolveFromLocal: () => Promise.resolve({ tags }),
+                resolve: () => Promise.resolve(undefined),
+              } as any)
+            : undefined;
+          app.get(
+            '/:id',
+            createDataHandler({
+              log,
+              dataAttributesSource,
+              dataSource,
+              dataBlockListValidator,
+              manifestPathResolver,
+              dataItemMetaResolver,
+            }),
+          );
+        };
+
+        it('declares the tagged gzip coding when the cached bytes carry its magic', async () => {
+          serveTagged({ bytes: gzipped });
+
+          const res = await get();
+
+          assert.equal(res.headers['content-encoding'], 'gzip');
+          assert.equal(res.headers['content-length'], String(gzipped.length));
+          // Decoded by the client: fails if the header does not fit the bytes.
+          assert.deepEqual(res.body, body);
+        });
+
+        it('takes the tag from the local item-header resolver, as on a real cache hit', async () => {
+          serveTagged({ bytes: gzipped, viaResolver: true });
+
+          const res = await get();
+
+          assert.equal(res.headers['content-encoding'], 'gzip');
+          assert.deepEqual(res.body, body);
+        });
+
+        it('declares it on a cached HEAD', async () => {
+          serveTagged({ bytes: gzipped });
+
+          const res = await request(app).head('/not-a-real-id').expect(200);
+
+          assert.equal(res.headers['content-encoding'], 'gzip');
+        });
+
+        it('declares it on a cached range response, whose body is a slice of the stored bytes', async () => {
+          serveTagged({ bytes: gzipped });
+
+          const res = await request(app)
+            .get('/not-a-real-id')
+            .set('Range', 'bytes=0-9')
+            .buffer(true)
+            .parse(bufferBody)
+            .expect(206);
+
+          assert.equal(res.headers['content-encoding'], 'gzip');
+          assert.equal(
+            res.headers['content-range'],
+            `bytes 0-9/${gzipped.length}`,
+          );
+        });
+
+        it('declares it on an uncached GET, which reads the bytes it sends', async () => {
+          serveTagged({ bytes: gzipped, cached: false });
+
+          const res = await get();
+
+          assert.equal(res.headers['content-encoding'], 'gzip');
+          assert.deepEqual(res.body, body);
+        });
+
+        it('sends no header when the bytes do not carry the magic (decoded upstream)', async () => {
+          serveTagged({ bytes: body });
+
+          const res = await get();
+
+          assert.equal(res.headers['content-encoding'], undefined);
+          assert.deepEqual(res.body, body);
+        });
+
+        it('sends no header for a body shorter than the magic', async () => {
+          serveTagged({ bytes: Buffer.from([0x1f]) });
+
+          const res = await get();
+
+          assert.equal(res.headers['content-encoding'], undefined);
+        });
+
+        it('sends no header for a tagged coding without magic (br)', async () => {
+          serveTagged({
+            bytes: gzipped,
+            tags: [{ name: 'Content-Encoding', value: 'br' }],
+          });
+
+          const res = await get();
+
+          assert.equal(res.headers['content-encoding'], undefined);
+        });
+
+        it('sends no header on an uncached HEAD, which reads no bytes', async () => {
+          serveTagged({ bytes: gzipped, cached: false });
+
+          const res = await request(app).head('/not-a-real-id').expect(200);
+
+          assert.equal(res.headers['content-encoding'], undefined);
+        });
+
+        it('sends no header without a Content-Encoding tag', async () => {
+          serveTagged({
+            bytes: gzipped,
+            tags: [{ name: 'Content-Type', value: 'application/wasm' }],
+          });
+
+          const res = await get();
+
+          assert.equal(res.headers['content-encoding'], undefined);
+        });
+
+        it('only the first Content-Encoding tag counts', async () => {
+          serveTagged({
+            bytes: gzipped,
+            tags: [
+              { name: 'Content-Encoding', value: 'br' },
+              { name: 'Content-Encoding', value: 'gzip' },
+            ],
+          });
+
+          const res = await get();
+
+          assert.equal(res.headers['content-encoding'], undefined);
+        });
+
+        it('declares a tagged zstd coding when the cached bytes carry its magic', async () => {
+          const zstdBytes = Buffer.from([0x28, 0xb5, 0x2f, 0xfd, 0x00, 0x01]);
+          serveTagged({
+            bytes: zstdBytes,
+            tags: [{ name: 'Content-Encoding', value: 'zstd' }],
+          });
+
+          const res = await request(app).head('/not-a-real-id').expect(200);
+
+          assert.equal(res.headers['content-encoding'], 'zstd');
+        });
+
+        it('sends no header, and still answers, when a cached HEAD cannot read the bytes', async () => {
+          dataSource = {
+            getData: () =>
+              Promise.resolve({
+                stream: new Readable({
+                  read() {
+                    this.destroy(new Error('disk read failed'));
+                  },
+                }),
+                size: gzipped.length,
+                verified: false,
+                trusted: true,
+                cached: true,
+                upstreamTags: gzipTag,
+              }),
+          };
+          app.get(
+            '/:id',
+            createDataHandler({
+              log,
+              dataAttributesSource,
+              dataSource,
+              dataBlockListValidator,
+              manifestPathResolver,
+            }),
+          );
+
+          const res = await request(app).head('/not-a-real-id').expect(200);
+
+          assert.equal(res.headers['content-encoding'], undefined);
+        });
+
+        it('a recorded coding the gateway does not honour is not replaced by the tag', async () => {
+          serveTagged({ bytes: gzipped, contentEncoding: 'gzip, br' });
+
+          const res = await get();
+
+          assert.equal(res.headers['content-encoding'], undefined);
+        });
+
+        it('a recorded coding still takes precedence over the tag', async () => {
+          serveTagged({
+            bytes: gzipped,
+            tags: [{ name: 'Content-Encoding', value: 'zstd' }],
+            contentEncoding: 'gzip',
+          });
+
+          const res = await get();
+
+          assert.equal(res.headers['content-encoding'], 'gzip');
+          assert.deepEqual(res.body, body);
+        });
+      });
     });
 
     it('should return 200 status code and empty data for unblocked data HEAD request', async () => {
@@ -609,6 +1165,736 @@ st
       await Promise.all([get, head]);
     });
 
+    describe('single range of an uncached item', () => {
+      const body = Buffer.from('0123456789abcdefghij');
+      let calls: any[];
+      let streams: Readable[];
+      let attributes: any;
+      let source: {
+        totalSize?: number;
+        cached?: boolean;
+        contentType?: string;
+        contentEncoding?: string;
+        fail?: Error;
+        body?: Buffer;
+        /** Clamp ranges to the body, as a root-bundle source does. */
+        clamp?: boolean;
+      };
+
+      // Reads the body as bytes; superagent would otherwise parse or decode it.
+      const raw = (res: any, callback: any) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (chunk: Buffer) => chunks.push(chunk));
+        res.on('end', () => callback(null, Buffer.concat(chunks)));
+      };
+
+      beforeEach(() => {
+        calls = [];
+        streams = [];
+        source = {};
+        attributes = {
+          size: body.length,
+          contentType: 'text/plain',
+          isManifest: false,
+          stable: false,
+          verified: false,
+          signature: null,
+        };
+        dataAttributesSource.getDataAttributes = async () => attributes;
+        dataSource.getData = async (params: any) => {
+          calls.push(params);
+          if (source.fail !== undefined) {
+            throw source.fail;
+          }
+          const full = source.body ?? body;
+          if (
+            source.clamp === true &&
+            params.region !== undefined &&
+            params.region.offset >= full.length
+          ) {
+            throw new Error('Requested region offset exceeds data item size');
+          }
+          const bytes =
+            params.region !== undefined
+              ? full.subarray(
+                  params.region.offset,
+                  params.region.offset + params.region.size,
+                )
+              : full;
+          const stream = Readable.from(bytes);
+          streams.push(stream);
+          return {
+            stream,
+            size:
+              source.clamp === true
+                ? bytes.length
+                : (params.region?.size ?? full.length),
+            totalSize: source.totalSize,
+            verified: false,
+            trusted: true,
+            cached: source.cached ?? false,
+            sourceContentType: source.contentType,
+            sourceContentEncoding: source.contentEncoding,
+            requestAttributes: { origin: 'node-url', hops: 2, clientIps: [] },
+            upstreamTags: [{ name: 'App-Name', value: 'range-test' }],
+          };
+        };
+      });
+
+      const useDataHandler = (extra: Record<string, unknown> = {}) => {
+        app.get(
+          '/:id',
+          createDataHandler({
+            log,
+            dataAttributesSource,
+            dataSource,
+            dataBlockListValidator,
+            manifestPathResolver,
+            ...extra,
+          }),
+        );
+      };
+
+      const getRange = (range: string) =>
+        request(app)
+          .get('/not-a-real-id')
+          .set('Range', range)
+          .buffer(true)
+          .parse(raw);
+
+      it('fetches only the range, once', async () => {
+        useDataHandler();
+
+        const res = await getRange('bytes=2-5').expect(206);
+
+        assert.equal(calls.length, 1);
+        assert.deepEqual(calls[0].region, { offset: 2, size: 4 });
+        assert.equal(res.body.toString(), '2345');
+        assert.equal(res.headers['content-range'], 'bytes 2-5/20');
+        assert.equal(res.headers['content-length'], '4');
+        assert.equal(res.headers['accept-ranges'], 'bytes');
+        assert.match(res.headers['content-type'], /^text\/plain/);
+        assert.equal(res.headers[headerNames.cache.toLowerCase()], 'MISS');
+        assert.equal(res.headers[headerNames.trusted.toLowerCase()], 'true');
+        assert.equal(res.headers[headerNames.hops.toLowerCase()], '2');
+        assert.equal(
+          res.headers[headerNames.dataId.toLowerCase()],
+          'not-a-real-id',
+        );
+        assert.equal(res.headers['x-arweave-tag-app-name'], 'range-test');
+        assert.equal(res.headers['content-digest'], undefined);
+        assert.equal(res.headers.etag, undefined);
+      });
+
+      it('serves a suffix range against the indexed size', async () => {
+        useDataHandler();
+
+        const res = await getRange('bytes=-3').expect(206);
+
+        assert.equal(calls.length, 1);
+        assert.deepEqual(calls[0].region, { offset: 17, size: 3 });
+        assert.equal(res.body.toString(), 'hij');
+        assert.equal(res.headers['content-range'], 'bytes 17-19/20');
+      });
+
+      it('accepts a reported total size that matches the index', async () => {
+        source.totalSize = body.length;
+        useDataHandler();
+
+        const res = await getRange('bytes=0-0').expect(206);
+
+        assert.equal(calls.length, 1);
+        assert.equal(res.body.toString(), '0');
+        assert.equal(res.headers['content-range'], 'bytes 0-0/20');
+      });
+
+      it("sends the item's indexed Content-Encoding", async () => {
+        attributes.contentEncoding = 'gzip';
+        useDataHandler();
+
+        // Not decoded by the client: a 206 of gzip bytes is not a gzip body.
+        const res = await new Promise<{ status?: number; headers: any }>(
+          (resolve, reject) => {
+            const server = app.listen(0, () => {
+              const { port } = server.address() as { port: number };
+              http
+                .get(
+                  {
+                    port,
+                    path: '/not-a-real-id',
+                    headers: { Range: 'bytes=4-7' },
+                  },
+                  (response) => {
+                    response.resume();
+                    response.on('end', () => {
+                      server.close();
+                      resolve({
+                        status: response.statusCode,
+                        headers: response.headers,
+                      });
+                    });
+                  },
+                )
+                .on('error', (error) => {
+                  server.close();
+                  reject(error);
+                });
+            });
+          },
+        );
+
+        assert.equal(res.status, 206);
+        assert.equal(res.headers['content-encoding'], 'gzip');
+        assert.equal(calls.length, 1);
+      });
+
+      it('falls back when the bytes are cached and their coding must be checked', async () => {
+        attributes.contentEncoding = 'gzip';
+        source.cached = true;
+        useDataHandler();
+
+        await getRange('bytes=4-7').expect(206);
+
+        // The ranged fetch, then the full-object path's two fetches.
+        assert.equal(calls.length, 3);
+        assert.notEqual(calls[0].region, undefined);
+        assert.equal(calls[1].region, undefined);
+        assert.ok(streams[0].destroyed);
+      });
+
+      it('falls back for any bytes that came from the cache, coded or not', async () => {
+        source.cached = true;
+        useDataHandler();
+
+        await getRange('bytes=4-7').expect(206);
+
+        assert.equal(calls.length, 3);
+        assert.notEqual(calls[0].region, undefined);
+        assert.equal(calls[1].region, undefined);
+        assert.ok(streams[0].destroyed);
+      });
+
+      it('falls back to the full-object path when the source reports another size', async () => {
+        source.body = Buffer.from('0123456789abcdefghijKLMNO');
+        source.totalSize = 25;
+        useDataHandler();
+
+        const res = await getRange('bytes=18-22').expect(206);
+
+        assert.equal(calls.length, 3);
+        assert.deepEqual(calls[0].region, { offset: 18, size: 2 });
+        assert.equal(calls[1].region, undefined);
+        assert.deepEqual(calls[2].region, { offset: 18, size: 5 });
+        assert.ok(streams[0].destroyed);
+        assert.equal(res.body.toString(), 'ijKLM');
+        assert.equal(res.headers['content-range'], 'bytes 18-22/25');
+      });
+
+      it('answers 404 when the ranged fetch fails', async () => {
+        source.fail = new Error('every source failed');
+        const negativeDataCache = {
+          isNegativelyCached: mock.fn(() => false),
+          evict: mock.fn(() => undefined),
+          recordSuccess: mock.fn(() => undefined),
+          recordMiss: mock.fn(() => undefined),
+        } as any;
+        useDataHandler({ negativeDataCache });
+
+        await getRange('bytes=2-5').expect(404);
+
+        assert.equal(calls.length, 1);
+        assert.notEqual(calls[0].region, undefined);
+        // The item is indexed, so a failed fetch is not a negative result.
+        assert.equal(negativeDataCache.recordMiss.mock.calls.length, 0);
+        assert.equal(negativeDataCache.evict.mock.calls.length, 0);
+      });
+
+      it('evicts the id from the negative cache when served', async () => {
+        const negativeDataCache = {
+          isNegativelyCached: mock.fn(() => false),
+          evict: mock.fn(() => undefined),
+          recordSuccess: mock.fn(() => undefined),
+          recordMiss: mock.fn(() => undefined),
+        } as any;
+        useDataHandler({ negativeDataCache });
+
+        await getRange('bytes=2-5').expect(206);
+
+        assert.equal(negativeDataCache.evict.mock.calls.length, 1);
+        assert.equal(negativeDataCache.recordSuccess.mock.calls.length, 1);
+      });
+
+      it('answers 499 when the client aborted the ranged fetch', async () => {
+        const abortError = new Error('aborted');
+        abortError.name = 'AbortError';
+        source.fail = abortError;
+        app.use((req: any, _res, next) => {
+          const controller = new AbortController();
+          controller.abort();
+          req.signal = controller.signal;
+          next();
+        });
+        useDataHandler();
+
+        await getRange('bytes=2-5').expect(499);
+
+        assert.equal(calls.length, 1);
+        assert.notEqual(calls[0].region, undefined);
+      });
+
+      describe('when the indexed size is larger than the item', () => {
+        beforeEach(() => {
+          // 15 bytes, indexed as 20; the source reports no total size and
+          // clamps a range at the item's real end.
+          source.body = body.subarray(0, 15);
+          source.clamp = true;
+        });
+
+        it('falls back when the source returns a shorter range', async () => {
+          useDataHandler();
+
+          const res = await getRange('bytes=10-19').expect(206);
+
+          assert.equal(calls.length, 3);
+          assert.deepEqual(calls[0].region, { offset: 10, size: 10 });
+          assert.equal(calls[1].region, undefined);
+          assert.ok(streams[0].destroyed);
+          // The full-object path's answer: the range cut at the real end.
+          assert.equal(res.body.toString(), 'abcde');
+          assert.equal(res.headers['content-range'], 'bytes 10-14/15');
+          assert.equal(res.headers['content-length'], '5');
+        });
+
+        it('answers 404, not 416, for a range starting past the real end', async () => {
+          // Documented in serveUncachedRange: a failed fetch cannot be told
+          // apart from an item no source has.
+          useDataHandler();
+
+          await getRange('bytes=16-19').expect(404);
+
+          assert.equal(calls.length, 1);
+        });
+      });
+
+      it('sends the same headers as the full-object path', async () => {
+        attributes.stable = true;
+        attributes.verified = true;
+        source.contentType = 'text/plain';
+        useDataHandler();
+        const names = [
+          headerNames.trusted,
+          headerNames.hops,
+          headerNames.stable,
+          headerNames.verified,
+          headerNames.cache,
+          headerNames.dataId,
+          'content-type',
+          'cache-control',
+          'content-range',
+          'content-length',
+          'accept-ranges',
+          'x-arweave-tag-app-name',
+        ].map((name) => name.toLowerCase());
+        const pick = (headers: any) =>
+          Object.fromEntries(names.map((name) => [name, headers[name]]));
+
+        const fast = await getRange('bytes=2-5').expect(206);
+        assert.equal(calls.length, 1);
+
+        // The same item without an indexed type takes the full-object path;
+        // the source supplies the same type.
+        delete attributes.contentType;
+        calls = [];
+        const full = await getRange('bytes=2-5').expect(206);
+        assert.equal(calls.length, 2);
+        assert.equal(calls[0].region, undefined);
+
+        assert.deepEqual(pick(fast.headers), pick(full.headers));
+        assert.deepEqual(fast.body, full.body);
+      });
+
+      describe('keeps the full-object path', () => {
+        const assertFullFirst = () => {
+          assert.ok(calls.length >= 1);
+          assert.equal(calls[0].region, undefined);
+        };
+
+        it('when the item is not indexed', async () => {
+          attributes = undefined;
+          useDataHandler();
+          await getRange('bytes=2-5').expect(206);
+          assertFullFirst();
+        });
+
+        it('when the indexed size is zero', async () => {
+          attributes.size = 0;
+          useDataHandler();
+          await getRange('bytes=2-5').expect(206);
+          assertFullFirst();
+        });
+
+        it('when the item has a stored hash', async () => {
+          attributes.hash = 'stored-hash';
+          useDataHandler();
+          await getRange('bytes=2-5').expect(206);
+          assertFullFirst();
+        });
+
+        it('when the content type is not indexed', async () => {
+          delete attributes.contentType;
+          useDataHandler();
+          await getRange('bytes=2-5').expect(206);
+          assertFullFirst();
+        });
+
+        it('when the item is a manifest by content type', async () => {
+          attributes.contentType = 'application/x.arweave-manifest+json';
+          manifestPathResolver.resolveFromData = async () => ({
+            id: 'not-a-real-id',
+            resolvedId: undefined,
+            complete: true,
+          });
+          useDataHandler();
+          await getRange('bytes=2-5').expect(404);
+          assertFullFirst();
+        });
+
+        it('when the item is flagged as a manifest', async () => {
+          attributes.isManifest = true;
+          manifestPathResolver.resolveFromIndex = async () => ({
+            id: 'not-a-real-id',
+            resolvedId: undefined,
+            complete: false,
+          });
+          useDataHandler();
+          await getRange('bytes=2-5').expect(206);
+          assertFullFirst();
+        });
+
+        it('for multiple ranges', async () => {
+          useDataHandler();
+          await getRange('bytes=0-1,4-5').expect(206);
+          assertFullFirst();
+        });
+
+        it('for a malformed range', async () => {
+          useDataHandler();
+          await getRange('invalid-range-header').expect(400);
+          assertFullFirst();
+        });
+
+        it('for an unsatisfiable range', async () => {
+          useDataHandler();
+          const res = await getRange('bytes=30-40').expect(416);
+          assert.equal(res.headers['content-range'], 'bytes */20');
+          assertFullFirst();
+        });
+
+        it('for HEAD', async () => {
+          useDataHandler();
+          await request(app)
+            .head('/not-a-real-id')
+            .set('Range', 'bytes=2-5')
+            .expect(206);
+          assertFullFirst();
+        });
+
+        it('without a Range header', async () => {
+          useDataHandler();
+          await request(app).get('/not-a-real-id').expect(200);
+          assert.equal(calls.length, 1);
+          assert.equal(calls[0].region, undefined);
+        });
+      });
+
+      describe('raw data route', () => {
+        const useRawHandler = () => {
+          app.get(
+            '/raw/:id',
+            (req, _res, next) => {
+              req.params[0] = req.params.id;
+              next();
+            },
+            createRawDataHandler({
+              log,
+              dataAttributesSource,
+              dataSource,
+              dataBlockListValidator,
+            }),
+          );
+        };
+
+        it('fetches only the range, once, whatever the content type', async () => {
+          attributes.contentType = 'application/x.arweave-manifest+json';
+          useRawHandler();
+
+          const res = await request(app)
+            .get('/raw/not-a-real-id')
+            .set('Range', 'bytes=2-5')
+            .buffer(true)
+            .parse(raw)
+            .expect(206);
+
+          assert.equal(calls.length, 1);
+          assert.deepEqual(calls[0].region, { offset: 2, size: 4 });
+          assert.equal(res.body.toString(), '2345');
+          assert.equal(res.headers['content-range'], 'bytes 2-5/20');
+          assert.equal(res.headers['x-arweave-tag-app-name'], 'range-test');
+        });
+
+        it('keeps the full-object path when the item has a stored hash', async () => {
+          attributes.hash = 'stored-hash';
+          useRawHandler();
+
+          await request(app)
+            .get('/raw/not-a-real-id')
+            .set('Range', 'bytes=2-5')
+            .expect(206);
+
+          assert.equal(calls[0].region, undefined);
+        });
+      });
+
+      describe('manifest-resolved item', () => {
+        const manifestAttributes = {
+          size: 100,
+          contentType: 'application/x.arweave-manifest+json',
+          isManifest: true,
+          stable: true,
+          verified: true,
+          signature: null,
+        };
+
+        const useManifest = (
+          resolutionType: 'path' | 'fallback',
+          extra: Record<string, unknown> = {},
+        ) => {
+          dataAttributesSource.getDataAttributes = async (id: string) =>
+            id === 'manifest-id' ? manifestAttributes : attributes;
+          manifestPathResolver.resolveFromIndex = async () => ({
+            id: 'manifest-id',
+            resolvedId: 'inner-id',
+            complete: true,
+            resolutionType,
+          });
+          app.get(
+            '/:id/*',
+            (_req, res, next) => {
+              // An ArNS name's long TTL, which a fallback must override.
+              res.setHeader('Cache-Control', 'public, max-age=3600');
+              next();
+            },
+            createDataHandler({
+              log,
+              dataAttributesSource,
+              dataSource,
+              dataBlockListValidator,
+              manifestPathResolver,
+              ...extra,
+            }),
+          );
+        };
+
+        it('leaves no headers behind when serving fails after setting them', async () => {
+          // Tags that are not iterable make setDataHeaders throw part-way,
+          // after it has set the data headers.
+          const dataItemMetaResolver = {
+            resolveFromLocal: async () => ({ tags: { length: 1 } }),
+            resolve: async () => undefined,
+          } as any;
+          manifestPathResolver.resolveFromData = async () => ({
+            id: 'manifest-id',
+            resolvedId: undefined,
+            complete: true,
+          });
+          useManifest('fallback', { dataItemMetaResolver });
+
+          const res = await request(app)
+            .get('/manifest-id/file.txt')
+            .set('Range', 'bytes=2-5')
+            .expect(404);
+
+          assert.equal(calls[0].id, 'inner-id');
+          assert.notEqual(calls[0].region, undefined);
+          assert.ok(streams[0].destroyed);
+          assert.equal(res.headers['content-range'], undefined);
+          assert.equal(res.headers['accept-ranges'], undefined);
+          assert.equal(
+            res.headers[headerNames.dataId.toLowerCase()],
+            undefined,
+          );
+          assert.equal(res.headers[headerNames.cache.toLowerCase()], undefined);
+        });
+
+        it('fetches only the range of the resolved item, once', async () => {
+          useManifest('path');
+
+          const res = await request(app)
+            .get('/manifest-id/file.txt')
+            .set('Range', 'bytes=2-5')
+            .buffer(true)
+            .parse(raw)
+            .expect(206);
+
+          assert.equal(calls.length, 1);
+          assert.equal(calls[0].id, 'inner-id');
+          assert.deepEqual(calls[0].region, { offset: 2, size: 4 });
+          assert.equal(res.body.toString(), '2345');
+          assert.equal(res.headers['content-range'], 'bytes 2-5/20');
+          assert.equal(
+            res.headers[headerNames.dataId.toLowerCase()],
+            'inner-id',
+          );
+          assert.equal(res.headers['cache-control'], 'public, max-age=3600');
+        });
+
+        it('sends the short fallback Cache-Control', async () => {
+          useManifest('fallback');
+
+          const res = await request(app)
+            .get('/manifest-id/file.txt')
+            .set('Range', 'bytes=2-5')
+            .buffer(true)
+            .parse(raw)
+            .expect(206);
+
+          assert.equal(calls.length, 1);
+          assert.equal(
+            res.headers['cache-control'],
+            `public, max-age=${config.CACHE_NOT_FOUND_MAX_AGE}, must-revalidate`,
+          );
+        });
+
+        it('keeps the full-object path when the resolved item has a stored hash', async () => {
+          attributes.hash = 'stored-hash';
+          useManifest('path');
+
+          await request(app)
+            .get('/manifest-id/file.txt')
+            .set('Range', 'bytes=2-5')
+            .expect(206);
+
+          assert.equal(calls[0].region, undefined);
+        });
+      });
+    });
+
+    describe('Content-Type', () => {
+      // Non-ASCII, so the tests also show the bytes pass through unchanged.
+      const body = Buffer.from('{"name":"café ☕"}');
+
+      // Reads the body as bytes; superagent would otherwise parse it.
+      const raw = (res: any, callback: any) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (chunk: Buffer) => chunks.push(chunk));
+        res.on('end', () => callback(null, Buffer.concat(chunks)));
+      };
+
+      const serve = (contentType: string) => {
+        app.get(
+          '/:id',
+          createDataHandler({
+            log,
+            dataAttributesSource,
+            dataSource,
+            dataBlockListValidator,
+            manifestPathResolver,
+          }),
+        );
+        dataAttributesSource.getDataAttributes = async () => ({
+          size: body.length,
+          contentType,
+          isManifest: false,
+          stable: true,
+          verified: true,
+          signature: null,
+          offset: 0,
+        });
+        dataSource.getData = async (params?: any) => {
+          const data =
+            params?.region !== undefined
+              ? body.subarray(
+                  params.region.offset,
+                  params.region.offset + params.region.size,
+                )
+              : body;
+          return {
+            stream: Readable.from(data),
+            size: body.length,
+            verified: true,
+            cached: false,
+            trusted: true,
+          };
+        };
+      };
+
+      it('sends a JSON type exactly as uploaded, without a charset', async () => {
+        serve('application/json');
+        const get = request(app)
+          .get('/not-a-real-id')
+          .buffer(true)
+          .parse(raw)
+          .expect(200)
+          .expect('Content-Type', 'application/json')
+          .then((res: any) => {
+            assert.deepEqual(res.body, body);
+          });
+        const head = request(app)
+          .head('/not-a-real-id')
+          .expect(200)
+          .expect('Content-Type', 'application/json');
+        await Promise.all([get, head]);
+      });
+
+      it('sends a JSON range response without a charset', async () => {
+        serve('application/json');
+        await request(app)
+          .get('/not-a-real-id')
+          .set('Range', 'bytes=0-3')
+          .buffer(true)
+          .parse(raw)
+          .expect(206)
+          .expect('Content-Type', 'application/json')
+          .then((res: any) => {
+            assert.deepEqual(res.body, body.subarray(0, 4));
+          });
+      });
+
+      it('keeps a charset the uploader set on a JSON type', async () => {
+        serve('application/json; charset=utf-8');
+        await request(app)
+          .get('/not-a-real-id')
+          .buffer(true)
+          .parse(raw)
+          .expect(200)
+          .expect('Content-Type', 'application/json; charset=utf-8');
+      });
+
+      it('adds a charset to text types that have none', async () => {
+        serve('text/plain');
+        await request(app)
+          .get('/not-a-real-id')
+          .expect(200)
+          .expect('Content-Type', 'text/plain; charset=utf-8');
+      });
+
+      it('adds a charset to text/html that has none', async () => {
+        serve('text/html');
+        await request(app)
+          .get('/not-a-real-id')
+          .expect(200)
+          .expect('Content-Type', 'text/html; charset=utf-8');
+      });
+
+      it('leaves other types unchanged', async () => {
+        serve('image/png');
+        await request(app)
+          .get('/not-a-real-id')
+          .expect(200)
+          .expect('Content-Type', 'image/png');
+      });
+    });
+
     describe('Headers', () => {
       describe('X-AR-IO-Verified', () => {
         it("should return false when data isn't verified", async () => {
@@ -1033,6 +2319,188 @@ st
                 res.headers['etag'],
                 '"4ROTs2lTPAKbr8Y41WrjHu-2q-7S-m-yTuO7fAUzZI4"',
               );
+            });
+        });
+      });
+
+      describe('digest headers on partial responses', () => {
+        const hash = '4ROTs2lTPAKbr8Y41WrjHu-2q-7S-m-yTuO7fAUzZI4';
+        const formatted =
+          'sha-256=:4ROTs2lTPAKbr8Y41WrjHu+2q+7S+m+yTuO7fAUzZI4=:';
+        const testData = Buffer.from('test data');
+
+        beforeEach(() => {
+          app.get(
+            '/:id',
+            createDataHandler({
+              log,
+              dataAttributesSource,
+              dataSource,
+              dataBlockListValidator,
+              manifestPathResolver,
+            }),
+          );
+          dataAttributesSource.getDataAttributes = async () => ({
+            hash,
+            size: testData.length,
+            contentType: 'text/plain',
+            isManifest: false,
+            stable: true,
+            verified: true,
+            signature: null,
+            offset: 0,
+          });
+          dataSource.getData = async (params?: any) => {
+            const bytes =
+              params?.region !== undefined
+                ? testData.subarray(
+                    params.region.offset,
+                    params.region.offset + params.region.size,
+                  )
+                : testData;
+            return {
+              stream: Readable.from(bytes),
+              size: testData.length,
+              sourceContentType: 'text/plain',
+              verified: true,
+              cached: true,
+              trusted: true,
+            };
+          };
+        });
+
+        it('sends Repr-Digest, not Content-Digest, on a cached single-range 206', async () => {
+          await request(app)
+            .get('/test-id')
+            .set('Range', 'bytes=0-3')
+            .expect(206)
+            .then((res: any) => {
+              assert.equal(res.text, 'test');
+              assert.equal(res.headers['content-digest'], undefined);
+              assert.equal(res.headers['repr-digest'], formatted);
+              assert.equal(res.headers['etag'], `"${hash}"`);
+              assert.equal(res.headers['x-ar-io-digest'], hash);
+            });
+        });
+
+        it('sends Repr-Digest, not Content-Digest, on a HEAD range response', async () => {
+          await request(app)
+            .head('/test-id')
+            .set('Range', 'bytes=0-3')
+            .expect(206)
+            .then((res: any) => {
+              assert.equal(res.headers['content-digest'], undefined);
+              assert.equal(res.headers['repr-digest'], formatted);
+            });
+        });
+
+        it('sends Repr-Digest, not Content-Digest, on a multipart 206', async () => {
+          await request(app)
+            .get('/test-id')
+            .set('Range', 'bytes=0-1,5-6')
+            .expect(206)
+            .then((res: any) => {
+              assert.match(
+                res.headers['content-type'],
+                /^multipart\/byteranges/,
+              );
+              assert.equal(res.headers['content-digest'], undefined);
+              assert.equal(res.headers['repr-digest'], formatted);
+            });
+        });
+
+        it('sends no Content-Digest on a 416', async () => {
+          await request(app)
+            .get('/test-id')
+            .set('Range', 'bytes=100-200')
+            .expect(416)
+            .then((res: any) => {
+              assert.equal(res.headers['content-digest'], undefined);
+              assert.equal(res.headers['repr-digest'], formatted);
+            });
+        });
+
+        it('sends no Content-Digest on a 400 for a malformed range', async () => {
+          await request(app)
+            .get('/test-id')
+            .set('Range', 'invalid-range-header')
+            .expect(400)
+            .then((res: any) => {
+              assert.equal(res.headers['content-digest'], undefined);
+            });
+        });
+
+        it('keeps Content-Digest, and sends no Repr-Digest, on a full 200', async () => {
+          await request(app)
+            .get('/test-id')
+            .expect(200)
+            .then((res: any) => {
+              assert.equal(res.text, 'test data');
+              assert.equal(res.headers['content-digest'], formatted);
+              assert.equal(res.headers['repr-digest'], undefined);
+            });
+        });
+      });
+
+      describe('range units', () => {
+        beforeEach(() => {
+          app.get(
+            '/:id',
+            createDataHandler({
+              log,
+              dataAttributesSource,
+              dataSource,
+              dataBlockListValidator,
+              manifestPathResolver,
+            }),
+          );
+        });
+
+        it('ignores a Range header with a unit other than bytes', async () => {
+          await request(app)
+            .get('/not-a-real-id')
+            .set('Range', 'items=0-5')
+            .expect(200)
+            .then((res: any) => {
+              assert.equal(res.body.toString(), 'testing...');
+              assert.equal(res.headers['content-range'], undefined);
+            });
+        });
+
+        it('ignores a unit other than bytes on the raw route', async () => {
+          const rawId = '3b9XZ2XlcuA3vCahZ81mnYYULrN9I6QnzA5pZd08Fpo';
+          app.get(
+            /^\/raw\/([a-zA-Z0-9-_]{43})$/,
+            createRawDataHandler({
+              log,
+              dataAttributesSource,
+              dataSource,
+              dataBlockListValidator,
+            }),
+          );
+
+          await request(app)
+            .get(`/raw/${rawId}`)
+            .set('Range', 'items=0-5')
+            .expect(200)
+            .then((res: any) => {
+              assert.equal(res.body.toString(), 'testing...');
+            });
+          await request(app)
+            .get(`/raw/${rawId}`)
+            .set('Range', 'BYTES=2-3')
+            .expect(206)
+            .expect('Content-Range', 'bytes 2-3/10');
+        });
+
+        it('treats the bytes unit case-insensitively', async () => {
+          await request(app)
+            .get('/not-a-real-id')
+            .set('Range', 'BYTES=2-3')
+            .expect(206)
+            .expect('Content-Range', 'bytes 2-3/10')
+            .then((res: any) => {
+              assert.equal(res.body.toString(), 'st');
             });
         });
       });
@@ -1871,6 +3339,131 @@ st
         });
       });
 
+      describe('manifests the index does not know', () => {
+        const resolvedId = 'resolved-manifest-path-id';
+        const manifestJson = JSON.stringify({
+          manifest: 'arweave/paths',
+          version: '0.1.0',
+          paths: { 'path/to/file.txt': { id: resolvedId } },
+        });
+        let requestedIds: string[];
+
+        beforeEach(() => {
+          requestedIds = [];
+          mock.method(dataSource, 'getData', (params: any) => {
+            requestedIds.push(params.id);
+            const whole =
+              params.id === 'manifest-id'
+                ? Buffer.from(manifestJson)
+                : Buffer.from('file contents');
+            const body =
+              params.region !== undefined
+                ? whole.subarray(
+                    params.region.offset,
+                    params.region.offset + params.region.size,
+                  )
+                : whole;
+            return Promise.resolve({
+              stream: Readable.from(body),
+              size: whole.length,
+              sourceContentType:
+                params.id === 'manifest-id'
+                  ? 'application/x.arweave-manifest+json'
+                  : 'text/plain',
+              verified: false,
+              cached: true,
+              trusted: true,
+              requestAttributes: { origin: 'node-url', hops: 0, clientIps: [] },
+            });
+          });
+          app.get(
+            '/:id/*',
+            createDataHandler({
+              log,
+              dataAttributesSource,
+              dataSource,
+              dataBlockListValidator,
+              manifestPathResolver,
+            }),
+          );
+        });
+
+        it('serves a trusted cached resolution without fetching the manifest', async () => {
+          mock.method(manifestPathResolver, 'resolveFromTrustedCache', () => ({
+            id: 'manifest-id',
+            resolvedId,
+            complete: true,
+            resolutionType: 'path',
+          }));
+          const resolveFromIndex = mock.method(
+            manifestPathResolver,
+            'resolveFromIndex',
+          );
+          const resolveFromData = mock.method(
+            manifestPathResolver,
+            'resolveFromData',
+          );
+
+          await request(app)
+            .get('/manifest-id/path/to/file.txt')
+            .expect(200)
+            .then((res: any) => {
+              assert.equal(res.text, 'file contents');
+              assert.equal(res.headers['x-ar-io-data-id'], resolvedId);
+            });
+
+          assert.deepEqual(requestedIds, [resolvedId]);
+          assert.equal(resolveFromIndex.mock.callCount(), 0);
+          assert.equal(resolveFromData.mock.callCount(), 0);
+        });
+
+        it('applies the range-unit rules to a manifest-resolved path', async () => {
+          mock.method(manifestPathResolver, 'resolveFromTrustedCache', () => ({
+            id: 'manifest-id',
+            resolvedId,
+            complete: true,
+            resolutionType: 'path',
+          }));
+
+          await request(app)
+            .get('/manifest-id/path/to/file.txt')
+            .set('Range', 'BYTES=0-3')
+            .expect(206)
+            .expect('Content-Range', 'bytes 0-3/13')
+            .then((res: any) => {
+              assert.equal(res.text, 'file');
+            });
+          await request(app)
+            .get('/manifest-id/path/to/file.txt')
+            .set('Range', 'items=0-3')
+            .expect(200)
+            .then((res: any) => {
+              assert.equal(res.text, 'file contents');
+            });
+        });
+
+        it('fetches and parses the manifest when there is no trusted cached resolution', async () => {
+          mock.method(manifestPathResolver, 'resolveFromData', () =>
+            Promise.resolve({
+              id: 'manifest-id',
+              resolvedId,
+              complete: true,
+              resolutionType: 'path',
+            }),
+          );
+
+          await request(app)
+            .get('/manifest-id/path/to/file.txt')
+            .expect(200)
+            .then((res: any) => {
+              assert.equal(res.text, 'file contents');
+              assert.equal(res.headers['x-ar-io-data-id'], resolvedId);
+            });
+
+          assert.deepEqual(requestedIds, ['manifest-id', resolvedId]);
+        });
+      });
+
       describe('X-AR-IO-Data-Id header', () => {
         it('should set X-AR-IO-Data-Id header with resolved ID when manifest path resolution succeeds', async () => {
           const resolvedId = 'resolved-manifest-path-id';
@@ -2455,6 +4048,16 @@ st
           assert.equal(requestAttributes.originNodeRelease, 'v1.0.0');
         });
 
+        it('never reads a negative hop count, which would get past the hop limits', () => {
+          for (const value of ['-5', '-1']) {
+            const requestAttributes = getRequestAttributes(
+              { headers: { 'x-ar-io-hops': value } } as any,
+              { get: () => undefined } as any,
+            );
+            assert.equal(requestAttributes.hops, 0);
+          }
+        });
+
         it('should not initialize originNodeRelease when only origin is present in headers', () => {
           const mockReq = {
             headers: {
@@ -2945,6 +4548,7 @@ st
               resolvedId: 'not-a-real-id',
               complete: false,
             }),
+          resolveFromTrustedCache: () => undefined,
         };
       });
 
@@ -3225,6 +4829,7 @@ st
               complete: true,
               resolutionType,
             }),
+          resolveFromTrustedCache: () => undefined,
         };
       };
 

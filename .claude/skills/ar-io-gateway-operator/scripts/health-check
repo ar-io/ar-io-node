@@ -43,7 +43,7 @@ if curl -sf -m 3 "$GATEWAY_HEALTH_URL"; then echo; else echo 'UNHEALTHY or unrea
 
 section "indexer height vs chain head"
 local_h=$(sqlite3 "$SQLITE_DB" \
-  "SELECT MAX(MAX(height), (SELECT MAX(height) FROM stable_blocks)) FROM new_blocks" 2>/dev/null)
+  "SELECT MAX(h) FROM (SELECT MAX(height) AS h FROM new_blocks UNION ALL SELECT MAX(height) FROM stable_blocks)" 2>/dev/null)
 chain_h=$(curl -sf -m 5 "$CHAIN_INFO_URL" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("height",""))' 2>/dev/null)
 echo "local: ${local_h:-?}  chain: ${chain_h:-?}"
 if [[ "$local_h" =~ ^[0-9]+$ && "$chain_h" =~ ^[0-9]+$ ]]; then

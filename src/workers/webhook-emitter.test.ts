@@ -9,7 +9,10 @@ import { afterEach, before, describe, it, mock } from 'node:test';
 import { EventEmitter } from 'node:events';
 import axios from 'axios';
 
-import { WebhookEmitter } from '../../src/workers/webhook-emitter.js';
+import {
+  WebhookEmitter,
+  redactUrl,
+} from '../../src/workers/webhook-emitter.js';
 import { AlwaysMatch, NeverMatch } from '../filters.js';
 import wait from '../lib/wait.js';
 import { createTestLogger } from '../../test/test-logger.js';
@@ -262,6 +265,115 @@ describe('WebhookEmitter', () => {
         assert.equal(eventEmitter.listenerCount(event), 0);
       }
     });
+  });
+
+  describe('redactUrl', () => {
+    it('replaces query values but keeps their names', () => {
+      assert.equal(
+        redactUrl('http://content-scanner:3100/scan?token=s3cr3t'),
+        'http://content-scanner:3100/scan?token=<redacted>',
+      );
+      assert.equal(
+        redactUrl('https://hooks.example.com/x?a=1&b=two'),
+        'https://hooks.example.com/x?a=<redacted>&b=<redacted>',
+      );
+    });
+
+    it('removes userinfo', () => {
+      const out = redactUrl('https://user:pass@hooks.example.com/x');
+      assert.ok(!out.includes('pass'));
+      assert.ok(!out.includes('user:'));
+      assert.ok(out.startsWith('https://redacted@hooks.example.com/x'));
+    });
+
+    it('leaves a URL without secrets unchanged', () => {
+      assert.equal(
+        redactUrl('http://content-scanner:3100/scan'),
+        'http://content-scanner:3100/scan',
+      );
+    });
+
+    it('drops the fragment', () => {
+      assert.equal(
+        redactUrl('http://h/scan?token=s3cr3t#frag=s3cr3t'),
+        'http://h/scan?token=<redacted>',
+      );
+      assert.equal(
+        redactUrl('http://h/scan#access_token=s3cr3t'),
+        'http://h/scan',
+      );
+    });
+
+    it('redacts a query segment with no value whole', () => {
+      assert.equal(redactUrl('http://h/x?s3cr3t'), 'http://h/x?<redacted>');
+      assert.equal(
+        redactUrl('http://h/x?a=1&s3cr3t&b='),
+        'http://h/x?a=<redacted>&<redacted>&b=<redacted>',
+      );
+    });
+
+    it('keeps the path, which is not redacted', () => {
+      assert.equal(
+        redactUrl('https://hooks.example.com/services/T0/B0/pathsecret'),
+        'https://hooks.example.com/services/T0/B0/pathsecret',
+      );
+    });
+
+    it('never echoes an unparseable value', () => {
+      assert.equal(redactUrl('not a url ?token=s3cr3t'), '<unparseable url>');
+    });
+  });
+
+  describe('failed emission logging', () => {
+    const secretUrl = 'http://content-scanner:3100/scan?token=s3cr3t';
+
+    for (const [name, thrown] of [
+      [
+        'axios error',
+        new axios.AxiosError(
+          'connect ECONNREFUSED 172.19.0.7:3100',
+          'ECONNREFUSED',
+        ),
+      ],
+      ['unexpected error', new Error('boom')],
+    ] as const) {
+      it(`does not log the target URL's token (${name})`, async () => {
+        webhookEmitter = new WebhookEmitter({
+          eventEmitter,
+          targetServersUrls: [secretUrl],
+          indexFilter: new AlwaysMatch(),
+          blockFilter: new AlwaysMatch(),
+          log,
+        });
+        mock.method(axios, 'post', async () => {
+          throw thrown;
+        });
+        const logged: unknown[] = [];
+        for (const level of ['error', 'debug', 'info', 'warn'] as const) {
+          mock.method(
+            (webhookEmitter as any).log,
+            level,
+            (...args: unknown[]) => {
+              logged.push(args);
+              return (webhookEmitter as any).log;
+            },
+          );
+        }
+
+        await webhookEmitter.emitWebhookToTargetServer({
+          targetServer: secretUrl,
+          eventWrapper: { event: 'tx-indexed', data: eventData as any },
+        });
+
+        const text = JSON.stringify(logged);
+        assert.ok(logged.length > 0, 'expected the failure to be logged');
+        assert.ok(!text.includes('s3cr3t'), `token leaked into logs: ${text}`);
+        assert.ok(
+          text.includes('token=<redacted>'),
+          'expected the redacted URL',
+        );
+      });
+    }
   });
 
   describe('dataCachedEvents', () => {

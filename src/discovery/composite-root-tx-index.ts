@@ -41,6 +41,10 @@ export class CompositeRootTxIndex implements DataItemRootIndex {
     GraphQLRootTxIndex: 'graphql',
     StandaloneSqlite: 'db',
     Cdb64RootTxIndex: 'cdb64',
+    // `cdb` when `cdb-remote` is also listed: still `cdb64`, so the label for
+    // the `cdb` token does not change with the split.
+    Cdb64LocalRootTxIndex: 'cdb64',
+    Cdb64RemoteRootTxIndex: 'cdb64-remote',
     HyperBeamRootTxIndex: 'hyperbeam',
     PeersRootTxIndex: 'peers',
   };

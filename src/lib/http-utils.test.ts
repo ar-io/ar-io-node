@@ -17,12 +17,119 @@ import {
   handleIfNoneMatch,
   normalizeAbortError,
   parseContentLength,
+  contentEncodingOf,
+  contentEncodingMagicLength,
+  contradictsContentEncoding,
+  hasContentEncodingMagic,
+  honouredContentEncoding,
+  parseContentEncoding,
   parseContentRange,
   parseNonNegativeInt,
+  undeclaredTaggedEncoding,
+  dataEtag,
   wouldReturn304,
+  byteRangeHeader,
+  matchesContentEncodingMagic,
+  taggedContentEncoding,
 } from './http-utils.js';
 
 describe('http-utils', () => {
+  describe('matchesContentEncodingMagic', () => {
+    it('needs the whole gzip or zstd magic', () => {
+      assert.equal(
+        matchesContentEncodingMagic(Buffer.from([0x1f, 0x8b, 8]), 'gzip'),
+        true,
+      );
+      assert.equal(
+        matchesContentEncodingMagic(
+          Buffer.from([0x28, 0xb5, 0x2f, 0xfd, 0]),
+          'zstd',
+        ),
+        true,
+      );
+      assert.equal(
+        matchesContentEncodingMagic(Buffer.from([0x1f]), 'gzip'),
+        false,
+      );
+      assert.equal(matchesContentEncodingMagic(Buffer.alloc(0), 'gzip'), false);
+      assert.equal(
+        matchesContentEncodingMagic(Buffer.from('{"a"'), 'gzip'),
+        false,
+      );
+    });
+
+    it('never matches a coding without magic', () => {
+      assert.equal(
+        matchesContentEncodingMagic(Buffer.from([0x1f, 0x8b]), 'br'),
+        false,
+      );
+      assert.equal(
+        matchesContentEncodingMagic(Buffer.from([0x1f, 0x8b]), undefined),
+        false,
+      );
+    });
+  });
+
+  describe('taggedContentEncoding', () => {
+    it('reads the first Content-Encoding tag, case-insensitively', () => {
+      assert.equal(
+        taggedContentEncoding([{ name: 'content-encoding', value: 'GZIP' }]),
+        'gzip',
+      );
+      assert.equal(
+        taggedContentEncoding([
+          { name: 'Content-Encoding', value: 'br' },
+          { name: 'Content-Encoding', value: 'gzip' },
+        ]),
+        'br',
+      );
+    });
+
+    it('returns undefined for no tag or a coding the gateway does not honour', () => {
+      assert.equal(taggedContentEncoding(undefined), undefined);
+      assert.equal(taggedContentEncoding([]), undefined);
+      assert.equal(
+        taggedContentEncoding([
+          { name: 'Content-Encoding', value: 'gzip, br' },
+        ]),
+        undefined,
+      );
+    });
+  });
+
+  describe('byteRangeHeader', () => {
+    it('passes a bytes range through', () => {
+      assert.equal(byteRangeHeader('bytes=0-99'), 'bytes=0-99');
+      assert.equal(byteRangeHeader('bytes=0-1,5-6'), 'bytes=0-1,5-6');
+    });
+
+    it('returns undefined without a header', () => {
+      assert.equal(byteRangeHeader(undefined), undefined);
+    });
+
+    it('normalizes the unit case', () => {
+      assert.equal(byteRangeHeader('BYTES=0-99'), 'bytes=0-99');
+      assert.equal(byteRangeHeader('Bytes=-500'), 'bytes=-500');
+    });
+
+    it('ignores a unit it does not understand', () => {
+      assert.equal(byteRangeHeader('items=0-5'), undefined);
+      assert.equal(byteRangeHeader('bytesx=0-5'), undefined);
+    });
+
+    it('passes an empty unit through for the parser to reject', () => {
+      assert.equal(byteRangeHeader('=0-5'), '=0-5');
+      assert.equal(byteRangeHeader(' =0-5'), ' =0-5');
+    });
+
+    it('leaves a header without a unit for the parser to reject', () => {
+      assert.equal(
+        byteRangeHeader('invalid-range-header'),
+        'invalid-range-header',
+      );
+    });
+  });
+
   describe('generateBoundary', () => {
     it('should generate 50 character boundaries', () => {
       const boundary = generateBoundary();
@@ -105,6 +212,189 @@ describe('http-utils', () => {
 
     it('should handle zero content-length', () => {
       assert.equal(parseContentLength({ 'content-length': '0' }), 0);
+    });
+  });
+
+  describe('parseContentEncoding', () => {
+    it('returns the encoding, lowercased and trimmed', () => {
+      assert.equal(parseContentEncoding('gzip'), 'gzip');
+      assert.equal(parseContentEncoding(' GZIP '), 'gzip');
+      assert.equal(parseContentEncoding('br'), 'br');
+    });
+
+    it('treats a missing, empty or identity header as no encoding', () => {
+      assert.equal(parseContentEncoding(undefined), undefined);
+      assert.equal(parseContentEncoding(''), undefined);
+      assert.equal(parseContentEncoding('   '), undefined);
+      assert.equal(parseContentEncoding('identity'), undefined);
+      assert.equal(parseContentEncoding('Identity'), undefined);
+    });
+
+    it('keeps a list of encodings as sent', () => {
+      assert.equal(parseContentEncoding('gzip, br'), 'gzip, br');
+      assert.equal(parseContentEncoding(['gzip', 'br']), 'gzip, br');
+    });
+  });
+
+  describe('honouredContentEncoding', () => {
+    it('names a single coding clients decode, normalized', () => {
+      assert.equal(honouredContentEncoding('gzip'), 'gzip');
+      assert.equal(honouredContentEncoding(' GZIP '), 'gzip');
+      assert.equal(honouredContentEncoding('br'), 'br');
+      assert.equal(honouredContentEncoding('deflate'), 'deflate');
+      assert.equal(honouredContentEncoding('zstd'), 'zstd');
+    });
+
+    it('names nothing for stacked, unknown, identity or missing codings', () => {
+      assert.equal(honouredContentEncoding('gzip, br'), undefined);
+      assert.equal(honouredContentEncoding('x-custom'), undefined);
+      assert.equal(honouredContentEncoding('compress'), undefined);
+      assert.equal(honouredContentEncoding('identity'), undefined);
+      assert.equal(honouredContentEncoding(''), undefined);
+      assert.equal(honouredContentEncoding(undefined), undefined);
+    });
+  });
+
+  describe('contentEncodingMagicLength', () => {
+    it('is the length of the coding magic', () => {
+      assert.equal(contentEncodingMagicLength('gzip'), 2);
+      assert.equal(contentEncodingMagicLength(' GZIP '), 2);
+      assert.equal(contentEncodingMagicLength('zstd'), 4);
+    });
+
+    it('is 0 for a coding without magic, or none', () => {
+      assert.equal(contentEncodingMagicLength('br'), 0);
+      assert.equal(contentEncodingMagicLength('deflate'), 0);
+      assert.equal(contentEncodingMagicLength(undefined), 0);
+    });
+  });
+
+  describe('contradictsContentEncoding', () => {
+    const gzipHead = Buffer.from([0x1f, 0x8b, 0x08, 0x00]);
+    const zstdHead = Buffer.from([0x28, 0xb5, 0x2f, 0xfd, 0x00]);
+    const json = Buffer.from('{"type":"advanced"}');
+
+    it('accepts bodies that start with the declared magic', () => {
+      assert.equal(contradictsContentEncoding(gzipHead, 'gzip'), false);
+      assert.equal(contradictsContentEncoding(gzipHead, ' GZIP '), false);
+      assert.equal(contradictsContentEncoding(zstdHead, 'zstd'), false);
+    });
+
+    it('rejects a decoded body that still declares gzip or zstd', () => {
+      assert.equal(contradictsContentEncoding(json, 'gzip'), true);
+      assert.equal(contradictsContentEncoding(json, 'zstd'), true);
+      assert.equal(contradictsContentEncoding(gzipHead, 'zstd'), true);
+    });
+
+    it('compares a short head as far as it goes', () => {
+      assert.equal(
+        contradictsContentEncoding(Buffer.from([0x1f]), 'gzip'),
+        false,
+      );
+      assert.equal(
+        contradictsContentEncoding(Buffer.from([0x7b]), 'gzip'),
+        true,
+      );
+    });
+
+    it('never rejects codings without magic, no coding, or an empty head', () => {
+      assert.equal(contradictsContentEncoding(json, 'br'), false);
+      assert.equal(contradictsContentEncoding(json, 'deflate'), false);
+      assert.equal(contradictsContentEncoding(json, 'gzip, br'), false);
+      assert.equal(contradictsContentEncoding(json, undefined), false);
+      assert.equal(contradictsContentEncoding(json, 'identity'), false);
+      assert.equal(contradictsContentEncoding(Buffer.alloc(0), 'gzip'), false);
+    });
+
+    it('reports which codings can be checked', () => {
+      assert.equal(hasContentEncodingMagic('gzip'), true);
+      assert.equal(hasContentEncodingMagic('ZSTD'), true);
+      assert.equal(hasContentEncodingMagic('br'), false);
+      assert.equal(hasContentEncodingMagic(undefined), false);
+    });
+  });
+
+  describe('undeclaredTaggedEncoding', () => {
+    const tagged = (value: string) => [
+      { name: 'Content-Type', value: 'application/json' },
+      { name: 'content-encoding', value },
+    ];
+
+    it('names a tagged coding the response does not declare', () => {
+      assert.equal(
+        undeclaredTaggedEncoding({
+          contentEncoding: undefined,
+          tags: tagged('gzip'),
+        }),
+        'gzip',
+      );
+      assert.equal(
+        undeclaredTaggedEncoding({
+          contentEncoding: 'identity',
+          tags: tagged('GZIP'),
+        }),
+        'gzip',
+      );
+    });
+
+    it('names nothing when the response declares an encoding', () => {
+      assert.equal(
+        undeclaredTaggedEncoding({
+          contentEncoding: 'gzip',
+          tags: tagged('gzip'),
+        }),
+        undefined,
+      );
+    });
+
+    it('names nothing for codings gateways never declare', () => {
+      for (const value of ['x-custom', 'gzip, br', 'identity']) {
+        assert.equal(
+          undeclaredTaggedEncoding({
+            contentEncoding: undefined,
+            tags: tagged(value),
+          }),
+          undefined,
+          value,
+        );
+      }
+    });
+
+    it('names nothing without a Content-Encoding tag', () => {
+      assert.equal(
+        undeclaredTaggedEncoding({ contentEncoding: undefined, tags: [] }),
+        undefined,
+      );
+      assert.equal(
+        undeclaredTaggedEncoding({
+          contentEncoding: undefined,
+          tags: undefined,
+        }),
+        undefined,
+      );
+    });
+
+    it('uses only the first Content-Encoding tag', () => {
+      assert.equal(
+        undeclaredTaggedEncoding({
+          contentEncoding: undefined,
+          tags: [
+            { name: 'Content-Encoding', value: 'x-custom' },
+            { name: 'Content-Encoding', value: 'gzip' },
+          ],
+        }),
+        undefined,
+      );
+    });
+  });
+
+  describe('contentEncodingOf', () => {
+    it('spreads an encoding only when there is one', () => {
+      assert.deepEqual(contentEncodingOf('GZIP'), {
+        sourceContentEncoding: 'gzip',
+      });
+      assert.deepEqual(contentEncodingOf(undefined), {});
+      assert.deepEqual(contentEncodingOf('identity'), {});
     });
   });
 
@@ -336,6 +626,20 @@ describe('http-utils', () => {
   });
 
   describe('calculateRangeResponseSize', () => {
+    it('charges a range with an ignored unit as the whole item', () => {
+      assert.equal(
+        calculateRangeResponseSize(1000, 'items=0-5', 'text/plain'),
+        1000,
+      );
+    });
+
+    it('charges an upper-case bytes range as the range', () => {
+      assert.equal(
+        calculateRangeResponseSize(1000, 'BYTES=0-499', 'text/plain'),
+        500,
+      );
+    });
+
     const contentType = 'application/octet-stream';
     const boundary = 'test-boundary-123';
 
@@ -491,6 +795,53 @@ describe('http-utils', () => {
 
       // Should be: 100 + 100 + 1000 = 1200 bytes data + multipart overhead
       assert.equal(size > 1200, true);
+    });
+  });
+
+  describe('dataEtag', () => {
+    const DIGEST = 'EH9VS4MRVSI5tcxNbyq5p2o9Yuq1iJQ8r-kkzKHOwj8';
+    const OLD_ID = 's8-yxqdYQRqMaVQ-TTlnMt0mu7gWQsFKua3dujzs0mY';
+    const NEW_ID = 'd1FJ-x_35islazgNjqw54eKERvE78j8X2FntbALlkaM';
+    const resWith = (resolvedId?: string): any => ({
+      getHeader: (name: string) =>
+        name.toLowerCase() === 'x-arns-resolved-id' ? resolvedId : undefined,
+    });
+
+    it('is the plain digest for a response not routed through a name', () => {
+      assert.equal(dataEtag(resWith(undefined), DIGEST), DIGEST);
+    });
+
+    it('is the plain digest when the resolved id header is empty', () => {
+      assert.equal(dataEtag(resWith(''), DIGEST), DIGEST);
+    });
+
+    it('includes the resolved id for an ArNS-routed response', () => {
+      assert.equal(dataEtag(resWith(NEW_ID), DIGEST), `${DIGEST}.${NEW_ID}`);
+    });
+
+    it('changes when a name is re-pointed at identical bytes', () => {
+      // duck-db-wasm on 2026-10-09: same file at /, new manifest.
+      assert.notEqual(
+        dataEtag(resWith(OLD_ID), DIGEST),
+        dataEtag(resWith(NEW_ID), DIGEST),
+      );
+    });
+
+    it('makes a revalidation with the old tag a full response, not a 304', () => {
+      const req: any = {
+        get: mock.fn(() => `"${dataEtag(resWith(OLD_ID), DIGEST)}"`),
+        method: 'GET',
+      };
+      assert.equal(
+        wouldReturn304(req, dataEtag(resWith(NEW_ID), DIGEST), true),
+        false,
+      );
+    });
+
+    it('still returns 304 when bytes and resolution are both unchanged', () => {
+      const tag = dataEtag(resWith(NEW_ID), DIGEST);
+      const req: any = { get: mock.fn(() => `"${tag}"`), method: 'GET' };
+      assert.equal(wouldReturn304(req, tag, true), true);
     });
   });
 

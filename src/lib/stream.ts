@@ -141,6 +141,107 @@ export function attachStallTimeout(
 }
 
 /**
+ * Reads at least `minBytes` from the start of a stream that nothing is reading
+ * yet, collecting as many chunks as that takes, and resolves with those bytes
+ * (`head`) and the stream to read the body from (`stream`).
+ *
+ * The collected chunks are put back in their original order, so `stream` is
+ * the stream passed in and no bytes are consumed. When the stream ends before
+ * `minBytes`, its bytes can no longer be put back, so `stream` is then a new
+ * stream of exactly the bytes collected (possibly none), and `head` is shorter
+ * than `minBytes`. Callers must read the body from the returned `stream`.
+ *
+ * A prefix split across chunks is the reason this collects: a first chunk of
+ * one byte would otherwise be compared as if it were the whole prefix.
+ *
+ * Leaves the stream paused, as {@link attachStallTimeout} does, so consumers
+ * start it with `pipe()` or `resume()`. Call it before attaching any `'data'`
+ * listener: a stream that already has one can flow while the peek runs, and
+ * those bytes would be lost.
+ *
+ * If `minBytes` have not arrived within `timeoutMs`, the stream is destroyed
+ * and the promise rejects. If `signal` aborts first, the stream is destroyed
+ * and the promise rejects with an `AbortError`.
+ */
+export function peekLeadingBytes(
+  stream: Readable,
+  minBytes: number,
+  timeoutMs: number,
+  signal?: AbortSignal,
+): Promise<{ head: Buffer; stream: Readable }> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let collected = 0;
+    const cleanup = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+      stream.off('data', onData);
+      stream.off('end', onEnd);
+      stream.off('error', onError);
+    };
+    // The caller has stopped wanting the bytes (client disconnect, or a hedged
+    // request that lost): release the connection now, not at the timeout.
+    const onAbort = () => {
+      cleanup();
+      stream.destroy();
+      const error = new Error('Peek aborted');
+      error.name = 'AbortError';
+      reject(error);
+    };
+    const onData = (chunk: Buffer) => {
+      chunks.push(chunk);
+      collected += chunk.length;
+      if (collected < minBytes) {
+        return;
+      }
+      stream.pause();
+      cleanup();
+      // unshift() puts each chunk in front of the last, so restore them in
+      // reverse to keep their order.
+      for (let i = chunks.length - 1; i >= 0; i--) {
+        stream.unshift(chunks[i]);
+      }
+      resolve({ head: Buffer.concat(chunks), stream });
+    };
+    // The whole body arrived before minBytes. An ended stream takes no
+    // unshift, so hand back a fresh one carrying exactly those bytes.
+    const onEnd = () => {
+      cleanup();
+      resolve({
+        head: Buffer.concat(chunks),
+        stream: Readable.from(chunks, { objectMode: false }),
+      });
+    };
+    const onError = (error: Error) => {
+      cleanup();
+      reject(error);
+    };
+    const timer = setTimeout(() => {
+      cleanup();
+      // Destroy without an error: the 'error' listener is gone, and an
+      // unhandled 'error' event would be an uncaught exception.
+      stream.destroy();
+      reject(
+        new Error(
+          `Received ${collected} of ${minBytes} leading bytes within ${timeoutMs}ms`,
+        ),
+      );
+    }, timeoutMs).unref();
+
+    if (signal?.aborted === true) {
+      onAbort();
+      return;
+    }
+    signal?.addEventListener('abort', onAbort, { once: true });
+    stream.on('data', onData);
+    stream.on('end', onEnd);
+    stream.on('error', onError);
+    // A stream paused earlier does not start flowing on a new 'data' listener.
+    stream.resume();
+  });
+}
+
+/**
  * Pipes a readable stream to an HTTP response, logging and destroying
  * the response on stream error.
  */

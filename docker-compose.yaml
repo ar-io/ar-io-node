@@ -1,7 +1,7 @@
 ---
 services:
   envoy:
-    image: ghcr.io/ar-io/ar-io-envoy:${ENVOY_IMAGE_TAG:-176414664895103926bb2cd072699e72e15832fb}
+    image: ghcr.io/ar-io/ar-io-envoy:${ENVOY_IMAGE_TAG:-9a28d6538aca7fb88d96c862062b13a0ed0fce69}
     build:
       context: envoy/
     restart: unless-stopped
@@ -23,6 +23,10 @@ services:
       - TVAL_GRAPHQL_HOST_HEADER=${GRAPHQL_HOST_HEADER:-}
       - TVAL_DATASETS_HOST=${DATASETS_PROXY_HOST:-core}
       - TVAL_DATASETS_PORT=${DATASETS_PROXY_PORT:-4000}
+      # Where https://<gateway>/ar-io/indexes/announce goes: the index-swarm
+      # sidecar's tracker listener for proxied announces (never published).
+      - TVAL_INDEX_SWARM_TRACKER_HOST=${INDEX_SWARM_TRACKER_PROXY_HOST:-index-swarm}
+      - TVAL_INDEX_SWARM_TRACKER_PORT=${INDEX_SWARM_TRACKER_PROXY_PORT:-6970}
       - TVAL_ARNS_ROOT_HOST=${ARNS_ROOT_HOST:-}
       - TVAL_ARWEAVE_POST_DRY_RUN=${ARWEAVE_POST_DRY_RUN:-false}
       - TVAL_ENABLE_ARWEAVE_PEER_EDS=${ENABLE_ARWEAVE_PEER_EDS:-true}
@@ -46,7 +50,7 @@ services:
       - observer
 
   core:
-    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-3e72d74de4a8ca838445eee4010f5ce60ece317d}
+    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-27b668f978a7a28009097d6df4f19fffe4e3af04}
     build:
       context: .
     restart: unless-stopped
@@ -75,6 +79,9 @@ services:
       - NODE_ENV=${NODE_ENV:-production}
       - LOG_LEVEL=${CORE_LOG_LEVEL:-info}
       - INDEXES_PUBLISHED_DIR=${INDEXES_PUBLISHED_DIR:-}
+      - INDEXES_ADVERTISE_FROM_URL=${INDEXES_ADVERTISE_FROM_URL:-}
+      - INDEXES_PUBLIC_URL=${INDEXES_PUBLIC_URL:-}
+      - INDEXES_TORRENT_WEBSEED=${INDEXES_TORRENT_WEBSEED:-}
       - LOG_FORMAT=${CORE_LOG_FORMAT:-simple}
       - LOG_FILTER=${CORE_LOG_FILTER:-}
       - LOG_ALL_STACKTRACES=${CORE_LOG_ALL_STACKTRACES:-}
@@ -82,6 +89,9 @@ services:
       - TRUSTED_GATEWAY_URL=${TRUSTED_GATEWAY_URL:-}
       - TRUSTED_GATEWAYS_URLS=${TRUSTED_GATEWAYS_URLS:-}
       - TRUSTED_GATEWAYS_REQUEST_TIMEOUT_MS=${TRUSTED_GATEWAYS_REQUEST_TIMEOUT_MS:-}
+      - GATEWAYS_THROTTLE_BACKOFF_ENABLED=${GATEWAYS_THROTTLE_BACKOFF_ENABLED:-}
+      - GATEWAYS_THROTTLE_BACKOFF_DEFAULT_MS=${GATEWAYS_THROTTLE_BACKOFF_DEFAULT_MS:-}
+      - GATEWAYS_THROTTLE_BACKOFF_MAX_MS=${GATEWAYS_THROTTLE_BACKOFF_MAX_MS:-}
       - GATEWAY_AGENT_IDLE_SOCKET_TIMEOUT_MS=${GATEWAY_AGENT_IDLE_SOCKET_TIMEOUT_MS:-}
       - GATEWAY_SLOW_SOCKET_ACQUISITION_LOG_THRESHOLD_MS=${GATEWAY_SLOW_SOCKET_ACQUISITION_LOG_THRESHOLD_MS:-}
       - GATEWAY_MAX_SOCKETS_PER_HOST=${GATEWAY_MAX_SOCKETS_PER_HOST:-}
@@ -96,6 +106,10 @@ services:
       - BUNDLER_URLS=${BUNDLER_URLS:-}
       - START_HEIGHT=${START_HEIGHT:-}
       - STOP_HEIGHT=${STOP_HEIGHT:-}
+      - L1_BAND_IMPORT_ENABLED=${L1_BAND_IMPORT_ENABLED:-}
+      - L1_BAND_IMPORT_BANDS_DIR=${L1_BAND_IMPORT_BANDS_DIR:-}
+      - L1_BAND_IMPORT_INTERVAL_SECONDS=${L1_BAND_IMPORT_INTERVAL_SECONDS:-}
+      - L1_BAND_IMPORT_CACHE_MIB=${L1_BAND_IMPORT_CACHE_MIB:-}
       - SKIP_CACHE=${SKIP_CACHE:-}
       - SKIP_DATA_CACHE=${SKIP_DATA_CACHE:-}
       - SKIP_DATA_CACHE_WRITES=${SKIP_DATA_CACHE_WRITES:-}
@@ -316,7 +330,7 @@ services:
       - AWS_ELASTICACHE_TURBO_HOST=${AWS_ELASTICACHE_TURBO_HOST:-}
       - AWS_ELASTICACHE_TURBO_USE_TLS=${AWS_ELASTICACHE_TURBO_USE_TLS:-}
       - AWS_ELASTICACHE_TURBO_PORT=${AWS_ELASTICACHE_TURBO_PORT:-}
-      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-84}
+      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-85}
       - CHUNK_POST_MIN_SUCCESS_COUNT=${CHUNK_POST_MIN_SUCCESS_COUNT:-}
       - CHUNK_POST_MIN_PREFERRED_SUCCESS_COUNT=${CHUNK_POST_MIN_PREFERRED_SUCCESS_COUNT:-}
       - CHUNK_POST_MAX_CONSECUTIVE_FAILURES=${CHUNK_POST_MAX_CONSECUTIVE_FAILURES:-}
@@ -623,7 +637,7 @@ services:
       - ar-io-network
 
   clickhouse-auto-import:
-    image: ghcr.io/ar-io/ar-io-clickhouse-auto-import:${CLICKHOUSE_AUTO_IMPORT_IMAGE_TAG:-956f52564e6ff14f5682f6d26176a03b5ed9807a}
+    image: ghcr.io/ar-io/ar-io-clickhouse-auto-import:${CLICKHOUSE_AUTO_IMPORT_IMAGE_TAG:-226ef06930babf540c1211e6d38d45b0707b73aa}
     profiles:
       - clickhouse
     build:
@@ -654,6 +668,8 @@ services:
       - CLICKHOUSE_AUTO_IMPORT_IDLE_WAIT_TIMEOUT_S=${CLICKHOUSE_AUTO_IMPORT_IDLE_WAIT_TIMEOUT_S:-}
       - CLICKHOUSE_AUTO_IMPORT_EXPORT_MAX_RETRIES=${CLICKHOUSE_AUTO_IMPORT_EXPORT_MAX_RETRIES:-}
       - CLICKHOUSE_AUTO_IMPORT_EXPORT_RETRY_DELAY_S=${CLICKHOUSE_AUTO_IMPORT_EXPORT_RETRY_DELAY_S:-}
+      - CLICKHOUSE_AUTO_IMPORT_DEBUG_RETRY_WINDOW_S=${CLICKHOUSE_AUTO_IMPORT_DEBUG_RETRY_WINDOW_S:-}
+      - CLICKHOUSE_IMPORT_SKIP_UNCHANGED=${CLICKHOUSE_IMPORT_SKIP_UNCHANGED:-}
       - CLICKHOUSE_TTL_RULES_PATH=/app/config/clickhouse-ttl-rules.yaml
       # Read by scripts/clickhouse-import at schema-render time (not by the
       # gateway runtime), so it lives on this service rather than on core.
@@ -665,7 +681,7 @@ services:
       - clickhouse
 
   observer:
-    image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG:-fe159f5a7ad1351723c48b5cb08dd2d224cc1dc2}
+    image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG:-c5e98ddcf567598358fa73a0852b6be2cbbd42c4}
     restart: unless-stopped
     ports:
       - ${OBSERVER_PORT:-5050}:5050
@@ -732,7 +748,7 @@ services:
       - TURBO_UPLOAD_SERVICE_URL=${TURBO_UPLOAD_SERVICE_URL:-}
       - RUN_OBSERVER=${RUN_OBSERVER:-true}
       - MIN_RELEASE_NUMBER=${MIN_RELEASE_NUMBER:-0}
-      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-84}
+      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-85}
       - AR_IO_SDK_LOG_LEVEL=${AR_IO_SDK_LOG_LEVEL:-none}
       # Reference Gateway Configuration
       # The bundled observer references THIS node's own gateway by default (its
@@ -780,8 +796,12 @@ services:
       # See ar-io-observer src/config.ts OBSERVER_MAX_GATEWAY_FAILURE_
       # THRESHOLD for context.
       - OBSERVER_MAX_GATEWAY_FAILURE_THRESHOLD=${OBSERVER_MAX_GATEWAY_FAILURE_THRESHOLD:-}
-      # Offset Observation Configuration
+      # Offset (chunk-proof) observation: a sampled share of gateways must
+      # serve /chunk/<offset> with a Merkle proof that validates against the
+      # chain. Set OFFSET_OBSERVATION_ENFORCEMENT_ENABLED=false to report
+      # failures without failing gateways. See docs/envs.md.
       - OFFSET_OBSERVATION_SAMPLE_RATE=${OFFSET_OBSERVATION_SAMPLE_RATE:-}
+      - OFFSET_SAMPLE_COUNT=${OFFSET_SAMPLE_COUNT:-}
       - OFFSET_OBSERVATION_ENABLED=${OFFSET_OBSERVATION_ENABLED:-}
       - OFFSET_OBSERVATION_ENFORCEMENT_ENABLED=${OFFSET_OBSERVATION_ENFORCEMENT_ENABLED:-}
     networks:
@@ -811,19 +831,19 @@ services:
 
   # Publishes the index artifacts this gateway offers, and subscribes to those
   # published by other gateways, installing and retiring bands under the
-  # running node. Off unless the index-swarm profile is enabled.
+  # running node. Runs by default: with INDEX_SWARM_SUBSCRIBE unset it takes
+  # the ar.io publisher's root-TX bands (INDEX_SWARM_SUBSCRIBE=[] opts out).
+  # The old `--profile index-swarm` flag is still accepted, and does nothing.
   #
   # Runs the core image rather than one of its own: the sidecar is compiled
   # into the same dist/ tree and needs no dependency core does not already
   # have, so a separate image would be roughly a gigabyte of duplicate layers
   # per operator for code that is already present.
   index-swarm:
-    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-3e72d74de4a8ca838445eee4010f5ce60ece317d}
+    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-27b668f978a7a28009097d6df4f19fffe4e3af04}
     build:
       context: .
     entrypoint: ['/nodejs/bin/node', 'dist/index-swarm/main.js']
-    profiles:
-      - index-swarm
     restart: unless-stopped
     # Proper PID 1, so signals reach the process and exited children are
     # reaped. Without it a wedged process cannot be stopped without a kill,
@@ -833,10 +853,15 @@ services:
     # Deliberately no depends_on. The sidecar shares only a volume with the
     # gateway and works whether or not it is up, and a dependency here would
     # mean bringing this profile up could start or recreate core.
-    # The closed tracker, which a publisher of torrents runs. Nothing listens
-    # on a node that does not publish them.
+    # The closed tracker's direct port, which only a publisher of torrents
+    # listens on. Published on loopback by default, so a subscriber (the
+    # default role) exposes nothing: announces normally reach the tracker
+    # through the gateway's HTTPS (/ar-io/indexes/announce, forwarded by Envoy
+    # to INDEX_SWARM_TRACKER_PROXY_PORT, which is never published). A
+    # publisher whose torrents announce to this port directly sets
+    # INDEX_SWARM_TRACKER_HOST_IP=0.0.0.0.
     ports:
-      - '${INDEX_SWARM_TRACKER_PORT:-6969}:${INDEX_SWARM_TRACKER_PORT:-6969}/tcp'
+      - '${INDEX_SWARM_TRACKER_HOST_IP:-127.0.0.1}:${INDEX_SWARM_TRACKER_PORT:-6969}:${INDEX_SWARM_TRACKER_PORT:-6969}/tcp'
     volumes:
       - ${INDEX_SWARM_DATA_PATH:-./data/indexes}:/app/data/indexes
       # Only the observer keypair, and only when it is kept in a file: the
@@ -860,19 +885,25 @@ services:
       - INDEX_SWARM_MANIFEST_FETCH_TIMEOUT_MS=${INDEX_SWARM_MANIFEST_FETCH_TIMEOUT_MS:-}
       - INDEX_SWARM_DOWNLOAD_STALL_TIMEOUT_SECONDS=${INDEX_SWARM_DOWNLOAD_STALL_TIMEOUT_SECONDS:-}
       - INDEX_SWARM_DOWNLOAD_CONCURRENCY=${INDEX_SWARM_DOWNLOAD_CONCURRENCY:-}
+      # Unset: 64 GiB with the default subscription (INDEX_SWARM_SUBSCRIBE
+      # unset), no ceiling with an explicit one (see envs.md); 0 is no ceiling.
       - INDEX_SWARM_MAX_DISK_BYTES=${INDEX_SWARM_MAX_DISK_BYTES:-}
       - INDEX_SWARM_DOWNLOAD_RATE_LIMIT_BYTES_PER_SEC=${INDEX_SWARM_DOWNLOAD_RATE_LIMIT_BYTES_PER_SEC:-}
       - INDEX_SWARM_REGISTRY_CACHE_TTL_SECONDS=${INDEX_SWARM_REGISTRY_CACHE_TTL_SECONDS:-}
-      # The swarm tier: on when INDEX_SWARM_ENGINE_AUTH is set (the URL then
-      # defaults to the compose engine) and the index-swarm-torrent profile
-      # runs the engine.
+      # The swarm tier, on by default: the URL defaults to the compose engine
+      # once there is a password, INDEX_SWARM_ENGINE_AUTH or, unset, the one
+      # index-swarm-engine-init generates into data/indexes/engine-auth.
       - INDEX_SWARM_ENGINE_URL=${INDEX_SWARM_ENGINE_URL:-}
       - INDEX_SWARM_ENGINE_AUTH=${INDEX_SWARM_ENGINE_AUTH:-}
       - INDEX_SWARM_TRACKERS=${INDEX_SWARM_TRACKERS:-}
       - INDEX_SWARM_ALLOWED_TRACKERS=${INDEX_SWARM_ALLOWED_TRACKERS:-}
       - INDEX_SWARM_ENGINE_BLOCK_PRIVATE=${INDEX_SWARM_ENGINE_BLOCK_PRIVATE:-true}
       - INDEX_SWARM_TRACKER_PORT=${INDEX_SWARM_TRACKER_PORT:-6969}
+      # Read only to warn when torrents announce to a port bound to loopback.
+      - INDEX_SWARM_TRACKER_HOST_IP=${INDEX_SWARM_TRACKER_HOST_IP:-127.0.0.1}
+      - INDEX_SWARM_TRACKER_PROXY_PORT=${INDEX_SWARM_TRACKER_PROXY_PORT:-6970}
       - INDEX_SWARM_TRACKER_TRUSTED_PROXIES=${INDEX_SWARM_TRACKER_TRUSTED_PROXIES:-}
+      - INDEX_SWARM_TRACKER_PROXY_TRUSTED_PROXIES=${INDEX_SWARM_TRACKER_PROXY_TRUSTED_PROXIES:-}
       - INDEX_SWARM_ENGINE_PUBLIC_HOST=${INDEX_SWARM_ENGINE_PUBLIC_HOST:-}
       - INDEX_SWARM_ENGINE_PORT=${INDEX_SWARM_ENGINE_PORT:-6881}
       - INDEX_SWARM_UPLOAD_LIMIT_BYTES_PER_SEC=${INDEX_SWARM_UPLOAD_LIMIT_BYTES_PER_SEC:-10000000}
@@ -927,18 +958,120 @@ services:
     labels:
       autoheal: ${RUN_AUTOHEAL:-false}
 
+  # Builds this gateway's root-TX (and, with INDEX_EXPORT_KINDS, L1) index
+  # bands from its own index once a day and
+  # puts them where the index-swarm sidecar signs and offers them. See
+  # "Producing bands" in docs/index-swarm.md.
+  index-export:
+    # The core image, at its own tag when set: the service can move to a
+    # release before core does, and must not run an image that predates it.
+    # Like core's, this build tags the core image.
+    image: ghcr.io/ar-io/ar-io-core:${INDEX_EXPORT_IMAGE_TAG:-${CORE_IMAGE_TAG:-27b668f978a7a28009097d6df4f19fffe4e3af04}}
+    build:
+      context: .
+    entrypoint: ['/nodejs/bin/node', 'dist/index-export/main.js']
+    profiles:
+      - index-export
+    restart: unless-stopped
+    init: true
+    # A run in progress gets a minute to stop; its scratch is cleared at the
+    # next start.
+    stop_grace_period: 60s
+    # Deliberately no depends_on: bringing this profile up must never start or
+    # recreate core, ClickHouse or the sidecar. A source that is down makes a
+    # run "couldn't check", retried later.
+    volumes:
+      - ${INDEX_SWARM_DATA_PATH:-./data/indexes}:/app/data/indexes
+      # Read-only, for the SQLite source (gateways without ClickHouse), L1
+      # bands (core.db) and L2 bands' owners' keys (bundles.db wallets).
+      - ${SQLITE_DATA_PATH:-./data/sqlite}:/app/data/sqlite:ro
+      # Peers' ClickHouse password files, only when INDEX_EXPORT_SOURCES names
+      # a peer; otherwise nothing is mounted.
+      - ${INDEX_EXPORT_SECRETS_DIR:-/dev/null}:/run/secrets/index-export:ro
+    environment:
+      - NODE_ENV=${NODE_ENV:-production}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - LOG_FORMAT=${LOG_FORMAT:-simple}
+      # The publisher: band ids are made unique to it.
+      - AR_IO_WALLET=${AR_IO_WALLET:-}
+      - CLICKHOUSE_URL=${CLICKHOUSE_URL:-}
+      - CLICKHOUSE_USER=${CLICKHOUSE_USER:-}
+      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:-}
+      - INDEX_EXPORT_KINDS=${INDEX_EXPORT_KINDS:-root-tx-index}
+      - INDEX_EXPORT_CORE_DB=${INDEX_EXPORT_CORE_DB:-}
+      - INDEX_EXPORT_SOURCES=${INDEX_EXPORT_SOURCES:-}
+      - INDEX_EXPORT_RUN_AT_UTC=${INDEX_EXPORT_RUN_AT_UTC:-04:00}
+      - INDEX_EXPORT_RECENT_MAX_BLOCKS=${INDEX_EXPORT_RECENT_MAX_BLOCKS:-100000}
+      - INDEX_EXPORT_ROOT_TX_LAYOUT=${INDEX_EXPORT_ROOT_TX_LAYOUT:-legacy}
+      - INDEX_EXPORT_ROOT_TX_SETTLE_BLOCKS=${INDEX_EXPORT_ROOT_TX_SETTLE_BLOCKS:-5040}
+      - INDEX_EXPORT_ROOT_TX_RESETTLE_INTERVAL_HOURS=${INDEX_EXPORT_ROOT_TX_RESETTLE_INTERVAL_HOURS:-168}
+      - INDEX_EXPORT_ROOT_TX_RESETTLE_MAX_CHANGED=${INDEX_EXPORT_ROOT_TX_RESETTLE_MAX_CHANGED:-20000}
+      - INDEX_EXPORT_START_HEIGHT=${INDEX_EXPORT_START_HEIGHT:-}
+      - INDEX_EXPORT_L1_RUN_BUDGET_MINUTES=${INDEX_EXPORT_L1_RUN_BUDGET_MINUTES:-}
+      # parquet-l2: the selections to build, and where from (see envs.md).
+      - INDEX_EXPORT_L2_INDEXES=${INDEX_EXPORT_L2_INDEXES:-}
+      - INDEX_EXPORT_L2_SOURCE=${INDEX_EXPORT_L2_SOURCE:-}
+      - INDEX_EXPORT_L2_SETTLE_BLOCKS=${INDEX_EXPORT_L2_SETTLE_BLOCKS:-}
+      - INDEX_EXPORT_L2_WALLETS_DB=${INDEX_EXPORT_L2_WALLETS_DB:-}
+      - INDEX_EXPORT_L2_MAX_READS=${INDEX_EXPORT_L2_MAX_READS:-}
+      - INDEX_EXPORT_L2_RUN_BUDGET_MINUTES=${INDEX_EXPORT_L2_RUN_BUDGET_MINUTES:-}
+      - INDEX_EXPORT_L2_DUCKDB_MEMORY=${INDEX_EXPORT_L2_DUCKDB_MEMORY:-}
+      - INDEX_EXPORT_L2_DUCKDB_THREADS=${INDEX_EXPORT_L2_DUCKDB_THREADS:-}
+      - INDEX_EXPORT_L2_DUCKDB_SPILL_MAX_GB=${INDEX_EXPORT_L2_DUCKDB_SPILL_MAX_GB:-}
+      - INDEX_EXPORT_L2_WINDOW_ITEMS=${INDEX_EXPORT_L2_WINDOW_ITEMS:-}
+      - INDEX_EXPORT_L2_RECHECK_UNREADABLE_EVERY=${INDEX_EXPORT_L2_RECHECK_UNREADABLE_EVERY:-}
+      - INDEX_EXPORT_HEADER_CHECK_URL=${INDEX_EXPORT_HEADER_CHECK_URL:-}
+      - INDEX_EXPORT_HEADER_CHECK_TIMEOUT_MS=${INDEX_EXPORT_HEADER_CHECK_TIMEOUT_MS:-30000}
+      - INDEX_EXPORT_METRICS_PORT=${INDEX_EXPORT_METRICS_PORT:-9102}
+      # Bounds, so a fold can't crowd the gateway: heap and memory, a larger
+      # thread pool so file I/O doesn't starve DNS lookups, and a low share
+      # of the disk.
+      - NODE_OPTIONS=--max-old-space-size=4096
+      - UV_THREADPOOL_SIZE=16
+    mem_limit: 6g
+    blkio_config:
+      weight: 100
+    healthcheck:
+      test:
+        [
+          'CMD',
+          '/nodejs/bin/node',
+          '-e',
+          "fetch('http://127.0.0.1:${INDEX_EXPORT_METRICS_PORT:-9102}/healthz').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))",
+        ]
+      # Sorting a large band's partition holds the event loop for a while:
+      # five minutes of failed checks, as /healthz itself allows, before the
+      # container counts as unhealthy.
+      interval: 30s
+      timeout: 30s
+      retries: 10
+      start_period: 60s
+    logging:
+      driver: json-file
+      options:
+        max-size: '${INDEX_SWARM_LOG_MAX_SIZE:-50m}'
+        max-file: '${INDEX_SWARM_LOG_MAX_FILE:-3}'
+    networks:
+      - ar-io-network
+    labels:
+      autoheal: ${RUN_AUTOHEAL:-false}
+
   # Writes the settings the swarm depends on into the torrent engine's config
   # before each engine start, then exits. The engine image has no way to take
   # a Web UI password from the environment; without this it would invent one
-  # per start that the sidecar could never know. Fails, and so keeps the
-  # engine down, when INDEX_SWARM_ENGINE_AUTH is unset.
+  # per start that the sidecar could never know. The password is
+  # INDEX_SWARM_ENGINE_AUTH when set; else one generated on the first start
+  # and kept, root-owned and mode 0600, in data/indexes/engine-auth, which
+  # the sidecar reads. Fails, and so keeps the engine down, when it cannot
+  # have one: the engine never runs without a password. Runs by default; the
+  # old `--profile index-swarm-torrent` flag is still accepted.
   index-swarm-engine-init:
-    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-3e72d74de4a8ca838445eee4010f5ce60ece317d}
+    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-27b668f978a7a28009097d6df4f19fffe4e3af04}
     entrypoint: ['/nodejs/bin/node', 'dist/index-swarm/engine-init.js']
-    profiles:
-      - index-swarm-torrent
     restart: 'no'
     volumes:
+      # Also where the generated password is kept: the sidecar mounts the
+      # same directory, the engine does not.
       - ${INDEX_SWARM_DATA_PATH:-./data/indexes}:/app/data/indexes
       - ${INDEX_SWARM_ENGINE_CONFIG_PATH:-./data/index-swarm-engine}:/config
     environment:
@@ -961,8 +1094,6 @@ services:
   # paths as the sidecar, because the sidecar hands it paths.
   index-swarm-engine:
     image: qbittorrentofficial/qbittorrent-nox:5.2.3-lt2-1@sha256:f269c2aae56f1bf8caddd77a59e7ba2a278919d8401213266b8fe154c6ac1043
-    profiles:
-      - index-swarm-torrent
     restart: unless-stopped
     depends_on:
       index-swarm-engine-init:
@@ -985,7 +1116,8 @@ services:
       - PUID=${INDEX_SWARM_ENGINE_UID:-1000}
       - PGID=${INDEX_SWARM_ENGINE_GID:-1000}
       - UMASK=022
-    # Only the peer port reaches the host. The Web API stays on the engine's
+    # Only the peer port reaches the host; open it (TCP and UDP) to the
+    # internet so peers can connect in. The Web API stays on the engine's
     # own network, where the sidecar reaches it as index-swarm-engine:8080;
     # it must be reached at that same port, because qBittorrent refuses a
     # Host header naming another.

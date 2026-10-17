@@ -14,10 +14,13 @@ import {
   CONTIGUOUS_DATA_CACHE_INDEX_UPDATE_ON_READ,
   PREFERRED_ARNS_BASE_NAMES,
   PREFERRED_ARNS_NAMES,
+  STREAM_STALL_TIMEOUT_MS,
 } from '../config.js';
 import { verificationPriorities } from '../constants.js';
 import * as events from '../events.js';
 import { generateRequestAttributes } from '../lib/request-attributes.js';
+import { isOctetStreamPlaceholder } from '../lib/content-type.js';
+import { parseContentEncoding } from '../lib/http-utils.js';
 import { Semaphore } from '../lib/semaphore.js';
 import { currentUnixTimestamp } from '../lib/time.js';
 import * as metrics from '../metrics.js';
@@ -32,11 +35,54 @@ import {
   ContiguousDataSource,
   ContiguousDataStore,
   ContiguousMetadata,
+  RecordedContentTypeSource,
   RequestAttributes,
 } from '../types.js';
 import { DataContentAttributeImporter } from '../workers/data-content-attribute-importer.js';
 
 const MAX_MRU_ARNS_NAMES_LENGTH = 10;
+
+/**
+ * The content type to record for this item, per ID, from a fetch of its data,
+ * and how far to trust it (see `ContentTypeSource` in types.d.ts).
+ *
+ * - The item's own tag (`sourceContentTypeOrigin: 'item'`) is always recorded.
+ * - A gateway's answer for this ID is recorded at the lower `upstream` rank,
+ *   and only from a trusted gateway: an untrusted peer could otherwise fix a
+ *   type on an item for good. The octet-stream placeholder is never recorded
+ *   at that rank, because a gateway that does not know the type answers with
+ *   it, and it would outrank a correct per-hash value.
+ * - A type with no stated origin is not recorded. That includes a type a
+ *   source took from this gateway's own stored attributes, which may be the
+ *   per-hash value of another item with the same bytes.
+ */
+export function itemContentTypeToRecord(
+  data: Pick<
+    ContiguousData,
+    'sourceContentType' | 'sourceContentTypeOrigin' | 'trusted'
+  >,
+):
+  | {
+      itemContentType: string;
+      itemContentTypeSource: RecordedContentTypeSource;
+    }
+  | undefined {
+  const contentType = data.sourceContentType;
+  if (contentType === undefined || contentType.trim() === '') {
+    return undefined;
+  }
+  if (data.sourceContentTypeOrigin === 'item') {
+    return { itemContentType: contentType, itemContentTypeSource: 'item' };
+  }
+  if (
+    data.sourceContentTypeOrigin === 'upstream' &&
+    data.trusted &&
+    !isOctetStreamPlaceholder(contentType)
+  ) {
+    return { itemContentType: contentType, itemContentTypeSource: 'upstream' };
+  }
+  return undefined;
+}
 
 /**
  * How a leader's foreground fetch ended, as seen by callers waiting on it.
@@ -122,6 +168,11 @@ type GetDataArgs = {
    * (PE-9099). Also forwarded upstream.
    */
   acceptContentType?: (contentType: string | undefined) => boolean;
+  /**
+   * For a ranged miss, whether to start a background fetch of the whole item
+   * (see `triggerBackgroundCacheForRange`). Defaults to true.
+   */
+  backgroundCacheOnRangeMiss?: boolean;
 };
 
 export class ReadThroughDataCache implements ContiguousDataSource {
@@ -158,6 +209,8 @@ export class ReadThroughDataCache implements ContiguousDataSource {
   private pendingBackgroundCaches: Set<string> = new Set();
   private backgroundCacheRangeMaxSize: number;
   private backgroundCacheSemaphore: Semaphore;
+  /** See {@link triggerBackgroundCacheForRange}. */
+  private backgroundCacheStallTimeoutMs: number;
   /**
    * Single-flight map for foreground full-object fetches, keyed by data ID.
    *
@@ -211,6 +264,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     trustedCacheRetryRate = 0,
     backgroundCacheRangeMaxSize = 0,
     backgroundCacheRangeConcurrency = 1,
+    backgroundCacheStallTimeoutMs = STREAM_STALL_TIMEOUT_MS,
     foregroundCacheMaxSize = 0,
     foregroundCacheConcurrency = 0,
     foregroundCacheCoalesceTimeoutMs = 300000,
@@ -233,6 +287,12 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     trustedCacheRetryRate?: number;
     backgroundCacheRangeMaxSize?: number;
     backgroundCacheRangeConcurrency?: number;
+    /**
+     * How long a background range-cache fetch may go without receiving a
+     * byte before it is abandoned and its permit released. Defaults to
+     * STREAM_STALL_TIMEOUT_MS.
+     */
+    backgroundCacheStallTimeoutMs?: number;
     foregroundCacheMaxSize?: number;
     foregroundCacheConcurrency?: number;
     foregroundCacheCoalesceTimeoutMs?: number;
@@ -326,6 +386,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     this.backgroundCacheSemaphore = new Semaphore(
       backgroundCacheRangeConcurrency,
     );
+    this.backgroundCacheStallTimeoutMs = backgroundCacheStallTimeoutMs;
     this.foregroundCacheMaxSize = foregroundCacheMaxSize;
     // 0 means unbounded -- leave the semaphore unset rather than constructing
     // one with a permit count that would reject in the Semaphore constructor.
@@ -660,8 +721,8 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     // Skipping also keeps the background permit free: without this check the
     // trigger below would coalesce onto that foreground leader and hold its
     // permit for the duration -- with BACKGROUND_CACHE_RANGE_CONCURRENCY
-    // defaulting to 1, one slow foreground fetch would stall background range
-    // caching process-wide.
+    // small (4 by default), a few slow foreground fetches would stall
+    // background range caching process-wide.
     if (this.inFlightForegroundFetches.has(id)) {
       metrics.backgroundRangeCacheSkippedTotal.inc({
         reason: 'already_pending',
@@ -685,18 +746,70 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     metrics.backgroundRangeCacheTriggeredTotal.inc();
     this.log.debug('Triggered background range cache fetch', { id, dataSize });
 
-    this.getData({ id, requestAttributes })
-      .then((result) => {
-        return new Promise<void>((resolve, reject) => {
-          result.stream.on('end', () => {
-            this.log.debug('Completed background range cache fetch', { id });
-            metrics.backgroundRangeCacheCompletedTotal.inc();
-            resolve();
-          });
-          result.stream.on('error', reject);
-          result.stream.resume();
+    // A wedged upstream never ends or errors its stream, which would hold this
+    // permit forever: a few such fetches would silently switch background
+    // range caching off for the life of the process. So the fetch is abandoned
+    // once it goes this long without a byte -- before the stream arrives, or
+    // between chunks -- and the permit returns. Abandoning aborts the fetch
+    // itself, not just this reader: this call is the foreground leader, so the
+    // abort reaches the upstream request and tears down its tee, staging file
+    // and in-flight entry; any request waiting on it falls back to its own
+    // fetch. Otherwise each abandoned fetch would outlive its permit, and a
+    // wedged upstream could pile them up without bound.
+    const stallTimeoutMs = this.backgroundCacheStallTimeoutMs;
+    const abortController = new AbortController();
+    let stream: Readable | undefined;
+    let abandoned = false;
+    let stallTimer: NodeJS.Timeout | undefined;
+    let onStall: (() => void) | undefined;
+    const armStallTimer = () => {
+      if (stallTimer !== undefined) {
+        clearTimeout(stallTimer);
+      }
+      stallTimer = setTimeout(() => onStall?.(), stallTimeoutMs);
+      // Never the only thing keeping the process alive.
+      stallTimer.unref();
+    };
+    const clearStallTimer = () => {
+      if (stallTimer !== undefined) {
+        clearTimeout(stallTimer);
+        stallTimer = undefined;
+      }
+    };
+
+    new Promise<void>((resolve, reject) => {
+      onStall = () => {
+        abandoned = true;
+        const error = new Error(
+          `Background range cache fetch stalled: no data for ${stallTimeoutMs}ms`,
+        );
+        abortController.abort(error);
+        stream?.destroy(error);
+        reject(error);
+      };
+      armStallTimer();
+      this.getData({
+        id,
+        requestAttributes,
+        signal: abortController.signal,
+      }).then((result) => {
+        stream = result.stream;
+        if (abandoned) {
+          // Abandoned while the fetch was starting.
+          result.stream.destroy();
+          return;
+        }
+        armStallTimer();
+        result.stream.on('data', armStallTimer);
+        result.stream.on('end', () => {
+          this.log.debug('Completed background range cache fetch', { id });
+          metrics.backgroundRangeCacheCompletedTotal.inc();
+          resolve();
         });
-      })
+        result.stream.on('error', reject);
+        result.stream.resume();
+      }, reject);
+    })
       .catch((error: any) => {
         this.log.debug('Background range cache fetch failed', {
           id,
@@ -705,6 +818,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
         metrics.backgroundRangeCacheFailedTotal.inc();
       })
       .finally(() => {
+        clearStallTimer();
         this.pendingBackgroundCaches.delete(id);
         this.backgroundCacheSemaphore.release();
       });
@@ -900,6 +1014,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
       parentSpan,
       signal,
       acceptContentType,
+      backgroundCacheOnRangeMiss = true,
     }: GetDataArgs,
     coalesceAttemptsRemaining: number,
   ): Promise<ContiguousData> {
@@ -1235,6 +1350,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
               parentSpan: span,
               signal,
               acceptContentType,
+              backgroundCacheOnRangeMiss,
             },
             nextAttempts,
           );
@@ -1315,8 +1431,36 @@ export class ReadThroughDataCache implements ContiguousDataSource {
       // Failing either guard degrades to "serve the bytes, stage nothing"
       // rather than to an error -- the caller still gets its data.
       let foregroundSkipReason: string | undefined;
+      // The item's Content-Encoding to record with the cached data, when these
+      // bytes are the first to tell us what it is.
+      let contentEncodingToRecord: string | undefined;
       if (cacheEligible) {
+        const knownContentEncoding = parseContentEncoding(
+          attributes?.contentEncoding,
+        );
+        const sourceContentEncoding = data.sourceContentEncoding;
         if (
+          sourceContentEncoding !== undefined &&
+          knownContentEncoding !== undefined &&
+          sourceContentEncoding !== knownContentEncoding
+        ) {
+          // The bytes are encoded differently from what this item is indexed
+          // or recorded as. The response is labelled from the index, so a
+          // cached copy would be served under the wrong encoding.
+          foregroundSkipReason = 'encoding_mismatch';
+        } else if (
+          sourceContentEncoding !== undefined &&
+          knownContentEncoding === undefined &&
+          data.sourceContentEncodingFromTags !== true &&
+          !data.trusted
+        ) {
+          // An untrusted upstream says the bytes are encoded and nothing else
+          // here confirms it. The response carries its Content-Encoding, but
+          // recording it would let one peer fix an encoding on an item for
+          // good (the recorded value is fill-once), and caching the bytes
+          // without it would serve them unlabelled.
+          foregroundSkipReason = 'encoding_unverified';
+        } else if (
           this.foregroundCacheMaxSize > 0 &&
           data.size > this.foregroundCacheMaxSize
         ) {
@@ -1337,9 +1481,27 @@ export class ReadThroughDataCache implements ContiguousDataSource {
             id,
             reason: foregroundSkipReason,
             dataSize: data.size,
+            sourceContentEncoding: data.sourceContentEncoding,
           });
         }
       }
+
+      if (
+        cacheEligible &&
+        foregroundSkipReason === undefined &&
+        data.sourceContentEncoding !== undefined &&
+        parseContentEncoding(attributes?.contentEncoding) === undefined
+      ) {
+        // From the item's signed tags or a trusted upstream (anything else
+        // was skipped above), and not yet known for this item.
+        contentEncodingToRecord = data.sourceContentEncoding;
+      }
+
+      // The item's own content type to record with the cached data, per ID.
+      const itemContentType =
+        cacheEligible && foregroundSkipReason === undefined
+          ? itemContentTypeToRecord(data)
+          : undefined;
 
       if (cacheEligible && foregroundSkipReason === undefined) {
         span.addEvent('Starting caching process');
@@ -1567,6 +1729,8 @@ export class ReadThroughDataCache implements ContiguousDataSource {
                           hash,
                           dataSize: data.size,
                           contentType: data.sourceContentType,
+                          contentEncoding: contentEncodingToRecord,
+                          ...itemContentType,
                           cachedAt: currentUnixTimestamp(),
                           verified: data.verified,
                           verificationPriority,
@@ -1586,6 +1750,19 @@ export class ReadThroughDataCache implements ContiguousDataSource {
                         hash,
                         size: data.size,
                         contentType: data.sourceContentType,
+                        // Ranked, so it replaces a per-hash value already in
+                        // memory for this ID (see setDataAttributes).
+                        ...(itemContentType !== undefined
+                          ? {
+                              contentTypeSource:
+                                itemContentType.itemContentTypeSource,
+                            }
+                          : {}),
+                        // In memory too, so the next request (a cache hit)
+                        // is labelled without waiting for the index write.
+                        ...(contentEncodingToRecord !== undefined
+                          ? { contentEncoding: contentEncodingToRecord }
+                          : {}),
                         trusted: true,
                       });
                     } catch (error: any) {
@@ -1640,6 +1817,8 @@ export class ReadThroughDataCache implements ContiguousDataSource {
                           hash,
                           dataSize: data.size,
                           contentType: data.sourceContentType,
+                          contentEncoding: contentEncodingToRecord,
+                          ...itemContentType,
                           cachedAt: currentUnixTimestamp(),
                           verified: false,
                           verificationPriority,
@@ -1655,6 +1834,19 @@ export class ReadThroughDataCache implements ContiguousDataSource {
                         hash,
                         size: data.size,
                         contentType: data.sourceContentType,
+                        // Ranked, so it replaces a per-hash value already in
+                        // memory for this ID (see setDataAttributes).
+                        ...(itemContentType !== undefined
+                          ? {
+                              contentTypeSource:
+                                itemContentType.itemContentTypeSource,
+                            }
+                          : {}),
+                        // In memory too, so the next request (a cache hit)
+                        // is labelled without waiting for the index write.
+                        ...(contentEncodingToRecord !== undefined
+                          ? { contentEncoding: contentEncodingToRecord }
+                          : {}),
                         trusted: false,
                       });
                     } catch (error: any) {
@@ -1757,7 +1949,11 @@ export class ReadThroughDataCache implements ContiguousDataSource {
           });
         }
 
-        if (region !== undefined && data.size > 0) {
+        if (
+          region !== undefined &&
+          data.size > 0 &&
+          backgroundCacheOnRangeMiss
+        ) {
           this.triggerBackgroundCacheForRange(
             id,
             attributes?.size ?? data.totalSize,

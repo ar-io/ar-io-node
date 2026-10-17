@@ -58,6 +58,8 @@ Claude Code.
 
 ## Dev Docs
 
+[docs/INDEX.md](docs/INDEX.md) is the index of the documents in `docs/`.
+
 ### Schema (WIP)
 
 - [Bundle schema]
@@ -82,7 +84,13 @@ docker run -e START_HEIGHT=800000 -v $PWD/data/:/app/data ar-io-core:latest
 ### Envoy & AR.IO Node
 
 You can also run [Envoy] alongside an `ar.io` node via [Docker Compose]. Envoy
-will proxy routes to `arweave.net` not yet implemented in the ar.io node.
+proxies the Arweave node routes the gateway does not serve itself (such as
+`POST /tx`) to Arweave nodes: by default, public peers it discovers through
+`ARWEAVE_PEER_DNS_RECORDS` (`peers.arweave.xyz`); with
+`ENABLE_ARWEAVE_PEER_EDS=false`, the static `TRUSTED_NODE_HOST` (default
+`arweave.net`) and `FALLBACK_NODE_HOST`. With `ARWEAVE_POST_DRY_RUN=true`,
+Envoy sends `POST /tx` to the gateway instead, which answers it itself and
+broadcasts nothing.
 
 ```shell
 docker compose up --build
@@ -103,7 +111,7 @@ To get started, supply the required environment variables in an environment vari
 - `BUNDLER_ARWEAVE_WALLET`: a stringified JWK wallet used for uploading bundles to Arweave.
 - `ALLOW_LISTED_ADDRESSES`: a comma-separated list of allowed uploader wallet addresses (normalized). See [Managing Bundler Access](#managing-bundler-access) for more permissioning options.
 
-See the `.env.bundler.example` file for other important configuration options, including settings for serving bundler-uploaded data items instantly from your gateway.
+See the `.env.bundler.example` file for other important configuration options, including settings for serving bundler-uploaded data items from your gateway as soon as they are uploaded.
 
 Once environment variables are set, run docker compose with the bundler-specific compose file.
 
@@ -170,7 +178,7 @@ Place an ANS-104 bundle at the start of the queue for unbundling and indexing
 on your gateway:
 
 ```
-curl -X PUT -H "Authorization: Bearer <ADMIN_KEY>" \
+curl -X POST -H "Authorization: Bearer <ADMIN_KEY>" \
   -H "Content-Type: application/json" \
   "http://<HOST>:<PORT>/ar-io/admin/queue-tx" \
   -d '{ "id": "<ID>" }'
@@ -185,24 +193,52 @@ For detailed information about filter types, operators, and advanced examples, s
 
 ### Root Transaction Index (CDB64)
 
-The gateway ships with a pre-built CDB64 index that provides O(1) lookups to
-resolve data item IDs to their containing L1 Arweave transactions. It is enabled
-by default and covers ~964 million non-AO, non-Redstone data items up to block
-height 1,820,000.
+The gateway ships with three pre-built CDB64 indexes that resolve data item
+IDs to their containing L1 Arweave transactions, up to block height
+1,820,000. They cover non-AO, non-Redstone data items with a content type
+(about 964 million) and without one (about 1.24 billion), and AO data items
+(about 1.63 billion). They are enabled by default and read from Arweave on
+demand. They are asked through the `cdb-remote` entry, which is last in the
+default `ROOT_TX_LOOKUP_ORDER`; the `cdb` entry, right after `db`, asks only
+indexes on local disk, such as bands installed by Index Sharing. An order
+without `cdb-remote` keeps the old behaviour: `cdb` asks every index, local
+and remote.
 
-To disable it, remove `cdb` from `ROOT_TX_LOOKUP_ORDER`. To use custom index
-sources, set `CDB64_ROOT_TX_INDEX_SOURCES`. See [docs/envs.md](docs/envs.md)
-for all CDB64 configuration options and [docs/cdb64-guide.md](docs/cdb64-guide.md)
-for operational guidance.
+To stop using the shipped indexes, leave them out of
+`CDB64_ROOT_TX_INDEX_SOURCES` (for example,
+`CDB64_ROOT_TX_INDEX_SOURCES=data/indexes/installed/root-tx-index`). Do not
+remove `cdb-remote` from `ROOT_TX_LOOKUP_ORDER` for this: without it, `cdb`
+asks every index, so the shipped indexes move up to right after `db`. To use
+other index sources, set `CDB64_ROOT_TX_INDEX_SOURCES`. See
+[docs/cdb64.md](docs/cdb64.md) for configuration and operation.
 
-Gateways can also share fresher indexes with each other: the optional
-`index-swarm` sidecar publishes this gateway's bands, signed with its observer
-key, and subscribes to other gateways' bands, which the gateway loads without a
-restart. Bands move over the publisher's metered HTTP routes, and, with the
-optional torrent engine (compose profile `index-swarm-torrent`), peer to peer
-as well, every subscriber seeding what it installs. See
-[docs/index-swarm.md](docs/index-swarm.md) to run it and
-[docs/index-publication.md](docs/index-publication.md) for the protocol.
+Gateways can also share fresher indexes with each other through Index
+Sharing, which is on by default: the `index-swarm` sidecar publishes this
+gateway's bands, signed with its observer key, and subscribes to other
+gateways' bands; unconfigured, it takes the ar.io publisher's root-TX bands
+(about 22 GB), which the gateway then searches first. Bands move over the
+publisher's metered HTTP routes and, through the torrent engine that runs
+beside it (peer port 6881), peer to peer as well, every subscriber seeding
+what it installs. `INDEX_SWARM_SUBSCRIBE=[]` opts out. Peers announce to a publisher's tracker
+through its HTTPS, each index has an RSS feed of its torrents, and each
+`.torrent` names the gateway as a WebSeed, so a stock BitTorrent client can
+follow a publisher too. Two kinds of band are shared:
+
+- **Root-TX bands** (CDB64), which the gateway loads without a restart to
+  place data items in their root transactions, and to answer
+  `/ar-io/offsets/<id>`.
+- **L1 bands** (`parquet-l1`): the Arweave base layer as Parquet, with
+  lookup files. With `L1_BAND_IMPORT_ENABLED` the gateway fills its own L1
+  history from them while it runs, so a new gateway follows the chain tip
+  from the start instead of indexing from height 0. They can also be
+  queried in place with DuckDB.
+
+`tools/index-swarm-setup` sets it up and `tools/index-swarm-status` checks
+it. See [docs/index-swarm.md](docs/index-swarm.md) to run it,
+[docs/index-export.md](docs/index-export.md) to build bands,
+[docs/index-publication.md](docs/index-publication.md) for the protocol, and
+[docs/cli.md](docs/cli.md) for the `ar-io-node` CLI that builds, checks and
+imports bands.
 
 ### Webhook Emission
 
@@ -253,10 +289,10 @@ ARNS_ROOT_HOST=my-gateway.net
 This would allow you to resolve names like `my-arns-name.my-gateway.net` provided
 you correctly configured a wildcard DNS entry for your gateway.
 
-Note: ArNS data ID resolution is currently delegated to `arweave.dev`. Routing is
-handled locally, but ArNS state is not yet computed locally. Local ArNS state
-computation will be added in a future release. Also, be aware, ArNS is still using
-a test contract. Resolved names should be considered temporary.
+ArNS names resolve in the order `ARNS_RESOLVER_PRIORITY_ORDER` sets, by
+default `on-demand,gateway`: first from the AR.IO Network's Solana programs
+directly, then from a trusted gateway (`TRUSTED_ARNS_GATEWAY_URL`, default
+`https://__NAME__.turbo-gateway.com`).
 
 ### Wallet association
 
@@ -298,7 +334,7 @@ particular ID is blocked.
 
 ### Monitoring and Observability
 
-The ar-io-node leverages [Prometheus] to collect metrics from the system and
+The ar-io-node uses [Prometheus] to collect metrics from the system and
 recommends [Grafana] to visualize them. To access a templated Grafana dashboard
 for the ar.io gateway, you can run:
 
@@ -427,6 +463,10 @@ filters, the filter structure and logic apply to log filtering as well.
 ## Principles and Practices
 
 ### Architecture
+
+Diagrams of the gateway, its chain, data and GraphQL paths are in
+[docs/diagrams/](docs/diagrams/), with their PlantUML sources under
+`docs/diagrams/src/`.
 
 - Code to interfaces.
 - Separate IO from application logic.

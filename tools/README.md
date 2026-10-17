@@ -5,14 +5,30 @@ This directory contains development and documentation tools for the AR.IO Node p
 ## Tools
 
 ### `index-swarm-setup` and `index-swarm-status`
-Set up index sharing (the `index-swarm` sidecar, optionally over BitTorrent) and check it works. `index-swarm-setup` edits `.env` idempotently (backing it up first) and, with `--restart`, recreates only what the changes need, by service name, using the running gateway's own compose files. `index-swarm-status` runs inside the sidecar and reports each check as ok/WARN/FAIL with the fix; it exits 1 on a failure. Both need only Docker: they run in the core image. See [Quick start](../docs/index-swarm.md#quick-start) and [setup and status scripts](../docs/index-swarm.md#setup-and-status-scripts).
+Set up Index Sharing (the `index-swarm` sidecar and its torrent engine, which run by default subscribed to the ar.io publisher's root-TX bands) further, and check it works. `index-swarm-setup` edits `.env` idempotently (backing it up first) and, with `--restart`, recreates only what the changes need, by service name, using the running gateway's own compose files. `index-swarm-status` runs inside the sidecar and reports each check as ok/WARN/FAIL with the fix; it exits 1 on a failure. Both need only Docker: they run in the core image. See [Quick start](../docs/index-swarm.md#quick-start) and [setup and status scripts](../docs/index-swarm.md#setup-and-status-scripts).
 
 **Usage:**
 ```bash
-./tools/index-swarm-setup --subscribe <publisher wallet> --torrent --dry-run
-./tools/index-swarm-setup --subscribe <publisher wallet> --torrent --restart
-./tools/index-swarm-setup --publish --torrent --public-host <public IP> --restart
+./tools/index-swarm-setup --subscribe <publisher wallet> --dry-run
+./tools/index-swarm-setup --subscribe <publisher wallet> --restart
+./tools/index-swarm-setup --subscribe <publisher wallet> --l1 --restart   # L1 bands too, filled into core.db
+./tools/index-swarm-setup --publish --public-host <public IP> --restart
 ./tools/index-swarm-status
+```
+
+### `ar-io-node`
+The gateway's command-line tool, in the style of the `ar.io` CLI from `@ar.io/sdk`: JSON on stdout, errors on stderr, exit 1 on failure. Its own commands build, export and check index bands (`index-band-*`) and import, verify and audit an L1 index (`index-l1-*`); any other command runs as the `ar.io` CLI with the same arguments. It runs in the core image (`CORE_IMAGE_TAG`), so it needs only Docker, and mounts only what a command needs. See [docs/cli.md](../docs/cli.md).
+
+**Usage:**
+```bash
+./tools/ar-io-node --help
+./tools/ar-io-node index-band-build --publisher <wallet> --kind d --height-range 2010500,tip \
+  --gateway-url http://core:4000 --input - < records.csv
+./tools/ar-io-node index-band-verify --band-dir data/indexes/published/root-tx-index/<band> --gateway-url http://core:4000
+./tools/ar-io-node index-l1-verify --bands-dir data/indexes/installed/parquet-l1
+./tools/ar-io-node index-l1-import --fill --bands-dir data/indexes/installed/parquet-l1 --core-db data/sqlite/core.db   # while the gateway runs
+./tools/ar-io-node index-l1-import --bands-dir data/indexes/installed/parquet-l1 --core-db data/sqlite/core.db   # with the gateway stopped
+./tools/ar-io-node get-gateway --address <wallet>
 ```
 
 ### `fetch-with-hint`
@@ -44,7 +60,7 @@ Fetches a data item from the gateway using client-supplied root TX ID and nestin
 - `--help` - Show help message
 
 ### `generate-architecture-pdf`
-Analyzes the repository structure and generates a comprehensive architecture review document in both markdown and PDF formats. The analysis covers:
+Analyzes the repository structure and generates an architecture review document in both markdown and PDF formats. The analysis covers:
 - Directory structure and file organization
 - Type system analysis
 - Database schemas and SQL statements
@@ -67,7 +83,7 @@ SKIP_COVERAGE=true ./tools/generate-architecture-pdf
 ```
 
 **Output:**
-- `architecture-review.md` - Comprehensive markdown analysis
+- `architecture-review.md` - Markdown analysis
 - `architecture-review.pdf` - E-reader optimized PDF (Kindle format)
 
 ### `test-chunk-retrieval`
@@ -155,6 +171,35 @@ File Descriptor Tracking (PID: 12345):
 - Stress test gateway configuration limits
 - Monitor resource usage during load tests
 
+### `test-data-retrieval`
+Retrieves a CSV of IDs (first column) from a gateway and reports what it
+served, optionally comparing with a reference gateway and checking each ID
+against a CDB64 index. HEAD only by default; `--bytes` and `--max-size`
+read data.
+
+**Usage:**
+```bash
+./tools/test-data-retrieval --csv ids.csv --gateway http://localhost:4000 \
+  --reference https://turbo-gateway.com --mode random --count 500 --concurrency 8
+./tools/test-data-retrieval --help   # every option
+```
+
+### `monitor-historical-dha-chunk-nodes`
+Polls the Arweave `data-N` and `tip-N` nodes on an interval and records
+whether each answers, for watching chunk-node availability over time.
+`--start-data-node`/`--end-data-node` (1-17), `--start-tip-node`/`--end-tip-node`
+(1-5), `--interval`, `--timeout`, `--output`; `--help` for the rest.
+
+### `x402-pay-test`
+Pays a gateway's x402 price end to end with a throwaway wallet (402, sign,
+retry, 200) and reports what settled on chain. **It spends real USDC on Base
+mainnet**, capped by `MAX_USDC` (default 0.05). See the header of the script
+for the wallet file it expects and why it must never be the receiving wallet.
+
+```bash
+GATEWAY=https://gateway.example ./tools/x402-pay-test [tx-id]
+```
+
 ### `generate-offset-mapping`
 Generates a static offset-to-block mapping file that maps Arweave weave byte offsets to approximate block heights. This mapping is used to optimize binary search when looking up transactions by offset, reducing the search space from the entire blockchain to a much smaller range.
 
@@ -229,6 +274,22 @@ cat data-items.csv | ./tools/queue-missing-bundles --input - \
 ```
 
 Run `./tools/queue-missing-bundles --help` for the full flag list.
+
+### CDB64 index tools
+
+Building, checking, moving and exporting CDB64 root-TX indexes by hand. Full
+usage is in [docs/cdb64-tools.md](../docs/cdb64-tools.md).
+
+| Tool | What it does |
+| --- | --- |
+| `generate-cdb64-root-tx-index` | Builds a CDB64 index from a CSV of data item ID to root transaction mappings |
+| `generate-cdb64-root-tx-index-rs` | The same, on the Rust-backed library (faster); needs `build-cdb64-napi` first |
+| `build-cdb64-napi` | Builds the Rust-backed `cdb64` native module |
+| `export-sqlite-to-cdb64` | Exports the root-TX mappings in this gateway's `data.db` straight to CDB64 |
+| `export-cdb64-root-tx-index` | Exports a CDB64 index back to CSV |
+| `verify-cdb64` | Checks that every ID in a CSV is in a CDB64 index |
+| `upload-cdb64-to-arweave` | Uploads a partitioned index's `.cdb` files to Arweave with the Turbo SDK and writes a manifest of `arweave-bundle-item` locations |
+| `download-cdb64` | Downloads a partitioned index's `.cdb` files from remote sources (HTTP, Arweave transaction, Arweave byte range) and writes a manifest of local file locations |
 
 ### `scan-bundle-offsets`
 Reads the item index and item headers of ANS-104 root bundles through a gateway's `/raw` range requests and writes the offsets and total size of every data item they contain, nested bundles included, in the CDB64 CSV format, ready for `generate-cdb64-root-tx-index-rs`. Payloads are never downloaded except where a coalesced header read spans them. Each item's header is decoded and its signature hashed to confirm the ID, and a root whose structure does not verify is recorded as failed instead of indexed; an item with an unknown signature type is skipped with a warning. Point it at a gateway you control: range reads on uncached roots are served from chunks by that gateway. Requests are limited to 10 per second by default (`--requests-per-second`, `0` for no limit), and only L1 transaction IDs should be listed.

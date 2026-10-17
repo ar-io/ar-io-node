@@ -35,6 +35,7 @@ import {
   utf8ToB64Url,
 } from '../lib/encoding.js';
 import { MANIFEST_CONTENT_TYPE } from '../lib/encoding.js';
+import { resolveContentType } from '../lib/content-type.js';
 import { currentUnixTimestamp } from '../lib/time.js';
 import log from '../log.js';
 import * as metrics from '../metrics.js';
@@ -62,6 +63,7 @@ import {
   ChunkPlacement,
   ChunkPlacementRef,
   TxGeometry,
+  RecordedContentTypeSource,
 } from '../types.js';
 import * as config from '../config.js';
 import { DetailedError } from '../lib/error.js';
@@ -660,10 +662,10 @@ export class StandaloneSqliteDatabaseWorker {
     // Full-claim path: caller has the complete root atom (parent_id,
     // root_transaction_id, all the offset/size fields, signature_type,
     // root_parent_offset). Used by the unbundle pipeline and by the
-    // on-demand metadata resolver. Atomic root-atom upsert; any of the
-    // tuple fields the caller leaves NULL are preserved by COALESCE in
-    // upsertNewDataItem rather than clobbered (see the contract comment
-    // in import.sql).
+    // on-demand metadata resolver. Atomic root-atom upsert: under the same
+    // root, tuple fields the caller leaves NULL are preserved by COALESCE in
+    // upsertNewDataItem; a write naming a different root replaces the whole
+    // atom, NULLs included (see the contract comment in import.sql).
     this.insertDataItemFn = this.dbs.bundles.transaction(
       (item: NormalizedDataItem, height?: number) => {
         const rows = dataItemToDbRows(item, height);
@@ -1703,8 +1705,16 @@ export class StandaloneSqliteDatabaseWorker {
       return undefined;
     }
 
-    const contentType =
-      txOrItemRow?.content_type ?? dataRow?.original_source_content_type;
+    // The item's own indexed tag first, then the type recorded for this item,
+    // then the per-hash value. The per-hash value is shared by every item with
+    // the same bytes, so it is only a fallback: two uploads of one file with
+    // different Content-Type tags must each keep their own.
+    const { contentType, contentTypeSource } = resolveContentType({
+      indexed: txOrItemRow?.content_type,
+      item: dataRow?.content_type,
+      itemSource: dataRow?.content_type_source,
+      hash: dataRow?.original_source_content_type,
+    });
     const hash = dataRow?.hash;
     const dataRoot = txOrItemRow?.data_root;
 
@@ -1748,8 +1758,13 @@ export class StandaloneSqliteDatabaseWorker {
       hash: hash ? toB64Url(hash) : undefined,
       dataRoot: dataRoot ? toB64Url(dataRoot) : undefined,
       size: txOrItemRow?.data_size ?? dataRow?.data_size,
-      contentEncoding: txOrItemRow?.content_encoding,
+      // The item's indexed tag, else the encoding recorded when its data was
+      // cached (from its signed tags or a trusted upstream). Never borrowed
+      // from another item with the same bytes: see selectDataAttributes.
+      contentEncoding:
+        txOrItemRow?.content_encoding ?? dataRow?.content_encoding ?? undefined,
       contentType,
+      contentTypeSource,
       parentId,
       rootTransactionId,
       rootParentOffset,
@@ -1977,6 +1992,9 @@ export class StandaloneSqliteDatabaseWorker {
     hash,
     dataSize,
     contentType,
+    contentEncoding,
+    itemContentType,
+    itemContentTypeSource,
     cachedAt,
     verified,
     verificationPriority,
@@ -1996,6 +2014,9 @@ export class StandaloneSqliteDatabaseWorker {
     hash: string;
     dataSize: number;
     contentType?: string;
+    contentEncoding?: string;
+    itemContentType?: string;
+    itemContentTypeSource?: RecordedContentTypeSource;
     cachedAt?: number;
     verified?: boolean;
     verificationPriority?: number;
@@ -2042,6 +2063,21 @@ export class StandaloneSqliteDatabaseWorker {
       root_data_offset: rootDataOffset ?? null,
       trusted: trusted === true ? 1 : trusted === false ? 0 : null,
     });
+
+    if (contentEncoding !== undefined) {
+      this.stmts.data.updateDataIdContentEncoding.run({
+        id: fromB64Url(id),
+        content_encoding: contentEncoding,
+      });
+    }
+
+    if (itemContentType !== undefined && itemContentTypeSource !== undefined) {
+      this.stmts.data.updateDataIdContentType.run({
+        id: fromB64Url(id),
+        content_type: itemContentType,
+        content_type_source: itemContentTypeSource,
+      });
+    }
 
     if (dataRoot !== undefined) {
       this.stmts.data.insertDataRoot.run({
@@ -4535,6 +4571,9 @@ export class StandaloneSqliteDatabase
     hash,
     dataSize,
     contentType,
+    contentEncoding,
+    itemContentType,
+    itemContentTypeSource,
     verified,
     verificationPriority,
     rootTransactionId,
@@ -4553,6 +4592,9 @@ export class StandaloneSqliteDatabase
     hash: string;
     dataSize: number;
     contentType?: string;
+    contentEncoding?: string;
+    itemContentType?: string;
+    itemContentTypeSource?: RecordedContentTypeSource;
     verified?: boolean;
     verificationPriority?: number;
     rootTransactionId?: string;
@@ -4589,6 +4631,13 @@ export class StandaloneSqliteDatabase
       rootDataItemOffset ?? '',
       rootDataOffset ?? '',
       contentType ?? '',
+      // Likewise: a write that first learns the item's encoding must not be
+      // dropped as a duplicate of one that did not know it.
+      contentEncoding ?? '',
+      // And its own content type, with the rank: an `item` value that
+      // replaces an `upstream` one is the write this cache must not drop.
+      itemContentType ?? '',
+      itemContentTypeSource ?? '',
     ].join('|');
 
     if (this.saveDataContentAttributesCache.get(dedupeKey)) {
@@ -4608,6 +4657,9 @@ export class StandaloneSqliteDatabase
         hash,
         dataSize,
         contentType,
+        contentEncoding,
+        itemContentType,
+        itemContentTypeSource,
         verified,
         verificationPriority,
         rootTransactionId,

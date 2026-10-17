@@ -27,7 +27,7 @@ sometimes referred to as "data IDs" in ar.io projects. This codebase attempts to
 always distinguish between "item ID", "transaction ID", and "data item ID" where
 appropriate for maximum clarity.
 
-**Stable/New Data** - Classification based on block confirmations. Stable data
+<a id="stable"></a> **Stable/New Data** - Classification based on block confirmations. Stable data
 is from blocks unlikely to be reorganized (18+ blocks deep), while new data is
 from recent blocks that could still be affected by chain reorganizations.
 
@@ -43,6 +43,15 @@ that "transaction ID" is often used interchangeably with "item ID" in the
 broader Arweave ecosystem. This codebase attempts to always distinguish between
 "item ID", "transaction ID", and "data item ID" where appropriate for maximum
 clarity.
+
+<a id="tx-root"></a> **tx_root** - The Merkle root a block commits to over its
+transactions. Above the 2.0 fork (height 422,250) it can be recomputed from
+the transactions, which proves each one's data root, size and position in
+Arweave's `(format, id)` sort. It does not prove transaction ids: Arweave drops
+the id before building the tree, so an id reaches `tx_root` only through the
+sort order. Nor does it prove the order a block lists its transactions in. A
+format-1 transaction's leaf is the root of its data, which an index does not
+store. Below the fork, `tx_root` is not committed by the block hash.
 
 <a id="weave"></a> **Weave** - The concatenated sequence of all transaction data
 on Arweave, forming the complete blockchain dataset.
@@ -144,7 +153,7 @@ token = 1 KiB). Requests are denied when insufficient tokens are available.
 Provides burst capacity while enforcing sustained rate limits.
 
 **x402 Protocol** - An open-source payment protocol built by Coinbase that
-leverages the HTTP 402 "Payment Required" status code to enable frictionless
+uses the HTTP 402 "Payment Required" status code to enable
 cryptocurrency payments for web APIs. The AR.IO Gateway uses x402 with USDC on
 the Base blockchain to monetize data egress and provide premium rate limit tiers
 for paying users. Requires the rate limiter to be enabled, as 402 responses are
@@ -156,7 +165,7 @@ only sent when rate limits are exceeded.
 [data items](#data-item), and their relationships. Includes retry tracking for
 bundle processing.
 
-**Chunks Database** - SQLite database (`chunks.db`) holding `chunk_placements` —
+<a id="chunks-database"></a> **Chunks Database** - SQLite database (`chunks.db`) holding `chunk_placements` —
 the chunk metadata index keyed by ([data root](#data-root), relative offset)
 that also serves as the **optimistic chunk ingest cache** ledger. When
 `CHUNK_INGEST_CACHE_ENABLED` is set, a chunk POSTed to the gateway is validated
@@ -232,72 +241,185 @@ the partitions and sources of a partitioned CDB64 index.
 be loaded from: local file, local directory, HTTP URL, Arweave transaction, or
 Arweave byte-range.
 
+<a id="cdb-remote"></a> **cdb / cdb-remote** — The two
+`ROOT_TX_LOOKUP_ORDER` entries for [CDB64 sources](#cdb64-source). When the
+order lists `cdb-remote`, `cdb` asks only sources read from local disk (local
+files, and partitioned indexes whose partitions are all local files, such as
+installed bands) and `cdb-remote` asks the ones read over the network (HTTP,
+Arweave, and local manifests with any remote partition, such as the shipped
+`resources/` indexes). When it does not, `cdb` asks every CDB64 source, as
+before Release 85.
+
 ## Index Distribution
 
-<a id="index-publication"></a> **Index Publication** — The signed JSON document
-a gateway serves at `/ar-io/indexes` listing the index artifacts it publishes,
-their bands, and where each band's files can be fetched. Signed with the
-gateway's Ed25519 observer key so it verifies against the publisher's
-registered `observerAddress` regardless of which mirror or transport delivered
-it. Distinct from an [Index Manifest](#index-manifest), which describes the
-partitions inside one CDB64 index. Specified in
-[index-publication.md](index-publication.md).
+<a id="index-sharing"></a> **Index Sharing** — The feature by which gateways
+publish signed index bands and subscribe to each other's, over HTTP and
+optionally BitTorrent. The [`index-swarm` sidecar](#index-swarm) moves the
+bands and [`index-export`](#index-export) builds them. See
+[index-swarm.md](index-swarm.md).
 
-<a id="webseed"></a> **WebSeed** — An HTTP URL (BEP 19) that serves the
-same bytes as the swarm, so a download completes even with no peers. On a
-gateway it is `/ar-io/indexes/webseed/`, rate limited and x402-priced while
-the swarm itself is free. Index torrents do not list it: subscribers add a
-publisher's WebSeed themselves, and only when peers stall, since engines
-otherwise treat it as one more peer and draw about half a band from it.
-
-<a id="torrent-name"></a> **Torrent Name** — The name inside a band's
-torrent: the first 16 hex characters of SHA-256 over one line per file,
-`<name>\0<size>\0<sha256 hex>\n`, with files in bytewise name order. Derived from content rather than the band id so
-that publishers of the same bytes share one infohash, and so that the
-WebSeed address `<torrent name>/<file>` cannot change meaning.
+<a id="index-publication"></a> **Publication** (Index Publication) — The signed
+JSON document a gateway serves at `/ar-io/indexes` listing the indexes it
+publishes, their bands, and every file's size and SHA-256. Signed with the
+gateway's Ed25519 observer key, so it verifies against the publisher's
+registered `observerAddress` whichever mirror or transport delivered it.
+Distinct from a band's own `manifest.json` ([Index Manifest](#index-manifest))
+or `band.json`. Specified in [index-publication.md](index-publication.md).
 
 <a id="band"></a> **Band** — One immutable unit of a published index, normally
-covering a block height range. Bands let a subscriber re-fetch only what
-changed: older height bands stay put while a rolling tip band is rebuilt on
-the publisher's cadence. A band's identity is the set of its file digests.
+covering a block height range. A subscriber re-fetches only what changed:
+older bands stay put while the band at the tip is rebuilt. A band's files are
+identified by their digests. A root-TX band's id is unique to its publisher
+and changes with its content. An [L1 band](#parquet-l1)'s id is a digest of
+its tables' rows, with the [lookup files](#lookup-file) left out, so two
+publishers of the same chain write bands with the same id.
 
-<a id="artifact-kind"></a> **Artifact Kind** — The `kind` field of a published
-index, selecting the plugin that validates and installs its bands
-(`cdb64-root-tx` first). Keeps the distribution path independent of what is
-being distributed.
+<a id="root-tx-band"></a> **Root-TX Band** (`cdb64-root-tx`) — A band that maps
+data item IDs to their root transactions and offsets, as a
+[partitioned CDB64 index](#partitioned-index). The gateway loads installed
+root-TX bands through its [Collection Source](#collection-source).
+
+<a id="parquet-l1"></a> **L1 Band** (`parquet-l1`) — A band of the Arweave base
+layer (blocks, transactions, tags and owners) for one height range, in
+Parquet, with a `band.json` of per-table row counts and row digests. A new
+gateway can import it instead of indexing the chain, and a client can query
+it in place. With `L1_BAND_IMPORT_ENABLED` the gateway fills its own L1
+history from installed L1 bands; otherwise it does not read them. The whole
+chain was 24 bands in October 2026.
+Its `band.json` holds only what the rows determine, dated by the top block,
+so every publisher of the same rows writes the same band and torrent; what
+is a publisher's own (the bands it replaces, when it built it) is kept
+beside it in `.publisher.json`, never published.
+See [index-publication.md](index-publication.md#l1-bands).
+
+<a id="parquet-l2"></a> **L2 Band** (`parquet-l2`) — A band of the ANS-104
+data items one declared selection takes (an app's items, by a tag and a
+value prefix) for one height range of the L1 grid, in Parquet: the items,
+their tags, owners' keys, and where each sits in its root transaction. The
+selection is in its `band.json` and its id, and the same for every band of
+an index. See [index-publication.md](index-publication.md#l2-bands).
+
+<a id="layout"></a> **Layout** (`l1-1`, `l1-2`, `l1-3`) — The `schema` value in
+an [L1 band](#parquet-l1)'s `band.json`, naming its file set and rules.
+`l1-2` writes [canonical columns](#canonical-band-columns); `l1-3` adds
+[lookup files](#lookup-file). Readers accept all three.
+
+<a id="artifact-kind"></a><a id="index-kind"></a> **Index Kind** — The `kind`
+field of a published index, selecting the code that validates and installs
+its bands: `cdb64-root-tx`, `parquet-l1` or `parquet-l2`. A reader skips a
+kind it does not implement.
 
 <a id="publication-sequence"></a> **Publication Sequence** — A monotonic
 counter per publisher, paired with the previous document's SHA-256. A
 subscriber refuses a lower sequence than the highest it has *seen*, whether or
 not that newer document's bands installed, so a cached or mirrored older
-document cannot roll it back. An equal sequence is accepted:
-it is what an unchanged publisher serves on every poll.
+document cannot roll it back. An equal sequence is accepted: it is what an
+unchanged publisher serves on every poll.
 
 <a id="collection-source"></a> **Collection Source** — A configured CDB64
 source that is a directory *of* indexes rather than one index: each
 subdirectory holding a `manifest.json` becomes its own reader, added and
 removed at runtime without a gateway restart.
 
-<a id="index-swarm"></a> **Index Swarm Sidecar** — The optional `index-swarm`
-compose service, running the core image with its own entrypoint, that
-publishes this gateway's bands and subscribes to other gateways'. It never
-touches the gateway's databases or the chain. See
-[index-swarm.md](index-swarm.md).
+<a id="index-swarm"></a> **`index-swarm` Sidecar** — The compose service,
+running the core image with its own entrypoint, that publishes this gateway's
+bands and subscribes to other gateways'. It runs by default, subscribed to the
+ar.io publisher's root-TX bands unless `INDEX_SWARM_SUBSCRIBE` says otherwise.
+
+<a id="default-subscription"></a> **Default Subscription** — What the
+[`index-swarm` sidecar](#index-swarm) subscribes to when
+`INDEX_SWARM_SUBSCRIBE` is unset or empty: the root-TX bands of the ar.io
+publisher, gateway wallet `34LYvMptiDvBP5sqfh1oAd6Q4qFsy4PWaZ1HTFmML7h5`.
+Documents are still verified against that wallet's registered observer key.
+Any explicit value replaces it; `[]` subscribes to nothing. See
+[index-swarm.md](index-swarm.md#on-by-default). It never touches the
+gateway's databases or the chain. See [index-swarm.md](index-swarm.md).
+
+<a id="index-export"></a> **Index Export** (`index-export`) — The optional
+compose service, running the core image, that builds this gateway's bands
+from its own index. Root-TX bands come from ClickHouse or `bundles.db`
+(history, a weekly-folded recent band and a daily delta, header-checked). L1
+bands come from `core.db`, checked against the chain. It writes them where the
+[`index-swarm` sidecar](#index-swarm) signs and offers them. See
+[index-export.md](index-export.md).
 
 <a id="publisher"></a> **Publisher** — A registered gateway serving a signed
-[Index Publication](#index-publication). Only the node holding the registered
+[Publication](#index-publication). Only the node holding the registered
 observer key can sign one, which is why a multi-node publisher sends
 `/ar-io/indexes*` to that node.
 
 <a id="subscriber"></a> **Subscriber** — A gateway whose sidecar follows one or
 more publishers, identified by wallet: it verifies each document against the
 registry, downloads bands by digest, and installs them where its gateway's
-[Collection Source](#collection-source) loads them.
+[Collection Source](#collection-source) loads them. A subscriber does not
+serve the byte routes for the bands it installed.
+
+<a id="byte-routes"></a> **Byte Routes** — The `/ar-io/indexes` routes that
+serve file bytes: a file by name, a file by digest ([Blob Route](#blob-route))
+and the [WebSeed](#webseed). Rate limited and x402-priced like data egress.
+The publication document and `.torrent` files are free.
 
 <a id="blob-route"></a> **Blob Route** — `GET /ar-io/indexes/blob/<sha256>`,
 which serves a published file by its digest. The address cannot change
-meaning, so responses are immutable and safe for any cache to keep; the
-publisher serves it from a hard link that pins the exact bytes it hashed.
+meaning, so responses are immutable. When the gateway meters the byte routes
+they are `private`, so a shared cache must not keep them; otherwise
+`public`. The publisher serves it from a hard link that pins the exact bytes
+it hashed.
+
+<a id="range-read"></a> **Range Read** — An HTTP request with a single `Range`
+header for part of a band file, answered `206`. The byte routes serve them,
+so a client can read a Parquet footer and a few row groups without the rest
+of the file. A proxy cache zone in front breaks them.
+
+<a id="repr-digest"></a> **Repr-Digest** — The RFC 9530 header carrying the
+SHA-256 of a whole file. Index band responses send it even on a `206`, and
+HTTPSIG covers it, so a signed range read is bound to the whole file. Data
+routes send it in place of `Content-Digest` on any response to a range
+request that would otherwise carry one (cached data or HEAD: a `206`, `304`,
+`416` or `400`), since `Content-Digest` covers only the bytes sent.
+
+<a id="webseed"></a> **WebSeed** — An HTTP URL (BEP 19) that serves the same
+bytes as the swarm, so a download completes even with no peers. On a gateway
+it is `/ar-io/indexes/webseed/`, metered while the swarm itself is free.
+The torrents a publisher builds do not list it. The gateway adds its own
+when it serves a `.torrent`, for stock clients following an
+[index feed](#index-feed); subscribers drop it, and add a publisher's
+WebSeed themselves only when peers stall.
+
+<a id="torrent-name"></a> **Torrent Name** — The name inside a band's
+torrent: the first 16 hex characters of SHA-256 over one line per file,
+`<name>\0<size>\0<sha256 hex>\n`, with files in bytewise name order. Derived
+from content rather than the band id so that publishers of the same bytes
+share one infohash, and so that the WebSeed address
+`<torrent name>/<file>` cannot change meaning.
+
+<a id="piece-layer"></a> **Piece Layer** — In a BitTorrent v2 (BEP 52)
+torrent, the hashes of one file's SHA-256 Merkle tree (built over 16 KiB
+blocks) at the level of whole pieces, carried outside the info dictionary.
+Hashed up to the file's `pieces root`, which the infohash covers, it lets a
+reader check any piece of a band file on its own. Band torrents use 256 KiB
+pieces so a range reader can verify what it fetched without the rest of the
+file.
+
+<a id="index-feed"></a> **Index Feed** — An RSS 2.0 feed of one published
+index's torrents, at `/ar-io/indexes/feed/<index>.xml`: one item per band,
+whose enclosure is the band's `.torrent`, served with the gateway's
+[WebSeed](#webseed). Lets an ordinary BitTorrent client follow a publisher
+with an auto-download rule, and finish every band. A view of the
+[publication](#index-publication), naming it by SHA-256, and never an
+authority of its own. See
+[index-publication.md](index-publication.md#following-an-index-in-a-bittorrent-client).
+
+<a id="closed-tracker"></a> **Closed Tracker** — The BitTorrent tracker a
+publishing sidecar runs, answering only for the bands its publication offers.
+Peers announce to it through the gateway, at `/ar-io/indexes/announce`, which
+Envoy forwards to the sidecar, or directly on port 6969. See
+[index-swarm.md](index-swarm.md#the-tracker).
+
+<a id="generation"></a> **Generation** — One installed copy of a band, in
+`installed/<index>/<band>~<generation>/`, named by the band id and a short
+digest of its files. A rebuilt band installs as a new generation beside the
+old one, which is retired no sooner than a minute later.
 
 <a id="install-retire"></a> **Install / Retire** — A subscriber *installs* a
 band by renaming a fully downloaded and verified directory into
@@ -308,8 +430,84 @@ it) and deleting the directory after the
 
 <a id="supersede"></a> **Supersede** — A band's `metadata.supersedes` names the
 band or bands it replaces. The publisher stops offering those at once and
-deletes them after `INDEX_SWARM_SUPERSEDE_GRACE_SECONDS`; subscribers retire
-them on the same grace, so a lookup in flight never loses its band.
+deletes them after `INDEX_SWARM_SUPERSEDE_GRACE_SECONDS`; subscribers keep the
+old band until its successor installs, then retire it on the same grace, so a
+lookup in flight never loses its band.
+
+<a id="lookup-file"></a> **Lookup File** — A Parquet file in an `l1-3`
+[L1 band](#parquet-l1), derived from the band's tables and sorted by an
+unsigned 64-bit key in row groups of 16,384 rows. A reader finds one key by
+reading the footer and one or two row groups. The three are `lookup_tx_id`,
+`lookup_wallet` and `lookup_tag`. A key is a pointer, confirmed against the
+table it points into. Not part of a band's id. See
+[lookup files](index-publication.md#lookup-files).
+
+<a id="prefix64"></a> **prefix64** — A lookup file key: the first 8 bytes of a
+value, big-endian, zero-padded on the right. Used for transaction ids and
+addresses.
+
+<a id="sha256-64"></a> **sha256_64** — A lookup file key: the
+[prefix64](#prefix64) of a value's SHA-256. Used for tag names and values.
+
+<a id="canonical-band-columns"></a> **Canonical Band Columns** — The values an
+[L1 band](#parquet-l1) writes, from layout `l1-2`, for columns a gateway fills
+in itself rather than reading off the chain: null for a pre-2.0 `tx_root` and
+a format-1 `data_root`, and `content_type`/`content_encoding` from the
+transaction's first such tag. They let two honest publishers write identical
+bands, so their digests can check each other. See
+[normalised columns](index-export.md#normalised-columns).
+
+<a id="l1-import"></a> **L1 Import** — Filling a gateway's `core.db` from
+installed [L1 bands](#parquet-l1) with `ar-io-node index-l1-import`, instead
+of indexing the chain block by block. With `--fill`, or the gateway's own
+worker (`L1_BAND_IMPORT_ENABLED`), it runs while the gateway does and writes
+only the heights `core.db` lacks beneath what the gateway indexes itself;
+with the gateway stopped it loads a whole chain fastest. Idempotent, and
+recorded range by range in `parquet_l1_imports` so it resumes.
+
+<a id="query-in-place"></a> **Query in Place** — Reading
+[L1 bands](#parquet-l1) directly with DuckDB or Polars, from disk or over
+[range reads](#range-read), instead of importing them into a gateway's
+`core.db`. Good for scans and aggregates, and for point lookups through a
+band's [lookup files](#lookup-file); it serves no gateway route.
+
+<a id="l1-audit"></a> **L1 Audit** — Checking the [`tx_root`](#tx-root) of
+blocks an index cannot check alone, with `ar-io-node index-l1-audit`. A
+format-1 transaction's `tx_root` leaf is the root of its data, which an index
+does not store, so about 13% of post-fork blocks need the data fetched. Ids
+are checked against the signatures they must be the SHA-256 of. Samples
+rather than sweeps, and the data source need not be trusted.
+
+<a id="l1-verify"></a> **L1 Verify** — Checking an L1 index against the
+weave size the chain commits to, with `ar-io-node index-l1-verify`. Below
+the 2.0 fork a block grew the weave by exactly its transactions'
+`data_size`, and the first post-2.0 block commits the running total, so
+one trusted block hash pins the size of every transaction beneath it.
+Proves nothing was invented, dropped or resized; does not prove which
+pre-2.0 block a transaction belonged to.
+
+<a id="fold"></a> **Fold** — Building a band from an earlier band's entries
+plus newer rows from the index, so entries the index has since dropped (such
+as ClickHouse rows past their TTL) are kept. A folded entry counts as being at
+its band's top height: a later root beats it, an older re-export does not.
+
+<a id="overlay"></a> **Overlay** — An authoritative record source for band
+building, such as a bundler's own offsets, whose rows beat every other
+source's for the same item within the height range it covers. A peer's row
+above that range (a re-bundle the overlay couldn't know of) still competes on
+height. Overlay rows that changed a root or offsets are header-checked in
+their own sample.
+
+<a id="record-conflict"></a> **Record Conflict** — In `index-export`, two
+record sources giving the same item the same root at the same height and
+rank but different offsets or size. Neither is trusted: the band falls back
+to the item's best earlier entry (a folded one, or an earlier root), or
+leaves the item out if there is none, rather than sign a guess.
+
+<a id="band-conflict"></a> **Band Conflict** (`band_conflict`) — In the
+`index-swarm` sidecar, two subscribed publishers offering different bytes
+under one band id. The copy already live keeps the id; the other is skipped
+and counted as `band_conflict`.
 
 ## Data Storage Architecture
 
@@ -637,6 +835,17 @@ requests.
 
 **Content Type/Encoding** - MIME type and compression format of stored data,
 preserved from the original upload.
+
+**Content Type Source** - Where the content type served for an item came from,
+most trusted first: `indexed` (the item's `Content-Type` tag in this gateway's
+index), `item` (recorded per item from its signed header, or from the
+uploader's per-item record such as Turbo's payload content type), `upstream`
+(recorded per item from a trusted gateway's answer for that ID), and `hash`
+(`contiguous_data.original_source_content_type`, shared by every item with the
+same bytes). An unindexed item used to have only the `hash` value, so two
+uploads of one file with different `Content-Type` tags were both served as the
+first one seen. Per-item values are written once; an `upstream` value yields
+only to an `item` value. In memory, a better-ranked type replaces a worse one.
 
 **Signature Type** - The cryptographic algorithm used to sign a transaction or
 data item (e.g., RSA, ED25519, Ethereum, Solana).

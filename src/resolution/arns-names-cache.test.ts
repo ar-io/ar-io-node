@@ -298,7 +298,9 @@ describe('ArNSNamesCache', () => {
     const debounceCache = new ArNSNamesCache({
       log,
       cacheHitDebounceTtl: 10000, // don't refresh the cache on a hit
-      cacheMissDebounceTtl: 10, // cache miss should trigger a refresh within 10ms
+      // Wide enough that a slow runner can't cross it between the first two
+      // lookups below.
+      cacheMissDebounceTtl: 200,
       registryCache,
       networkProcess: {
         // on first call, return empty, then return success
@@ -338,12 +340,22 @@ describe('ArNSNamesCache', () => {
     assert.deepEqual(missingNameAttempt2, undefined);
     assert.equal(callCount, 1);
 
-    // calling again after debounce is finished should hydrate the cache
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    // calling again after debounce is finished starts a refresh; it runs in
+    // the background, so wait for it rather than for a fixed time
+    await new Promise((resolve) => setTimeout(resolve, 250));
     await debounceCache.getCachedArNSBaseName('name-2');
-    // a subsequent call should return the name
-    const missingNameAttempt3 =
+    const deadline = Date.now() + 5000;
+    while (callCount < 2 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    assert.equal(callCount, 2);
+    // a subsequent call should return the name, once the refresh has stored it
+    let missingNameAttempt3 =
       await debounceCache.getCachedArNSBaseName('name-2');
+    while (missingNameAttempt3 === undefined && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      missingNameAttempt3 = await debounceCache.getCachedArNSBaseName('name-2');
+    }
     assert.equal(callCount, 2);
     assert.deepEqual(missingNameAttempt3, {
       name: 'name-2',

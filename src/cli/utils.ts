@@ -1,0 +1,177 @@
+/**
+ * AR.IO Gateway
+ * Copyright (C) 2022-2025 Permanent Data Solutions, Inc. All Rights Reserved.
+ *
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+
+/**
+ * The command plumbing of the `ar.io` CLI in `@ar.io/sdk` (`src/cli/utils.ts`),
+ * mirrored with the same names and behaviour so `ar-io-node` commands look and
+ * fail exactly like the SDK's: flat kebab-case names, options from one
+ * registry, the result as indented JSON on stdout and exit 0, an error's
+ * message on stderr (its stack with `--debug`) and exit 1. Mirrored rather
+ * than imported: the SDK exports no CLI modules, and its CLI internals are
+ * not a public contract.
+ */
+import { Command, program } from 'commander';
+
+import { globalOptions } from './options.js';
+import type {
+  CommanderOption,
+  GlobalCLIOptions,
+  JsonSerializable,
+} from './types.js';
+
+function stringifyJsonForCLIDisplay(json: unknown): string {
+  return JSON.stringify(json, null, 2);
+}
+
+/**
+ * Writes to a stream and waits for the bytes to reach the OS.
+ *
+ * `process.exit` throws away whatever is still buffered, and a write to a
+ * pipe is asynchronous — so a result larger than the pipe buffer (64 KiB)
+ * was being cut mid-token, leaving stdout holding JSON that will not
+ * parse. A file hid it, because those writes are synchronous; the shapes
+ * that broke are exactly the documented ones, `| jq` and `docker run`.
+ */
+export async function writeAndFlush(
+  stream: NodeJS.WriteStream,
+  text: string,
+): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    // A closed pipe calls back with EPIPE and *then* emits `error`. With
+    // nothing listening that is an unhandled event, which kills the
+    // process before the caller's error path runs. The listener outlives
+    // the callback for that reason; removing it in the callback is too
+    // early.
+    const settled = (outcome: () => void) => {
+      setImmediate(() => stream.off('error', swallow));
+      outcome();
+    };
+    const swallow = () => undefined;
+    stream.on('error', swallow);
+    stream.write(text, (error) =>
+      error === null || error === undefined
+        ? settled(resolve)
+        : settled(() => reject(error)),
+    );
+  });
+}
+
+async function logCommandOutput(output: JsonSerializable): Promise<void> {
+  await writeAndFlush(
+    process.stdout,
+    stringifyJsonForCLIDisplay(output) + '\n',
+  );
+}
+
+async function exitWithErrorLog(error: unknown, debug = false): Promise<never> {
+  let errorLog: string;
+  if (error instanceof Error) {
+    errorLog = error.message;
+    if (debug && error.stack !== undefined) {
+      errorLog = error.stack;
+    }
+  } else {
+    errorLog = stringifyJsonForCLIDisplay(error);
+  }
+  await writeAndFlush(process.stderr, errorLog + '\n');
+  process.exit(1);
+}
+
+/**
+ * Runs a command's handler: prints what it returns and exits 0, or prints
+ * what it throws and exits 1. A handler that must fail with a structured
+ * result (a failed check, say) throws that result object.
+ */
+export async function runCommand<O extends GlobalCLIOptions>(
+  command: Command,
+  action: (options: O) => Promise<JsonSerializable>,
+): Promise<void> {
+  const options = command.optsWithGlobals<O>();
+  try {
+    const output = await action(options);
+    await logCommandOutput(output);
+    process.exit(0);
+  } catch (error) {
+    await exitWithErrorLog(error, options.debug);
+  }
+}
+
+export function applyOptions(
+  command: Command,
+  options: CommanderOption[],
+): Command {
+  [...options].forEach((option) => {
+    command.option(option.alias, option.description, option.default);
+  });
+  return command;
+}
+
+/** Registers a command on the shared `program`, with the global options. */
+export function makeCommand<O extends GlobalCLIOptions = GlobalCLIOptions>({
+  name,
+  description,
+  options = [],
+  action,
+}: {
+  name: string;
+  description: string;
+  options?: CommanderOption[];
+  action?: (options: O) => Promise<JsonSerializable>;
+}): Command {
+  const command = program.command(name).description(description);
+  const appliedCommand = applyOptions(command, [...options, ...globalOptions]);
+  if (action !== undefined) {
+    appliedCommand.action(() => runCommand<O>(appliedCommand, action));
+  }
+  return appliedCommand;
+}
+
+export function requiredStringFromOptions<O extends GlobalCLIOptions>(
+  options: O,
+  key: string,
+): string {
+  const value = options[key];
+  if (value === undefined) {
+    throw new Error(`--${kebab(key)} is required`);
+  }
+  return value;
+}
+
+export function positiveIntegerFromOptions<O extends GlobalCLIOptions>(
+  options: O,
+  key: string,
+): number | undefined {
+  const value = options[key];
+  if (value === undefined) {
+    return undefined;
+  }
+  const numberValue = +value;
+  if (!Number.isSafeInteger(numberValue) || numberValue <= 0) {
+    throw new Error(
+      `Invalid ${kebab(key)}: ${value}, must be a positive integer`,
+    );
+  }
+  return numberValue;
+}
+
+/** A comma-separated option as a list, empty entries dropped. */
+export function stringListFromOptions<O extends GlobalCLIOptions>(
+  options: O,
+  key: string,
+): string[] | undefined {
+  const value = options[key];
+  if (value === undefined) {
+    return undefined;
+  }
+  return String(value)
+    .split(',')
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0);
+}
+
+const kebab = (key: string) =>
+  key.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`);

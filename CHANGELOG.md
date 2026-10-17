@@ -4,6 +4,1093 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased]
+
+## [Release 85] - 2026-10-17
+
+This is a **recommended release** focused on **the Arweave base layer as a
+shared, verifiable index, serving compressed and mislabelled data correctly,
+and chunk availability**. Key highlights include Index Sharing on by default
+(a plain `docker compose up -d` now starts the `index-swarm` sidecar and its
+torrent engine, subscribed to the ar.io publisher's root-TX bands; opt out
+with `INDEX_SWARM_SUBSCRIBE=[]`); `parquet-l1` L1 index bands,
+shared between gateways over the index swarm, an RSS feed per index and a
+WebSeed, from which a gateway fills its L1 history while it runs
+(`tools/index-swarm-setup --l1`) instead of indexing the chain block by
+block, checked with `index-l1-verify`; opt-in `parquet-l2` bands of
+ANS-104 data items, and root-TX bands on the L1 grid;
+the `index-export` service, which builds a gateway's index bands, and the
+`ar-io-node` CLI; fixes for gzip-encoded items served with a missing or wrong
+`Content-Encoding`, and for uploads of the same bytes served with each other's
+`Content-Type`; chunk fetches that learn which preferred nodes serve each
+gateway, ahead of the observer's offset checks, which are back and fail
+gateways by default (the default observer image moves to `c5e98ddc`); GraphQL
+pages from ClickHouse no longer cut short; and peers announcing to a
+publisher's tracker through the gateway's HTTPS (**upgrade the Envoy image
+with core**).
+
+### Added
+
+- **L1 index bands (`parquet-l1`)**: the Arweave base layer (blocks,
+  transactions, tags in plaintext, owners) as Parquet, one fixed height
+  range per band (whole 100,000-height history bands over 5,000-height
+  delta bands, so only the tip is ever rebuilt), so a new gateway can
+  import its L1 index rather than index the chain block by block, and apps
+  can query it with DuckDB. `index-export` builds them from `core.db` with
+  `INDEX_EXPORT_KINDS` including `parquet-l1`, checking every block's
+  links, `hash_list_merkle`, `tx_root`, transaction positions and owners'
+  addresses before publishing; the index-swarm sidecar publishes them as
+  `{"name":"parquet-l1","kind":"parquet-l1"}`, and a subscriber that names
+  `parquet-l1` (`INDEX_SWARM_SUBSCRIBE` `name` may now be a list) checks
+  each band's files, footers, schema and row counts before installing it.
+  A subscription without `name` doesn't take them.
+  - Two honest publishers of the same chain write identical bands, so they
+    can check each other by digest and share one torrent and one swarm.
+    Three columns a gateway fills in for itself are written one way:
+    `blocks.tx_root` below the 2.0 fork is null (the block hash doesn't
+    commit it, and nodes disagree), a format-1 `transactions.data_root` is
+    null (the header carries none), and `content_type`/`content_encoding`
+    come from the band's own tags, first by position. A band's `band.json`
+    holds only what its rows determine, and its `createdAt` is the time of
+    its top block. What is the publisher's own, the bands it replaces and
+    its build time, sits beside the band in `.publisher.json`, which is
+    never published. Checked on 2026-10-11 against turbo-gateway.com's and
+    vilenarios.com's live L1 bands: all 24 are byte-identical.
+  See *L1 bands* in [docs/index-publication.md](docs/index-publication.md)
+  for the format and [docs/index-export.md](docs/index-export.md) for
+  building them.
+
+- **`parquet-l1` bands carry lookup files (layout `l1-3`)**, so one
+  transaction, wallet or tag value can be found without scanning a band:
+  `lookup_tx_id`, `lookup_wallet` and `lookup_tag`, each sorted by an
+  unsigned 64-bit key in row groups of 16,384, so a reader goes from the
+  footer to the one or two row groups that can hold its key. Measured on a
+  100,000-height band over HTTP, in 256 KiB pieces: a transaction's height
+  0.8 MB against 88 MB scanning `id`, a wallet's transactions and bytes
+  stored 0.8 MB against 8 MB, the most used App-Name values 1.0 MB against
+  113 MB. They add 14 to 19% to a band (59 MB on a 413 MB band, 254 MB on
+  the busiest, 1.35 GB).
+  - Declared in the layout beside the tables, described in `band.json` with
+    rows and row digests, and left out of a band's id, which stays a digest
+    of the tables' rows.
+  - Subscribers check a band's files against the layout its `band.json`
+    names, and lookup footers and row counts as tables'.
+  - `index-l1-verify --bands-dir` checks each band's lookups against its
+    tables and `band.json` (the `lookups` check; `--skip-lookups` to leave
+    it out).
+  - The engine (`src/lib/parquet/lookups.ts`, `keys.ts`) knows no dataset,
+    and `RowDigest` moves beside it (`src/lib/parquet/digest.ts`), so another
+    Parquet dataset declares lookups without new code.
+  See *Lookup files* in [docs/index-publication.md](docs/index-publication.md).
+
+- **A trusted gateway that answers 429 is skipped until its `Retry-After` has
+  passed** (`GATEWAYS_THROTTLE_BACKOFF_ENABLED`, default `true`). Before, every
+  request still went to it first: it waited for one of that gateway's sockets,
+  often until the connection timeout, then got another 429. On
+  turbo-gateway.com, arweave.net (a priority-2 fallback) answered one node's
+  cold-item requests with `429` and `retry-after: 299` about 24,000 times a
+  day, and 60% of those requests had waited 2-5 s for a socket, so cold items
+  took ~3 s on that node against ~0.1 s on its sibling. The cooldown is the
+  response's `Retry-After` (seconds or an HTTP date), capped at
+  `GATEWAYS_THROTTLE_BACKOFF_MAX_MS` (300 s); without one it is
+  `GATEWAYS_THROTTLE_BACKOFF_DEFAULT_MS` (30 s). Both gateway data sources
+  share one set of cooldowns, and a throttled gateway is asked once per item
+  rather than once per path. New metrics:
+  `gateway_throttle_cooldowns_total{gateway_url}` and
+  `gateway_throttle_skips_total{gateway_url}`.
+
+- **A gateway can fill its L1 history from published bands while it
+  runs** (`L1_BAND_IMPORT_ENABLED`, default `false`).
+  `tools/index-swarm-setup --subscribe <publisher> --l1` subscribes to the
+  publisher's `parquet-l1` bands and turns it on. Core then runs
+  `ar-io-node index-l1-import --fill` every
+  `L1_BAND_IMPORT_INTERVAL_SECONDS` (600) as a child process, so a crash
+  in the import cannot take the gateway down. A fill writes only the
+  heights `core.db` lacks below the top of `stable_blocks`, so nothing the
+  gateway indexed itself is rewritten (a range an interrupted import left
+  unfinished is the exception, written again whole), in short transactions
+  with a pause after each, so the gateway keeps indexing and serving. It covers a
+  gateway that began mid-chain, a hole inside what a gateway holds, and a
+  new gateway: with the setting on, an empty `core.db` and no
+  `START_HEIGHT`, the block importer starts at the chain tip instead of 0,
+  and the history beneath arrives as the bands do. Only one import or fill
+  runs against a `core.db` at a time. New metrics:
+  `l1_band_import_runs_total{result}`, `l1_band_import_rows_total` and
+  `l1_band_import_uncovered_heights`. See [docs/cli.md](docs/cli.md).
+
+- `ar-io-node index-l1-import` fills a gateway's `core.db` from installed
+  `parquet-l1` bands, so a new gateway starts from a published index rather
+  than walking the chain block by block: with `--fill` while the gateway
+  runs (above), or fastest with the gateway stopped. Stopped, it refuses a
+  database another writer holds, one still holding unstable blocks, or one
+  that has not run the import migration. Bands land in
+  height order, each recorded in `parquet_l1_imports` as it commits, so a
+  run that stops can be run again and carries on. A band is written to the
+  ledger before its first row and completed after its last, and importing
+  it clears its height range first, so a band a crash left part way is
+  imported again over whatever it managed to write — progress is read from
+  the ledger rather than from `stable_blocks`, which a band fills long
+  before its transactions. Every write is idempotent, so a band imported
+  twice leaves `core.db` exactly as importing it once does. A transaction a
+  block lists that its band lacks becomes a `missing_transactions` row for
+  the usual backfill. The run is refused up front if the filesystem has no
+  room for it, says where it is once a minute while a band lands, and
+  exits 1 with the result on stderr if a band is refused. `--cache-mib`
+  sets the SQLite page cache (default 1024): a bootstrap spends its time
+  maintaining indexes, and the 2 MB SQLite default makes the rate decay as
+  the database fills. `--from` and `--to` fill in history beneath a
+  gateway that began mid-chain, which the default upward-only run could
+  not do; a band rewrites only its own range, so importing below what is
+  held cannot disturb it. Because that can leave a hole between staged
+  runs, and the block importer rewinds across one, the result carries
+  `holes` and the run warns when any remain.
+  Measured on vilenarios.com: the busiest 100,000 heights (46,606,658 rows)
+  import in about half an hour and leave a 12.1 GB `core.db`; the whole
+  chain is 468,501,488 rows and about 120 GB. See
+  [docs/cli.md](docs/cli.md).
+
+- `ar-io-node index-l1-verify` checks a gateway's L1 index against the
+  weave size the chain commits to. Above the 2.0 fork a block's `tx_root`
+  proves its transactions; below it, a pre-2.0 identity hash cannot be
+  recomputed from an index at all (it commits to the full wallet list, the
+  recall block's whole binary, and every transaction's data and
+  signature). What is left is exact accounting: a pre-2.0 block grew the
+  weave by its transactions' `data_size`, those differences telescope, and
+  the first post-2.0 block commits the running total — so one trusted
+  block hash pins the size of every transaction beneath it. Read-only, so
+  the gateway can stay up; 422,251 blocks in about 4 seconds. It also
+  rebuilds the `hash_list_merkle` recurrence — a running commitment to
+  every block hash below, folded from height 0 for the fork-1.6 seed — so
+  one trusted block hash pins every `indep_hash` beneath it, recomputes
+  each post-fork block's `tx_root` from its transactions (1,383,754 of
+  1,592,566 on the live chain; the rest hold a format-1 transaction with
+  data and need `index-l1-audit`), and checks contiguity, block linkage
+  and `block_size`. `--skip-tx-root` leaves out the one check that reads
+  every transaction. `--bands-dir` checks a directory of bands with no
+  gateway and no database, which is how a consumer verifies someone
+  else's index before installing it; both views drive the same chain
+  rules and a differential test holds them together. `--anchor-from` fetches that
+  trusted hash from independent Arweave nodes (both sides of the fork,
+  since its seed breaks the recurrence) and requires several to agree —
+  one source is a single point of trust, so one reachable source fails. It does not prove which
+  pre-2.0 block a transaction belonged to. See
+  [docs/cli.md](docs/cli.md).
+
+- `ar-io-node index-l1-audit` checks the blocks `index-l1-verify` has to
+  skip. A format-1 transaction's `tx_root` leaf is the root of its data,
+  which an index does not store, so 208,812 post-fork blocks of 1,592,566
+  cannot be proved from the index alone. This fetches that data, derives
+  each `data_root` and recomputes `tx_root`. It samples rather than sweeps
+  (the full set is 111 GB) and reports the 95% upper bound on the error
+  rate. The data source need not be trusted: wrong data can only cause a
+  false alarm, never a false pass. Read-only. Measured on the full chain:
+  1000 of 208,812 sampled, all 1000 matched, bounding the error rate at
+  0.3%. See [docs/cli.md](docs/cli.md).
+
+- The `index-export` service (compose profile `index-export`) builds this
+  gateway's root-TX index bands from its own index once a day and puts them
+  where the index-swarm sidecar signs and offers them: history bands cut at
+  fixed edges, a recent band folded weekly (so rows ClickHouse has expired
+  are kept) and frozen at `INDEX_EXPORT_RECENT_MAX_BLOCKS`, and a daily
+  delta published only when its content changes. Several sources merge
+  (`INDEX_EXPORT_SOURCES`: ClickHouse peers, SQLite, an overlay of a
+  bundler's own offsets). Every band is header-checked against
+  `INDEX_EXPORT_HEADER_CHECK_URL` before it publishes; a run that couldn't
+  check is retried, a rejected one waits for an operator, and nothing
+  published is withdrawn on failure. `index-swarm-setup --publish` sets it
+  up (`--start-height`, `--header-check-url`), `index-swarm-status` reports
+  it, and `prometheus.yml` scrapes it and the sidecar.
+  `INDEX_EXPORT_L1_RUN_BUDGET_MINUTES` (default 240) sets how long a run may
+  keep starting `parquet-l1` history bands; raise it for a bootstrap that
+  would otherwise spread over several runs. Its other settings
+  (`INDEX_EXPORT_*`) are in [docs/envs.md](docs/envs.md). See
+  [docs/index-export.md](docs/index-export.md).
+
+- `ar-io-node index-band-export` writes one record source's root-TX index
+  records for a height range as the CSV `index-band-build` reads: this
+  gateway's ClickHouse or SQLite, a peer's ClickHouse, or an overlay
+  directory of coverage-named CSV files. Offsets are placed in the root only
+  where proven: nested items whose `root_parent_offset` was zeroed (#907) are
+  repaired when their parent proves the offsets relative, and otherwise keep
+  their root without offsets. ClickHouse queries are read-only and bounded.
+  The record sources are the first part of the `index-export` service; see
+  [docs/cli.md](docs/cli.md).
+
+- The `ar-io-node` CLI (`tools/ar-io-node`, [docs/cli.md](docs/cli.md)),
+  in the style of the `ar.io` CLI from `@ar.io/sdk`: JSON on stdout, errors
+  on stderr, exit 1 on failure. `index-band-build` builds an index band from
+  CSV records, checks a sample of its headers against their root
+  transactions, and publishes it for the index-swarm sidecar;
+  `index-band-verify` runs that check on any band. Every other command runs
+  as the `ar.io` CLI of the SDK the gateway carries. It runs in the core
+  image and mounts only what a command needs.
+
+- `INDEXES_ADVERTISE_FROM_URL` lets a node that serves an operator's
+  indexes but does not sign them advertise the signing node's publication in
+  `/ar-io/info`. Behind a load balancer, `/ar-io/indexes*` already goes to
+  the signing node, but `/ar-io/info` is answered by whichever node the
+  request reaches, so a crawler saw the `indexes` block only some of the
+  time. The node fetches the document every minute, off the request path,
+  and advertises its index names only if it names this node's `AR_IO_WALLET`
+  as publisher and its signature verifies. A `404` or an invalid document
+  withdraws them at once; failed fetches withdraw them after five minutes.
+  Unset, nothing changes.
+
+- `GET /ar-io/offsets/:id` now also answers from CDB64 indexes on local
+  disk, such as bands installed by Index Sharing, when the local index can't
+  place the item. It still makes no network request: remote CDB64 sources,
+  and the remote partitions of the shipped indexes, are skipped. A new
+  `offsets_lookup_total{source}` metric counts answers by `db`, `cdb64` or
+  `none`.
+- The index-swarm tracker reports who shares: `index_swarm_tracker_seeders`
+  (tracked peers holding the whole band) and
+  `index_swarm_tracker_seeding_hosts` (distinct addresses seeding at least one
+  band, an IPv6 /64 counted once and this node's own engine left out: roughly
+  how many other gateways share).
+- **An RSS feed of each published index's torrents**, at
+  `/ar-io/indexes/feed/<index>.xml`. One item per band offered as a torrent,
+  with the `.torrent` as its enclosure and the magnet as its link, so a
+  BitTorrent client such as qBittorrent follows a publisher with an
+  auto-download rule and takes each new band as it is published. A view of
+  the signed publication: it names the publication by SHA-256 in the channel
+  and in an `X-AR-IO-Index-Feed` header, which HTTPSIG signs along with
+  `Content-Digest`. Its URLs start with the new `INDEXES_PUBLIC_URL` (default
+  `https://<ARNS_ROOT_HOST>`), never the request's `Host` header. Not
+  metered; `public, max-age=60` with an `ETag`. Built on a format-independent
+  feed layer (`src/feeds/`): a source builds a feed, a format renders it.
+- **Peers announce to a publisher's tracker through the gateway's HTTPS**, at
+  `https://<gateway>/ar-io/indexes/announce`, so a publishing gateway no
+  longer needs port 6969 open. Envoy forwards the path to a second tracker
+  listener on the sidecar (`INDEX_SWARM_TRACKER_PROXY_HOST`, default
+  `index-swarm`), on `INDEX_SWARM_TRACKER_PROXY_PORT` (6970), which is
+  never published and reads the peer's address from `X-Forwarded-For`.
+  `tools/index-swarm-setup --publish --torrent` now writes that URL into
+  `INDEX_SWARM_TRACKERS` when it knows the gateway's origin (`--public-url`,
+  `INDEXES_PUBLIC_URL` or `ARNS_ROOT_HOST`). An existing tracker list is
+  kept; the direct port still works. **Upgrade the Envoy image with core:**
+  the route is Envoy's, and an older Envoy passes the path to core, which
+  answers `404`, so every announce fails without a word. The listener
+  believes `X-Forwarded-For` from `INDEX_SWARM_TRACKER_PROXY_TRUSTED_PROXIES`,
+  every private range by default, like core's `TRUSTED_PROXIES`; narrow it
+  where clients can reach Envoy from a private address. It refuses announces
+  that bear a browser's marks (`Sec-Fetch-Site`, `Sec-Fetch-Dest`, `Origin`,
+  `Referer`, or an `Accept` asking for an image or a page), so a page cannot
+  list its visitors as peers.
+- **`/ar-io/info` points at each index's feed.** Its `indexes` block gains
+  `feeds`, mapping each index that has a band offered as a torrent to
+  `/ar-io/indexes/feed/<index>.xml`, present only when the gateway serves
+  feeds (it has `INDEXES_PUBLIC_URL` or `ARNS_ROOT_HOST`). A node that
+  advertises another node's publication, on a fleet, advertises its feeds
+  from that publication, when it has a public origin of its own; the feeds
+  themselves are served by the signing node the `/ar-io/indexes*` pin
+  reaches, so give it one too. So one request per registered gateway finds
+  every feed.
+- **A `.torrent` served by the gateway names the gateway as its WebSeed**
+  (BEP 19 `url-list`, `<INDEXES_PUBLIC_URL>/ar-io/indexes/webseed/`), so a
+  stock BitTorrent client following an index feed can finish a band that no
+  peer is delivering, and can download a whole index, such as all of L1,
+  from the feed alone. It sits outside the info dictionary, so the
+  infohashes are the publisher's; the stored file is unchanged, and
+  subscribers still drop every WebSeed and add the publisher's only when
+  peers stall. The torrent route now answers with an `ETag` (`304` on a
+  match), a `Content-Digest`, and an `X-AR-IO-Index-Torrent` header naming
+  the v1 infohash, which HTTPSIG signs. Feed items name the folder a band is
+  saved in (`ario:torrentName`) and the bands it replaces
+  (`ario:supersedes`, only the claims the publisher honours), and each
+  enclosure's length is the served torrent's. A stock client pulls a good
+  share of every band from the WebSeed even while seeders could serve it,
+  through the byte routes' meter when that is on;
+  `INDEXES_TORRENT_WEBSEED=false` serves torrents without it. A stored
+  `.torrent` whose info dictionary does not hash to the infohash it is filed
+  under is not served.
+
+- **L2 index bands (`parquet-l2`)**: a new index kind for the ANS-104 data
+  items one declared selection takes (a tag name and a value prefix, with
+  an optional narrower prefix excluded: `App-Name` starting `ArDrive`, say),
+  with their tags, owners' keys, nested bundles and offsets in their root
+  transactions, as Parquet on the L1 bands' height grid. The selection is declared in each band's
+  `band.json`, bound into its id (`l2-h<from>-<to>-<publisher>-<digest>`),
+  and carried in the signed publication. The index-swarm sidecar publishes
+  them as `{"name":"ardrive-l2","kind":"parquet-l2"}`, and a subscriber that
+  names the index checks each band's files, footers, schema, row counts, id
+  and selection before installing it, refusing every band of an index whose
+  bands, or `filter`, declare different selections. Opt-in, like
+  `parquet-l1`. `index-export` builds them (below). See *L2 bands* in
+  [docs/index-publication.md](docs/index-publication.md).
+  - Every band carries three lookup files, as an `l1-3` band does, with the
+    same keys: `lookup_id.parquet` (an item's id to its heights),
+    `lookup_wallet.parquet` (an owner's or target's items, with heights and
+    sizes) and `lookup_tag.parquet` (each tag pair, such as a `Drive-Id`,
+    with its item count and first and last height), so a reader finds an
+    item, a wallet or a tag pair without scanning the band. `band.json`
+    describes them under `lookups`; they are not part of the band's id, and
+    a subscriber checks their footers and row counts as a table's.
+- **`index-export` builds L2 bands (`INDEX_EXPORT_KINDS=…,parquet-l2`)**:
+  one index per selection in `INDEX_EXPORT_L2_INDEXES` (`ardrive-l2`:
+  `App-Name` starting `ArDrive`, not `ArDriver`), published under
+  `published/<name>/`, from this gateway's ClickHouse or a peer's
+  (`INDEX_EXPORT_L2_SOURCE`), on the L1 grid with the root-TX grid's settle
+  lag (`INDEX_EXPORT_L2_SETTLE_BLOCKS`), daily tip bands and weekly
+  re-settles.
+  - Every item takes its root's height and block position from this
+    publisher's `parquet-l1` bands (else ClickHouse's L1 rows); a root found
+    in neither refuses the band.
+  - Items are located by the root-TX bands' placement rules, item-relative
+    header offsets moved into the payload, and only when their offsets
+    describe one item; absolute offsets are written parent-relative, and an
+    ambiguous item is settled by reading its header from the root through
+    `INDEX_EXPORT_HEADER_CHECK_URL`. Owners' keys come from ClickHouse,
+    `bundles.db` or the root, kept only when they hash to the address.
+  - The same rows give the same band and id whatever order they are read
+    in; rows that can't be told apart refuse the band rather than be
+    tie-broken. A band that replaces others never loses an item or a
+    location, and every relocated item is header-checked.
+  - `--once --dry-run --range <from>-<to>` builds one band of each index
+    (`--keep` keeps it). New metrics: `index_export_l2_rows`,
+    `index_export_l2_unlocated_rows`, `index_export_l2_owners_without_key`,
+    `index_export_l2_proofs_total`. See *L2 bands* in
+    [docs/index-export.md](docs/index-export.md).
+  - An ambiguous item's proof reads its header as the band header check
+    does: a header whose tag count field is malformed (see *Fixed*) still
+    proves its reading, and is counted (`stats.malformedTags`).
+  - Any band builds in memory that follows a window of the source, never
+    the band: windows of at most `INDEX_EXPORT_L2_WINDOW_ITEMS` (50,000)
+    items, rows sorted and digested a window at a time and appended to a
+    DuckDB database in the staging directory, which writes the Parquet in
+    order, with no sort of the band. DuckDB runs within
+    `INDEX_EXPORT_L2_DUCKDB_MEMORY` (2GB) and `INDEX_EXPORT_L2_DUCKDB_THREADS`
+    (2), spilling at most `INDEX_EXPORT_L2_DUCKDB_SPILL_MAX_GB` (256).
+  - The lookup files are derived from the written tables in the same
+    DuckDB, and checked before publishing: read back to their digests, and
+    derived again to hold exactly the rows the tables give.
+  - A root the gateway answers 404 for is unreadable for the build, asked
+    about once: its ambiguous items are written unlocated (`unproven`) and
+    an owner whose key could only be read there without a key, rather than
+    stop the band; timeouts, 5xx and 429 still stop it, to be retried. A
+    re-settle may locate such items, or key such owners, later; it never
+    drops a key (`dropped_wallets`).
+  - The header check reads its sample from a pool ten times as large, as
+    root-TX bands do, passing over rows whose root is gone; what it read
+    (`sampled`, `poolSize`, `unreadable`, `unreadableShare`) goes in the
+    publisher's `.publisher.json`, never `band.json`, which holds only what
+    the rows and the selection determine.
+  - Re-settles are gated on a fingerprint of the rows each band's
+    sub-ranges read (and the `bundles.db` keys of its owners), as root-TX
+    grid bands are: `--resettle` gates, `--resettle=full` rebuilds. A band
+    built with 404s is rebuilt every
+    `INDEX_EXPORT_L2_RECHECK_UNREADABLE_EVERY` (4) gated re-settles.
+- **Root-TX bands on the L1 grid, with a settle lag
+  (`INDEX_EXPORT_ROOT_TX_LAYOUT=grid`)**: `index-export` cuts root-TX bands
+  at the same heights as `parquet-l1` bands, so every publisher's bands line
+  up whatever its start height, and subscribers stop downloading a
+  multi-GB recent band every week. A 5,000-height `d` band freezes once its
+  top is `INDEX_EXPORT_ROOT_TX_SETTLE_BLOCKS` (5,040, about 7 days) below the
+  stable top, from the sources and the tip's entries; twenty of them roll
+  into a 100,000-height `h` band; a `tip` above them is rebuilt daily,
+  superseding the previous one, and published only when it changed. The
+  default `legacy` layout is unchanged.
+  - Frozen bands are re-settled every
+    `INDEX_EXPORT_ROOT_TX_RESETTLE_INTERVAL_HOURS` (168; 0 for never, or
+    `--once --resettle` to force one): rebuilt from their own entries and
+    the sources, and replaced only when entries were added or relocated. A
+    re-settle never loses an entry and header-checks only what it changes:
+    every relocated entry (at most
+    `INDEX_EXPORT_ROOT_TX_RESETTLE_MAX_CHANGED`, 20,000, a band), each of
+    which must read and verify, and a sample of the added, so entries whose
+    roots are no longer seeded don't block it. Any wrong header leaves the
+    band as it is. Each is reported with its counts and counted in
+    `index_export_resettles_total` and `index_export_resettle_entries`.
+  - A due band is rebuilt only when its sources changed: each source's
+    fingerprint of the band's heights is recorded when it settles (one
+    aggregate query for ClickHouse; the files' names, sizes and SHA-256 for
+    a CSV source) and compared first; equal fingerprints settle it without
+    a rebuild (`unchanged`, `same_sources`,
+    `index_export_resettle_gate_total`). `--once --resettle=full` rebuilds
+    every one.
+  - Grid bands built by hand with `index-band-build` (`h-`, `d-` and
+    `tip-` ids) are taken as they are; a legacy layout's current `r` and
+    daily `d` move into the new bands and the first tip supersedes them.
+    Bands off the grid, or overlapping, stop the run before anything is
+    built (`grid_layout`). See "Grid layout" in `docs/index-export.md`.
+  - A `--once --dry-run` lists the plan in the report (`plan`).
+  - `tools/index-swarm-status` takes the tip as the daily band once there
+    is one.
+  - `docs/index-export.md` documents the overlay files a `csv` source reads
+    (names, columns, header).
+  - `--once --resettle --range <from>-<to>` re-settles only the frozen
+    bands inside those heights, building nothing else.
+
+### Changed
+
+- **Index Sharing is on by default.** The `index-swarm`,
+  `index-swarm-engine-init` and `index-swarm-engine` services no longer sit
+  behind compose profiles, so a plain `docker compose up -d` starts them
+  (`--profile index-swarm` and `--profile index-swarm-torrent` are still
+  accepted, and change nothing; `index-export` stays behind its profile,
+  for publishers). Each default is taken only when its variable is unset or
+  empty, so a gateway that sets them sees no change:
+  - `INDEX_SWARM_SUBSCRIBE` defaults to the ar.io publisher's root-TX bands,
+    `[{"publisher":"34LYvMptiDvBP5sqfh1oAd6Q4qFsy4PWaZ1HTFmML7h5","name":"root-tx-index"}]`
+    (L1 bands stay opt-in); `[]` subscribes to nothing. A gateway whose
+    `AR_IO_WALLET` is that publisher does not subscribe to itself: its
+    default is no subscription, and the sidecar logs that at startup.
+  - `INDEX_SWARM_ENGINE_AUTH`, unset, is generated by
+    `index-swarm-engine-init` on its first start (`swarm:` and 48 random hex
+    characters) and kept, root-owned and mode 0600, in
+    `data/indexes/engine-auth`, where the sidecar reads it; it is reused on
+    later starts and never logged. The engine still never runs without a
+    password.
+  - `CDB64_ROOT_TX_INDEX_SOURCES` defaults to
+    `data/indexes/installed/root-tx-index` first, then the three shipped
+    indexes, so installed bands answer first. A directory that does not
+    exist yet is waited for, as before.
+  - `ROOT_TX_LOOKUP_ORDER` defaults to
+    `db,cdb,gateways,graphql,hyperbeam,cdb-remote` (was
+    `db,gateways,graphql,hyperbeam,cdb`). A new entry, `cdb-remote`, splits
+    CDB64 lookups by where the data is read from: with it in the order,
+    `cdb` asks only indexes on local disk, such as installed bands, right
+    after the local index, and `cdb-remote` asks the ones read over the
+    network, including the three shipped indexes (partitions on Arweave),
+    last. An item the bands do not hold goes to `gateways` without waiting
+    on Arweave reads first. An order without `cdb-remote` behaves as before:
+    `cdb` asks every CDB64 source, local and remote. Lookups are counted as
+    `root_tx_lookup_total{source="cdb64"}` and `{source="cdb64-remote"}`,
+    and each has its own circuit breaker, so slow remote reads cannot open
+    the breaker for the installed bands (`circuit_breaker_state` labels
+    `cdb64-local-root-tx-index` and `cdb64-remote-root-tx-index`; an order
+    without `cdb-remote` keeps `cdb64-root-tx-index`). To stop using the
+    shipped indexes, leave them out of `CDB64_ROOT_TX_INDEX_SOURCES`;
+    removing `cdb-remote` from the order moves them up instead.
+  - `INDEX_SWARM_MAX_DISK_BYTES` defaults to 64 GiB when
+    `INDEX_SWARM_SUBSCRIBE` is also unset (the default subscription). With an
+    explicit `INDEX_SWARM_SUBSCRIBE` and no budget set, there is still no
+    ceiling, as before, so an existing subscriber gets no new limit. `0` is
+    no ceiling, and a set value is used as given.
+  - A sidecar that ran over HTTP only, with no engine password set, now gets
+    the torrent engine too, since the engine runs by default and its init
+    generates a password. To keep HTTP only, put the two engine services
+    behind an unused profile (see "Turning it off" in `docs/index-swarm.md`).
+    Two gateways on one host each publish the engine's peer port, so give
+    them different `INDEX_SWARM_ENGINE_PORT` values.
+  - The tracker's direct port (6969) is published on `127.0.0.1` by default
+    (`INDEX_SWARM_TRACKER_HOST_IP`), so a subscriber exposes nothing it does
+    not use; announces through the gateway's HTTPS are unaffected. **A
+    publisher whose torrents announce to `http://<address>:6969/announce`
+    must set `INDEX_SWARM_TRACKER_HOST_IP=0.0.0.0`**; the sidecar warns when
+    it does not.
+  - The engine's peer port, 6881 TCP and UDP, is published; opening it is
+    recommended, not required (`INDEX_SWARM_ENGINE_PORT` moves it).
+
+  Measured on a live gateway: about 22 GB of disk for the root-TX bands,
+  about 90 MB of memory for the sidecar and 300 MB for the engine, upload
+  capped at `INDEX_SWARM_UPLOAD_LIMIT_BYTES_PER_SEC` (10 MB/s).
+  `tools/index-swarm-setup --torrent` no longer writes a password.
+  `--subscribe` keeps the default subscription (never adding the gateway's
+  own wallet), writes the 64 GiB budget when it turns an unset subscription
+  into an explicit one (so the ceiling stays), and leaves an unset
+  `ROOT_TX_LOOKUP_ORDER` unset. In a set order it puts `cdb` right after
+  `db`, keeps every other entry, and adds `cdb-remote` last if missing. See "On by default" in `docs/index-swarm.md`.
+
+- **A single-range GET of an uncached item fetches only the range.** The data,
+  `/raw` and manifest-resolved routes used to fetch the whole item first,
+  drop that stream and then fetch the range, so a range miss ran the
+  upstream source cascade twice, and could wait on another request's
+  download of the whole item (11-22 s to first byte measured on a live
+  gateway). Now a GET for one satisfiable byte range of an item with an
+  indexed size and no stored hash (on the data route, also a known
+  non-manifest type) makes one ranged fetch and sends the same headers.
+  HEAD, multipart, malformed and unsatisfiable ranges, cached items, and a
+  source that returns another length or item size keep the old path.
+  `uncached_range_fast_path_total{outcome}` counts `served`, `refused` and
+  each `fallback_*` reason.
+
+- **Range misses fill the cache in the background by default**:
+  `BACKGROUND_CACHE_RANGE_MAX_SIZE` defaults to 10 GiB (was 0, off) and
+  `BACKGROUND_CACHE_RANGE_CONCURRENCY` to 4 (was 1). The dropped whole-item
+  fetch above kept downloading into the cache after the range was served,
+  so it was what cached items read only by range (video, SQLite or Parquet
+  over HTTP); the background fetch now does that, and a concurrent full GET
+  shares it. A background fetch that receives no data for
+  `STREAM_STALL_TIMEOUT_MS` is abandoned so its slot is freed. Signature and
+  owner reads from a parent bundle never start one, so a GraphQL signature
+  lookup does not download the whole bundle. Set the variables to keep the
+  old values.
+
+- **`tip-5.arweave.xyz` is no longer a default preferred chunk node**, for
+  GET or POST. Its port 1984 was closed from two separate networks on
+  2026-10-10, it served none of 60 random offsets, and `tip-1`'s own peer
+  list no longer carries it. As a default it only spent chunk GET attempts
+  and broadcast slots. The four remaining `tip` nodes still meet
+  `CHUNK_POST_MIN_PREFERRED_SUCCESS_COUNT` (2) and
+  `CHUNK_POST_MIN_SUCCESS_COUNT` (3). Operators who set
+  `PREFERRED_CHUNK_GET_NODE_URLS` or `PREFERRED_CHUNK_POST_NODE_URLS`
+  should drop it from their own lists too.
+
+- **A chunk fetch now tries up to 8 Arweave peers, up from 5**
+  (`ARWEAVE_PEER_CHUNK_GET_MAX_PEER_ATTEMPT_COUNT`). On the older half of
+  the weave a chunk is often held by only one of the preferred `tip` nodes,
+  and peers are picked by weighted random, so 5 attempts regularly ran out
+  first and `/chunk/<offset>` answered 404 for a chunk the network holds.
+  Measured from a US gateway: 16 of 20 random offsets served at 5 attempts,
+  19 of 20 at 8 (turbo-gateway.com: 19 of 20). The observer's offset checks,
+  restored in this release, fail a gateway that 404s on chunks it should
+  serve. Each attempt is still capped at 500 ms, so a chunk no peer has now
+  takes up to 4 s to fail instead of 2.5 s, and makes three more peer
+  requests. Set the variable to keep the old value.
+
+- **Offset (chunk-proof) checks are back in the observer, and fail gateways
+  by default.** Every gateway (`OFFSET_OBSERVATION_SAMPLE_RATE`, default
+  1.0; a lower rate samples a share, chosen identically by every observer
+  each epoch) must serve `/chunk/<offset>` with a Merkle proof that
+  validates against the chain. A checked gateway fails only if all
+  `OFFSET_SAMPLE_COUNT` (default 4) offsets fail; timeouts, error
+  statuses and bad proofs all count. With
+  `OFFSET_OBSERVATION_ENFORCEMENT_ENABLED=true` (the default) that fails the
+  observation, and the epoch result is still a 2-of-3 majority. A check the
+  observer could not judge itself (its own chain lookups failed) is
+  reported as `inconclusive` and never fails a gateway. This is not
+  new behaviour. Enforcement was on by default from Release 54 to Release
+  63, but the continuous observer that became the only service mode in
+  Release 64 never ran the check, so the `OFFSET_*` settings have done
+  nothing since. Reports again carry `offsetAssessments`, now with a
+  `failureCategory` per failed sample (`timeout`, `network`, `http_status`,
+  `invalid_chunk`, `bad_proof`, `unverifiable`). To record failures without
+  failing gateways, set `OFFSET_OBSERVATION_ENFORCEMENT_ENABLED=false`; to
+  turn the check off, set `OFFSET_OBSERVATION_ENABLED=false`.
+  `OFFSET_SAMPLE_COUNT` is now passed through to the observer, and
+  `docs/envs.md` gives the real defaults (it said 0.10 and `false`)
+  (ar-io/ar-io-observer#145).
+
+- **Default observer image bumped to `c5e98ddc`** — `OBSERVER_IMAGE_TAG` moves
+  from `fe159f5a` to the `ar-io-observer` build carrying the offset checks
+  above (every gateway by default, ar-io/ar-io-observer#148) and the
+  reference fix under Fixed. Operators who pin
+  `OBSERVER_IMAGE_TAG` in `.env` must update it there too, since that
+  shadows the compose default.
+
+- **Observer updated to `@ar.io/sdk` 4.5.2.** The observer's epoch crank
+  now finds delegations to compound once per epoch instead of on every
+  tick, which removes a pair of full-registry scans per tick from the
+  window after each distribution (ar-io/ar-io-observer#146). A delegation
+  whose compound reverts on every send is retried once and then skipped
+  for the epoch, so the sweep always ends and the crank always reaches
+  `create_epoch` (ar-io/ar-io-observer#147).
+
+- **`@ar.io/sdk` updated from 4.0.0 to 4.5.0.** The hourly refresh of the
+  gateway registry now reads only the registry's slot window and retries a
+  failed batch (429 or 5xx) up to 3 times; before, one failed batch failed
+  the whole refresh.
+
+- **Index-swarm torrents are built with 256 KiB pieces, down from 4 MiB**, so
+  a browser can verify a byte range of a band file against the signed
+  `infohashV2` without the whole file: it rebuilds the file's BEP 52
+  `pieces root` from the torrent's piece layer and checks each piece it
+  reads. Reading a Parquet band this way fetches about a seventh of what
+  4 MiB pieces would. A file's `pieces root` does not depend on the piece
+  length, so only the torrents change: on its first scan after the upgrade a
+  publisher rebuilds every band's torrent once and offers it under new
+  infohashes, and subscribers keep their installed bands and seed the new
+  torrents. Band ids and files are unchanged. See `docs/index-swarm.md`.
+
+- `GET /ar-io/offsets/:id` answers are now signed (HTTPSIG), with a
+  `Content-Digest` binding the body and an `X-AR-IO-Root-Transaction-Id`
+  header, so an answer is the gateway's attributable claim. An answer from a
+  CDB64 index never carries `contentType` or `dataSize`.
+- The bare root of a sandbox subdomain (`GET`/`HEAD /` on
+  `<52-char base32>.<ARNS_ROOT_HOST>`) now answers **451** when the ID it
+  encodes is blocked and **404** otherwise, instead of falling through to
+  `GET /` and returning `/ar-io/info` with a 200. Abuse reports cite that bare
+  URL, so a blocked item's sandbox looked live to the reporter. Both responses
+  use the not-found TTL (`CACHE_NOT_FOUND_MAX_AGE`, `must-revalidate`) rather
+  than the 30-day blocked TTL, because an unblock never revalidates this URL.
+  Every other path on a sandbox host is unchanged.
+
+- **Faster whole-band reads.** `Cdb64Reader.entries()` reads in 1 MiB
+  pieces rather than three reads a record (`entryBatches()` yields a
+  piece's records at once), and a re-settle's comparison walks two bands in
+  id order: 2.6 MB/s before, about 400 MB/s after on local disk.
+
+### Fixed
+
+- **Gateways missing the same chunks asked each other without end, through
+  the offset lookup.** A chunk request another gateway forwards carries
+  `X-AR-IO-Hops`, and the chunk sources never pass it to an AR.IO peer again
+  (one hop at most). The offset lookup did not keep that limit:
+  - the chunk-metadata anchor probed its reference peer (every gateway on the
+    defaults shares one, `GATEWAYS_ROOT_TX_URLS`: `https://turbo-gateway.com`)
+    with no `X-AR-IO-*` headers, so the peer saw a new client;
+  - the tx_path check fetched a chunk from AR.IO peers without the request's
+    hop count, and did so even with `ar-io-network` taken out of the
+    retrieval orders.
+  So a chunk that gateway A forwarded to B, and that B lacked, sent B back
+  into the network, and from there back to A. On 2026-10-17 the gateways of a
+  few large operators asked for offsets none of them held, and both
+  turbo-gateway.com nodes stopped answering for six hours: in 32 minutes one
+  made 563,600 peer chunk requests that found 7 chunks. Now:
+  - a forwarded request (`X-AR-IO-Hops` of 1 or more) has its offset
+    resolved from this gateway's own database only: no anchor probe, no
+    AR.IO peer, and no chain search, whose few slots belong to this
+    gateway's own clients. The asking gateway does its own chain lookup on a
+    miss, and a database failure is reported as a failure, not a 404. A
+    request that must not be forwarded to AR.IO peers skips the anchor and
+    tx_path and keeps the chain search;
+  - the anchor's probe sends `X-AR-IO-Hops` (and nothing else of the client's
+    request), so the peer treats it as forwarded;
+  - the tx_path check passes the request's hop count, and asks AR.IO peers
+    only when `CHUNK_METADATA_RETRIEVAL_ORDER` includes `ar-io-network`;
+  - concurrent lookups of one offset share one anchor probe, and an offset
+    the anchor could not resolve is not probed again for
+    `CHUNK_METADATA_ANCHOR_MISS_CACHE_TTL_SECONDS` (default 60; `0` turns it
+    off);
+  - a negative `X-AR-IO-Hops` is read as 0.
+  This holds for every `CHUNK_PEER_ORIGIN_MODE`, including the default
+  `off`: a peer's request no longer has its offset found through the anchor
+  or the chain on its behalf, so `audit` no longer records
+  `boundary="remote"`. `enforce` still differs from `off` by also declining
+  Arweave nodes for the chunk itself.
+  A gateway's probes carry the hop count once it runs this release; until
+  then, the gateway it asks can stop the chain on its side by leaving
+  `ar-io-network` out of `CHUNK_METADATA_RETRIEVAL_ORDER` and
+  `CHUNK_DATA_RETRIEVAL_ORDER`, as turbo-gateway.com does. Outcomes are
+  counted in `ario_chunk_metadata_anchor_total` as `peer_origin`,
+  `miss_cached` and `probe_shared`.
+
+- **Lookup checks no longer run large bands out of memory.** Verifying a
+  `parquet-l1` or `parquet-l2` band's lookup against its tables compared the
+  two with `EXCEPT ALL`, which DuckDB holds in memory, deriving the lookup
+  twice. A 100,000-block ArDrive `parquet-l2` band (h1.6M) failed it under
+  the default `INDEX_EXPORT_L2_DUCKDB_MEMORY` of 2 GB, after its build had
+  passed. The derived rows are now digested in the lookup's order, as the
+  file's are, and compared by digest; the set comparison runs only to say
+  how a failing lookup differs. On a real 57.8M-tag band, the tag lookup's
+  check needs about a third of the memory (passes at 512 MB; the old check
+  failed at 1 GB). Verifying is slower in exchange: about 4.7 minutes for
+  that band's three lookups against about 3 before, since every row is now
+  read in order and digested.
+
+- **JSON data was served as `application/json; charset=utf-8`.** Express
+  appended the charset to every JSON, JavaScript and text type, so a client
+  that compares the type exactly, such as Zora's metadata check, rejected
+  JSON from every ar.io gateway. A JSON type is now sent exactly as it was
+  uploaded; RFC 8259 defines no charset for JSON, and `fetch`, XHR and JSON
+  modules read it as UTF-8 in Chromium, Firefox and WebKit. Until a Safari
+  release carries WebKit's 2026-09-07 fix for JSON display, non-ASCII JSON
+  opened directly in a Safari tab can show as mojibake.
+  Text and JavaScript types keep the charset, since without it browsers
+  decode UTF-8 text documents as windows-1252. Edge caches keep the old
+  header on responses they already hold until those expire or are purged.
+
+- **A cached range response claimed the whole item's digest.** A `206`,
+  and the `416` or `400` answer to a range request, carried `Content-Digest`
+  set to the SHA-256 of the whole item, a signed claim its body fails, since
+  `Content-Digest` covers only the bytes sent (RFC 9530). These responses
+  now carry `Repr-Digest`, the digest of the whole item, which HTTPSIG also
+  covers, as the `/ar-io/indexes` routes already did. Full responses keep
+  `Content-Digest`.
+
+- **A Range header with an unknown unit was refused.** `items=0-5` got a
+  `416`; RFC 9110 requires an origin server to ignore it and send the whole
+  item, which it now does. The `bytes` unit is matched case-insensitively.
+
+- **A manifest the index does not know was parsed on every request.** Its
+  path resolutions were cached but never read back, so each request fetched
+  and parsed the manifest again (66 ms on average on one gateway, up to 2 s).
+  A resolution from trusted bytes is now reused; one from an untrusted
+  source still decides only its own response.
+
+- **A fleet node could not subscribe to its own fleet's index publication.**
+  The fleet recipe in `docs/index-swarm.md` subscribes a non-signing node to
+  the fleet wallet, which is that node's own `AR_IO_WALLET` (it must be, for
+  `INDEXES_ADVERTISE_FROM_URL`). The sidecar resolves publishers from the
+  gateway's `/ar-io/peers`, and a gateway never lists its own wallet there,
+  so the publisher never resolved and every poll counted `unreachable`.
+  `/ar-io/peers` now reports the gateway's own registry entry as `self`,
+  apart from its peers, and the sidecar resolves its own wallet from it.
+
+- **A write naming a different root no longer keeps the old root's offsets
+  (#937 hardening).** `upsertNewDataItem` merged the root atom field by field,
+  so a write for the same data item under another bundle that omitted the
+  header offsets kept the previous root's `offset`, `size`, `signature_offset`
+  and `owner_offset`: a header offset that frames nothing in the new bundle,
+  which the read path then served. A write whose root differs from the stored
+  one now replaces every root-atom field with its own values, NULLs included;
+  same-root partial writes still keep what is known. No current writer sends
+  such a partial write, so this is hardening: the 161 mixed rows found in
+  turbo-gateway.com's ClickHouse (heights 1.30M–1.74M) were written by the
+  statement before PE-9073, which did not update the header offsets at all.
+
+- **Gateways far from the preferred chunk nodes served only about a third of
+  old chunks.** A chunk GET tried nodes that advertise the chunk's range
+  (`/sync_buckets`) first, then preferred nodes in list order, each capped
+  at 500 ms. The advertised ranges are unreliable: the `tip` nodes serve far
+  more than they claim (for 39 of 64 node and chunk pairs sampled, the node
+  held the chunk without claiming its range), and with the default list a
+  US gateway spent its attempts on range claimants and on `data` nodes in
+  Germany that miss the 500 ms limit from there. `/chunk/<offset>` then
+  answered 404, which the observer's offset checks count against the
+  gateway. Preferred nodes now go first, ordered by a cost each gateway
+  learns per node: an average of time-to-success where any miss counts as
+  the full timeout. Each gateway settles on the preferred nodes that serve
+  it well from where it runs, with no regional configuration. Simulated on
+  40 random chunks surveyed from a US gateway with the default list, on
+  offsets the cost was not learned from: 30% served before, 90% after (95%
+  with `PREFERRED_CHUNK_GET_NODE_URLS` set to the US `tip` nodes). Live on
+  gatewaypie.com (US) with every chunk setting at its default: 86% of 100
+  random chunks served while it learned after a restart, then 96% of the
+  next 100, against 98% from turbo-gateway.com; vilenarios.com on the old
+  order and defaults had failed all 12 offsets the observer sampled. Expect
+  a warm-up of roughly 100 chunk requests after each restart. New
+  `peer_type="preferred"` label on `request_chunk_total`.
+  `PREFERRED_CHUNK_GET_NODE_URLS` and `PREFERRED_CHUNK_POST_NODE_URLS` are
+  now documented, and the documented default for
+  `WEIGHTED_PEERS_TEMPERATURE_DELTA` is corrected to 2.
+
+- **Item locations from Turbo's offsets API were never usable.** Turbo
+  returns `startOffsetInRootBundle` and `rawContentLength` as JSON strings
+  (Postgres bigints) although its API documents integers, and the gateway
+  added them as-is: `"1102486" + 221` gave a data offset of `"1102486221"`.
+  The location check refused every such location, so each first-seen item
+  Turbo answered cost wasted chunk reads and two error lines before the
+  bundle was searched instead. Turbo's offsets are now read as integers, and
+  any malformed answer is refused and not cached. Item locations from any
+  index are also refused unless every offset is an integer.
+
+- **Byte-identical uploads with different `Content-Type` tags were all
+  served as the first one a gateway saw.** For a data item the gateway had
+  not indexed, the content type came from
+  `contiguous_data.original_source_content_type`, which is keyed by the data
+  hash and so shared by every upload of the same bytes. A path manifest whose
+  body matched an earlier `text/html` upload was served as HTML and never
+  resolved (seen on turbo-gateway.com for three manifests sharing the bytes
+  of `7mPdjxByTDwNh2GAYT6ww_Gc-w7f-dvbfLqgjclJA6c`; an ArNS name pointing at
+  one showed the raw JSON). The mislabel also spread between gateways: one
+  that fetched the item from a trusted gateway stored that gateway's
+  `Content-Type` as its own per-hash value. The item's own type is now
+  recorded per ID (migration: `contiguous_data_ids.content_type` and
+  `content_type_source`, two nullable columns), ranked by where it came
+  from:
+  - **`item`**, final: the item's signed `Content-Type` tag, read from its
+    header by `RootParentDataSource`, or Turbo's per-item payload content
+    type (S3, DynamoDB, Redis) when its record has one; the
+    `application/octet-stream` served in place of a missing one is never
+    recorded. `RootParentDataSource` now serves the header's
+    type over a stored one; it used to read the header and keep the stored,
+    possibly borrowed, type.
+  - **`upstream`**: a trusted gateway's answer for that ID, written once and
+    replaced only by an `item` value. Untrusted peers' types and a gateway's
+    `application/octet-stream` placeholder are not recorded.
+
+  `getDataAttributes` prefers the indexed tag, then the per-item value, then
+  the per-hash value. A type a data source took from this gateway's own
+  attributes is never re-recorded as per-item evidence. The in-memory
+  attributes cache keeps the best-ranked type rather than the first, and
+  drops an item's entry when the item or transaction is indexed, so a fix
+  through `queue-bundle` or `queue-data-item` is served without a restart.
+  An item already cached before this release keeps its per-hash type until it
+  is indexed (for example with `POST /ar-io/admin/queue-bundle` for its
+  bundle) or fetched again.
+
+- **A response served through an ArNS name kept its old resolution after
+  the name was re-pointed, for as long as the bytes stayed the same.** The
+  entity tag was the content digest alone, so a cache revalidating its copy
+  after the name moved to a manifest whose file at that path had the same
+  bytes got a `304` and kept the old response's headers: the old
+  `X-ArNS-Resolved-Id`, root offsets and signature (seen on
+  turbo-gateway.com, a week-old resolution behind a 900 s TTL). On a response
+  routed through an ArNS name the `ETag` is now
+  `"<digest>.<X-ArNS-Resolved-Id>"`, so a `304` means the same bytes and the
+  same resolution; the 304 and payment predictions use the same tag. `/raw`,
+  `/{id}` and the index routes keep the plain digest. Treat the `ETag` as
+  opaque and read the digest from `X-AR-IO-Digest`.
+
+- **The webhook emitter no longer writes a target's secret to the logs.**
+  `WEBHOOK_TARGET_SERVERS` can carry a credential in the URL: the content
+  scanner's `WEBHOOK_SECRET` (v0.7.0) travels as `?token=`, since the emitter
+  can't send headers. Every failed emission (e.g. while the scanner restarts)
+  logged the full URL, token included, and the debug line did too. Logged URLs
+  now keep the scheme, host, port, path and query parameter names, with values
+  and userinfo replaced by `<redacted>`.
+
+- **The observer no longer uses a gateway as its own reference.** The
+  observed gateway was never excluded from reference lookups, so observing
+  `turbo-gateway.com` or `ar-io.net` (the default reference hosts) compared
+  each with itself and its ArNS check could not fail. The reference now
+  comes from another reference host or from network consensus that
+  excludes the gateway. Other gateways' references are unchanged
+  (ar-io/ar-io-observer#144).
+
+- **GraphQL pages served from ClickHouse could come back short with
+  `hasNextPage: false`, silently dropping the rest of the results.** The
+  query reads `(pageSize + 1) × CLICKHOUSE_GQL_DEDUPE_HEADROOM` rows before
+  it folds duplicate ReplacingMergeTree versions, and where re-imported
+  ranges held more versions of a row than that, the page came up short: on
+  turbo-gateway.com and vilenarios.com, `first: 100` for one owner returned
+  68 of 323 transactions. A short page whose read window was full now
+  continues from its last row's cursor, and an id lookup re-runs with more
+  headroom. A page still short after a few rounds is returned with
+  `hasNextPage: true`, and rows from the other sources that sort after it
+  wait for the next page. New metric:
+  `clickhouse_gql_dedupe_headroom_total{leg,outcome}`.
+
+- **ClickHouse auto-import no longer re-imports history it already holds.**
+  A data item indexed late at an old height pulled each cycle's start back,
+  and the cycle then re-imported every bucket from there to the tip: one
+  item at height 783,731 cost 124 batches and 66 minutes, several times a
+  day, and the duplicate versions it left behind caused the short GraphQL
+  pages above. Buckets already imported without a gap are now skipped
+  unless they hold stable data items. `clickhouse-import` now inserts only
+  rows that differ from the newest stored version of their key
+  (`CLICKHOUSE_IMPORT_SKIP_UNCHANGED`, default `true`), so a re-import adds
+  no duplicate versions; an unchanged re-import no longer refreshes
+  `expires_at`.
+
+- **A core restart during a ClickHouse auto-import cycle failed every
+  remaining batch as `debug_failed`**, leaving ClickHouse behind until the
+  next cycle. The `/ar-io/admin/debug` fetch now retries with backoff, from
+  5 s up to 60 s, for `CLICKHOUSE_AUTO_IMPORT_DEBUG_RETRY_WINDOW_S` (default
+  600); a cycle that still can't reach it stops at that batch. Skipped
+  buckets no longer wait on the fetch, and each request has a 10 s connect
+  timeout and a 300 s total timeout.
+
+- **An item tagged `Content-Encoding: gzip` whose bytes are plain was
+  served with `Content-Encoding: gzip`, so every client that decodes failed
+  on it.** A tag is the uploader's claim, not a property of the bytes; a
+  manifest uploaded this way is on mainnet. The data routes now peek at the
+  body before sending headers and, for a coding with fixed leading bytes
+  (`gzip`, `zstd`), drop the header when the body does not start with them.
+  A full `GET` always checks. `HEAD`, ranges and `304` answers, which do
+  not send the body, check only cached bytes, so they never wait on an
+  upstream; uncached, they declare the coding unchecked, and a failed read
+  of cached bytes falls back to it. A copy decoded by a gateway older than #964 and cached fails
+  the same check: the header is wrong for it too, so it is dropped, but such
+  a copy is not the item and should be purged, so each drop is logged as a
+  warning with the item's `verified` flag and counted in the new metric
+  `served_content_encoding_dropped_total{encoding,verified}`. The
+  `X-Arweave-Tag-Content-Encoding` header still names the tag, so a peer
+  running #991 still refuses our copy as possibly decoded upstream and tries
+  its next source, since from the bytes alone the two cases look the same.
+  The check, here and in #991's upstream checks, now reads as many chunks as
+  the coding's magic needs: it compared the first chunk alone, so a body
+  whose first byte arrived by itself, `1f` for gzip, passed as gzip whatever
+  followed, which let a decoded body through upstream.
+
+- **A gateway older than #964 could poison the cache with a decoded copy
+  of a gzip-compressed item.** Such gateways serve an item tagged
+  `Content-Encoding: gzip` unzipped: some without the header and cut at the
+  compressed length, some still declaring `Content-Encoding: gzip`. Fetched
+  from a trusted gateway or an AR.IO peer, those bytes were cached and served
+  as the item, with a `Content-Digest` over the wrong bytes. On vilenarios.com,
+  docs.ar.io's 14.5 MiB search index came back as its first 2.5 MiB of plain
+  JSON. Both sources now refuse, and try the next source for, a response
+  whose body does not start with the magic bytes of the `gzip` or `zstd`
+  coding it declares, and one whose `X-Arweave-Tag-Content-Encoding` names a
+  coding (`gzip`, `br`, `deflate`, `zstd`) the response does not declare. New
+  metric: `upstream_decoded_body_rejected_total{class,source,encoding,reason}`.
+  A decoded body sent with neither the header nor tag headers still cannot be
+  told apart, so do not trust gateways older than #964, and purge items
+  cached before this fix.
+
+- A 404 or 429 from a trusted gateway was logged as a warning, although the
+  code meant to log those routine outcomes at debug: the check read a field
+  that is only set for an unexpected 2xx, while axios reports a 4xx on its
+  rejection. On turbo-gateway.com that was ~24,000 warnings a day from one
+  fallback gateway's 429s.
+
+- An ArNS name the trusted gateway does not resolve (a `404` with no
+  `X-ArNS-Resolved-Id`) was logged as a warning, `Cannot read properties of
+  undefined (reading 'match')`. It now logs `Name not resolved by trusted
+  gateway` at info. Resolution is unchanged.
+
+- `tools/index-swarm-setup --engine-port` and `--public-host` did nothing
+  without `--torrent`: moving an existing engine to another peer port printed
+  ".env already has everything" (while telling the operator to open the new
+  port) and left `INDEX_SWARM_ENGINE_PORT` unchanged. Both now apply on their
+  own, like `--max-disk-gib`, and `--restart` recreates the engine.
+- `index_swarm_tracker_peers` counted peers of a swarm that had gone quiet,
+  and bands no longer offered, until the next announce ran expiry. It now
+  counts only bands still offered and peers seen within the announce TTL.
+- **Gzip-encoded data fetched from a trusted gateway or AR.IO peer was served
+  decompressed, still labelled `Content-Encoding: gzip`, so clients could not
+  decode it.** An item uploaded gzip-compressed and tagged
+  `Content-Encoding: gzip` is served by a gateway as the stored gzip bytes with
+  that header. The node fetched it with axios, which decodes any response
+  carrying `Content-Encoding` and drops the header, even when the request asks
+  for `identity`. The node then served the decompressed body with
+  `Content-Encoding: gzip` from the item's tag (browsers fail to decode it; curl
+  `--compressed` exits 61), and never cached it, because the body did not match
+  the indexed size, so every request fetched it again. Seen on
+  turbo-gateway.com, where each node's trusted gateway is the other node, for
+  gzip-encoded observer reports.
+  - Upstream data fetches (`GatewaysDataSource`, `ArIODataSource`) no longer
+    decode, so stored bytes pass through unchanged, and report the upstream
+    `Content-Encoding` as the new `sourceContentEncoding`.
+  - A response uses the item's indexed `Content-Encoding`, else the one its
+    upstream reported for the bytes being served, so encoded bytes are never
+    served unlabelled. A data item served as a byte range of its root bundle
+    does not inherit the bundle's encoding.
+  - Bytes whose upstream encoding differs from the item's indexed encoding
+    (including an item whose encoding this node has not indexed) are served
+    but not cached, so a later cache hit cannot serve encoded bytes without
+    their header. Counted as
+    `foreground_cache_skipped_total{reason="encoding_mismatch"}`.
+  - Bodies already cached by a reverse proxy in front of the gateway (e.g.
+    nginx `proxy_cache`) keep the wrong body until they expire or are purged.
+- **Gzip-encoded data items were served without `Content-Encoding` by gateways
+  that had not indexed them**, so browsers showed compressed bytes instead of
+  the page. An item uploaded compressed and tagged `Content-Encoding: gzip` must
+  be served as the stored bytes with that header, but the header came only from
+  the index of the item's tags, which a gateway does not have for data items in
+  bundles it does not unbundle (on turbo-gateway.com, every Turbo upload). The
+  node now learns the encoding when it fetches the bytes:
+  - from the item's own signed header, which it reads to serve an item from
+    its root bundle anyway (`RootParentDataSource`);
+  - from Turbo's S3 objects: the `payload-content-encoding` metadata when
+    present, otherwise the item header at the start of the object, read in the
+    same request as the payload (full reads only);
+  - from a trusted gateway's response (see the entry above).
+  The encoding is recorded with the item (a new `contiguous_data_ids.content_encoding`
+  column, written once and never overwritten), so cache hits keep the header.
+  It is recorded per item, not per data hash, so byte-identical uploads with
+  and without the tag keep their own behaviour. An untrusted peer's encoding is
+  served but not recorded or cached
+  (`foreground_cache_skipped_total{reason="encoding_unverified"}`).
+  - Only `gzip`, `br`, `deflate` and `zstd` are named in `Content-Encoding`;
+    a list of stacked codings or an unknown value is served without the
+    header, as before.
+  - Remote CDB64 byte-range reads no longer decode a `Content-Encoding`
+    response.
+  - Items cached before this release keep serving without the header until
+    their cache entries are refreshed.
+- **Nested data items stored with an intermediate bundle as their root were
+  served as 404s** (#959). An item inside a bundle that is itself a data item
+  could be recorded with that bundle as its root and offsets measured in the
+  bundle's payload. The bytes there are the item's, but since #937 every
+  stored location has its header checked before use, and the check reads the
+  recorded root as an L1 transaction, which it is not. The stored-root rebase
+  only helps when the bundle has attributes of its own; without them the
+  location was rejected, a local-first root TX lookup returned the same
+  location, and the request failed. When a header cannot be read at all, the
+  gateway now looks the recorded root up as a bundle, in its stored
+  attributes and then the root TX index, adds the bundle's payload offset, and
+  checks the header again in the enclosing root. A full read of a recovered
+  location is served through signature verification, and the location is
+  stored only once the payload verifies; a range read is served but not
+  stored. The recovery runs at most once per location per request. On
+  turbo-gateway.com about 5,500 of 5.1M stored locations per node had this
+  shape; replaying 300 of them against production data, 283 were served from
+  exactly the location CDB64 records for the item, and the other 17 have no
+  index entry for their bundle.
+- `data_item_location_check_total` gains a `reason` label on rejections:
+  `header_unreadable`, `id_mismatch` or `offset_mismatch`. Before, every
+  rejection looked alike, so read failures and roots that are data items read
+  as wrong locations. Recovered locations are counted under sources ending in
+  `_rebased`, and their payload verification under
+  `data_item_signature_verification_total{source="rebased_location"}`.
+
+- **A gzip item could lose its `Content-Encoding` while cached.** When the
+  upstream that supplied an item sent neither the header nor the item's
+  tags, nothing recorded the coding, and every later cache hit served the
+  gzip bytes without `Content-Encoding` while still sending
+  `X-Arweave-Tag-Content-Encoding: gzip`, so browsers failed to load them.
+  The item's own `Content-Encoding` tag is now declared when nothing else
+  names a coding, for gzip and zstd only and only when the body starts with
+  the coding's magic bytes, so a copy decoded upstream is still served
+  without it. Edge caches keep affected responses until they are purged.
+
+- **Lookup file digests ordered by value**: the lookup engine digested a
+  lookup's rows ordering by its own text renderings of the 64-bit columns
+  (`id8`, `addr8`, `height`, `data_size`, …), so `10` < `100` < `9`, while
+  the files are sorted by value: a reader digesting a lookup in file order
+  could not reproduce its `rowDigest`. The order is now an explicit option
+  (`numeric` or `legacy-text`). `parquet-l2` (`l2-1`) lookups use `numeric`,
+  their files' own order. `parquet-l1` (`l1-3`) lookups keep `legacy-text`,
+  so every published `l1-3` band's digests are unchanged and still verify;
+  a future L1 layout moves to `numeric`.
+- **Root-TX exports no longer place a row that can't frame its own item.**
+  A row with no size, a payload that doesn't start after the item, a header
+  longer than the item, or (its payload size known) an item that doesn't
+  end where its payload does now keeps its root only, counted as
+  `unrepaired` `layout`, top-level or nested, before any placement. Such
+  rows (one at height 1,123,650: offset 1,762, size 1,151, data offset
+  5,543, data size 3) were placed and failed header checks as wrong.
+  ClickHouse and SQLite sources now read the item's payload size for this.
+- **The header check verifies a band among the roots that can still be
+  read.** History whose roots are gone network-wide no longer makes a band
+  "couldn't check" (turbo-gateway.com's 1.3M band had 46% of sampled roots
+  readable, and needed `--skip-header-check`). A read answered 404 is
+  `unreadable`: neither passed nor wrong, left out of the 80% pass ratio,
+  and its root not asked for again; 416 stays wrong, and timeouts, 429 and
+  5xx still count against the ratio. Samples are drawn ten times over and
+  walked until their size has been read (root-TX builds, re-settles,
+  `index-band-build`, `index-band-verify`), and a band also needs 80% of
+  50 verified (or of a smaller sample), which fails it only when gone roots
+  use the pool up; a run's report gives `sampled` (entries read) and
+  `poolSize`. Results, logs and
+  `index-band-verify` report `unreadable`, the pool size and the unreadable
+  share; `index_export_gate_unreadable_total` counts them. A relocated
+  entry in a re-settle must still read and verify.
+- **Band header check: an item with a malformed tag count is no longer a
+  wrong offset.** Some early bundlers wrote the tag bytes' length into the
+  header's tag count field too (an Arweave-signed item at height 789,458
+  says 264 for 9 tags). Its signature hashes to its id and its header ends
+  where its tag bytes say, so its location is right; the check called it
+  wrong and refused the whole band (`wrong_header`), a root-TX band or a
+  re-settle alike. Such an entry now passes and is counted separately
+  (`malformedTags` in the check's result, its strata, a re-settle's
+  report and `index-band-verify`'s output;
+  `index_export_gate_malformed_tags_total`). Every other wrong header is
+  still wrong, and a bundle scan still refuses such a header.
+
+### Documentation
+
+- **Index Sharing docs are split by reader, and CDB64 has one operator
+  page.** `docs/index-swarm.md` covers running the `index-swarm` sidecar, and the new
+  `docs/index-export.md` covers building root-TX and L1 bands.
+  `docs/index-publication.md` now holds the L1 band format, lookup files and
+  querying over HTTP. `docs/cdb64-guide.md` is merged into `docs/cdb64.md`,
+  with the shipped defaults corrected (`ROOT_TX_LOOKUP_ORDER`,
+  `CDB64_ROOT_TX_INDEX_SOURCES`, `CDB64_REMOTE_RETRIEVAL_ORDER`). Every
+  default in `docs/envs.md` was checked against the code and
+  `docker-compose.yaml` and corrected where it differed. The PlantUML
+  diagrams are rendered to SVG under `docs/diagrams/`, and five stale drafts
+  are removed.
+
+- *Querying a dataset over HTTP* in `docs/index-publication.md` shows how to
+  read a published dataset where it sits: a `parquet-l1` band is Parquet and
+  the byte routes serve ranges, so a client needs no band files, no import
+  into a database and no gateway of its own, and fetches only the footer and
+  the row groups a predicate selects. DuckDB installs its own `httpfs` and
+  `json` extensions on first use. The signed document is the catalog, since
+  HTTP has no directory listing to glob.
+  Because `Repr-Digest` is co-signable and commits to the whole file, a ranged
+  read still carries a signature over the digest of the file it read from.
+  Measured against a 24-band dataset covering heights 0 to 2,016,168 whose
+  `transactions.parquet` files total 5.51 GB: a 100-block window across all 24
+  bands in 0.1 s, and the full height span and row count in 0.6 s, over HTTPS,
+  with nothing written to disk.
+
+- The nginx guidance for `/ar-io/indexes` in `docs/index-swarm.md` named the
+  wrong remedy and understated the cost. It said to set `proxy_buffering off`,
+  which does not fix anything: when a location has a cache zone, nginx strips
+  the client's `Range` from the upstream request and fetches the whole object
+  so it can store it, before it has seen any `Cache-Control`, so no response
+  header helps either. What the client sees then depends on whether the
+  response was cacheable: a gateway that does not meter sends `public` and
+  nginx answers the range from its cache, while a metering gateway sends
+  `private`, nothing is stored, and nginx returns `200` with the whole body on
+  every request. A cache zone is wrong on both branches, since the whole file
+  crosses from the gateway either way and one band file can exceed 600 MB. The fix is
+  `proxy_cache off` for the prefix, with no trailing slash,
+  since a `proxy_pass` location whose prefix ends in `/` answers the unslashed
+  form with a `301` and the document every subscriber polls lives there, with
+  HTTPSig signing `@path`. The stated band size (7 to 30 MB) also predated
+  `parquet-l1`, whose files can exceed 600 MB. Core and envoy answer ranges
+  correctly, so the default stack was never affected; the guidance only
+  mattered once an operator added a cache, and it failed quietly, because a
+  `200` carrying more bytes than were asked for looks like success. Verified
+  against a 541 MB band file: a 100-byte range returned all 541,753,181 bytes
+  through a cache zone and `206` with it off.
+
 ## [Release 84] - 2026-09-29
 
 This is a **recommended release** focused on **index sharing between gateways,

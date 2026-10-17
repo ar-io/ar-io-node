@@ -10,12 +10,23 @@ import { describe, it, beforeEach, afterEach } from 'node:test';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import * as os from 'node:os';
+import { Readable } from 'node:stream';
+import { fileURLToPath } from 'node:url';
 
-import { Cdb64RootTxIndex } from './cdb64-root-tx-index.js';
+import {
+  Cdb64LocalRootTxIndex,
+  Cdb64RemoteRootTxIndex,
+  Cdb64RootTxIndex,
+  cdb64SourceLocality,
+} from './cdb64-root-tx-index.js';
+import { CompositeRootTxIndex } from './composite-root-tx-index.js';
+import { Cdb64Manifest, parseManifest } from '../lib/cdb64-manifest.js';
+import { SHIPPED_CDB64_ROOT_TX_INDEX_SOURCES } from '../lib/root-tx-defaults.js';
 import { Cdb64Writer } from '../lib/cdb64.js';
 import { PartitionedCdb64Writer } from '../lib/partitioned-cdb64-writer.js';
 import { encodeCdb64Value } from '../lib/cdb64-encoding.js';
 import { toB64Url } from '../lib/encoding.js';
+import { ContiguousDataSource, DataItemRootIndex } from '../types.js';
 import { createTestLogger } from '../../test/test-logger.js';
 
 const log = createTestLogger({ suite: 'Cdb64RootTxIndex' });
@@ -283,6 +294,228 @@ describe('Cdb64RootTxIndex', () => {
       const result2 = await index.getRootTx(toB64Url(dataItemId));
       assert(result2 !== undefined);
       assert.equal(result1.rootTxId, result2.rootTxId);
+
+      await index.close();
+    });
+  });
+
+  describe('getLocalRootTx', () => {
+    /**
+     * A contiguous data source that serves byte ranges of in-memory files by
+     * ID and records every request, standing in for Arweave so a test can
+     * tell whether a lookup went to the network.
+     */
+    const recordingDataSource = (files: Map<string, Buffer>) => {
+      const requests: string[] = [];
+      const source = {
+        async getData({
+          id,
+          region,
+        }: {
+          id: string;
+          region?: { offset: number; size: number };
+        }) {
+          requests.push(id);
+          const file = files.get(id);
+          if (file === undefined) throw new Error(`No such ID: ${id}`);
+          const offset = region?.offset ?? 0;
+          const bytes = file.subarray(
+            offset,
+            offset + (region?.size ?? file.length),
+          );
+          return {
+            stream: Readable.from([bytes]),
+            size: bytes.length,
+            verified: false,
+            trusted: false,
+            cached: false,
+          };
+        },
+      } as unknown as ContiguousDataSource;
+      return { source, requests };
+    };
+
+    const waitForLocal = async (
+      index: Cdb64RootTxIndex,
+      id: string,
+    ): Promise<Awaited<ReturnType<Cdb64RootTxIndex['getLocalRootTx']>>> => {
+      const deadline = Date.now() + 5000;
+      while (Date.now() < deadline) {
+        const result = await index.getLocalRootTx(id);
+        if (result !== undefined) return result;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      return undefined;
+    };
+
+    const buildPartitioned = async (
+      indexDir: string,
+      entries: Array<{ dataItemId: Buffer; rootTxId: Buffer }>,
+    ): Promise<void> => {
+      const writer = new PartitionedCdb64Writer(indexDir);
+      await writer.open();
+      for (const entry of entries) {
+        await writer.add(
+          entry.dataItemId,
+          encodeCdb64Value({
+            rootTxId: entry.rootTxId,
+            rootDataItemOffset: 1000,
+            rootDataOffset: 1100,
+            dataItemSize: 600,
+          }),
+        );
+      }
+      await writer.finalize();
+    };
+
+    it('misses without waiting for initialization, then answers from a local file', async () => {
+      const cdbPath = path.join(tempDir, 'local.cdb');
+      const dataItemId = createTxId(1);
+      const rootTxId = createTxId(100);
+      await createTestCdb(cdbPath, [
+        { dataItemId, rootTxId, rootDataItemOffset: 10, rootDataOffset: 20 },
+      ]);
+
+      const index = new Cdb64RootTxIndex({ log, sources: [cdbPath] });
+      assert.equal(await index.getLocalRootTx(toB64Url(dataItemId)), undefined);
+
+      // The first call started initialization in the background.
+      const result = await waitForLocal(index, toB64Url(dataItemId));
+      assert(result !== undefined);
+      assert.equal(result.rootTxId, toB64Url(rootTxId));
+      assert.equal(result.rootOffset, 10);
+      assert.equal(result.rootDataOffset, 20);
+      assert.equal('dataSize' in result, false);
+
+      await index.close();
+    });
+
+    it('answers from a local partitioned index, with the item size but no dataSize', async () => {
+      const indexDir = path.join(tempDir, 'band');
+      const dataItemId = createTxId(2);
+      const rootTxId = createTxId(200);
+      await buildPartitioned(indexDir, [{ dataItemId, rootTxId }]);
+
+      const index = new Cdb64RootTxIndex({ log, sources: [indexDir] });
+      const result = await waitForLocal(index, toB64Url(dataItemId));
+
+      assert(result !== undefined);
+      assert.equal(result.rootTxId, toB64Url(rootTxId));
+      assert.equal(result.rootOffset, 1000);
+      assert.equal(result.size, 600);
+      assert.equal('dataSize' in result, false);
+
+      await index.close();
+    });
+
+    it('never reads a remote partition of a local manifest, even one already open', async () => {
+      // The shipped resources/ indexes are local directories whose partitions
+      // are all remote; point this band's partitions at Arweave the same way.
+      const indexDir = path.join(tempDir, 'remote-partitions');
+      const dataItemId = createTxId(3);
+      const rootTxId = createTxId(300);
+      await buildPartitioned(indexDir, [{ dataItemId, rootTxId }]);
+
+      const manifestPath = path.join(indexDir, 'manifest.json');
+      const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf-8'));
+      const files = new Map<string, Buffer>();
+      for (const partition of manifest.partitions) {
+        const id = toB64Url(Buffer.alloc(32, parseInt(partition.prefix, 16)));
+        files.set(
+          id,
+          await fs.readFile(path.join(indexDir, partition.location.filename)),
+        );
+        partition.location = { type: 'arweave-id', id };
+      }
+      await fs.writeFile(manifestPath, JSON.stringify(manifest));
+
+      const { source, requests } = recordingDataSource(files);
+      const index = new Cdb64RootTxIndex({
+        log,
+        sources: [indexDir],
+        watch: false,
+        contiguousDataSource: source,
+      });
+
+      // The full lookup does go to the network, which proves the partition
+      // is remote, and leaves it open.
+      const remote = await index.getRootTx(toB64Url(dataItemId));
+      assert.equal(remote?.rootTxId, toB64Url(rootTxId));
+      assert(requests.length > 0);
+
+      requests.length = 0;
+      assert.equal(await index.getLocalRootTx(toB64Url(dataItemId)), undefined);
+      assert.equal(requests.length, 0);
+
+      await index.close();
+    });
+
+    it('never reads a remote source', async () => {
+      const cdbPath = path.join(tempDir, 'served.cdb');
+      const dataItemId = createTxId(4);
+      const rootTxId = createTxId(400);
+      await createTestCdb(cdbPath, [
+        { dataItemId, rootTxId, rootDataItemOffset: 10, rootDataOffset: 20 },
+      ]);
+      const txId = toB64Url(createTxId(44));
+      const { source, requests } = recordingDataSource(
+        new Map([[txId, await fs.readFile(cdbPath)]]),
+      );
+
+      const index = new Cdb64RootTxIndex({
+        log,
+        sources: [txId],
+        contiguousDataSource: source,
+      });
+
+      const remote = await index.getRootTx(toB64Url(dataItemId));
+      assert.equal(remote?.rootTxId, toB64Url(rootTxId));
+      assert(requests.length > 0);
+
+      requests.length = 0;
+      assert.equal(await index.getLocalRootTx(toB64Url(dataItemId)), undefined);
+      assert.equal(requests.length, 0);
+
+      await index.close();
+    });
+
+    it('does not wait on an initialization held up by a remote source', async () => {
+      const cdbPath = path.join(tempDir, 'beside-slow.cdb');
+      const dataItemId = createTxId(5);
+      await createTestCdb(cdbPath, [{ dataItemId, rootTxId: createTxId(500) }]);
+      // A remote source whose first read never completes.
+      const stalled = {
+        getData: () => new Promise(() => undefined),
+      } as unknown as ContiguousDataSource;
+
+      const index = new Cdb64RootTxIndex({
+        log,
+        sources: [toB64Url(createTxId(55)), cdbPath],
+        contiguousDataSource: stalled,
+      });
+
+      const result = await Promise.race([
+        index.getLocalRootTx(toB64Url(dataItemId)),
+        new Promise((resolve) => setTimeout(() => resolve('waited'), 1000)),
+      ]);
+      assert.equal(result, undefined);
+
+      await index.close();
+    });
+
+    it('rejects a malformed ID', async () => {
+      const cdbPath = path.join(tempDir, 'ids.cdb');
+      await createTestCdb(cdbPath, [
+        { dataItemId: createTxId(6), rootTxId: createTxId(600) },
+      ]);
+      const index = new Cdb64RootTxIndex({ log, sources: [cdbPath] });
+      await index.getRootTx(toB64Url(createTxId(6)));
+
+      assert.equal(await index.getLocalRootTx('not-an-id'), undefined);
+      assert.equal(
+        await index.getLocalRootTx(toB64Url(Buffer.alloc(8))),
+        undefined,
+      );
 
       await index.close();
     });
@@ -1719,6 +1952,532 @@ describe('Cdb64RootTxIndex', () => {
         assert.equal((index as any).pendingDirectories.size, 0);
         await index.close();
       });
+    });
+  });
+});
+
+describe('CDB64 source locality (cdb vs cdb-remote)', () => {
+  const repoRoot = fileURLToPath(new URL('../../', import.meta.url));
+  let tempDir: string;
+
+  beforeEach(async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cdb64-locality-test-'));
+  });
+
+  afterEach(async () => {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  const idFrom = (seed: number): Buffer => {
+    const buf = Buffer.alloc(32);
+    for (let i = 0; i < 32; i++) buf[i] = (seed * 7 + i) % 256;
+    return buf;
+  };
+
+  const manifestWith = (
+    locations: Cdb64Manifest['partitions'][number]['location'][],
+  ): Cdb64Manifest => ({
+    version: 1,
+    createdAt: new Date(0).toISOString(),
+    totalRecords: locations.length,
+    partitions: locations.map((location, i) => ({
+      prefix: i.toString(16).padStart(2, '0'),
+      location,
+      recordCount: 1,
+      size: 1,
+    })),
+  });
+
+  /**
+   * Stands in for Arweave: serves in-memory files by ID and records every
+   * request, so a test can tell whether a lookup went to the network.
+   */
+  const recordingDataSource = (files: Map<string, Buffer> = new Map()) => {
+    const requests: string[] = [];
+    const source = {
+      async getData({
+        id,
+        region,
+      }: {
+        id: string;
+        region?: { offset: number; size: number };
+      }) {
+        requests.push(id);
+        const file = files.get(id);
+        if (file === undefined) throw new Error(`No such ID: ${id}`);
+        const offset = region?.offset ?? 0;
+        const bytes = file.subarray(
+          offset,
+          offset + (region?.size ?? file.length),
+        );
+        return {
+          stream: Readable.from([bytes]),
+          size: bytes.length,
+          verified: false,
+          trusted: false,
+          cached: false,
+        };
+      },
+    } as unknown as ContiguousDataSource;
+    return { source, requests };
+  };
+
+  /** A local band: a partitioned index whose partitions are local files. */
+  const buildBand = async (
+    dir: string,
+    entries: Array<{ dataItemId: Buffer; rootTxId: Buffer }>,
+  ): Promise<void> => {
+    const writer = new PartitionedCdb64Writer(dir);
+    await writer.open();
+    for (const entry of entries) {
+      await writer.add(
+        entry.dataItemId,
+        encodeCdb64Value({
+          rootTxId: entry.rootTxId,
+          rootDataItemOffset: 1000,
+          rootDataOffset: 1100,
+        }),
+      );
+    }
+    await writer.finalize();
+  };
+
+  /**
+   * A local manifest whose partitions are stored on Arweave, as the shipped
+   * resources/ indexes are. With `keepLocal`, the partitions for those
+   * prefixes stay local files, making a mixed manifest.
+   */
+  const buildArweaveBackedIndex = async (
+    dir: string,
+    entries: Array<{ dataItemId: Buffer; rootTxId: Buffer }>,
+    keepLocal: string[] = [],
+  ): Promise<Map<string, Buffer>> => {
+    await buildBand(dir, entries);
+    const manifestPath = path.join(dir, 'manifest.json');
+    const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf-8'));
+    const files = new Map<string, Buffer>();
+    for (const partition of manifest.partitions) {
+      if (keepLocal.includes(partition.prefix)) continue;
+      const id = toB64Url(Buffer.alloc(32, parseInt(partition.prefix, 16)));
+      files.set(
+        id,
+        await fs.readFile(path.join(dir, partition.location.filename)),
+      );
+      partition.location = { type: 'arweave-id', id };
+    }
+    await fs.writeFile(manifestPath, JSON.stringify(manifest));
+    return files;
+  };
+
+  describe('cdb64SourceLocality', () => {
+    it('is local for a local file or a manifest of local files', () => {
+      assert.equal(cdb64SourceLocality('file'), 'local');
+      assert.equal(
+        cdb64SourceLocality(
+          'partitioned-directory',
+          manifestWith([{ type: 'file', filename: '00.cdb' }]),
+        ),
+        'local',
+      );
+      assert.equal(
+        cdb64SourceLocality('partitioned-directory', manifestWith([])),
+        'local',
+      );
+    });
+
+    it('is remote for a local manifest with any remote partition', () => {
+      for (const location of [
+        { type: 'arweave-id' as const, id: 'a'.repeat(43) },
+        {
+          type: 'arweave-byte-range' as const,
+          rootTxId: 'a'.repeat(43),
+          dataOffsetInRootTx: 0,
+        },
+        { type: 'http' as const, url: 'https://example.com/00.cdb' },
+      ]) {
+        assert.equal(
+          cdb64SourceLocality(
+            'partitioned-directory',
+            manifestWith([location]),
+          ),
+          'remote',
+          location.type,
+        );
+      }
+      // Mixed: one local and one remote partition is remote as a whole.
+      assert.equal(
+        cdb64SourceLocality(
+          'partitioned-directory',
+          manifestWith([
+            { type: 'file', filename: '00.cdb' },
+            { type: 'arweave-id', id: 'a'.repeat(43) },
+          ]),
+        ),
+        'remote',
+      );
+    });
+
+    it('is remote for every network source type', () => {
+      for (const type of [
+        'http',
+        'arweave-tx',
+        'arweave-byte-range',
+        'partitioned-http',
+        'partitioned-arweave-tx',
+        'partitioned-arweave-byte-range',
+      ]) {
+        assert.equal(cdb64SourceLocality(type), 'remote', type);
+      }
+    });
+
+    it('classifies each shipped resources/ index as remote', async () => {
+      const shipped = SHIPPED_CDB64_ROOT_TX_INDEX_SOURCES.split(',');
+      assert.equal(shipped.length, 3);
+      for (const source of shipped) {
+        const manifest = parseManifest(
+          await fs.readFile(
+            path.join(repoRoot, source, 'manifest.json'),
+            'utf-8',
+          ),
+        );
+        assert.equal(
+          cdb64SourceLocality('partitioned-directory', manifest),
+          'remote',
+          source,
+        );
+      }
+    });
+  });
+
+  describe('getRootTxFrom', () => {
+    it('never reads a shipped resources/ index for a local lookup', async () => {
+      const bandsDir = path.join(tempDir, 'installed');
+      await fs.mkdir(bandsDir);
+      const { source, requests } = recordingDataSource();
+      const index = new Cdb64RootTxIndex({
+        log,
+        // The default sources: the installed bands, then the shipped indexes.
+        sources: [
+          bandsDir,
+          ...SHIPPED_CDB64_ROOT_TX_INDEX_SOURCES.split(',').map((s) =>
+            path.join(repoRoot, s),
+          ),
+        ],
+        watch: false,
+        contiguousDataSource: source,
+      });
+
+      const id = toB64Url(idFrom(1));
+      assert.equal(await index.getRootTxFrom(id, 'local'), undefined);
+      assert.equal(requests.length, 0);
+
+      // The same ID asked of the remote sources does go to Arweave.
+      assert.equal(await index.getRootTxFrom(id, 'remote'), undefined);
+      assert(requests.length > 0);
+
+      await index.close();
+    });
+
+    it('answers from installed bands locally, and asks remote sources only for remote', async () => {
+      const bandsDir = path.join(tempDir, 'installed');
+      const localId = idFrom(2);
+      const remoteId = idFrom(3);
+      await buildBand(path.join(bandsDir, 'band-a'), [
+        { dataItemId: localId, rootTxId: idFrom(20) },
+      ]);
+      const remoteDir = path.join(tempDir, 'shipped');
+      const files = await buildArweaveBackedIndex(remoteDir, [
+        { dataItemId: remoteId, rootTxId: idFrom(30) },
+      ]);
+      const { source, requests } = recordingDataSource(files);
+      const index = new Cdb64RootTxIndex({
+        log,
+        sources: [bandsDir, remoteDir],
+        watch: false,
+        contiguousDataSource: source,
+      });
+
+      const local = await index.getRootTxFrom(toB64Url(localId), 'local');
+      assert.equal(local?.rootTxId, toB64Url(idFrom(20)));
+      assert.equal(
+        await index.getRootTxFrom(toB64Url(remoteId), 'local'),
+        undefined,
+      );
+      assert.equal(requests.length, 0);
+
+      // The remote view skips the local band and reads the remote index.
+      assert.equal(
+        await index.getRootTxFrom(toB64Url(localId), 'remote'),
+        undefined,
+      );
+      const remote = await index.getRootTxFrom(toB64Url(remoteId), 'remote');
+      assert.equal(remote?.rootTxId, toB64Url(idFrom(30)));
+      assert(requests.length > 0);
+
+      // getRootTx still asks every source, local and remote, in order.
+      assert.equal(
+        (await index.getRootTx(toB64Url(localId)))?.rootTxId,
+        toB64Url(idFrom(20)),
+      );
+      assert.equal(
+        (await index.getRootTx(toB64Url(remoteId)))?.rootTxId,
+        toB64Url(idFrom(30)),
+      );
+
+      await index.close();
+    });
+
+    it('treats a manifest mixing local and remote partitions as remote', async () => {
+      const dir = path.join(tempDir, 'mixed');
+      // Find an ID whose partition stays local.
+      const dataItemId = idFrom(4);
+      const prefix = dataItemId[0].toString(16).padStart(2, '0');
+      const files = await buildArweaveBackedIndex(
+        dir,
+        [
+          { dataItemId, rootTxId: idFrom(40) },
+          { dataItemId: idFrom(5), rootTxId: idFrom(50) },
+        ],
+        [prefix],
+      );
+      const { source } = recordingDataSource(files);
+      const index = new Cdb64RootTxIndex({
+        log,
+        sources: [dir],
+        watch: false,
+        contiguousDataSource: source,
+      });
+
+      assert.equal(
+        await index.getRootTxFrom(toB64Url(dataItemId), 'local'),
+        undefined,
+      );
+      assert.equal(
+        (await index.getRootTxFrom(toB64Url(dataItemId), 'remote'))?.rootTxId,
+        toB64Url(idFrom(40)),
+      );
+
+      await index.close();
+    });
+
+    it('does not make a local lookup wait on a remote source still loading', async () => {
+      const cdbPath = path.join(tempDir, 'local.cdb');
+      const dataItemId = idFrom(6);
+      const writer = new Cdb64Writer(cdbPath);
+      await writer.open();
+      await writer.add(dataItemId, encodeCdb64Value({ rootTxId: idFrom(60) }));
+      await writer.finalize();
+      // A remote source, listed first, whose first read never completes.
+      const stalled = {
+        getData: () => new Promise(() => undefined),
+      } as unknown as ContiguousDataSource;
+
+      const index = new Cdb64RootTxIndex({
+        log,
+        sources: [toB64Url(idFrom(66)), cdbPath],
+        watch: false,
+        contiguousDataSource: stalled,
+      });
+
+      const result = await Promise.race([
+        index.getRootTxFrom(toB64Url(dataItemId), 'local'),
+        new Promise((resolve) => setTimeout(() => resolve('waited'), 2000)),
+      ]);
+      assert.notEqual(result, 'waited');
+      assert.equal(
+        (result as { rootTxId: string } | undefined)?.rootTxId,
+        toB64Url(idFrom(60)),
+      );
+      // The offsets route's lookup answers too, without waiting.
+      assert.equal(
+        (await index.getLocalRootTx(toB64Url(dataItemId)))?.rootTxId,
+        toB64Url(idFrom(60)),
+      );
+
+      await index.close();
+    });
+  });
+
+  describe('in the root TX lookup order', () => {
+    const breakerOptions = {
+      timeout: 5000,
+      errorThresholdPercentage: 100,
+      resetTimeout: 1000,
+      rollingCountTimeout: 5000,
+    };
+
+    /** A stand-in for the `gateways` source that records when it is asked. */
+    const gatewaysStub = (
+      events: string[],
+      answer: Awaited<ReturnType<DataItemRootIndex['getRootTx']>>,
+    ): DataItemRootIndex => {
+      class GatewaysRootTxIndex {
+        async getRootTx() {
+          events.push('gateways');
+          return answer;
+        }
+      }
+      return new GatewaysRootTxIndex();
+    };
+
+    const setup = async () => {
+      const bandsDir = path.join(tempDir, 'installed');
+      await buildBand(path.join(bandsDir, 'band-a'), [
+        { dataItemId: idFrom(7), rootTxId: idFrom(70) },
+      ]);
+      const remoteDir = path.join(tempDir, 'shipped');
+      const files = await buildArweaveBackedIndex(remoteDir, [
+        { dataItemId: idFrom(8), rootTxId: idFrom(80) },
+      ]);
+      const events: string[] = [];
+      const recording = recordingDataSource(files);
+      const source = {
+        getData: (args: any) => {
+          events.push('remote-read');
+          return recording.source.getData(args);
+        },
+      } as unknown as ContiguousDataSource;
+      const index = new Cdb64RootTxIndex({
+        log,
+        sources: [bandsDir, remoteDir],
+        watch: false,
+        contiguousDataSource: source,
+      });
+      return { index, events };
+    };
+
+    /**
+     * An ID no index holds, in the same partition as the remote index's one
+     * entry, so asking the remote index for it does read from Arweave.
+     */
+    const freshId = (): string => {
+      const id = Buffer.from(idFrom(8));
+      id[31] ^= 0xff;
+      return toB64Url(id);
+    };
+
+    const gatewayAnswer = {
+      rootTxId: toB64Url(idFrom(90)),
+      rootOffset: 1,
+      rootDataOffset: 2,
+    };
+
+    it('with cdb-remote (the default), a local miss reaches gateways without a remote read', async () => {
+      const { index, events } = await setup();
+      const composite = new CompositeRootTxIndex({
+        log,
+        // db,cdb,gateways,...,cdb-remote
+        indexes: [
+          new Cdb64LocalRootTxIndex(index),
+          gatewaysStub(events, gatewayAnswer),
+          new Cdb64RemoteRootTxIndex(index),
+        ],
+        circuitBreakerOptions: breakerOptions,
+      });
+
+      // An ID no local band holds, as a fresh item above the newest band.
+      const result = await composite.getRootTx(freshId());
+      assert.equal(result?.rootTxId, gatewayAnswer.rootTxId);
+      assert.deepEqual(events, ['gateways']);
+
+      // An ID the local band holds never reaches gateways.
+      events.length = 0;
+      const local = await composite.getRootTx(toB64Url(idFrom(7)));
+      assert.equal(local?.rootTxId, toB64Url(idFrom(70)));
+      assert.deepEqual(events, []);
+
+      await index.close();
+    });
+
+    it('with cdb-remote, remote sources are still asked once gateways misses', async () => {
+      const { index, events } = await setup();
+      const composite = new CompositeRootTxIndex({
+        log,
+        indexes: [
+          new Cdb64LocalRootTxIndex(index),
+          gatewaysStub(events, undefined),
+          new Cdb64RemoteRootTxIndex(index),
+        ],
+        circuitBreakerOptions: breakerOptions,
+      });
+
+      const result = await composite.getRootTx(toB64Url(idFrom(8)));
+      assert.equal(result?.rootTxId, toB64Url(idFrom(80)));
+      assert.equal(events[0], 'gateways');
+      assert(events.slice(1).every((e) => e === 'remote-read'));
+      assert(events.length > 1);
+
+      await index.close();
+    });
+
+    it('gives cdb and cdb-remote separate circuit breakers, so a slow remote read cannot cut off local bands', async () => {
+      const bandsDir = path.join(tempDir, 'installed');
+      await buildBand(path.join(bandsDir, 'band-a'), [
+        { dataItemId: idFrom(7), rootTxId: idFrom(70) },
+      ]);
+      const remoteDir = path.join(tempDir, 'shipped');
+      await buildArweaveBackedIndex(remoteDir, [
+        { dataItemId: idFrom(8), rootTxId: idFrom(80) },
+      ]);
+      // Arweave reads that never complete, as a wedged remote read.
+      const stalled = {
+        getData: () => new Promise(() => undefined),
+      } as unknown as ContiguousDataSource;
+      const index = new Cdb64RootTxIndex({
+        log,
+        sources: [bandsDir, remoteDir],
+        watch: false,
+        contiguousDataSource: stalled,
+      });
+      const local = new Cdb64LocalRootTxIndex(index);
+      const remote = new Cdb64RemoteRootTxIndex(index);
+      const composite = new CompositeRootTxIndex({
+        log,
+        indexes: [local, remote],
+        circuitBreakerOptions: {
+          timeout: 50,
+          errorThresholdPercentage: 1,
+          volumeThreshold: 1,
+          resetTimeout: 60_000,
+          rollingCountTimeout: 60_000,
+        },
+      });
+      const breakers = (composite as any).circuitBreakers as Map<
+        string,
+        { opened: boolean }
+      >;
+      assert.deepEqual(
+        [...breakers.keys()],
+        ['Cdb64LocalRootTxIndex', 'Cdb64RemoteRootTxIndex'],
+      );
+
+      // A miss in the bands goes on to the remote index, which times out.
+      assert.equal(await composite.getRootTx(toB64Url(idFrom(8))), undefined);
+      assert.equal(breakers.get('Cdb64RemoteRootTxIndex')?.opened, true);
+      assert.equal(breakers.get('Cdb64LocalRootTxIndex')?.opened, false);
+
+      // The installed bands still answer.
+      const result = await composite.getRootTx(toB64Url(idFrom(7)));
+      assert.equal(result?.rootTxId, toB64Url(idFrom(70)));
+
+      await index.close();
+    });
+
+    it('without cdb-remote, cdb asks every source before gateways, as before', async () => {
+      const { index, events } = await setup();
+      const composite = new CompositeRootTxIndex({
+        log,
+        // db,cdb,gateways: cdb is the whole index.
+        indexes: [index, gatewaysStub(events, gatewayAnswer)],
+        circuitBreakerOptions: breakerOptions,
+      });
+
+      const result = await composite.getRootTx(freshId());
+      assert.equal(result?.rootTxId, gatewayAnswer.rootTxId);
+      assert(events.indexOf('remote-read') >= 0);
+      assert(events.indexOf('remote-read') < events.indexOf('gateways'));
+
+      await index.close();
     });
   });
 });

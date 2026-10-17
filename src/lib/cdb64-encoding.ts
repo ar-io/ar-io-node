@@ -196,7 +196,7 @@ export function isPathCompleteValue(
  * payload offset. The item's end offset must also be a safe integer, so a huge
  * size can't frame a payload range beyond what the gateway can address.
  */
-function isValidDataItemSize(
+export function isValidDataItemSize(
   dataItemSize: unknown,
   rootDataItemOffset: number,
   rootDataOffset: number,

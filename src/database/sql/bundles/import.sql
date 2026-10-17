@@ -158,17 +158,18 @@ UPDATE SET
  *
  *   - upsertNewDataItem — used by the unbundle path and the on-demand
  *     metadata resolver, both of which know the full root atom. INSERT
- *     carries the full tuple; on conflict, every root-atom field is
- *     updated atomically (COALESCE protects against the rare partial
- *     write — see note below). Height is IFNULL'd because it lives on
- *     a different timeline than the bundling (set by chain ingestion
- *     via updateNewDataItemHeights).
+ *     carries the full tuple; on conflict, a write naming a different
+ *     root replaces every root-atom field with its own values, NULLs
+ *     included, and any other write COALESCEs them (see note below).
+ *     Height is IFNULL'd because it lives on a different timeline than
+ *     the bundling (set by chain ingestion via updateNewDataItemHeights).
  *
  * The COALESCE on the root-atom UPDATE columns is a safety net for
  * callers that don't actually have full tuple knowledge yet (e.g., a
- * partially-resolved metadata fetch). It is NOT a license to write
- * partial tuples — callers in the unbundle path are expected to
- * provide all eleven fields together.
+ * partially-resolved metadata fetch) under the SAME root. It is NOT a
+ * license to write partial tuples — callers in the unbundle path are
+ * expected to provide all eleven fields together. A different root is a
+ * different atom, so nothing from the old one is kept.
  */
 
 -- insertOptimisticDataItem
@@ -211,15 +212,42 @@ INSERT INTO new_data_items (
   @root_parent_offset
 ) ON CONFLICT DO
 UPDATE SET
+  -- A write naming a DIFFERENT root replaces the whole root atom with its own
+  -- values, NULLs included: the item now lives in another bundle (a re-bundle,
+  -- or a second copy of a deterministic item), and an offset, size or parent
+  -- from the old root is wrong there (#937: header offset kept from one copy
+  -- under another copy's root, served as verified). Unknown beats wrong; a
+  -- later full write fills the NULLs. Same root (or none given): COALESCE as
+  -- before, so a partial write never erases what an earlier one knew.
   height              = IFNULL(@height,                height),
-  parent_id           = COALESCE(@parent_id,           parent_id),
   root_transaction_id = COALESCE(@root_transaction_id, root_transaction_id),
-  data_offset         = COALESCE(@data_offset,         data_offset),
-  root_parent_offset  = COALESCE(@root_parent_offset,  root_parent_offset),
-  offset              = COALESCE(@offset,              offset),
-  size                = COALESCE(@size,                size),
-  signature_offset    = COALESCE(@signature_offset,    signature_offset),
-  signature_size      = COALESCE(@signature_size,      signature_size),
-  owner_offset        = COALESCE(@owner_offset,        owner_offset),
-  owner_size          = COALESCE(@owner_size,          owner_size),
-  signature_type      = COALESCE(@signature_type,      signature_type)
+  parent_id           = CASE WHEN @root_transaction_id IS NOT NULL AND root_transaction_id IS NOT NULL
+                                 AND @root_transaction_id != root_transaction_id
+                            THEN @parent_id ELSE COALESCE(@parent_id, parent_id) END,
+  data_offset         = CASE WHEN @root_transaction_id IS NOT NULL AND root_transaction_id IS NOT NULL
+                                 AND @root_transaction_id != root_transaction_id
+                            THEN @data_offset ELSE COALESCE(@data_offset, data_offset) END,
+  root_parent_offset  = CASE WHEN @root_transaction_id IS NOT NULL AND root_transaction_id IS NOT NULL
+                                 AND @root_transaction_id != root_transaction_id
+                            THEN @root_parent_offset ELSE COALESCE(@root_parent_offset, root_parent_offset) END,
+  offset              = CASE WHEN @root_transaction_id IS NOT NULL AND root_transaction_id IS NOT NULL
+                                 AND @root_transaction_id != root_transaction_id
+                            THEN @offset ELSE COALESCE(@offset, offset) END,
+  size                = CASE WHEN @root_transaction_id IS NOT NULL AND root_transaction_id IS NOT NULL
+                                 AND @root_transaction_id != root_transaction_id
+                            THEN @size ELSE COALESCE(@size, size) END,
+  signature_offset    = CASE WHEN @root_transaction_id IS NOT NULL AND root_transaction_id IS NOT NULL
+                                 AND @root_transaction_id != root_transaction_id
+                            THEN @signature_offset ELSE COALESCE(@signature_offset, signature_offset) END,
+  signature_size      = CASE WHEN @root_transaction_id IS NOT NULL AND root_transaction_id IS NOT NULL
+                                 AND @root_transaction_id != root_transaction_id
+                            THEN @signature_size ELSE COALESCE(@signature_size, signature_size) END,
+  owner_offset        = CASE WHEN @root_transaction_id IS NOT NULL AND root_transaction_id IS NOT NULL
+                                 AND @root_transaction_id != root_transaction_id
+                            THEN @owner_offset ELSE COALESCE(@owner_offset, owner_offset) END,
+  owner_size          = CASE WHEN @root_transaction_id IS NOT NULL AND root_transaction_id IS NOT NULL
+                                 AND @root_transaction_id != root_transaction_id
+                            THEN @owner_size ELSE COALESCE(@owner_size, owner_size) END,
+  signature_type      = CASE WHEN @root_transaction_id IS NOT NULL AND root_transaction_id IS NOT NULL
+                                 AND @root_transaction_id != root_transaction_id
+                            THEN @signature_type ELSE COALESCE(@signature_type, signature_type) END

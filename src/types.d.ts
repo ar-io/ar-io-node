@@ -1004,6 +1004,37 @@ export interface ContiguousData {
   verified: boolean;
   trusted: boolean;
   sourceContentType?: string;
+  /**
+   * The `Content-Encoding` of the bytes in `stream`, as reported by the
+   * upstream that supplied them (normalized; `identity` is `undefined`).
+   * Upstream data fetches do not decode, so encoded bytes stay encoded, the way
+   * they are stored on chain (for example a gzip-compressed item tagged
+   * `Content-Encoding: gzip`). Only set by sources that fetch the item itself;
+   * a data item served as a byte range of its root bundle does not inherit the
+   * bundle's encoding.
+   */
+  sourceContentEncoding?: string;
+  /**
+   * True when `sourceContentEncoding` was read from the item's own signed tags
+   * (directly from its header, or from storage metadata derived from them) rather
+   * than claimed by an upstream. Such an encoding is recorded with the cached
+   * data; an upstream's is recorded only when the upstream is trusted.
+   */
+  sourceContentEncodingFromTags?: boolean;
+  /**
+   * Where `sourceContentType` came from, when the source knows; decides how
+   * it is recorded per item (see {@link ContentTypeSource}):
+   * - `item`: the item's own `Content-Type` tag, read from its signed header
+   *   during this fetch or from the uploader's per-item record of it (Turbo's
+   *   payload content type).
+   * - `upstream`: a gateway's response for this ID. That may itself be the
+   *   gateway's per-hash label, so it is recorded only from a trusted gateway
+   *   and only until an `item` value arrives.
+   * Unset for anything else, notably a type a source took from this
+   * gateway's own stored attributes, which must never be re-recorded as if
+   * it were new evidence.
+   */
+  sourceContentTypeOrigin?: 'item' | 'upstream';
   cached: boolean;
   requestAttributes?: RequestAttributes;
   /**
@@ -1031,6 +1062,21 @@ interface ContiguousMetadata {
  *
  * See docs/glossary.md for detailed definitions of offsets and ANS-104 concepts.
  */
+/**
+ * Where an item's content type came from, most trusted first:
+ * - `indexed`: the item's `Content-Type` tag in this gateway's index.
+ * - `item`: recorded per item from its signed tag (header read) or the
+ *   uploader's per-item record of it. Final once recorded.
+ * - `upstream`: recorded per item from a trusted gateway's answer for this ID.
+ *   Replaced by an `item` value.
+ * - `hash`: `contiguous_data.original_source_content_type`, shared by every
+ *   item with the same bytes; the last fallback.
+ */
+export type ContentTypeSource = 'indexed' | 'item' | 'upstream' | 'hash';
+
+/** The ranks of {@link ContentTypeSource} that are recorded per item. */
+export type RecordedContentTypeSource = 'item' | 'upstream';
+
 export interface ContiguousDataAttributes {
   // Content identification and verification
 
@@ -1067,6 +1113,12 @@ export interface ContiguousDataAttributes {
 
   /** MIME type of the content (e.g., "application/json", "image/png"). */
   contentType?: string;
+
+  /**
+   * Where {@link contentType} came from. Lets a cache keep the best-ranked
+   * value it has seen rather than the first.
+   */
+  contentTypeSource?: ContentTypeSource;
 
   // Root transaction reference
 
@@ -1250,6 +1302,7 @@ export interface ContiguousDataIndex {
     hash,
     dataSize,
     contentType,
+    contentEncoding,
     cachedAt,
     verified,
     verificationPriority,
@@ -1269,6 +1322,18 @@ export interface ContiguousDataIndex {
     hash: string;
     dataSize: number;
     contentType?: string;
+    /**
+     * The item's `Content-Encoding`, recorded fill-once. Only pass one learned
+     * from the item's signed tags or a trusted upstream.
+     */
+    contentEncoding?: string;
+    /**
+     * The item's own content type, recorded per ID (unlike `contentType`,
+     * which is recorded per data hash). Ranked by `itemContentTypeSource`:
+     * an `item` value is final, an `upstream` value yields to an `item` one.
+     */
+    itemContentType?: string;
+    itemContentTypeSource?: RecordedContentTypeSource;
     cachedAt?: number;
     verified?: boolean;
     verificationPriority?: number;
@@ -1371,6 +1436,7 @@ export interface ContiguousDataSource {
     parentSpan,
     signal,
     acceptContentType,
+    backgroundCacheOnRangeMiss,
   }: {
     id: string;
     requestAttributes?: RequestAttributes;
@@ -1393,6 +1459,15 @@ export interface ContiguousDataSource {
      * next priority tier. PE-9099.
      */
     acceptContentType?: (contentType: string | undefined) => boolean;
+    /**
+     * For a `region` that misses a cache: whether the cache may start a
+     * background fetch of the whole item to fill itself (within
+     * BACKGROUND_CACHE_RANGE_MAX_SIZE). Defaults to true. Pass false when
+     * the range is all the caller will ever want of the item, such as a
+     * signature read from its parent bundle, so a small read does not
+     * download the whole bundle. Sources without a cache ignore it.
+     */
+    backgroundCacheOnRangeMiss?: boolean;
   }): Promise<ContiguousData>;
 }
 
@@ -1442,6 +1517,15 @@ export interface ManifestPathResolver {
     id: string,
     path: string | undefined,
   ): Promise<ManifestResolution>;
+
+  /**
+   * A cached resolution that came from trusted bytes, without fetching
+   * anything; undefined when there is none.
+   */
+  resolveFromTrustedCache(
+    id: string,
+    path: string | undefined,
+  ): ManifestResolution | undefined;
 }
 
 /**

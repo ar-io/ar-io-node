@@ -9,6 +9,8 @@ import { Readable } from 'node:stream';
 import rangeParser from 'range-parser';
 import { Request, Response } from 'express';
 
+import { headerNames } from '../constants.js';
+
 /**
  * Generate a random multipart boundary string.
  * Uses same algorithm as Firefox - 50 character boundary optimized for boyer-moore parsing.
@@ -65,6 +67,220 @@ export function parseContentLength(
   }
 
   return parsed;
+}
+
+/**
+ * Normalizes an upstream `Content-Encoding` response header for use as the
+ * encoding of the bytes received.
+ *
+ * Returns `undefined` for a missing or empty header and for `identity`, which
+ * means the bytes are not encoded. Otherwise returns the lowercased, trimmed
+ * value (a list such as `gzip, br` is kept as sent: it describes the bytes as
+ * a whole).
+ *
+ * @example
+ * parseContentEncoding('gzip') // 'gzip'
+ * parseContentEncoding(' GZIP ') // 'gzip'
+ * parseContentEncoding('identity') // undefined
+ * parseContentEncoding(undefined) // undefined
+ */
+export function parseContentEncoding(
+  contentEncoding: string | string[] | undefined,
+): string | undefined {
+  const value = Array.isArray(contentEncoding)
+    ? contentEncoding.join(', ')
+    : contentEncoding;
+  const normalized = value?.trim().toLowerCase();
+  if (
+    normalized === undefined ||
+    normalized === '' ||
+    normalized === 'identity'
+  ) {
+    return undefined;
+  }
+  return normalized;
+}
+
+/**
+ * Content codings the gateway will name in a `Content-Encoding` response
+ * header. Browsers decode all of these; anything else, including a list of
+ * stacked codings such as `gzip, br`, is served without the header, as
+ * before, rather than with one a client may not decode.
+ */
+export const HONOURED_CONTENT_ENCODINGS: ReadonlySet<string> = new Set([
+  'gzip',
+  'br',
+  'deflate',
+  'zstd',
+]);
+
+/**
+ * The `Content-Encoding` to send for an item, or `undefined` for none: the
+ * normalized value if it is a single honoured coding (see
+ * {@link HONOURED_CONTENT_ENCODINGS}), else `undefined`.
+ *
+ * @example
+ * honouredContentEncoding('GZIP') // 'gzip'
+ * honouredContentEncoding('gzip, br') // undefined
+ * honouredContentEncoding('x-custom') // undefined
+ */
+export function honouredContentEncoding(
+  contentEncoding: string | undefined,
+): string | undefined {
+  const normalized = parseContentEncoding(contentEncoding);
+  return normalized !== undefined && HONOURED_CONTENT_ENCODINGS.has(normalized)
+    ? normalized
+    : undefined;
+}
+
+/**
+ * The coding an upstream's `X-Arweave-Tag-Content-Encoding` header names when
+ * the response itself carries no `Content-Encoding`, or `undefined` when the
+ * two agree.
+ *
+ * A gateway that serves an item stored encoded sends `Content-Encoding` for
+ * every honoured coding its tag names (see {@link honouredContentEncoding}).
+ * A tag naming one with no header means the bytes were decoded somewhere
+ * upstream. Gateways older than ar-io-node #964 did this: they decoded the
+ * gzip body and cut it at the encoded length, so the bytes are both decoded
+ * and truncated, and must not be served or cached.
+ *
+ * Only the first `Content-Encoding` tag counts, as when indexing (#966).
+ *
+ * @example
+ * undeclaredTaggedEncoding({ contentEncoding: undefined, tags: [{ name: 'Content-Encoding', value: 'gzip' }] }) // 'gzip'
+ * undeclaredTaggedEncoding({ contentEncoding: 'gzip', tags: [{ name: 'Content-Encoding', value: 'gzip' }] }) // undefined
+ * undeclaredTaggedEncoding({ contentEncoding: undefined, tags: [{ name: 'Content-Encoding', value: 'x-custom' }] }) // undefined
+ */
+export function undeclaredTaggedEncoding({
+  contentEncoding,
+  tags,
+}: {
+  contentEncoding: string | string[] | undefined;
+  tags: { name: string; value: string }[] | undefined;
+}): string | undefined {
+  if (parseContentEncoding(contentEncoding) !== undefined) {
+    return undefined;
+  }
+  const tag = tags?.find(
+    (candidate) => candidate.name.toLowerCase() === 'content-encoding',
+  );
+  return honouredContentEncoding(tag?.value);
+}
+
+/**
+ * Leading bytes every body in a content coding starts with, for the codings
+ * that have them (`br` and raw `deflate` do not).
+ */
+const CONTENT_ENCODING_MAGIC: ReadonlyMap<string, Buffer> = new Map([
+  ['gzip', Buffer.from([0x1f, 0x8b])],
+  ['zstd', Buffer.from([0x28, 0xb5, 0x2f, 0xfd])],
+]);
+
+/**
+ * Whether a response declaring `contentEncoding` can be checked against its
+ * first bytes with {@link contradictsContentEncoding}.
+ */
+export function hasContentEncodingMagic(
+  contentEncoding: string | string[] | undefined,
+): boolean {
+  const normalized = parseContentEncoding(contentEncoding);
+  return normalized !== undefined && CONTENT_ENCODING_MAGIC.has(normalized);
+}
+
+/**
+ * How many leading bytes {@link contradictsContentEncoding} needs to judge a
+ * body declaring `contentEncoding`: the length of the coding's magic, or 0
+ * for a coding without one.
+ */
+export function contentEncodingMagicLength(
+  contentEncoding: string | string[] | undefined,
+): number {
+  const normalized = parseContentEncoding(contentEncoding);
+  return normalized !== undefined
+    ? (CONTENT_ENCODING_MAGIC.get(normalized)?.length ?? 0)
+    : 0;
+}
+
+/**
+ * True when a body's first bytes rule out the coding its `Content-Encoding`
+ * declares: a `gzip` body that does not start `1f 8b`, or a `zstd` body that
+ * does not start `28 b5 2f fd`.
+ *
+ * Gateways older than ar-io-node #964 can serve a gzip-tagged item already
+ * decompressed while still declaring `Content-Encoding: gzip`, so clients
+ * fail to decode it. A coding with no fixed magic, or an empty `head`, is
+ * never contradicted; a `head` shorter than the magic is compared as far as
+ * it goes.
+ *
+ * @example
+ * contradictsContentEncoding(Buffer.from('{"a"'), 'gzip') // true
+ * contradictsContentEncoding(Buffer.from([0x1f, 0x8b, 8]), 'gzip') // false
+ * contradictsContentEncoding(Buffer.from('{"a"'), 'br') // false
+ */
+export function contradictsContentEncoding(
+  head: Buffer,
+  contentEncoding: string | string[] | undefined,
+): boolean {
+  const normalized = parseContentEncoding(contentEncoding);
+  const magic =
+    normalized !== undefined
+      ? CONTENT_ENCODING_MAGIC.get(normalized)
+      : undefined;
+  if (magic === undefined || head.length === 0) {
+    return false;
+  }
+  const length = Math.min(head.length, magic.length);
+  return !head.subarray(0, length).equals(magic.subarray(0, length));
+}
+
+/**
+ * True only when a body's first bytes carry the whole magic of `contentEncoding`.
+ *
+ * Stricter than {@link contradictsContentEncoding}, which lets a short or empty
+ * head and a coding without magic through: this is for a coding the gateway
+ * has no record of and would otherwise not declare, so it needs positive
+ * evidence before adding the header.
+ */
+export function matchesContentEncodingMagic(
+  head: Buffer,
+  contentEncoding: string | undefined,
+): boolean {
+  const normalized = parseContentEncoding(contentEncoding);
+  const magic =
+    normalized !== undefined
+      ? CONTENT_ENCODING_MAGIC.get(normalized)
+      : undefined;
+  return (
+    magic !== undefined &&
+    head.length >= magic.length &&
+    head.subarray(0, magic.length).equals(magic)
+  );
+}
+
+/**
+ * The honoured coding an item's own `Content-Encoding` tag names, or
+ * `undefined`. Only the first such tag counts, as when indexing (#966).
+ */
+export function taggedContentEncoding(
+  tags: { name: string; value: string }[] | undefined,
+): string | undefined {
+  const tag = tags?.find(
+    (candidate) => candidate.name.toLowerCase() === 'content-encoding',
+  );
+  return honouredContentEncoding(tag?.value);
+}
+
+/**
+ * `{ sourceContentEncoding }` for an upstream `Content-Encoding` header that
+ * names an encoding, or `{}` when the bytes are not encoded; for spreading into
+ * a `ContiguousData` result.
+ */
+export function contentEncodingOf(
+  contentEncoding: string | string[] | undefined,
+): { sourceContentEncoding?: string } {
+  const sourceContentEncoding = parseContentEncoding(contentEncoding);
+  return sourceContentEncoding !== undefined ? { sourceContentEncoding } : {};
 }
 
 /**
@@ -254,12 +470,13 @@ export function calculateRangeResponseSize(
   contentType: string,
   boundary?: string,
 ): number {
-  // No range header - full content
-  if (rangeHeader === undefined) {
+  // No range, or one whose unit is ignored (see byteRangeHeader) - full content
+  const byteRange = byteRangeHeader(rangeHeader);
+  if (byteRange === undefined) {
     return dataSize;
   }
 
-  const ranges = rangeParser(dataSize, rangeHeader);
+  const ranges = rangeParser(dataSize, byteRange);
 
   // Malformed or unsatisfiable range - charge for full content
   if (ranges === -1 || ranges === -2 || ranges.type !== 'bytes') {
@@ -274,6 +491,60 @@ export function calculateRangeResponseSize(
   // Multiple ranges: calculate total including boundaries and headers
   const actualBoundary = boundary ?? generateBoundary();
   return calculateMultipartSize(ranges, dataSize, contentType, actualBoundary);
+}
+
+/**
+ * The Range header a data route should act on, or undefined to serve the
+ * whole representation.
+ *
+ * Range units are case-insensitive (RFC 9110 section 14.1), and an origin
+ * server MUST ignore a Range header whose unit it does not understand
+ * (section 14.2), so `BYTES=0-99` is a byte range and `items=0-5` is no
+ * range at all. A header without a unit (`0-5`, `=0-5`) is passed through
+ * for the parser to reject as malformed.
+ *
+ * @param rangeHeader - The request's Range header, if any.
+ * @returns The header with its unit normalized to `bytes`, or undefined.
+ */
+export function byteRangeHeader(
+  rangeHeader: string | undefined,
+): string | undefined {
+  if (rangeHeader === undefined) {
+    return undefined;
+  }
+  const index = rangeHeader.indexOf('=');
+  const unit = index === -1 ? '' : rangeHeader.slice(0, index).trim();
+  // No unit at all is malformed, not an unknown unit: the parser rejects it.
+  if (unit === '') {
+    return rangeHeader;
+  }
+  if (unit.toLowerCase() !== 'bytes') {
+    return undefined;
+  }
+  return `bytes=${rangeHeader.slice(index + 1)}`;
+}
+
+/**
+ * The entity tag for a data response, without quotes.
+ *
+ * The content digest, except when the request was routed through an ArNS
+ * name: the resolved id is then part of it too. A name can be re-pointed at a
+ * manifest whose file at the same path has the same bytes. With the digest
+ * alone, a cache revalidating its copy gets a 304 and keeps the old response's
+ * headers -- the old X-ArNS-Resolved-Id, root offsets and signature -- for as
+ * long as the bytes stay the same (seen on turbo-gateway.com: a week-old
+ * resolution served behind a 900 s TTL). With the resolution folded in, a 304
+ * means "same bytes, same resolution". Responses not routed through a name
+ * (/raw, /{id}, the index routes) keep the plain digest.
+ *
+ * The ArNS middleware sets X-ArNS-Resolved-Id before the data handler runs, so
+ * reading it from the response is enough.
+ */
+export function dataEtag(res: Response, hash: string): string {
+  const resolvedId = res.getHeader(headerNames.arnsResolvedId);
+  return typeof resolvedId === 'string' && resolvedId !== ''
+    ? `${hash}.${resolvedId}`
+    : hash;
 }
 
 /**

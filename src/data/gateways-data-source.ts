@@ -9,16 +9,24 @@ import { default as axios } from 'axios';
 import http from 'node:http';
 import https from 'node:https';
 import winston from 'winston';
+import { Readable } from 'node:stream';
 
 import * as config from '../config.js';
 import { TrustedGatewayConfig } from '../config.js';
 import {
   buildRangeHeader,
   normalizeAbortError,
+  contentEncodingOf,
+  contentEncodingMagicLength,
+  contradictsContentEncoding,
+  hasContentEncodingMagic,
+  parseContentEncoding,
   parseContentLength,
   parseContentRange,
+  undeclaredTaggedEncoding,
 } from '../lib/http-utils.js';
 import { BASE_AGENT_OPTIONS, instrumentAgent } from '../lib/http-agent.js';
+import { GatewayThrottle } from './gateway-throttle.js';
 import { shuffleArray } from '../lib/random.js';
 import {
   detectLoopInViaChain,
@@ -27,7 +35,11 @@ import {
   parseUpstreamTagHeaders,
   validateHopCount,
 } from '../lib/request-attributes.js';
-import { ByteRangeTransform, attachStallTimeout } from '../lib/stream.js';
+import {
+  ByteRangeTransform,
+  attachStallTimeout,
+  peekLeadingBytes,
+} from '../lib/stream.js';
 import * as metrics from '../metrics.js';
 import { startChildSpan } from '../tracing.js';
 import {
@@ -58,6 +70,7 @@ export class GatewaysDataSource implements ContiguousDataSource {
   private readonly maxHopsAllowed: number;
   private readonly rangeAccept200MaxOffset: number;
   private readonly sendUntrustedParams: boolean;
+  private readonly throttle: GatewayThrottle;
   private readonly agents: Map<string, http.Agent | https.Agent> = new Map();
 
   constructor({
@@ -70,6 +83,7 @@ export class GatewaysDataSource implements ContiguousDataSource {
     maxHopsAllowed = MAX_DATA_HOPS,
     rangeAccept200MaxOffset = config.GATEWAYS_RANGE_ACCEPT_200_MAX_OFFSET,
     sendUntrustedParams = config.TRUSTED_GATEWAYS_SEND_UNTRUSTED_PARAMS,
+    throttle,
   }: {
     log: winston.Logger;
     trustedGatewaysUrls: Record<string, TrustedGatewayConfig>;
@@ -80,6 +94,8 @@ export class GatewaysDataSource implements ContiguousDataSource {
     maxHopsAllowed?: number;
     rangeAccept200MaxOffset?: number;
     sendUntrustedParams?: boolean;
+    /** Shared 429 cooldowns; pass one instance to every data source. */
+    throttle?: GatewayThrottle;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.requestTimeoutMs = requestTimeoutMs;
@@ -89,6 +105,14 @@ export class GatewaysDataSource implements ContiguousDataSource {
     this.maxHopsAllowed = maxHopsAllowed;
     this.rangeAccept200MaxOffset = rangeAccept200MaxOffset;
     this.sendUntrustedParams = sendUntrustedParams;
+    this.throttle =
+      throttle ??
+      new GatewayThrottle({
+        log,
+        enabled: config.GATEWAYS_THROTTLE_BACKOFF_ENABLED,
+        defaultMs: config.GATEWAYS_THROTTLE_BACKOFF_DEFAULT_MS,
+        maxMs: config.GATEWAYS_THROTTLE_BACKOFF_MAX_MS,
+      });
 
     if (Object.keys(trustedGatewaysUrls).length === 0) {
       throw new Error('At least one gateway URL must be provided');
@@ -297,6 +321,22 @@ export class GatewaysDataSource implements ContiguousDataSource {
               continue;
             }
 
+            // A gateway that answered 429 is skipped until its Retry-After has
+            // passed: queueing for its sockets only to be refused again costs
+            // seconds per item and keeps the throttle going.
+            const throttledForMs = this.throttle.remainingMs(gatewayUrl);
+            if (throttledForMs > 0) {
+              metrics.gatewayThrottleSkipsTotal.inc({
+                gateway_url: gatewayUrl,
+              });
+              span.addEvent('Skipping throttled gateway', {
+                'gateways.url': gatewayUrl,
+                'gateways.tier.priority': priority,
+                'gateways.throttle.remaining_ms': throttledForMs,
+              });
+              continue;
+            }
+
             // Marks response trust and gates the outbound provenance query
             // params; see getData() TSDoc for the trust-dependent contract.
             const gatewayTrusted = this.gatewayTrust.get(gatewayUrl) ?? true;
@@ -428,6 +468,14 @@ export class GatewaysDataSource implements ContiguousDataSource {
                   },
                   url: path,
                   responseType: 'stream',
+                  // Keep the bytes exactly as sent. axios otherwise decodes any
+                  // response carrying Content-Encoding and drops the header,
+                  // even with Accept-Encoding: identity. An upstream gateway
+                  // sends Content-Encoding for an item stored encoded (e.g. a
+                  // gzip-compressed item tagged Content-Encoding: gzip), so
+                  // decoding here served the decompressed body under the tag's
+                  // Content-Encoding, which clients cannot decode.
+                  decompress: false,
                   // Trust-dependent provenance params; see getData() TSDoc.
                   // `undefined` (not `{}`) ensures axios appends no query
                   // string at all for untrusted gateways.
@@ -542,6 +590,41 @@ export class GatewaysDataSource implements ContiguousDataSource {
                   }
                 }
 
+                // A gateway older than #964 decodes a Content-Encoding: gzip
+                // item and serves the plain bytes, cut at the encoded length,
+                // without the header. Its tag headers still name the coding,
+                // so the mismatch identifies the body as decoded and
+                // truncated. Fall through rather than serve or cache it.
+                const upstreamTags = parseUpstreamTagHeaders(
+                  response.headers as Record<string, string | string[]>,
+                );
+                const undeclaredEncoding = undeclaredTaggedEncoding({
+                  contentEncoding: response.headers['content-encoding'] as
+                    | string
+                    | undefined,
+                  tags: upstreamTags,
+                });
+                if (undeclaredEncoding !== undefined) {
+                  response.data.destroy();
+                  metrics.upstreamDecodedBodyRejectedTotal.inc({
+                    class: this.constructor.name,
+                    source: gatewayUrl,
+                    encoding: undeclaredEncoding,
+                    reason: 'undeclared',
+                  });
+                  span.addEvent('Gateway response body decoded upstream', {
+                    'gateways.url': gatewayUrl,
+                    'gateways.tier.priority': priority,
+                    'gateways.request.path': path,
+                    'http.content_encoding_tag': undeclaredEncoding,
+                  });
+                  throw new Error(
+                    `Gateway response for ${id} is tagged Content-Encoding: ` +
+                      `${undeclaredEncoding} but sent without that header ` +
+                      `(body decoded upstream)`,
+                  );
+                }
+
                 if (upstreamIgnoredRange) {
                   // Cap the prefix bandwidth we're willing to burn to
                   // slice locally. If region.offset exceeds the cap, the
@@ -597,7 +680,7 @@ export class GatewaysDataSource implements ContiguousDataSource {
                   signal.removeEventListener('abort', onClientAbort);
                 }
 
-                const stream = response.data;
+                let stream: Readable = response.data;
                 const contentLength = parseContentLength(response.headers);
 
                 if (contentLength === undefined || contentLength === 0) {
@@ -631,6 +714,54 @@ export class GatewaysDataSource implements ContiguousDataSource {
                     throw new Error(
                       `Gateway full body (${contentLength}) too small for ` +
                         `requested region [${region.offset}, ${requiredBytes}) for ${id}`,
+                    );
+                  }
+                }
+
+                // A gateway older than #964 can also send a gzip-tagged item
+                // decompressed while still declaring Content-Encoding: gzip.
+                // Where the body starts at the item's first byte, check the
+                // declared coding's magic before handing the stream on. This
+                // runs before attachStallTimeout, whose 'data' listener would
+                // let the stream flow during the peek and drop bytes.
+                const declaredEncoding = response.headers[
+                  'content-encoding'
+                ] as string | undefined;
+                const bodyStartsAtItemStart =
+                  region === undefined ||
+                  upstreamIgnoredRange ||
+                  region.offset === 0;
+                if (
+                  bodyStartsAtItemStart &&
+                  hasContentEncodingMagic(declaredEncoding)
+                ) {
+                  const peeked = await peekLeadingBytes(
+                    stream,
+                    contentEncodingMagicLength(declaredEncoding),
+                    this.requestTimeoutMs,
+                    signal,
+                  );
+                  stream = peeked.stream;
+                  const head = peeked.head;
+                  if (contradictsContentEncoding(head, declaredEncoding)) {
+                    stream.destroy();
+                    const encoding = parseContentEncoding(declaredEncoding);
+                    metrics.upstreamDecodedBodyRejectedTotal.inc({
+                      class: this.constructor.name,
+                      source: gatewayUrl,
+                      encoding,
+                      reason: 'mislabelled',
+                    });
+                    span.addEvent('Gateway response body mislabelled', {
+                      'gateways.url': gatewayUrl,
+                      'gateways.tier.priority': priority,
+                      'gateways.request.path': path,
+                      'http.content_encoding': encoding,
+                    });
+                    throw new Error(
+                      `Gateway response for ${id} declares Content-Encoding: ` +
+                        `${encoding} but its body is not ${encoding}-encoded ` +
+                        `(decoded upstream)`,
                     );
                   }
                 }
@@ -756,14 +887,23 @@ export class GatewaysDataSource implements ContiguousDataSource {
                   sourceContentType: response.headers['content-type'] as
                     | string
                     | undefined,
+                  // The gateway's answer for this ID: ranked below the item's
+                  // own tag when recorded, since it may be the gateway's
+                  // per-hash label for another item with the same bytes.
+                  ...(response.headers['content-type'] !== undefined
+                    ? { sourceContentTypeOrigin: 'upstream' as const }
+                    : {}),
+                  // Only present when the bytes are encoded, so unencoded results keep
+                  // their shape.
+                  ...contentEncodingOf(
+                    response.headers['content-encoding'] as string | undefined,
+                  ),
                   cached: false,
                   requestAttributes: parseRequestAttributesHeaders({
                     headers: response.headers as { [key: string]: string },
                     currentHops: requestAttributesHeaders?.attributes.hops,
                   }),
-                  upstreamTags: parseUpstreamTagHeaders(
-                    response.headers as Record<string, string | string[]>,
-                  ),
+                  upstreamTags,
                 };
               } catch (rawError: any) {
                 clearTimeout(connectionTimer);
@@ -793,6 +933,10 @@ export class GatewaysDataSource implements ContiguousDataSource {
 
                 const gatewayRequestDuration = Date.now() - gatewayRequestStart;
                 lastError = error as Error;
+                // axios rejects a 4xx with the status on `error.response`;
+                // `gatewayStatus` is only set for an unexpected 2xx above.
+                const gatewayStatus: number | undefined =
+                  error.gatewayStatus ?? error.response?.status;
 
                 span.addEvent('Gateway request failed', {
                   'gateways.url': gatewayUrl,
@@ -809,8 +953,8 @@ export class GatewaysDataSource implements ContiguousDataSource {
                 // still reported by the caller.
                 const expectedOutcome =
                   axios.isCancel(error) ||
-                  error.gatewayStatus === 404 ||
-                  error.gatewayStatus === 429;
+                  gatewayStatus === 404 ||
+                  gatewayStatus === 429;
                 const failureDetails = {
                   gatewayUrl,
                   priority,
@@ -824,6 +968,16 @@ export class GatewaysDataSource implements ContiguousDataSource {
                   );
                 } else {
                   this.log.warn('Failed to fetch from gateway', failureDetails);
+                }
+
+                if (gatewayStatus === 429) {
+                  // Throttled: skip this gateway until it asks to be retried,
+                  // and do not try its other path for this item either.
+                  this.throttle.recordThrottled(
+                    gatewayUrl,
+                    error.response?.headers?.['retry-after'],
+                  );
+                  break;
                 }
               }
             }

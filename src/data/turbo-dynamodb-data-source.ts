@@ -35,6 +35,12 @@ type TransactionId = string; // Base64URL encoded string
 export interface PayloadInfo {
   payloadDataStart: number;
   payloadContentType: string;
+  /**
+   * Whether `payloadContentType` came from Turbo's record (the item's own
+   * Content-Type tag). False when the record had none and the octet-stream
+   * fallback stands in, which must never be recorded as the item's type.
+   */
+  payloadContentTypeKnown: boolean;
 }
 
 export interface DataItemOffsetsInfo {
@@ -45,6 +51,8 @@ export interface DataItemOffsetsInfo {
   };
   rawContentLength: number;
   payloadContentType: string;
+  /** See {@link PayloadInfo.payloadContentTypeKnown}. */
+  payloadContentTypeKnown: boolean;
   payloadDataStart: number;
   rootParentInfo?: {
     rootParentId: TransactionId;
@@ -279,6 +287,9 @@ export class TurboDynamoDbDataSource implements ContiguousDataSource {
               offsetsInfo.rootParentInfo.startOffsetInRootTx +
               offsetsInfo.payloadDataStart, // Absolute: item position + header size
             contentType: offsetsInfo.payloadContentType,
+            ...(offsetsInfo.payloadContentTypeKnown
+              ? { contentTypeSource: 'item' as const }
+              : {}),
             rootTransactionId: offsetsInfo.rootParentInfo.rootParentId,
             parentId: offsetsInfo.rootParentInfo.rootParentId, // root IS the parent
             offset: offsetsInfo.rootParentInfo.startOffsetInRootTx,
@@ -327,6 +338,7 @@ export class TurboDynamoDbDataSource implements ContiguousDataSource {
         const {
           parentInfo,
           payloadContentType,
+          payloadContentTypeKnown,
           payloadDataStart,
           rawContentLength,
         } = offsetsInfo;
@@ -345,6 +357,9 @@ export class TurboDynamoDbDataSource implements ContiguousDataSource {
           size: payloadLength,
           dataOffset: startOffsetInParentPayload + payloadDataStart, // Absolute: item position + header size
           contentType: payloadContentType,
+          ...(payloadContentTypeKnown
+            ? { contentTypeSource: 'item' as const }
+            : {}),
           parentId: offsetsInfo.parentInfo.parentDataItemId,
           offset: offsetsInfo.parentInfo.startOffsetInParentPayload,
         };
@@ -405,6 +420,10 @@ export class TurboDynamoDbDataSource implements ContiguousDataSource {
           size: nestedDataItemDataStream.size,
           totalSize: payloadLength,
           sourceContentType: payloadContentType,
+          // Turbo's per-item record of the item's own Content-Type tag.
+          ...(payloadContentTypeKnown
+            ? { sourceContentTypeOrigin: 'item' as const }
+            : {}),
           verified: false,
           trusted: true,
           cached: false,
@@ -443,6 +462,9 @@ export class TurboDynamoDbDataSource implements ContiguousDataSource {
           .setDataAttributes(id, {
             size: dataItem.buffer.length - dataItem.info.payloadDataStart,
             contentType: dataItem.info.payloadContentType,
+            ...(dataItem.info.payloadContentTypeKnown
+              ? { contentTypeSource: 'item' as const }
+              : {}),
           })
           .catch((error) => {
             this.log.warn('Failed to cache attributes from DynamoDB raw data', {
@@ -512,11 +534,15 @@ export class TurboDynamoDbDataSource implements ContiguousDataSource {
       if (res.Item.C?.S === undefined || res.Item.C.S === '') {
         this.log.error(`Data item ${dataItemId} has no content type!`);
       }
-      const payloadContentType = res.Item.C?.S ?? 'application/octet-stream';
+      const payloadContentTypeKnown =
+        res.Item.C?.S !== undefined && res.Item.C.S !== '';
+      const payloadContentType = payloadContentTypeKnown
+        ? (res.Item.C?.S as string)
+        : 'application/octet-stream';
 
       return {
         buffer,
-        info: { payloadDataStart, payloadContentType },
+        info: { payloadDataStart, payloadContentType, payloadContentTypeKnown },
       };
     } catch (error) {
       this.log.error(`Error retrieving data item ${dataItemId} from DynamoDB`, {
@@ -566,7 +592,14 @@ export class TurboDynamoDbDataSource implements ContiguousDataSource {
             }
           : {}),
         rawContentLength: +(res.Item.S?.N ?? 0),
-        payloadContentType: res.Item.C?.S ?? 'application/octet-stream',
+        // The fallback stands in for a missing type and is never recorded as
+        // the item's own (see PayloadInfo.payloadContentTypeKnown).
+        ...(res.Item.C?.S !== undefined && res.Item.C.S !== ''
+          ? { payloadContentType: res.Item.C.S, payloadContentTypeKnown: true }
+          : {
+              payloadContentType: 'application/octet-stream',
+              payloadContentTypeKnown: false,
+            }),
         payloadDataStart: +(res.Item.P?.N ?? 0),
       };
     } catch (error) {
@@ -584,11 +617,12 @@ export class TurboDynamoDbDataSource implements ContiguousDataSource {
     requestAttributes,
   }: {
     buffer: Buffer;
-    payloadInfo: { payloadDataStart: number; payloadContentType: string };
+    payloadInfo: PayloadInfo;
     region?: Region;
     requestAttributes?: RequestAttributes;
   }): ContiguousData {
-    const { payloadDataStart, payloadContentType } = payloadInfo;
+    const { payloadDataStart, payloadContentType, payloadContentTypeKnown } =
+      payloadInfo;
 
     let stream = bufferToStream(
       buffer.subarray(payloadDataStart, buffer.byteLength),
@@ -608,6 +642,10 @@ export class TurboDynamoDbDataSource implements ContiguousDataSource {
     return {
       stream,
       sourceContentType: payloadContentType,
+      // Turbo's per-item record of the item's own Content-Type tag.
+      ...(payloadContentTypeKnown
+        ? { sourceContentTypeOrigin: 'item' as const }
+        : {}),
       size: region?.size ?? buffer.byteLength - payloadDataStart,
       totalSize: buffer.byteLength - payloadDataStart,
       cached: false,

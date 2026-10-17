@@ -15,7 +15,7 @@ import PrometheusMetrics from 'opossum-prometheus';
 import CircuitBreaker from 'opossum';
 import winston from 'winston';
 
-import { AR_IO_NODE_RELEASE } from './config.js';
+import { AR_IO_NODE_RELEASE } from './release.js';
 import { Semaphore } from './lib/semaphore.js';
 
 // Set default labels for all metrics
@@ -843,6 +843,30 @@ export const clickhouseMaxImportedHeight = new promClient.Gauge({
 });
 
 /**
+ * Pages whose ClickHouse inner window filled with duplicate
+ * ReplacingMergeTree versions, leaving fewer unique rows than the page needs.
+ *
+ * Labels:
+ * - `leg`: `stable`, `unstable` or `window` (owner-window fallback)
+ * - `outcome`:
+ *   - `continued`: ran a follow-up query from the last unique row's cursor
+ *   - `grown`: re-ran an id lookup (no order to continue from) with 4x the
+ *     dedupe headroom
+ *   - `exhausted`: still short after the last round; the page was returned
+ *     as a prefix with `hasNextPage: true`
+ *   - `too_many_rows`: a follow-up query tripped `max_rows_to_read`; the
+ *     page was returned as a prefix with `hasNextPage: true`
+ *
+ * A steady non-zero rate means the table carries many unmerged versions
+ * per PK (check `count()` against `uniqExact(id)` per partition).
+ */
+export const clickhouseGqlDedupeHeadroomTotal = new promClient.Counter({
+  name: 'clickhouse_gql_dedupe_headroom_total',
+  help: 'Count of GQL ClickHouse pages left short by duplicate versions, by leg and outcome.',
+  labelNames: ['leg', 'outcome'] as const,
+});
+
+/**
  * Count of GQL stable-leg queries that tripped ClickHouse `max_rows_to_read`
  * (Code 158 TOO_MANY_ROWS). `filter` is a low-cardinality descriptor of which
  * filter families the query used (e.g. `owners+tags`, `ids`, `none`),
@@ -979,12 +1003,11 @@ export const arnsNameCacheHydrationFailuresCounter = new promClient.Counter({
  * this counter a partially hydrated cache is invisible to monitoring: the
  * gateway stays healthy and simply 404s the names it never managed to write.
  */
-export const arnsNameCacheHydrationWriteFailuresCounter = new promClient.Counter(
-  {
+export const arnsNameCacheHydrationWriteFailuresCounter =
+  new promClient.Counter({
     name: 'arns_name_cache_hydration_write_failures_total',
     help: 'Total number of registry cache writes that failed during ArNS cache hydration',
-  },
-);
+  });
 
 export const arnsBaseNameCacheEntriesGauge = new promClient.Gauge({
   name: 'arns_base_name_cache_entries',
@@ -1069,6 +1092,22 @@ export const getDataStreamSizeHistogram = new promClient.Histogram({
   buckets: [102400, 1048576, 10485760, 104857600], // 100KB, 1MB, 10MB, 100MB
 });
 
+// A gateway answering 429 is skipped until its Retry-After has passed (see
+// GatewayThrottle). Cooldowns counts each time a gateway enters one; skips
+// counts the requests that went straight to the next gateway or tier instead
+// of queueing for a throttled one.
+export const gatewayThrottleCooldownsTotal = new promClient.Counter({
+  name: 'gateway_throttle_cooldowns_total',
+  help: 'Count of times an upstream gateway answered 429 and was put in a cooldown',
+  labelNames: ['gateway_url'] as const,
+});
+
+export const gatewayThrottleSkipsTotal = new promClient.Counter({
+  name: 'gateway_throttle_skips_total',
+  help: 'Count of requests that skipped an upstream gateway because it was in a 429 cooldown',
+  labelNames: ['gateway_url'] as const,
+});
+
 // Incremented when GatewaysDataSource sent a Range request but the upstream
 // answered with a full 200 body instead of a 206 partial-content response.
 // `outcome` distinguishes the cases:
@@ -1098,6 +1137,18 @@ export const gatewayContentTypeRejectedTotal = new promClient.Counter({
   name: 'gateway_content_type_rejected_total',
   help: 'Count of upstream responses rejected by the caller-supplied content-type predicate (e.g., text/html when expecting bundle bytes).',
   labelNames: ['gateway_url', 'priority', 'content_type'] as const,
+});
+
+export const upstreamDecodedBodyRejectedTotal = new promClient.Counter({
+  name: 'upstream_decoded_body_rejected_total',
+  help: 'Count of upstream data responses rejected as decoded upstream (pre-#964 gateways): reason="undeclared" when a Content-Encoding tag header names a coding the response does not declare, reason="mislabelled" when the body does not start with the declared coding\'s magic bytes.',
+  labelNames: ['class', 'source', 'encoding', 'reason'] as const,
+});
+
+export const servedContentEncodingDroppedTotal = new promClient.Counter({
+  name: 'served_content_encoding_dropped_total',
+  help: 'Count of data responses served without the Content-Encoding their item names, because the body does not start with that coding\'s magic bytes: an item tagged with a coding it does not use, or (verified="false") possibly a copy decoded upstream that should be purged. source="recorded" is a coding the index or upstream recorded; source="tag" is the item\'s own tag, consulted when nothing recorded one.',
+  labelNames: ['encoding', 'verified', 'source'] as const,
 });
 
 // Time from an outbound gateway request needing a socket (Agent.addRequest) to a
@@ -1764,6 +1815,16 @@ export const x402PaymentSettledUsdcCounter = new promClient.Counter({
 // Root TX Index metrics
 //
 
+// Answers from `GET /ar-io/offsets/:id`, by what produced them: `db` for the
+// local index, `cdb64` for installed CDB64 indexes on local disk, `none` for
+// a 404. Kept apart from root_tx_lookup_total, which counts the composite
+// lookup's probes.
+export const offsetsLookupTotal = new promClient.Counter({
+  name: 'offsets_lookup_total',
+  help: 'GET /ar-io/offsets/:id answers by source (db, cdb64, or none for a 404)',
+  labelNames: ['source'] as const,
+});
+
 export const rootTxLookupTotal = new promClient.Counter({
   name: 'root_tx_lookup_total',
   help: 'Total root TX index lookups by source and status. On a hit, has_offsets is whether both root offsets came back and has_size whether the item size did',
@@ -1936,6 +1997,21 @@ export const backgroundRangeCacheSkippedTotal = new promClient.Counter({
   name: 'background_range_cache_skipped_total',
   help: 'Background full-item cache fetches skipped',
   labelNames: ['reason'] as const,
+});
+
+/**
+ * Single-range GETs of uncached items answered with one ranged fetch, by
+ * outcome: `served`, `refused` (rate limit or payment), or
+ * `fallback_<reason>` when the ranged fetch showed the full-object path was
+ * needed (`size_mismatch`: the source returned a different length than
+ * requested, or reported a different item size than indexed; `cached`:
+ * the bytes came from the local cache, which the full-object path serves
+ * fast and checks the item's Content-Encoding on).
+ */
+export const uncachedRangeFastPathTotal = new promClient.Counter({
+  name: 'uncached_range_fast_path_total',
+  help: 'Single-range GETs of uncached items answered with one ranged fetch, by outcome',
+  labelNames: ['outcome'] as const,
 });
 
 //
@@ -2126,8 +2202,8 @@ export const hintEmittedTotal = new promClient.Counter({
  */
 export const dataItemLocationCheckTotal = new promClient.Counter({
   name: 'data_item_location_check_total',
-  help: 'Header checks on stored or indexed data item locations before serving from them',
-  labelNames: ['source', 'result'] as const,
+  help: 'Header checks on stored or indexed data item locations before serving from them. On result="rejected", reason says why: header_unreadable (no header could be parsed there: the read failed, e.g. an upstream failure or a root that is a bundled data item rather than an L1 transaction, or the bytes are not a header), id_mismatch (the header belongs to another item) or offset_mismatch (the header does not end at the recorded payload offset, or the location is malformed). id_mismatch and offset_mismatch are locations that would have served wrong bytes. Sources ending in _rebased are locations recovered by adding the payload offset of a recorded root that turned out to be a bundled data item.',
+  labelNames: ['source', 'result', 'reason'] as const,
 });
 
 /**
@@ -2292,4 +2368,34 @@ export const manifestResolutionDurationSeconds = new promClient.Histogram({
   help: 'Manifest path resolution latency, by source',
   labelNames: ['source'] as const,
   buckets: [0.0005, 0.001, 0.005, 0.025, 0.1, 0.5, 2],
+});
+
+/**
+ * Runs of the L1 band import worker (`L1_BAND_IMPORT_ENABLED`), which fills
+ * the history beneath this gateway from installed `parquet-l1` bands, by
+ * result: `filled` wrote at least one range, `idle` found nothing to write,
+ * `failed` stopped on an error (the next run carries on from the ledger).
+ */
+export const l1BandImportRunsTotal = new promClient.Counter({
+  name: 'l1_band_import_runs_total',
+  help: 'L1 band import worker runs, by result (filled, idle, failed)',
+  labelNames: ['result'] as const,
+});
+
+/** Rows the L1 band import worker has written into core.db. */
+export const l1BandImportRowsTotal = new promClient.Counter({
+  name: 'l1_band_import_rows_total',
+  help: 'Rows the L1 band import worker has written into core.db',
+});
+
+/**
+ * Heights beneath what this gateway indexes itself that it lacks and no
+ * installed band holds yet, as of the last run. Falls to 0 once the bands
+ * are installed and filled; a band still downloading, or the heights
+ * between the newest band and where the gateway began, keep it above 0
+ * until the publisher's next tip band covers them.
+ */
+export const l1BandImportUncoveredHeights = new promClient.Gauge({
+  name: 'l1_band_import_uncovered_heights',
+  help: 'Heights below the gateway that it lacks and no installed L1 band holds yet',
 });

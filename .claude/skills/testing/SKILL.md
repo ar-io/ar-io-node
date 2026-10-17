@@ -32,8 +32,21 @@ Pick the narrowest layer that can fail on the change.
 | `yarn test:file:coverage <path>` | Single file with coverage. |
 | `yarn test:e2e` | All e2e tests. Builds the core image unless `USE_PREBUILT_IMAGE=true`. |
 | `yarn test:auto-verify:indexing` | Auto-verify run. Driven by `.env` + `AUTO_VERIFY_*` vars. |
-| `yarn lint:check` / `yarn lint:fix` | ESLint. |
-| `yarn duplicate:check` / `yarn deps:ci` | jscpd and madge circular-dep gate. |
+| `yarn lint:check` / `yarn lint:fix` | ESLint. Read its full output: piping through `tail` can leave only npm's update notice. |
+| `yarn typecheck` | Type-checks source **and tests** (`yarn build` skips tests, and the per-push CI, `build-core.yml`, runs neither on test code; only the hand-dispatched `test-core.yml` does). It fails with hundreds of pre-existing errors, so compare against `develop` by file and message, with `--pretty false` (coloured output defeats `grep 'error TS'`). |
+| `yarn duplicate:ci` / `yarn deps:ci` | jscpd and madge circular-dependency gates. `yarn duplicate:check` only reports; it never fails. |
+
+**DuckDB and SQLite suites on an old-glibc host.** The native DuckDB and SQLite modules need a newer glibc than some hosts have. Run those suites (index-swarm, index-export, parquet-l1, anything that opens a database) inside the core image, with your `node_modules` mounted read-only:
+
+```bash
+TAG=aee1c67a9ee639837def301f059c7f4feeee8c60          # any recent core image tag
+FILES="src/index-export/service.test.ts src/lib/parquet-l1/layout.test.ts"
+docker run --rm -v "$PWD:/app" -v "$PWD/node_modules:/app/node_modules:ro" -w /app \
+  --entrypoint /nodejs/bin/node "ghcr.io/ar-io/ar-io-core:${TAG}" \
+  --import ./register.js --test --test-concurrency 1 --test-timeout=300000 ${FILES}
+```
+
+Three files fail there only because of the image, not the code: `src/lib/scan-bundle-offsets-cli.test.ts` (the image has no shell), `src/routes/graphql/resolvers.test.ts` (hangs) and `src/store/fs-chunk-data-store.test.ts` (the container runs as root, so permission checks pass). Run them on the host instead.
 
 **Tag filtering** (unit + e2e): wrap test bodies with `isTestFiltered(tags)` from `test/utils.ts` and set `TEST_ONLY_TAGS=slow,integration` or `TEST_SKIP_TAGS=flaky`. CI runs e2e with `TEST_SKIP_TAGS=flaky`.
 
@@ -52,7 +65,8 @@ Pick the narrowest layer that can fail on the change.
 ## Writing e2e tests
 
 - Use `composeUp()` / `cleanDb()` from `test/end-to-end/utils.ts`. It wraps `DockerComposeEnvironment` (testcontainers) around the real `docker-compose.yaml` with sensible defaults and exposes `START_HEIGHT`, `STOP_HEIGHT`, filters, and `ADMIN_API_KEY='secret'`.
-- `USE_PREBUILT_IMAGE=true` reuses a pre-built `core` image (CI does this). Local runs rebuild from the Dockerfile.
+- The suites wipe `./data/sqlite` and refuse to start unless `ALLOW_DESTRUCTIVE_E2E=true`. Never set it in a checkout whose `data/` backs a live gateway.
+- `USE_PREBUILT_IMAGE=true` reuses a pre-built image (CI does this); local runs otherwise build from the Dockerfile. If you set it, tag one build both `core` (for `getCoreContainer` suites) and `ghcr.io/ar-io/ar-io-core:<tag>`, and export `CORE_IMAGE_TAG=<tag>`: `composeUp` suites run what `docker-compose.yaml` resolves, and without it they quietly pull the published image and test old code.
 - Wait helpers in the same file: `waitForBlocks`, `waitForBundleToBeIndexed`, `waitForTxToBeIndexed`, `waitForDataItemToBeIndexed`, `waitForLogMessage`. Prefer these over hand-rolled polling.
 - Tear down with `compose.down()` in `after(...)`. Forgetting this leaks containers across runs and tends to manifest as port conflicts on 4000/5432/8123.
 

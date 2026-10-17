@@ -488,6 +488,46 @@ describe('ArIOPeerManager', () => {
       assert.ok(urls.includes('https://other.com'));
       m.stopUpdatingPeers?.();
     });
+
+    it('keeps our own registry entry apart, for the peer list to report as self', async () => {
+      const m = managerWith([
+        {
+          gatewayAddress: 'localNode',
+          observerAddress: 'localObserver',
+          operatorStake: 20000,
+          status: 'joined',
+          settings: { protocol: 'https', fqdn: 'self.com' },
+        },
+        {
+          gatewayAddress: 'other',
+          status: 'joined',
+          settings: { protocol: 'https', fqdn: 'other.com' },
+        },
+      ]);
+      await m.refreshPeers();
+      assert.deepEqual(m.getSelfRecord(), {
+        url: 'https://self.com',
+        wallet: 'localNode',
+        observerAddress: 'localObserver',
+        operatorStake: 20000,
+        status: 'joined',
+      });
+      assert.ok(!m.getPeerUrls().includes('https://self.com'));
+      m.stopUpdatingPeers?.();
+    });
+
+    it('has no own entry when its wallet is not registered', async () => {
+      const m = managerWith([
+        {
+          gatewayAddress: 'other',
+          status: 'joined',
+          settings: { protocol: 'https', fqdn: 'other.com' },
+        },
+      ]);
+      await m.refreshPeers();
+      assert.equal(m.getSelfRecord(), undefined);
+      m.stopUpdatingPeers?.();
+    });
   });
 
   describe('a registry read that fails', () => {

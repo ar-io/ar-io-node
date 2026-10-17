@@ -5,8 +5,12 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
+
 import * as config from '../config.js';
 import { directoryBytes } from '../disk.js';
+import { resolveEngineAuth } from '../engine-auth.js';
 import { QBittorrentTransport } from '../transport/qbittorrent.js';
 import { INSTALLED_ROOT_TX_SOURCE } from './setup-plan.js';
 
@@ -203,10 +207,16 @@ export function subscriberChecks(
     });
     return checks;
   }
+  // The gateway loads only root-TX bands (CDB64). Other kinds, such as
+  // parquet-l1 bands a subscriber installs, are never read this way, so
+  // counting them here would warn on every subscriber that holds them.
+  const loadable = sum(sidecar, 'index_swarm_installed_bands', {
+    index: 'root-tx-index',
+  });
   checks.push({
-    level: readers.value >= installed ? 'ok' : 'warn',
-    text: `The gateway has ${readers.value} of ${installed} installed bands loaded`,
-    ...(readers.value < installed
+    level: readers.value >= loadable ? 'ok' : 'warn',
+    text: `The gateway has ${readers.value} of ${loadable} installed root-TX bands loaded`,
+    ...(readers.value < loadable
       ? {
           fix: 'A band just installed loads within 30 s. If it stays behind, check CDB64_ROOT_TX_INDEX_WATCH is not false.',
         }
@@ -290,7 +300,7 @@ export function engineChecks(
     checks.push({
       level: 'fail',
       text: 'The torrent engine is not answering; bands move over HTTP only',
-      fix: 'Start it: docker compose --profile index-swarm-torrent up -d --no-deps index-swarm-engine-init index-swarm-engine (with this gateway’s -f files). Its log says why it stopped.',
+      fix: 'Start it: docker compose up -d --no-deps index-swarm-engine-init index-swarm-engine (with this gateway’s -f files). Its log says why it stopped.',
     });
     return checks;
   }
@@ -341,6 +351,204 @@ const MARK: Record<Level, string> = {
   info: ' -- ',
 };
 
+/** What the index-export service leaves in `data/indexes/export`. */
+export interface ExportStatus {
+  state?: {
+    lastSuccess?: Partial<Record<'h' | 'r' | 'd' | 'tip', string>>;
+    lastRejection?: { at: string; role: string; reasons: string[] };
+    retry?: { at: string; attempts: number; reason: string };
+    lastRun?: { at: string; outcome: string; detail?: string };
+    overlayNewest?: Record<string, string>;
+  };
+  /** Seconds since the lock was last touched, when one is there. */
+  lockAgeSeconds?: number;
+  /** Whether this node publishes (INDEX_SWARM_PUBLISH set). */
+  publishing?: boolean;
+  /** Whether the service answered /healthz; undefined when not probed. */
+  serviceUp?: boolean;
+}
+
+const RUN_ONCE =
+  'docker compose --profile index-export run --rm -T index-export --once';
+
+/** A daily band older than this is a failure. */
+const EXPORT_DELTA_FAIL_SECONDS = 2 * 86400;
+/** An overlay older than this is stale. */
+const EXPORT_OVERLAY_WARN_SECONDS = 8 * 86400;
+/** A lock untouched this long belongs to a run that died. */
+const EXPORT_LOCK_STALE_SECONDS = 300;
+
+/** What the index-export service's state says, for a node that builds its own bands. */
+export function exportChecks(status: ExportStatus, now: number): Check[] {
+  const { state } = status;
+  if (state === undefined) {
+    return [
+      status.publishing === true
+        ? {
+            level: 'warn',
+            text: 'index-export has not run here, so this node publishes only bands built another way',
+            fix: 'If it should build them, check `docker compose logs index-export` (a configuration error stops it at start), or start it: see "Producing bands" in docs/index-swarm.md.',
+          }
+        : {
+            level: 'info',
+            text: 'index-export has not run here',
+          },
+    ];
+  }
+  const checks: Check[] = [];
+  if (status.serviceUp === false) {
+    checks.push({
+      level: 'warn',
+      text: 'The index-export service is not answering /healthz (stopped, or not started)',
+      fix: 'docker compose --profile index-export up -d --no-deps index-export, with your compose -f files; then docker compose logs index-export.',
+    });
+  }
+  const age = (at: string | undefined) =>
+    at === undefined ? undefined : (now - Date.parse(at)) / 1000;
+
+  // The grid layout's daily band is the tip; its d bands freeze weekly.
+  const daily = state.lastSuccess?.tip !== undefined ? 'tip' : 'd';
+  const delta = age(state.lastSuccess?.[daily]);
+  if (delta === undefined || delta > EXPORT_DELTA_FAIL_SECONDS) {
+    checks.push({
+      level: 'fail',
+      text:
+        delta === undefined
+          ? `No daily band (${daily}) has been built yet`
+          : `The daily band (${daily}) last succeeded ${formatAge(delta)} ago`,
+      fix: `Check docker compose logs index-export and its last run below; to run now: ${RUN_ONCE}`,
+    });
+  } else {
+    checks.push({
+      level: 'ok',
+      text: `Daily band (${daily}) last succeeded ${formatAge(delta)} ago`,
+    });
+  }
+  const recent = age(state.lastSuccess?.r);
+  if (recent !== undefined) {
+    checks.push({
+      level: recent > 8 * 86400 ? 'warn' : 'ok',
+      text: `Recent band (r) last folded ${formatAge(recent)} ago`,
+    });
+  }
+  if (state.lastRun !== undefined) {
+    checks.push({
+      level: 'info',
+      text: `Last run ${formatAge(age(state.lastRun.at) ?? 0)} ago: ${state.lastRun.outcome}`,
+    });
+  }
+  if (state.retry !== undefined) {
+    checks.push({
+      level: 'warn',
+      text: `Couldn't check (attempt ${state.retry.attempts}), retrying at ${state.retry.at}: ${state.retry.reason}`,
+    });
+  }
+  const rejection = state.lastRejection;
+  const rejected = age(rejection?.at);
+  const since =
+    rejection === undefined
+      ? undefined
+      : state.lastSuccess?.[rejection.role as 'h' | 'r' | 'd' | 'tip'];
+  if (
+    rejection !== undefined &&
+    rejected !== undefined &&
+    rejected < 7 * 86400 &&
+    (since === undefined || Date.parse(since) < Date.parse(rejection.at))
+  ) {
+    checks.push({
+      level: 'fail',
+      text: `A ${rejection.role} band was rejected ${formatAge(rejected)} ago: ${rejection.reasons.slice(0, 3).join('; ')}`,
+      fix: `A rejected band is not retried by itself: find why its headers or sources disagree, then rerun it: ${RUN_ONCE}`,
+    });
+  }
+  if (
+    status.lockAgeSeconds !== undefined &&
+    status.lockAgeSeconds > EXPORT_LOCK_STALE_SECONDS
+  ) {
+    checks.push({
+      level: 'warn',
+      text: `A stale lock (untouched ${formatAge(status.lockAgeSeconds)}): a run died`,
+      fix: 'The next run clears it.',
+    });
+  }
+  for (const [source, at] of Object.entries(state.overlayNewest ?? {})) {
+    const overlay = age(at) ?? 0;
+    checks.push({
+      level: overlay > EXPORT_OVERLAY_WARN_SECONDS ? 'warn' : 'ok',
+      text: `Overlay ${source}: newest file ${formatAge(overlay)} old`,
+      ...(overlay > EXPORT_OVERLAY_WARN_SECONDS
+        ? { fix: 'Check the job that writes its extracts.' }
+        : {}),
+    });
+  }
+  return checks;
+}
+
+/** What the index-export service's state says of the L1 bands it builds. */
+export function l1ExportChecks(
+  state: NonNullable<ExportStatus['state']>,
+  now: number,
+): Check[] {
+  const age = (at: string | undefined) =>
+    at === undefined ? undefined : (now - Date.parse(at)) / 1000;
+  const checks: Check[] = [];
+  const tip = age(state.lastSuccess?.d);
+  const whole = age(state.lastSuccess?.h);
+  if (tip === undefined || tip > EXPORT_DELTA_FAIL_SECONDS) {
+    checks.push({
+      level: 'fail',
+      text:
+        tip === undefined
+          ? 'No L1 tip band has been built yet'
+          : `The L1 tip band last succeeded ${formatAge(tip)} ago`,
+      fix: `A bootstrap builds the whole bands below it first, over several runs. Check docker compose logs index-export and its last run below; to run now: ${RUN_ONCE}`,
+    });
+  } else {
+    checks.push({
+      level: 'ok',
+      text: `L1 tip band last succeeded ${formatAge(tip)} ago`,
+    });
+  }
+  if (whole !== undefined) {
+    checks.push({
+      level: 'info',
+      text: `A whole L1 band last built ${formatAge(whole)} ago`,
+    });
+  }
+  if (state.retry !== undefined) {
+    checks.push({
+      level: 'warn',
+      text: `Couldn't check (attempt ${state.retry.attempts}), retrying at ${state.retry.at}: ${state.retry.reason}`,
+    });
+  }
+  if (state.lastRun !== undefined) {
+    const { outcome, detail } = state.lastRun;
+    checks.push({
+      level: outcome === 'couldnt_check' ? 'warn' : 'info',
+      text: `Last L1 run ${formatAge(age(state.lastRun.at) ?? 0)} ago: ${outcome}${detail !== undefined ? ` (${detail})` : ''}`,
+    });
+  }
+  const rejection = state.lastRejection;
+  const rejected = age(rejection?.at);
+  const since =
+    rejection === undefined
+      ? undefined
+      : state.lastSuccess?.[rejection.role as 'h' | 'd'];
+  if (
+    rejection !== undefined &&
+    rejected !== undefined &&
+    rejected < 7 * 86400 &&
+    (since === undefined || Date.parse(since) < Date.parse(rejection.at))
+  ) {
+    checks.push({
+      level: 'fail',
+      text: `An L1 band failed its chain checks ${formatAge(rejected)} ago: ${rejection.reasons.slice(0, 3).join('; ')}`,
+      fix: 'The named heights in core.db disagree with the chain; later bands wait for it. Repair those blocks, then the next run builds it.',
+    });
+  }
+  return checks;
+}
+
 function print(title: string, checks: Check[]): void {
   process.stdout.write(`\n${title}\n`);
   for (const check of checks) {
@@ -362,12 +570,25 @@ async function main(): Promise<void> {
     print(title, checks);
   };
 
+  // The engine password as the sidecar finds it: the setting, else the file
+  // the engine's init generated. Not waited for: the sidecar is running.
+  const engineAuth = await resolveEngineAuth({
+    fromEnv: config.ENGINE_AUTH_SETTING,
+    engineUrl: config.ENGINE_URL_SETTING,
+    defaultEngineUrl: config.DEFAULT_ENGINE_URL,
+    file: config.ENGINE_AUTH_FILE,
+  }).catch(() => ({ auth: undefined, source: 'none' as const }));
+  const engineUrl = config.resolveEngineUrl(
+    config.ENGINE_URL_SETTING,
+    engineAuth.auth,
+  );
+
   const roles = [
     config.PUBLISH.length > 0 ? 'publishing' : undefined,
     config.SUBSCRIBE.length > 0
       ? `subscribed to ${config.SUBSCRIBE.length}`
       : undefined,
-    config.ENGINE_URL !== undefined ? 'BitTorrent on' : 'HTTP only',
+    engineUrl !== undefined ? 'BitTorrent on' : 'HTTP only',
   ].filter((s) => s !== undefined);
   section('Sidecar', [
     sidecarText === undefined
@@ -416,10 +637,74 @@ async function main(): Promise<void> {
     section('Publishing', publisherChecks(sidecar, document, Date.now()));
   }
 
-  if (config.ENGINE_URL !== undefined) {
+  const exportDir = path.join(config.DATA_DIR, 'export');
+  const exportStates = await fs
+    .readFile(path.join(exportDir, 'state.json'), 'utf8')
+    .then(
+      (text) =>
+        (
+          JSON.parse(text) as {
+            indexes?: Record<string, ExportStatus['state']>;
+          }
+        ).indexes,
+    )
+    .catch(() => undefined);
+  const l1State = exportStates?.['parquet-l1'];
+  let exportState = exportStates?.['root-tx-index'];
+  // A run's own record is kept with root-TX's, so a node building only L1
+  // bands has a root-TX state that holds nothing else.
+  if (
+    l1State !== undefined &&
+    Object.keys(exportState?.lastSuccess ?? {}).length === 0 &&
+    exportState?.lastRejection === undefined
+  ) {
+    exportState = undefined;
+  }
+  if (l1State !== undefined) {
+    // The run's pending retry, shown here when there's no root-TX section.
+    const retry =
+      exportState === undefined
+        ? exportStates?.['root-tx-index']?.retry
+        : undefined;
+    section(
+      'Building L1 bands (index-export)',
+      l1ExportChecks(
+        { ...l1State, ...(retry !== undefined ? { retry } : {}) },
+        Date.now(),
+      ),
+    );
+  }
+  if (
+    (config.PUBLISH.length > 0 && l1State === undefined) ||
+    exportState !== undefined
+  ) {
+    const lock = await fs
+      .stat(path.join(exportDir, 'lock'))
+      .catch(() => undefined);
+    const serviceUp =
+      exportState === undefined
+        ? undefined
+        : (await fetchText('http://index-export:9102/healthz')) !== undefined;
+    section(
+      'Building bands (index-export)',
+      exportChecks(
+        {
+          ...(exportState !== undefined ? { state: exportState } : {}),
+          ...(lock !== undefined
+            ? { lockAgeSeconds: (Date.now() - lock.mtimeMs) / 1000 }
+            : {}),
+          publishing: config.PUBLISH.length > 0,
+          ...(serviceUp !== undefined ? { serviceUp } : {}),
+        },
+        Date.now(),
+      ),
+    );
+  }
+
+  if (engineUrl !== undefined) {
     const transport = new QBittorrentTransport({
-      url: config.ENGINE_URL,
-      ...(config.ENGINE_AUTH ?? {}),
+      url: engineUrl,
+      ...(engineAuth.auth ?? {}),
     });
     const available = await transport.isAvailable();
     const engine: {

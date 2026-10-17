@@ -30,7 +30,7 @@ import {
   parseTrustedProxies,
 } from '../lib/trusted-proxies.js';
 import { isPrivateAddress } from './torrent.js';
-import { setTrackerPeerCount, trackerAnnounces } from './metrics.js';
+import { setTrackerStats, trackerAnnounces, TrackerStats } from './metrics.js';
 
 export interface ClosedTrackerOptions {
   log: Logger;
@@ -198,6 +198,31 @@ function addressBucket(ip: string): string {
  * @throws on an entry that is neither an address nor a CIDR, so a typo is a
  *   startup error rather than a proxy silently not trusted.
  */
+/**
+ * Whether a request bears a browser's marks rather than a BitTorrent
+ * client's. Behind the gateway the tracker shares an HTTPS origin any page
+ * can embed, so an `<img src=".../announce?...">` would list every visitor
+ * as a peer.
+ *
+ * Browsers send `Sec-Fetch-Site` and `Sec-Fetch-Dest`, many send `Origin`,
+ * most send a `Referer`, and an image or a page asks for one in `Accept`;
+ * older browsers lack the Fetch Metadata headers but not the rest.
+ * BitTorrent clients send none of these. Not `Sec-Fetch-Mode`: Node's own
+ * `fetch` sends that one. A heuristic, not proof: a client can send any
+ * headers it likes, so this stops pages, not a deliberate liar, who is
+ * bounded like any peer by the per-address caps.
+ */
+export function fromBrowser(headers: http.IncomingHttpHeaders): boolean {
+  const accept = headers['accept'] ?? '';
+  return (
+    headers['sec-fetch-site'] !== undefined ||
+    headers['sec-fetch-dest'] !== undefined ||
+    headers['origin'] !== undefined ||
+    headers['referer'] !== undefined ||
+    /\b(image|text\/html)\b/i.test(accept)
+  );
+}
+
 export class ClosedTracker {
   private readonly log: Logger;
   private readonly allowed: () => Set<string>;
@@ -229,7 +254,7 @@ export class ClosedTracker {
     this.maxPeers = options.maxPeers ?? 50;
     this.maxPeersPerSwarm = options.maxPeersPerSwarm ?? 2000;
     this.maxPeersTotal = options.maxPeersTotal ?? 50_000;
-    setTrackerPeerCount(() => this.peerCount());
+    setTrackerStats(() => this.stats());
     this.maxPortsPerIp = options.maxPortsPerIp ?? 4;
     this.maxAnnouncesPerMinute = options.maxAnnouncesPerMinute ?? 10;
     this.selfAddress = options.selfAddress ?? (() => undefined);
@@ -373,7 +398,7 @@ export class ClosedTracker {
   /** Forget peers that have missed two announces, and swarms no longer offered. */
   private expire(now: number): void {
     const allowed = this.allowed();
-    const ttlMs = (this.intervalSeconds * 2 + 60) * 1000;
+    const ttlMs = this.peerTtlMs();
     for (const [hex, swarm] of this.swarms) {
       if (!allowed.has(hex)) {
         this.swarms.delete(hex);
@@ -386,50 +411,107 @@ export class ClosedTracker {
     }
   }
 
+  /** How long a peer is kept without announcing: two intervals and a minute. */
+  private peerTtlMs(): number {
+    return (this.intervalSeconds * 2 + 60) * 1000;
+  }
+
   /**
-   * Peers per torrent, each counted once however many hashes it uses.
-   * Walks every peer, so it runs when metrics are read, not per announce.
+   * Peers and seeders per torrent, each peer counted once however many
+   * hashes it announces under (a seeder under any of them), plus the distinct
+   * addresses seeding anything.
+   *
+   * Counts only what {@link expire} would keep: bands still offered and peers
+   * seen within the TTL. Expiry runs on announces, so without this a swarm
+   * that went quiet would be counted as it last was. Seeding hosts are
+   * counted by address bucket (an IPv6 /64 is one address, as for the
+   * per-address limits) and leave out this node's own engine, so they count
+   * other hosts that share. Walks every peer, so it runs when metrics are
+   * read, not per announce.
    */
-  private peerCount(): number {
+  private stats(): TrackerStats {
+    const now = this.now();
+    const ttlMs = this.peerTtlMs();
+    const allowed = this.allowed();
     const torrentOf = this.torrentOf();
-    const byTorrent = new Map<string, Set<string>>();
+    const self = this.selfPeer();
+    const selfKey =
+      self === undefined ? undefined : `${normalizeIp(self.ip)}:${self.port}`;
+    const byTorrent = new Map<string, Map<string, boolean>>();
+    const seedingHosts = new Set<string>();
     for (const [hex, swarm] of this.swarms) {
+      if (!allowed.has(hex)) continue;
       const torrent = torrentOf.get(hex) ?? hex;
       let peers = byTorrent.get(torrent);
       if (peers === undefined) {
-        peers = new Set();
+        peers = new Map();
         byTorrent.set(torrent, peers);
       }
-      for (const key of swarm.keys()) peers.add(key);
+      for (const [key, peer] of swarm) {
+        if (now - peer.seenAt > ttlMs) continue;
+        peers.set(key, peers.get(key) === true || peer.seeding);
+        if (peer.seeding && key !== selfKey) {
+          seedingHosts.add(addressBucket(peer.ip));
+        }
+      }
     }
-    let total = 0;
-    for (const peers of byTorrent.values()) total += peers.size;
-    return total;
+    let peers = 0;
+    let seeders = 0;
+    for (const torrentPeers of byTorrent.values()) {
+      peers += torrentPeers.size;
+      for (const seeding of torrentPeers.values()) if (seeding) seeders += 1;
+    }
+    return { peers, seeders, seedingHosts: seedingHosts.size };
   }
 
   /**
    * The announcing peer's address: the socket's, or, from a trusted proxy,
    * the nearest `X-Forwarded-For` hop that is not itself a trusted proxy.
+   *
+   * @param proxies the proxies believed on the listener the request came in
+   *   on; by default the tracker's own `trustedProxies`.
    */
   clientAddress(
     socketAddress: string,
     forwardedFor: string | string[] | undefined,
+    proxies: net.BlockList = this.trustedProxies,
   ): string {
-    return clientAddressBehindProxies(
-      socketAddress,
-      forwardedFor,
-      this.trustedProxies,
-    );
+    return clientAddressBehindProxies(socketAddress, forwardedFor, proxies);
   }
 
-  /** Serve it: `/announce` only; everything else is a 404. */
-  listen(host: string, port: number): Promise<http.Server> {
+  /**
+   * Serve it: `/announce` only; everything else is a 404.
+   *
+   * Every response is `Cache-Control: no-store`: an announce answer is for
+   * one peer, and a cache anywhere on the path (an edge cache keyed on the
+   * path without the query, say) would hand it to every other.
+   *
+   * @param options.trustedProxies proxies whose `X-Forwarded-For` this
+   *   listener believes, instead of the tracker's own. The listener behind
+   *   the gateway's Envoy believes private addresses; the published one must
+   *   not, because where Docker's userland proxy carries outside traffic an
+   *   outside client arrives from a private address too, and could then name
+   *   any peer address it liked.
+   */
+  listen(
+    host: string,
+    port: number,
+    options: { trustedProxies?: readonly string[] } = {},
+  ): Promise<http.Server> {
+    const proxies =
+      options.trustedProxies !== undefined
+        ? parseTrustedProxies([...options.trustedProxies])
+        : this.trustedProxies;
     const server = http.createServer((req, res) => {
       const url = req.url ?? '/';
       const q = url.indexOf('?');
       const pathname = q < 0 ? url : url.slice(0, q);
       if (req.method !== 'GET' || pathname !== '/announce') {
-        res.writeHead(404).end();
+        res.writeHead(404, { 'Cache-Control': 'no-store' }).end();
+        return;
+      }
+      if (fromBrowser(req.headers)) {
+        res.writeHead(403, { 'Cache-Control': 'no-store' }).end();
         return;
       }
       const body = this.announce(
@@ -437,11 +519,13 @@ export class ClosedTracker {
         this.clientAddress(
           req.socket.remoteAddress ?? '',
           req.headers['x-forwarded-for'],
+          proxies,
         ),
       );
       res.writeHead(200, {
         'Content-Type': 'text/plain',
         'Content-Length': String(body.length),
+        'Cache-Control': 'no-store',
       });
       res.end(body);
     });
@@ -453,7 +537,11 @@ export class ClosedTracker {
     return new Promise((resolve, reject) => {
       server.once('error', reject);
       server.listen(port, host, () => {
-        this.log.info('Closed tracker listening', { host, port });
+        this.log.info('Closed tracker listening', {
+          host,
+          port,
+          behindProxy: options.trustedProxies !== undefined,
+        });
         resolve(server);
       });
     });
