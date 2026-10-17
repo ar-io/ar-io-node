@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`tools/index-swarm-setup --restart` brought back a torrent engine that
+  had been turned off.** It named `index-swarm-engine-init` and
+  `index-swarm-engine` on the `docker compose up` command line, and Compose
+  starts a service named there even when its profile is off, so a gateway
+  sharing over HTTP only (engine behind an unused profile in
+  `docker-compose.override.yaml`) got the engine again. Setup now names only
+  the services its compose files enable (`docker compose config --services`,
+  with `COMPOSE_PROFILES` honoured), for `--restart` and for the commands it
+  prints without it.
+
 ## [Release 85] - 2026-10-17
 
 This is a **recommended release** focused on **the Arweave base layer as a
