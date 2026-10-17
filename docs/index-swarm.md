@@ -211,7 +211,7 @@ A gateway can do both: pass `--subscribe` and `--publish` together.
 | `--max-disk-gib <n>` | `INDEX_SWARM_MAX_DISK_BYTES`. Works on its own, to change an existing subscriber's budget |
 | `--no-gateway` | Leaves the two gateway keys alone |
 | `--dry-run` | Shows the changes and writes nothing |
-| `--restart` | Then recreates what needs it: the gateway only when `CDB64_ROOT_TX_INDEX_SOURCES`, `ROOT_TX_LOOKUP_ORDER` or `L1_BAND_IMPORT_ENABLED` differ from what it runs with, then the engine and the sidecar, by service name, with the compose files the running gateway was started with. A service those files turn off (an engine behind an unused profile, for HTTP only) is left alone |
+| `--restart` | Then recreates what needs it: the gateway only when `CDB64_ROOT_TX_INDEX_SOURCES`, `ROOT_TX_LOOKUP_ORDER` or `L1_BAND_IMPORT_ENABLED` differ from what it runs with, then the engine and the sidecar, by service name, with the compose files the running gateway was started with. plus `docker-compose.override.yaml` if they lack it. A service those files turn off (an engine behind an unused profile, for HTTP only) is left alone |
 | `--env-file <path>` | A file other than `.env`, relative to the gateway's directory |
 
 It is idempotent: a second run changes only what is missing, so it is also
@@ -1243,8 +1243,11 @@ reads the password only at startup, and deleting the file changes nothing
 compose can see). With no password the sidecar does not look for an engine
 and moves bands over HTTP only. `tools/index-swarm-setup --restart` leaves
 the engine alone on such a gateway: it starts only the services the compose
-files enable (`COMPOSE_PROFILES` included), since Compose starts a service
-named on the command line even when its profile is off. Setup from releases
+files enable on a plain `docker compose up` (`COMPOSE_PROFILES` included, the
+legacy `index-swarm` profile names it passes not counted), since Compose
+starts a service named on the command line even when its profile is off. It
+reads `docker-compose.override.yaml` even when the running gateway was
+started before the file existed. Setup from releases
 before 86 named the engine regardless; with one of those, run setup without
 `--restart` and recreate what it lists, engine excluded.
 
