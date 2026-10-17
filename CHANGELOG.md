@@ -621,7 +621,9 @@ with core**).
   file's are, and compared by digest; the set comparison runs only to say
   how a failing lookup differs. On a real 57.8M-tag band, the tag lookup's
   check needs about a third of the memory (passes at 512 MB; the old check
-  failed at 1 GB).
+  failed at 1 GB). Verifying is slower in exchange: about 4.7 minutes for
+  that band's three lookups against about 3 before, since every row is now
+  read in order and digested.
 
 - **JSON data was served as `application/json; charset=utf-8`.** Express
   appended the charset to every JSON, JavaScript and text type, so a client
