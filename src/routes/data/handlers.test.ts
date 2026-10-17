@@ -4048,6 +4048,16 @@ st
           assert.equal(requestAttributes.originNodeRelease, 'v1.0.0');
         });
 
+        it('never reads a negative hop count, which would get past the hop limits', () => {
+          for (const value of ['-5', '-1']) {
+            const requestAttributes = getRequestAttributes(
+              { headers: { 'x-ar-io-hops': value } } as any,
+              { get: () => undefined } as any,
+            );
+            assert.equal(requestAttributes.hops, 0);
+          }
+        });
+
         it('should not initialize originNodeRelease when only origin is present in headers', () => {
           const mockReq = {
             headers: {
