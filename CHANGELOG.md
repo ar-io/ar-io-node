@@ -18,6 +18,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   resolution" is logged only when a resolver timed out or was aborted, not
   when every resolver simply found no record. A resolver that throws still
   logs its own error.
+- **Opting out of Index Sharing stops seeding.** With
+  `INDEX_SWARM_SUBSCRIBE=[]` (or on the default publisher, whose default
+  subscription skips itself) the `index-swarm` sidecar now takes the
+  subscriber's torrents out of the engine once per start, files kept:
+  installed bands stay installed and the gateway still searches them, but
+  they are no longer seeded, and a download in progress stops. Torrents a
+  publisher seeds from `published/` are unaffected. Subscribing again seeds
+  the installed bands from their kept `.torrent` files, nothing fetched
+  again. Previously the engine went on seeding installed bands after an
+  opt-out.
 
 ## [Release 85] - 2026-10-17
 
