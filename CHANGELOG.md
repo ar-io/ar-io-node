@@ -19,6 +19,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   when every resolver simply found no record. A resolver that throws still
   logs its own error.
 
+### Fixed
+
+- **A chunk-metadata anchor probe kept running after every caller had given
+  up on it.** Concurrent lookups of one offset share a single probe of the
+  reference peer (a `HEAD /chunk/{offset}/data`, then the chain cross-checks),
+  and that probe took no signal, so when every caller's request was cancelled
+  it still ran to completion. Waiters are now counted: a caller that aborts
+  while others wait rejects only its own lookup, and when the last one aborts
+  the probe is aborted and dropped, so a later lookup of the offset starts a
+  fresh one. The abort reaches the peer `HEAD` (or ranged `GET`) and the
+  chain `/tx/{id}/offset` request; the chain `/tx/{id}` request does not take
+  a signal yet, so one already started still runs to completion. An aborted
+  probe is not remembered as a miss
+  (`CHUNK_METADATA_ANCHOR_MISS_CACHE_TTL_SECONDS`).
+
 ## [Release 85] - 2026-10-17
 
 This is a **recommended release** focused on **the Arweave base layer as a
