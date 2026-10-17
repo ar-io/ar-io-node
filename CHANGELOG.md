@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- The `CHUNK_METADATA_ANCHOR_*` settings now pass through
+  `docker-compose.yaml` to core, so they can be set from `.env`. Before this,
+  only a direct `yarn start` saw them.
+- A lookup of an ArNS name that is not registered no longer logs a warning
+  and an error. "Base name not found in ArNS names cache" is now `debug` (the
+  `arns_name_cache_miss_total` counter still counts it), "Unable to resolve
+  name against all resolvers" is now `info`, and "Error during parallel
+  resolution" is logged only when a resolver timed out or was aborted, not
+  when every resolver simply found no record. A resolver that throws still
+  logs its own error.
 - **Opting out of Index Sharing stops seeding.** With
   `INDEX_SWARM_SUBSCRIBE=[]` (or on the default publisher, whose default
   subscription skips itself) the `index-swarm` sidecar now takes the

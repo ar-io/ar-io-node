@@ -194,6 +194,82 @@ describe('CompositeArNSResolver', () => {
     });
   });
 
+  describe('logging when no resolver resolves the name', () => {
+    // Records every call by level; child() returns the same recorder so the
+    // resolver's own child logger is captured too.
+    const recordingLog = () => {
+      const calls: { level: string; message: string }[] = [];
+      const logger: any = {};
+      for (const level of ['error', 'warn', 'info', 'verbose', 'debug']) {
+        logger[level] = (message: string) => calls.push({ level, message });
+      }
+      logger.child = () => logger;
+      return { logger, calls };
+    };
+    const miss = async (): Promise<NameResolution> => ({
+      name: 'unregistered',
+      resolvedId: undefined,
+      resolvedAt: undefined,
+      ttl: undefined,
+      antId: undefined,
+      limit: undefined,
+      index: undefined,
+    });
+
+    it('logs no error or warning for an unregistered name', async () => {
+      const { logger, calls } = recordingLog();
+      const compositeResolver = new CompositeArNSResolver({
+        log: logger,
+        resolvers: [{ resolve: miss }, { resolve: miss }],
+        resolutionCache: mockResolutionCache,
+        registryCache: mockRegistryCache,
+        arnsNamesCache: {} as ArNSNamesCache, // unused, avoids unawaited promises
+        maxConcurrentResolutions: 2,
+        resolverTimeoutMs: 50,
+      });
+
+      const result = await compositeResolver.resolve({ name: 'unregistered' });
+
+      assert.equal(result.resolvedId, undefined);
+      assert.deepEqual(
+        calls.filter((c) => c.level === 'error' || c.level === 'warn'),
+        [],
+      );
+    });
+
+    it('still logs an error when a resolver times out', async () => {
+      const { logger, calls } = recordingLog();
+      const compositeResolver = new CompositeArNSResolver({
+        log: logger,
+        resolvers: [
+          { resolve: miss },
+          {
+            resolve: async () =>
+              new Promise<NameResolution>((resolve) =>
+                setTimeout(() => resolve(mockResolution), 1000),
+              ),
+          },
+        ],
+        resolutionCache: mockResolutionCache,
+        registryCache: mockRegistryCache,
+        arnsNamesCache: {} as ArNSNamesCache, // unused, avoids unawaited promises
+        maxConcurrentResolutions: 2,
+        resolverTimeoutMs: 50,
+        lastResolverTimeoutMs: 50,
+      });
+
+      await compositeResolver.resolve({ name: 'slow' });
+
+      assert.ok(
+        calls.some(
+          (c) =>
+            c.level === 'error' &&
+            c.message.startsWith('Error during parallel resolution'),
+        ),
+      );
+    });
+  });
+
   it('falls back to cached resolution when fresh resolver returns undefined fast (PE-9075)', async () => {
     const now = Date.now();
     const expiredCachedResolution: NameResolution = {
