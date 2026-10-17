@@ -789,6 +789,16 @@ export const CHUNK_METADATA_ANCHOR_TX_CACHE_TTL_SECONDS =
     300,
   );
 
+// How long (seconds) an offset the anchor could not resolve is left
+// unprobed. Every gateway on the defaults shares one reference peer, so a
+// chunk none of them holds is otherwise re-probed on every request for it.
+// 0 turns the miss cache off.
+export const CHUNK_METADATA_ANCHOR_MISS_CACHE_TTL_SECONDS =
+  env.nonNegativeIntOrDefault(
+    'CHUNK_METADATA_ANCHOR_MISS_CACHE_TTL_SECONDS',
+    60,
+  );
+
 // LRU cache size for resolved manifest paths. Keyed by (manifest id, path);
 // values are immutable per manifest transaction, so no TTL is needed. Caching
 // resolutions lets repeat requests for the same manifest path skip re-fetching

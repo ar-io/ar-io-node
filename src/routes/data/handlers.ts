@@ -1004,7 +1004,9 @@ export const getRequestAttributes = (
   } = {},
 ): RequestAttributes => {
   const hopsHeader = req.headers[headerNames.hops.toLowerCase()] as string;
-  const hops = parseInt(hopsHeader) || 0;
+  // Never below 0: a negative hop count would let a request through the
+  // hop limits (validateHopCount, the anchor's forwarded-request guard).
+  const hops = Math.max(0, parseInt(hopsHeader) || 0);
 
   // Get origin and originNodeRelease from request headers
   let origin = req.headers[headerNames.origin.toLowerCase()] as
