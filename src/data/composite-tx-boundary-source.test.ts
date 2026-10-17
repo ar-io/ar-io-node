@@ -217,31 +217,72 @@ describe('CompositeTxBoundarySource', () => {
       // Resolving it over the network would spend this gateway's anchor
       // probe, AR.IO peer fetches and chain-search slots for the asker, and
       // the first two re-enter the AR.IO network past the one-hop limit.
-      for (const attributes of [
-        { hops: 1, clientIps: [] },
-        { hops: 0, clientIps: [], skipRemoteForwarding: true },
-      ]) {
-        const anchorSource = sourceReturning(boundary('anchor-tx'));
-        const txPathSource = sourceReturning(boundary('txpath-tx'));
-        const chainSource = sourceReturning(boundary('chain-tx'));
-        const dbSource = sourceReturning(null);
-        const composite = new CompositeTxBoundarySource({
-          log,
-          dbSource,
-          anchorSource,
-          txPathSource,
-          chainSource,
-        });
+      const anchorSource = sourceReturning(boundary('anchor-tx'));
+      const txPathSource = sourceReturning(boundary('txpath-tx'));
+      const chainSource = sourceReturning(boundary('chain-tx'));
+      const dbSource = sourceReturning(null);
+      const composite = new CompositeTxBoundarySource({
+        log,
+        dbSource,
+        anchorSource,
+        txPathSource,
+        chainSource,
+      });
 
-        assert.equal(
-          await composite.getTxBoundary(OFFSET, undefined, attributes),
-          null,
-        );
-        assert.equal((dbSource.getTxBoundary as any).mock.callCount(), 1);
-        for (const remote of [anchorSource, txPathSource, chainSource]) {
-          assert.equal((remote.getTxBoundary as any).mock.callCount(), 0);
-        }
+      assert.equal(
+        await composite.getTxBoundary(OFFSET, undefined, {
+          hops: 1,
+          clientIps: [],
+        }),
+        null,
+      );
+      assert.equal((dbSource.getTxBoundary as any).mock.callCount(), 1);
+      for (const remote of [anchorSource, txPathSource, chainSource]) {
+        assert.equal((remote.getTxBoundary as any).mock.callCount(), 0);
       }
+    });
+
+    it('keeps the chain search for a request that must not reach AR.IO peers', async () => {
+      // skipRemoteForwarding covers the AR.IO peer layer (the anchor and
+      // tx_path), not Arweave nodes.
+      const anchorSource = sourceReturning(boundary('anchor-tx'));
+      const txPathSource = sourceReturning(boundary('txpath-tx'));
+      const chainSource = sourceReturning(boundary('chain-tx'));
+      const composite = new CompositeTxBoundarySource({
+        log,
+        dbSource: sourceReturning(null),
+        anchorSource,
+        txPathSource,
+        chainSource,
+      });
+
+      const result = await composite.getTxBoundary(OFFSET, undefined, {
+        hops: 0,
+        clientIps: [],
+        skipRemoteForwarding: true,
+      });
+
+      assert.equal(result?.source, 'chain');
+      assert.equal((anchorSource.getTxBoundary as any).mock.callCount(), 0);
+      assert.equal((txPathSource.getTxBoundary as any).mock.callCount(), 0);
+    });
+
+    it('propagates a database failure on a forwarded request rather than reporting a miss', async () => {
+      const failure = new Error('SQLITE_IOERR');
+      const composite = new CompositeTxBoundarySource({
+        log,
+        dbSource: {
+          getTxBoundary: mock.fn(async () => {
+            throw failure;
+          }),
+        },
+        chainSource: sourceReturning(boundary('chain-tx')),
+      });
+
+      await assert.rejects(
+        composite.getTxBoundary(OFFSET, undefined, { hops: 1, clientIps: [] }),
+        failure,
+      );
     });
 
     it('still answers a forwarded request the database knows', async () => {

@@ -76,17 +76,21 @@ export class CompositeTxBoundarySource implements TxBoundarySource {
     const localOnly = requestAttributes?.localSourcesOnly === true;
 
     // A request another gateway forwarded (hops >= 1) is answered from what
-    // this gateway already knows (its database), as is one that asks not to
-    // be forwarded. Resolving it over the network would spend this
-    // gateway's anchor probe, AR.IO peer fetches and chain-search slots on
-    // the asker's behalf: the anchor and tx_path re-enter the AR.IO network
-    // past the one-hop limit, and the chain fallback's few slots are then
-    // taken from this gateway's own clients. The asker does its own chain
-    // lookup on a miss.
-    const forwarded =
-      (requestAttributes?.hops ?? 0) >= 1 ||
-      requestAttributes?.skipRemoteForwarding === true;
-    const networkAllowed = !localOnly && !forwarded;
+    // this gateway already knows (its database). Resolving it over the
+    // network would spend this gateway's anchor probe, AR.IO peer fetches
+    // and chain-search slots on the asker's behalf: the anchor and tx_path
+    // re-enter the AR.IO network past the one-hop limit, and the chain
+    // fallback's few slots are then taken from this gateway's own clients.
+    // The asker does its own chain lookup on a miss.
+    const forwarded = (requestAttributes?.hops ?? 0) >= 1;
+    // A request that must not be forwarded to AR.IO peers (skipRemoteForwarding)
+    // skips the two sources that ask them, the anchor and tx_path, and keeps
+    // the chain search, which asks Arweave nodes.
+    const peersAllowed =
+      !localOnly &&
+      !forwarded &&
+      requestAttributes?.skipRemoteForwarding !== true;
+    const chainAllowed = !localOnly && !forwarded;
 
     // Check for abort before starting
     signal?.throwIfAborted();
@@ -122,7 +126,7 @@ export class CompositeTxBoundarySource implements TxBoundarySource {
     // 2. Try chunk-metadata anchor — HEAD a peer's /chunk/{offset}/data
     //    and cross-check the headers against the chain. Cheaper than the
     //    binary search below for any tx covered by a reachable peer.
-    if (this.anchorSource && networkAllowed) {
+    if (this.anchorSource && peersAllowed) {
       try {
         log.debug('Attempting chunk-metadata anchor');
         // The request's attributes go along: the anchor declines a
@@ -154,7 +158,7 @@ export class CompositeTxBoundarySource implements TxBoundarySource {
     signal?.throwIfAborted();
 
     // 3. Try tx_path validation (for unindexed data)
-    if (this.txPathSource && networkAllowed) {
+    if (this.txPathSource && peersAllowed) {
       try {
         log.debug('Attempting tx_path validation');
         // With the request's attributes, so its peer fetch keeps the
@@ -185,7 +189,7 @@ export class CompositeTxBoundarySource implements TxBoundarySource {
     signal?.throwIfAborted();
 
     // 4. Try chain fallback (slowest) with concurrency limit
-    if (this.chainSource && networkAllowed) {
+    if (this.chainSource && chainAllowed) {
       // Check concurrency limit before attempting chain fallback
       if (this.activeChainFallbackCount >= this.chainFallbackConcurrencyLimit) {
         log.debug('Skipping chain fallback - concurrency limit reached', {
@@ -224,11 +228,12 @@ export class CompositeTxBoundarySource implements TxBoundarySource {
       }
     }
 
-    // A local-only caller has no fallback, so a failed database lookup is the
-    // whole answer rather than one miss among several. Returning null here
-    // would present a SQLite or disk failure as "this offset does not exist",
-    // and the caller would report a not-found instead of a gateway fault.
-    if (localOnly && dbError !== undefined) {
+    // A local-only or forwarded request has no fallback, so a failed database
+    // lookup is the whole answer rather than one miss among several.
+    // Returning null here would present a SQLite or disk failure as "this
+    // offset does not exist", and the caller would report a not-found
+    // instead of a gateway fault.
+    if (!chainAllowed && dbError !== undefined) {
       log.debug('Local-only lookup failed with no fallback available', {
         error: dbError.message,
       });

@@ -627,11 +627,13 @@ with core**).
   few large operators asked for offsets none of them held, and both
   turbo-gateway.com nodes stopped answering for six hours: in 32 minutes one
   made 563,600 peer chunk requests that found 7 chunks. Now:
-  - a forwarded request (`X-AR-IO-Hops` of 1 or more, or one that asks not to
-    be forwarded) has its offset resolved from this gateway's own database
-    only: no anchor probe, no AR.IO peer, and no chain search, whose few
-    slots belong to this gateway's own clients. The asking gateway does its
-    own chain lookup on a miss;
+  - a forwarded request (`X-AR-IO-Hops` of 1 or more) has its offset
+    resolved from this gateway's own database only: no anchor probe, no
+    AR.IO peer, and no chain search, whose few slots belong to this
+    gateway's own clients. The asking gateway does its own chain lookup on a
+    miss, and a database failure is reported as a failure, not a 404. A
+    request that must not be forwarded to AR.IO peers skips the anchor and
+    tx_path and keeps the chain search;
   - the anchor's probe sends `X-AR-IO-Hops` (and nothing else of the client's
     request), so the peer treats it as forwarded;
   - the tx_path check passes the request's hop count, and asks AR.IO peers
