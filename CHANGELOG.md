@@ -650,6 +650,19 @@ with core**).
   counted in `ario_chunk_metadata_anchor_total` as `peer_origin`,
   `miss_cached` and `probe_shared`.
 
+- **Lookup checks no longer run large bands out of memory.** Verifying a
+  `parquet-l1` or `parquet-l2` band's lookup against its tables compared the
+  two with `EXCEPT ALL`, which DuckDB holds in memory, deriving the lookup
+  twice. A 100,000-block ArDrive `parquet-l2` band (h1.6M) failed it under
+  the default `INDEX_EXPORT_L2_DUCKDB_MEMORY` of 2 GB, after its build had
+  passed. The derived rows are now digested in the lookup's order, as the
+  file's are, and compared by digest; the set comparison runs only to say
+  how a failing lookup differs. On a real 57.8M-tag band, the tag lookup's
+  check needs about a third of the memory (passes at 512 MB; the old check
+  failed at 1 GB). Verifying is slower in exchange: about 4.7 minutes for
+  that band's three lookups against about 3 before, since every row is now
+  read in order and digested.
+
 - **JSON data was served as `application/json; charset=utf-8`.** Express
   appended the charset to every JSON, JavaScript and text type, so a client
   that compares the type exactly, such as Zora's metadata check, rejected
