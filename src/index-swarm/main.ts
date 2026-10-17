@@ -32,6 +32,7 @@ import { Publisher, loadPublisherSigner } from './publisher.js';
 import { QBittorrentTransport } from './transport/qbittorrent.js';
 import { waitForEngine } from './transport/wait.js';
 import { EngineJanitor } from './engine-janitor.js';
+import { SubscriberTorrentsStopper } from './opt-out.js';
 import { resolveEngineAuth } from './engine-auth.js';
 import { UploadBudget } from './upload-budget.js';
 import {
@@ -296,6 +297,21 @@ async function main(): Promise<void> {
       dailyLimitBytes: config.UPLOAD_DAILY_LIMIT_BYTES,
       normalRateBytesPerSec: config.UPLOAD_LIMIT_BYTES_PER_SEC,
     });
+    // Nothing subscribed (INDEX_SWARM_SUBSCRIBE=[], or the default
+    // publisher skipping itself): installed bands stay installed and read,
+    // but the engine stops seeding them (see opt-out.ts). Done once the
+    // engine answers, so an engine that is down at startup is handled on a
+    // later check instead of failing the sidecar; a check that overlaps a
+    // pass still running does not start another.
+    const optOut =
+      config.SUBSCRIBE.length === 0
+        ? new SubscriberTorrentsStopper({
+            log,
+            state,
+            transport: engine,
+            swarmDir: config.SWARM_DIR,
+          })
+        : undefined;
     const checkEngine = async () => {
       const available = await engine.isAvailable();
       engineAvailable.set(available ? 1 : 0);
@@ -305,6 +321,7 @@ async function main(): Promise<void> {
             error: error?.message,
           }),
         );
+        if (optOut !== undefined) await optOut.runIfPending();
       }
       if (available !== last) {
         const fields = { engineUrl };
