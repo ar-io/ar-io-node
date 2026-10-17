@@ -210,6 +210,30 @@ describe('CompositeTxBoundarySource', () => {
     });
   });
 
+  describe('request attributes', () => {
+    it('hands the request attributes to the anchor and tx_path sources', async () => {
+      // They decline or limit a request another gateway forwarded (the
+      // one-hop limit), so they must see where the request came from.
+      const forwarded = { hops: 1, clientIps: [] };
+      const anchorSource = sourceReturning(null);
+      const txPathSource = sourceReturning(null);
+      const composite = new CompositeTxBoundarySource({
+        log,
+        dbSource: sourceReturning(null),
+        anchorSource,
+        txPathSource,
+      });
+
+      await composite.getTxBoundary(OFFSET, undefined, forwarded);
+
+      for (const source of [anchorSource, txPathSource]) {
+        const calls = (source.getTxBoundary as any).mock.calls;
+        assert.equal(calls.length, 1);
+        assert.equal(calls[0].arguments[2], forwarded);
+      }
+    });
+  });
+
   describe('cancellation', () => {
     it('propagates an AbortError rather than falling through', async () => {
       const anchorSource = sourceReturning(boundary('anchor-tx'));

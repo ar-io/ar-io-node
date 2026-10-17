@@ -1162,6 +1162,9 @@ const chunkMetadataAnchorSource =
         requestTimeoutMs: config.CHUNK_METADATA_ANCHOR_REQUEST_TIMEOUT_MS,
         cacheSize: config.CHUNK_METADATA_ANCHOR_TX_CACHE_SIZE,
         cacheTtlMs: config.CHUNK_METADATA_ANCHOR_TX_CACHE_TTL_SECONDS * 1000,
+        missCacheTtlMs:
+          config.CHUNK_METADATA_ANCHOR_MISS_CACHE_TTL_SECONDS * 1000,
+        nodeRelease: config.AR_IO_NODE_RELEASE,
         // Wrap the chain client to match anchorChunkMetadata's string-typed
         // contract — weave-scale offsets need to round-trip through BigInt
         // without Number.MAX_SAFE_INTEGER loss.

@@ -112,9 +112,13 @@ export class CompositeTxBoundarySource implements TxBoundarySource {
     if (this.anchorSource && !localOnly) {
       try {
         log.debug('Attempting chunk-metadata anchor');
+        // The request's attributes go along: the anchor declines a
+        // request another gateway forwarded, and marks its own probe as
+        // one hop on.
         const anchorResult = await this.anchorSource.getTxBoundary(
           absoluteOffset,
           signal,
+          requestAttributes,
         );
         if (anchorResult) {
           log.debug('Chunk-metadata anchor successful', {
@@ -140,9 +144,13 @@ export class CompositeTxBoundarySource implements TxBoundarySource {
     if (this.txPathSource && !localOnly) {
       try {
         log.debug('Attempting tx_path validation');
+        // With the request's attributes, so its peer fetch keeps the
+        // one-hop limit: a request another gateway forwarded is not
+        // forwarded to AR.IO peers again.
         const txPathResult = await this.txPathSource.getTxBoundary(
           absoluteOffset,
           signal,
+          requestAttributes,
         );
         if (txPathResult) {
           log.debug('tx_path validation successful', {

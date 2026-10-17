@@ -7,6 +7,7 @@
 import winston from 'winston';
 
 import {
+  RequestAttributes,
   TxBoundary,
   TxBoundarySource,
   UnvalidatedChunkSource,
@@ -46,6 +47,7 @@ export class TxPathValidationSource implements TxBoundarySource {
   async getTxBoundary(
     absoluteOffset: bigint,
     signal?: AbortSignal,
+    requestAttributes?: RequestAttributes,
   ): Promise<TxBoundary | null> {
     // Check for abort before starting
     signal?.throwIfAborted();
@@ -77,7 +79,9 @@ export class TxPathValidationSource implements TxBoundarySource {
       const unvalidatedChunk =
         await this.unvalidatedChunkSource.getUnvalidatedChunk(
           offsetNumber,
-          undefined, // requestAttributes not passed through TxBoundarySource interface
+          // The peer fetch applies the hop limit from these: without them a
+          // request another gateway forwarded went to AR.IO peers again.
+          requestAttributes,
           signal,
         );
 

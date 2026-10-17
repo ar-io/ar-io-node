@@ -8,7 +8,7 @@ import { default as axios, AxiosInstance } from 'axios';
 import { LRUCache } from 'lru-cache';
 import winston from 'winston';
 
-import { TxBoundary, TxBoundarySource } from '../types.js';
+import { RequestAttributes, TxBoundary, TxBoundarySource } from '../types.js';
 import * as metrics from '../metrics.js';
 import { parseChunkHeaderMetadata } from '../lib/chunk-header-parser.js';
 import {
@@ -18,6 +18,7 @@ import {
 } from '../lib/chunk-metadata-anchor.js';
 import { createAgentPair } from '../lib/http-agent.js';
 import { discardResponseBody, normalizeAbortError } from '../lib/http-utils.js';
+import { generateRequestAttributes } from '../lib/request-attributes.js';
 
 // Largest absolute weave offset this source will probe via the
 // number-typed cache + chain cross-check path. The chain-anchored
@@ -41,6 +42,10 @@ const MAX_SAFE_OFFSET_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
  * - `metadata_missing` — peer didn't return required headers
  * - `mismatch`         — chain disagreed with peer headers (caught + falls through)
  * - `error`            — HTTP/network/abort failure (falls through)
+ * - `peer_origin`      — the request came from another gateway (hops >= 1):
+ *                        not probed, so a peer's miss is never forwarded on
+ * - `miss_cached`      — this offset missed within the miss cache's TTL:
+ *                        not probed again
  */
 type AnchorResult =
   | 'hit'
@@ -48,7 +53,9 @@ type AnchorResult =
   | 'metadata_missing'
   | 'mismatch'
   | 'peer_refused'
-  | 'error';
+  | 'error'
+  | 'peer_origin'
+  | 'miss_cached';
 
 /**
  * Thrown when the reference peer answered HEAD with a status that a ranged GET
@@ -92,6 +99,9 @@ export class ChunkMetadataAnchorSource implements TxBoundarySource {
   private requestTimeoutMs: number;
   private axiosInstance: AxiosInstance;
   private cache: LRUCache<string, AnchoredChunkMetadata>;
+  /** Offsets that just missed, so they are not probed again at once. */
+  private misses: LRUCache<string, true> | undefined;
+  private nodeRelease: string | undefined;
   private fetchTxOffset: (
     txId: string,
     signal?: AbortSignal,
@@ -107,6 +117,9 @@ export class ChunkMetadataAnchorSource implements TxBoundarySource {
     requestTimeoutMs,
     cacheSize,
     cacheTtlMs,
+    missCacheSize = 10_000,
+    missCacheTtlMs = 60_000,
+    nodeRelease,
     fetchTxOffset,
     fetchTransaction,
     axiosInstance,
@@ -121,6 +134,16 @@ export class ChunkMetadataAnchorSource implements TxBoundarySource {
     requestTimeoutMs: number;
     cacheSize: number;
     cacheTtlMs: number;
+    /**
+     * Offsets remembered after a miss (no headers, a refusal, an error or a
+     * chain mismatch), and for how long; a TTL of 0 turns the miss cache off.
+     * Every gateway on the defaults asks the same reference peer, so an
+     * offset none can resolve would otherwise be re-probed on every request.
+     */
+    missCacheSize?: number;
+    missCacheTtlMs?: number;
+    /** Sent as `X-AR-IO-Node-Release`, so the peer sees a gateway asking. */
+    nodeRelease?: string;
     /**
      * Chain `/tx/{id}/offset` fetcher. Returns `{ size, offset }` as
      * strings so they can round-trip through {@link BigInt} without
@@ -151,6 +174,14 @@ export class ChunkMetadataAnchorSource implements TxBoundarySource {
       max: cacheSize,
       ttl: cacheTtlMs,
     });
+    this.misses =
+      missCacheTtlMs > 0 && missCacheSize > 0
+        ? new LRUCache<string, true>({
+            max: missCacheSize,
+            ttl: missCacheTtlMs,
+          })
+        : undefined;
+    this.nodeRelease = nodeRelease;
     this.axiosInstance =
       axiosInstance ??
       axios.create({
@@ -169,12 +200,23 @@ export class ChunkMetadataAnchorSource implements TxBoundarySource {
   async getTxBoundary(
     absoluteOffset: bigint,
     signal?: AbortSignal,
+    requestAttributes?: RequestAttributes,
   ): Promise<TxBoundary | null> {
     signal?.throwIfAborted();
     const log = this.log.child({
       method: 'getTxBoundary',
       absoluteOffset: absoluteOffset.toString(),
     });
+
+    // A chunk request another gateway forwarded is not probed for it. The
+    // reference peer is a gateway too, and every gateway on the defaults
+    // uses the same one, so probing here on a peer's behalf re-enters the
+    // network past the one-hop limit the chunk sources keep: two gateways
+    // missing the same chunk ask each other through the anchor without end.
+    if ((requestAttributes?.hops ?? 0) >= 1) {
+      this.recordResult('peer_origin');
+      return null;
+    }
 
     // Guard against unsafe bigint → number coercion. The downstream
     // cache uses number-typed bounds and `anchorChunkMetadata` accepts
@@ -189,13 +231,46 @@ export class ChunkMetadataAnchorSource implements TxBoundarySource {
       return null;
     }
     const offsetNum = Number(absoluteOffset);
+    const offsetKey = absoluteOffset.toString();
+    if (this.misses?.has(offsetKey) === true) {
+      this.recordResult('miss_cached');
+      return null;
+    }
+    const boundary = await this.probe(
+      offsetNum,
+      absoluteOffset,
+      signal,
+      requestAttributes,
+      log,
+    );
+    if (boundary === null) this.misses?.set(offsetKey, true);
+    return boundary;
+  }
 
+  /** One probe of the reference peer; null on any miss. */
+  private async probe(
+    offsetNum: number,
+    absoluteOffset: bigint,
+    signal: AbortSignal | undefined,
+    requestAttributes: RequestAttributes | undefined,
+    log: winston.Logger,
+  ): Promise<TxBoundary | null> {
     const peer = this.peerUrls[0];
     const url = `${peer}/chunk/${absoluteOffset}/data`;
+    // Identify the probe as a gateway's, one hop on, as the chunk sources
+    // do: the peer then applies its hop limit and its limits for gateways.
+    const requestHeaders: Record<string, string> = {
+      ...(this.nodeRelease !== undefined
+        ? { 'X-AR-IO-Node-Release': this.nodeRelease }
+        : {}),
+      ...(generateRequestAttributes(
+        requestAttributes ?? { hops: 0, clientIps: [] },
+      )?.headers ?? {}),
+    };
 
     let headers: Record<string, string | string[] | undefined>;
     try {
-      headers = await this.fetchPeerChunkHeaders(url, signal);
+      headers = await this.fetchPeerChunkHeaders(url, signal, requestHeaders);
     } catch (err: any) {
       // Normalize Axios's CanceledError (code ERR_CANCELED) into a
       // plain AbortError so signal cancellations propagate instead of
@@ -317,7 +392,8 @@ export class ChunkMetadataAnchorSource implements TxBoundarySource {
    */
   private async fetchPeerChunkHeaders(
     url: string,
-    signal?: AbortSignal,
+    signal: AbortSignal | undefined,
+    requestHeaders: Record<string, string>,
   ): Promise<Record<string, string | string[] | undefined>> {
     // Left undefined when HEAD throws, which is a genuine "HEAD didn't work"
     // and still earns the GET fallback. Set outside the catch below so the
@@ -328,6 +404,7 @@ export class ChunkMetadataAnchorSource implements TxBoundarySource {
       const headResponse = await this.axiosInstance.head(url, {
         signal,
         timeout: this.requestTimeoutMs,
+        headers: requestHeaders,
       });
       headStatus = headResponse.status;
       if (
@@ -371,7 +448,7 @@ export class ChunkMetadataAnchorSource implements TxBoundarySource {
     const getResponse = await this.axiosInstance.get(url, {
       signal,
       timeout: this.requestTimeoutMs,
-      headers: { Range: 'bytes=0-0' },
+      headers: { ...requestHeaders, Range: 'bytes=0-0' },
       responseType: 'stream',
     });
     await discardResponseBody(getResponse.data, {

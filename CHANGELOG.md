@@ -612,6 +612,28 @@ with core**).
 
 ### Fixed
 
+- **Gateways missing the same chunks asked each other without end, through
+  the chunk-metadata anchor.** A chunk request another gateway forwards
+  carries `X-AR-IO-Hops`, and the chunk sources never pass it to an AR.IO
+  peer again (one hop at most). The offset lookup did not keep that limit.
+  The anchor probed its reference peer, which every gateway on the defaults
+  shares (`GATEWAYS_ROOT_TX_URLS`, `https://turbo-gateway.com`), with no
+  `X-AR-IO-*` headers, so the peer saw a new client. The tx_path check
+  fetched a chunk from AR.IO peers without the request's hop count. A chunk
+  that gateway A forwarded to B, and that B lacked, made B ask the reference
+  peer, which asked its peers, A among them, again. On 2026-10-17 the
+  gateways of a few large operators asked for offsets none of them held.
+  Both turbo-gateway.com nodes stopped answering for six hours. In 32
+  minutes one of them made 563,600 peer chunk requests that found 7 chunks.
+  Now the anchor does not probe for a request another gateway forwarded.
+  Its own probe carries `X-AR-IO-Hops` and `X-AR-IO-Node-Release`, so the
+  peer's hop limit and its limits for gateways apply. The tx_path check
+  passes the request's attributes, so its peer fetch keeps the limit. An
+  offset the anchor could not resolve is not probed again for
+  `CHUNK_METADATA_ANCHOR_MISS_CACHE_TTL_SECONDS` (default 60; `0` turns it
+  off). Outcomes are counted as `peer_origin` and `miss_cached` in
+  `ario_chunk_metadata_anchor_total`.
+
 - **JSON data was served as `application/json; charset=utf-8`.** Express
   appended the charset to every JSON, JavaScript and text type, so a client
   that compares the type exactly, such as Zora's metadata check, rejected

@@ -48,11 +48,14 @@ const matchingChainOffset = {
 function makeAxiosStub(): {
   axios: AxiosInstance;
   calls: { method: 'head' | 'get'; url: string }[];
+  /** The headers each call sent, in call order. */
+  sentHeaders: (Record<string, string> | undefined)[];
   setNextHead: (status: number, headers: Record<string, unknown>) => void;
   setNextGet: (status: number, headers: Record<string, unknown>) => void;
   setHeadThrows: (err: unknown) => void;
 } {
   const calls: { method: 'head' | 'get'; url: string }[] = [];
+  const sentHeaders: (Record<string, string> | undefined)[] = [];
   let nextHead: { status: number; headers: Record<string, unknown> } = {
     status: 200,
     headers: {},
@@ -64,8 +67,12 @@ function makeAxiosStub(): {
   let headError: unknown | undefined;
 
   const axios = {
-    head: async (url: string) => {
+    head: async (
+      url: string,
+      config?: { headers?: Record<string, string> },
+    ) => {
       calls.push({ method: 'head', url });
+      sentHeaders.push(config?.headers);
       if (headError !== undefined) {
         const e = headError;
         headError = undefined;
@@ -73,8 +80,9 @@ function makeAxiosStub(): {
       }
       return nextHead;
     },
-    get: async (url: string) => {
+    get: async (url: string, config?: { headers?: Record<string, string> }) => {
       calls.push({ method: 'get', url });
+      sentHeaders.push(config?.headers);
       return nextGet;
     },
   } as unknown as AxiosInstance;
@@ -82,6 +90,7 @@ function makeAxiosStub(): {
   return {
     axios,
     calls,
+    sentHeaders,
     setNextHead: (status, headers) => {
       nextHead = { status, headers };
     },
@@ -100,6 +109,8 @@ function makeSource({
   fetchTransaction = async () => ({ data_root: dataRoot }),
   peerUrls = ['https://ref.example'],
   cacheTtlMs = 60_000,
+  missCacheTtlMs = 0,
+  nodeRelease,
 }: {
   axiosInstance: AxiosInstance;
   fetchTxOffset?: (
@@ -112,6 +123,8 @@ function makeSource({
   ) => Promise<{ data_root: string }>;
   peerUrls?: string[];
   cacheTtlMs?: number;
+  missCacheTtlMs?: number;
+  nodeRelease?: string;
 }): ChunkMetadataAnchorSource {
   return new ChunkMetadataAnchorSource({
     log,
@@ -119,6 +132,8 @@ function makeSource({
     requestTimeoutMs: 1000,
     cacheSize: 32,
     cacheTtlMs,
+    missCacheTtlMs,
+    nodeRelease,
     fetchTxOffset,
     fetchTransaction,
     axiosInstance,
@@ -422,6 +437,90 @@ describe('ChunkMetadataAnchorSource', () => {
       const source = makeSource({ axiosInstance: failingAxios });
       const result = await source.getTxBoundary(inRangeOffset);
       assert.strictEqual(result, null);
+    });
+  });
+
+  describe('loop guard: hops and the miss cache', () => {
+    it('does not probe for a request another gateway forwarded', async () => {
+      const stub = makeAxiosStub();
+      stub.setNextHead(200, chunkHeaders());
+      const source = makeSource({ axiosInstance: stub.axios });
+      const result = await source.getTxBoundary(inRangeOffset, undefined, {
+        hops: 1,
+        clientIps: [],
+      });
+      assert.equal(result, null);
+      assert.equal(stub.calls.length, 0, 'no request to the reference peer');
+    });
+
+    it('marks its own probe as a gateway one hop on', async () => {
+      const stub = makeAxiosStub();
+      stub.setNextHead(200, chunkHeaders());
+      const source = makeSource({
+        axiosInstance: stub.axios,
+        nodeRelease: '85',
+      });
+      await source.getTxBoundary(inRangeOffset, undefined, {
+        hops: 0,
+        clientIps: [],
+      });
+      assert.equal(stub.sentHeaders[0]?.['X-AR-IO-Hops'], '1');
+      assert.equal(stub.sentHeaders[0]?.['X-AR-IO-Node-Release'], '85');
+    });
+
+    it('marks the probe one hop on with no request attributes, and on the GET fallback', async () => {
+      const stub = makeAxiosStub();
+      stub.setNextHead(405, {});
+      stub.setNextGet(206, chunkHeaders());
+      const source = makeSource({ axiosInstance: stub.axios });
+      await source.getTxBoundary(inRangeOffset);
+      assert.deepEqual(
+        stub.calls.map((c) => c.method),
+        ['head', 'get'],
+      );
+      assert.deepEqual(
+        stub.sentHeaders.map((h) => h?.['X-AR-IO-Hops']),
+        ['1', '1'],
+      );
+      assert.equal(stub.sentHeaders[1]?.Range, 'bytes=0-0');
+    });
+
+    it('does not probe an offset again while its miss is remembered', async () => {
+      const stub = makeAxiosStub();
+      stub.setNextHead(404, {});
+      const source = makeSource({
+        axiosInstance: stub.axios,
+        missCacheTtlMs: 60_000,
+      });
+      assert.equal(await source.getTxBoundary(inRangeOffset), null);
+      assert.equal(await source.getTxBoundary(inRangeOffset), null);
+      assert.equal(stub.calls.length, 1, 'the second lookup asked no one');
+      // Another offset is still probed.
+      await source.getTxBoundary(inRangeOffset + 1n);
+      assert.equal(stub.calls.length, 2);
+    });
+
+    it('probes again once the miss is forgotten (TTL 0: never remembered)', async () => {
+      const stub = makeAxiosStub();
+      stub.setNextHead(404, {});
+      const source = makeSource({
+        axiosInstance: stub.axios,
+        missCacheTtlMs: 0,
+      });
+      await source.getTxBoundary(inRangeOffset);
+      await source.getTxBoundary(inRangeOffset);
+      assert.equal(stub.calls.length, 2);
+    });
+
+    it('does not remember a hit as a miss', async () => {
+      const stub = makeAxiosStub();
+      stub.setNextHead(200, chunkHeaders());
+      const source = makeSource({
+        axiosInstance: stub.axios,
+        missCacheTtlMs: 60_000,
+      });
+      assert.notEqual(await source.getTxBoundary(inRangeOffset), null);
+      assert.notEqual(await source.getTxBoundary(inRangeOffset), null);
     });
   });
 
