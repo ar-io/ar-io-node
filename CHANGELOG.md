@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- **Opting out of Index Sharing stops seeding.** With
+  `INDEX_SWARM_SUBSCRIBE=[]` (or on the default publisher, whose default
+  subscription skips itself) the `index-swarm` sidecar now takes the
+  subscriber's torrents out of the engine once per start, files kept:
+  installed bands stay installed and the gateway still searches them, but
+  they are no longer seeded, and a download in progress stops. Torrents a
+  publisher seeds from `published/` are unaffected. Subscribing again seeds
+  the installed bands from their kept `.torrent` files, nothing fetched
+  again. Previously the engine went on seeding installed bands after an
+  opt-out.
+
 ## [Release 85] - 2026-10-17
 
 This is a **recommended release** focused on **the Arweave base layer as a
