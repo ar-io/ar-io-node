@@ -11,11 +11,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - The `CHUNK_METADATA_ANCHOR_*` settings now pass through
   `docker-compose.yaml` to core, so they can be set from `.env`. Before this,
   only a direct `yarn start` saw them.
-- Misses on ArNS names that are not registered no longer log at `warn`:
-  "Base name not found in ArNS names cache" is now `debug` (the
-  `arns_name_cache_miss_total` counter still counts it) and "Unable to
-  resolve name against all resolvers" is now `info`. A resolver that fails
-  still logs its own error.
+- A lookup of an ArNS name that is not registered no longer logs a warning
+  and an error. "Base name not found in ArNS names cache" is now `debug` (the
+  `arns_name_cache_miss_total` counter still counts it), "Unable to resolve
+  name against all resolvers" is now `info`, and "Error during parallel
+  resolution" is logged only when a resolver timed out or was aborted, not
+  when every resolver simply found no record. A resolver that throws still
+  logs its own error.
 
 ## [Release 85] - 2026-10-17
 

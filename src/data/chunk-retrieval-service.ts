@@ -353,7 +353,8 @@ export class ChunkRetrievalService {
    *
    * `boundary` says how the offset was resolved. A forwarded request is
    * resolved from the local database only (CompositeTxBoundarySource), so in
-   * practice it is `local` or `none`; `remote` stays in the type for a
+   * practice it is `local`, `none`, or `cancelled` when the request was
+   * aborted before the lookup finished; `remote` stays in the type for a
    * boundary source that ever reports otherwise.
    *
    * `bytes` says whether the chunk came off local disk or a remote source.

@@ -18,6 +18,18 @@ import { ARIORead } from '@ar.io/sdk';
 import * as config from '../config.js';
 import { tracer } from '../tracing.js';
 
+/**
+ * Thrown inside parallel resolution when a resolver answers without a
+ * resolved id, so `Promise.any` moves on to the next one. Distinguishes "no
+ * resolver knows this name" from a timeout or abort when all of them fail.
+ */
+class NoResolutionError extends Error {
+  constructor() {
+    super('Invalid resolution');
+    this.name = 'NoResolutionError';
+  }
+}
+
 export class CompositeArNSResolver implements NameResolver {
   private log: winston.Logger;
   private resolvers: NameResolver[];
@@ -217,7 +229,7 @@ export class CompositeArNSResolver implements NameResolver {
           alreadyResolvedAbort.abort();
           return resolution;
         }
-        throw new Error('Invalid resolution');
+        throw new NoResolutionError();
       });
     });
 
@@ -230,6 +242,16 @@ export class CompositeArNSResolver implements NameResolver {
       return await this.pendingResolutions[name];
     } catch (e: any) {
       const error = e as Error;
+      // Every resolver answering "no resolution" is how an unregistered name
+      // looks (a resolver that threw has already logged its own error), so
+      // that is not an error here. A timeout or abort among them still is.
+      const allMissed =
+        error instanceof AggregateError &&
+        error.errors.every((reason) => reason instanceof NoResolutionError);
+      if (allMissed) {
+        this.log.debug('No resolver returned a resolution', { name });
+        return undefined;
+      }
       this.log.error('Error during parallel resolution:', {
         name,
         resolvers: this.resolvers.map((r) => r.constructor.name),

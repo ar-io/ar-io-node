@@ -118,8 +118,10 @@ export const chunkServeLocalOnlyCounter = new promClient.Counter({
 // source.
 //
 // **`bytes="remote"` is the cost of enforcing**: those are the requests
-// `enforce` would refuse, because the chunk was only reachable from an
-// Arweave node. `bytes="local"` would be served under `enforce` as well.
+// `enforce` would refuse, because the chunk data was only reachable from an
+// Arweave node. `bytes` reflects the data source only: a chunk whose data was
+// cached but whose metadata was not counts as `local`, yet `enforce` would
+// still 404 it, so treat `bytes="remote"` as a lower bound.
 //
 // `cancelled` means the retrieval was aborted, either by the caller
 // disconnecting or by an internal timeout. The service sees a merged signal

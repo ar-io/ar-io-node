@@ -1404,7 +1404,8 @@ export const CHUNK_PEER_ORIGIN_DEADLINE_MS = env.nonNegativeIntOrDefault(
 // chain search), and the AR.IO peer sources bound forwarding depth with
 // validateHopCount. This setting governs only where the chunk bytes may
 // then come from: `off` allows any source except AR.IO peers, `enforce`
-// also declines Arweave nodes and serves only what this gateway holds.
+// also declines Arweave nodes, leaving this gateway's caches and
+// operator-owned storage (legacy S3/PostgreSQL).
 //
 // `audit` changes nothing and records, via chunk_peer_origin_audit_total,
 // the requests `enforce` would refuse (`bytes="remote"`). Run it before
