@@ -579,6 +579,194 @@ describe('ChunkMetadataAnchorSource', () => {
     });
   });
 
+  describe('shared probe cancellation', () => {
+    // A peer that answers only when released, and honours the request's
+    // signal the way axios does (rejecting with CanceledError), unless
+    // `ignoreAbort` keeps an aborted request pending until it is released.
+    function makeGatedPeer(
+      response: { status: number; headers: Record<string, unknown> },
+      { ignoreAbort = false }: { ignoreAbort?: boolean } = {},
+    ) {
+      const signals: (AbortSignal | undefined)[] = [];
+      const releases: (() => void)[] = [];
+      const axiosInstance = {
+        head: (_url: string, config?: { signal?: AbortSignal }) => {
+          const signal = config?.signal;
+          signals.push(signal);
+          return new Promise((resolve, reject) => {
+            releases.push(() => resolve(response));
+            if (ignoreAbort) return;
+            signal?.addEventListener(
+              'abort',
+              () =>
+                reject(
+                  Object.assign(new Error('canceled'), {
+                    code: 'ERR_CANCELED',
+                    name: 'CanceledError',
+                  }),
+                ),
+              { once: true },
+            );
+          });
+        },
+        get: async () => {
+          throw new Error('no GET expected');
+        },
+      } as unknown as AxiosInstance;
+      return {
+        axiosInstance,
+        signals,
+        release: (i: number) => releases[i](),
+      };
+    }
+
+    it('aborts the probe when every caller has aborted', async () => {
+      const peer = makeGatedPeer({ status: 200, headers: chunkHeaders() });
+      const source = makeSource({ axiosInstance: peer.axiosInstance });
+      const a = new AbortController();
+      const b = new AbortController();
+      const first = source.getTxBoundary(inRangeOffset, a.signal);
+      const second = source.getTxBoundary(inRangeOffset, b.signal);
+      assert.equal(peer.signals.length, 1, 'one probe for two lookups');
+      a.abort();
+      await assert.rejects(first, { name: 'AbortError' });
+      assert.equal(peer.signals[0]?.aborted, false, 'one caller still waits');
+      b.abort();
+      await assert.rejects(second, { name: 'AbortError' });
+      assert.equal(peer.signals[0]?.aborted, true, 'the HEAD saw the abort');
+    });
+
+    it('keeps probing for the caller still waiting when one aborts', async () => {
+      const peer = makeGatedPeer({ status: 200, headers: chunkHeaders() });
+      let chainSignal: AbortSignal | undefined;
+      const source = makeSource({
+        axiosInstance: peer.axiosInstance,
+        fetchTxOffset: async (_txId, signal) => {
+          chainSignal = signal;
+          return matchingChainOffset;
+        },
+      });
+      const a = new AbortController();
+      const b = new AbortController();
+      const first = source.getTxBoundary(inRangeOffset, a.signal);
+      const second = source.getTxBoundary(inRangeOffset, b.signal);
+      a.abort();
+      await assert.rejects(first, { name: 'AbortError' });
+      peer.release(0);
+      const boundary = await second;
+      assert.equal(boundary?.id, txId);
+      assert.equal(peer.signals[0]?.aborted, false);
+      assert.equal(chainSignal?.aborted, false, 'chain check not aborted');
+    });
+
+    it('starts a fresh probe for a caller after a full abort', async () => {
+      const peer = makeGatedPeer({ status: 200, headers: chunkHeaders() });
+      const source = makeSource({ axiosInstance: peer.axiosInstance });
+      const a = new AbortController();
+      const first = source.getTxBoundary(inRangeOffset, a.signal);
+      a.abort();
+      await assert.rejects(first, { name: 'AbortError' });
+      const second = source.getTxBoundary(inRangeOffset);
+      assert.equal(peer.signals.length, 2, 'did not join the aborted probe');
+      assert.equal(peer.signals[1]?.aborted, false);
+      peer.release(1);
+      assert.equal((await second)?.id, txId);
+    });
+
+    it("does not let an aborted probe's late cleanup drop its replacement", async () => {
+      // The aborted request stays pending, so the old probe settles only
+      // after a new probe of the offset has taken its place in the map.
+      const peer = makeGatedPeer(
+        { status: 200, headers: chunkHeaders() },
+        { ignoreAbort: true },
+      );
+      const source = makeSource({ axiosInstance: peer.axiosInstance });
+      const a = new AbortController();
+      const first = source.getTxBoundary(inRangeOffset, a.signal);
+      a.abort();
+      await assert.rejects(first, { name: 'AbortError' });
+      const second = source.getTxBoundary(inRangeOffset);
+      assert.equal(peer.signals.length, 2, 'a replacement probe started');
+      // Let the old probe settle and run its cleanup while the new one is
+      // still in flight.
+      peer.release(0);
+      await new Promise((resolve) => setImmediate(resolve));
+      const third = source.getTxBoundary(
+        inRangeOffset,
+        new AbortController().signal,
+      );
+      assert.equal(peer.signals.length, 2, 'joined the replacement probe');
+      peer.release(1);
+      assert.equal((await second)?.id, txId);
+      assert.equal((await third)?.id, txId);
+    });
+
+    it('does not remember an aborted probe as a miss', async () => {
+      const peer = makeGatedPeer({ status: 404, headers: {} });
+      const source = makeSource({
+        axiosInstance: peer.axiosInstance,
+        missCacheTtlMs: 60_000,
+      });
+      const a = new AbortController();
+      const first = source.getTxBoundary(inRangeOffset, a.signal);
+      a.abort();
+      await assert.rejects(first, { name: 'AbortError' });
+      // Let the aborted probe settle so its cleanup has run.
+      await new Promise((resolve) => setImmediate(resolve));
+      const second = source.getTxBoundary(inRangeOffset);
+      assert.equal(peer.signals.length, 2, 'probed again, not miss_cached');
+      peer.release(1);
+      assert.equal(await second, null);
+      // A real miss is remembered.
+      assert.equal(await source.getTxBoundary(inRangeOffset), null);
+      assert.equal(peer.signals.length, 2);
+    });
+
+    it('does not remember a probe that resolved null after its abort as a miss', async () => {
+      // The chain /tx/{id} fetch in system.ts ignores the signal, so an
+      // aborted probe can still finish, here with a data_root mismatch.
+      const stub = makeAxiosStub();
+      stub.setNextHead(200, chunkHeaders());
+      let entered!: () => void;
+      const inFetch = new Promise<void>((resolve) => (entered = resolve));
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => (release = resolve));
+      const source = makeSource({
+        axiosInstance: stub.axios,
+        missCacheTtlMs: 60_000,
+        fetchTransaction: async () => {
+          entered();
+          await gate;
+          return { data_root: 'A'.repeat(43) };
+        },
+      });
+      const a = new AbortController();
+      const first = source.getTxBoundary(inRangeOffset, a.signal);
+      await inFetch;
+      a.abort();
+      await assert.rejects(first, { name: 'AbortError' });
+      release();
+      // Let the aborted probe resolve null and run its cleanup.
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(stub.calls.length, 1);
+      assert.equal(await source.getTxBoundary(inRangeOffset), null);
+      assert.equal(stub.calls.length, 2, 'probed again, not miss_cached');
+    });
+
+    it('never aborts a probe a caller without a signal waits on', async () => {
+      const peer = makeGatedPeer({ status: 200, headers: chunkHeaders() });
+      const source = makeSource({ axiosInstance: peer.axiosInstance });
+      const unsignalled = source.getTxBoundary(inRangeOffset);
+      const a = new AbortController();
+      const signalled = source.getTxBoundary(inRangeOffset, a.signal);
+      a.abort();
+      await assert.rejects(signalled, { name: 'AbortError' });
+      assert.equal(peer.signals[0]?.aborted, false);
+      peer.release(0);
+      assert.equal((await unsignalled)?.id, txId);
+    });
+  });
+
   describe('abort propagation', () => {
     it('throws AbortError when signal is already aborted', async () => {
       const stub = makeAxiosStub();

@@ -75,6 +75,16 @@ class PeerRefusedHeadError extends Error {
   }
 }
 
+/** A probe of one offset that concurrent lookups share. */
+interface SharedProbe {
+  /** Settles with the probe's result; rejects with AbortError if aborted. */
+  promise: Promise<TxBoundary | null>;
+  /** Aborts the probe's network requests once nobody is waiting. */
+  controller: AbortController;
+  /** Callers still waiting on {@link promise}. */
+  waiters: number;
+}
+
 /**
  * Resolves `offset → tx + data_root` by HEAD-ing a reference peer's
  * `/chunk/{offset}/data`, parsing the `X-Arweave-Chunk-*` headers, and
@@ -104,7 +114,7 @@ export class ChunkMetadataAnchorSource implements TxBoundarySource {
   /** Offsets that just missed, so they are not probed again at once. */
   private misses: LRUCache<string, true> | undefined;
   /** Probes in flight, by offset: concurrent lookups share one. */
-  private inFlight = new Map<string, Promise<TxBoundary | null>>();
+  private inFlight = new Map<string, SharedProbe>();
   private fetchTxOffset: (
     txId: string,
     signal?: AbortSignal,
@@ -240,22 +250,88 @@ export class ChunkMetadataAnchorSource implements TxBoundarySource {
     }
     // Concurrent lookups of one offset share a probe: the incident's
     // pattern was the same missing offset asked for many times at once.
-    // The shared probe takes no caller's signal, so one caller cancelling
-    // does not fail the others; its own timeouts bound it, and each caller
-    // stops waiting when its own signal aborts.
-    let probing = this.inFlight.get(offsetKey);
-    if (probing === undefined) {
-      probing = this.probe(offsetNum, absoluteOffset, undefined, log)
-        .then((boundary) => {
-          if (boundary === null) this.misses?.set(offsetKey, true);
-          return boundary;
-        })
-        .finally(() => this.inFlight.delete(offsetKey));
-      this.inFlight.set(offsetKey, probing);
+    // The shared probe has its own AbortController rather than any one
+    // caller's signal, so one caller cancelling does not fail the others.
+    // Waiters are counted: when the last one aborts, the probe is aborted
+    // too, so a lookup nobody is waiting for stops using the network.
+    let shared = this.inFlight.get(offsetKey);
+    if (shared === undefined) {
+      const controller = new AbortController();
+      const entry: SharedProbe = {
+        controller,
+        waiters: 0,
+        promise: this.probe(offsetNum, absoluteOffset, controller.signal, log)
+          .then((boundary) => {
+            // An aborted probe is not a miss: nothing was learned about the
+            // offset, so the next caller must be free to probe it.
+            if (boundary === null && !controller.signal.aborted) {
+              this.misses?.set(offsetKey, true);
+            }
+            return boundary;
+          })
+          .finally(() => this.dropInFlight(offsetKey, entry)),
+      };
+      // Once every waiter has aborted nobody awaits the probe, so its
+      // AbortError would otherwise surface as an unhandled rejection.
+      entry.promise.catch(() => undefined);
+      this.inFlight.set(offsetKey, entry);
+      shared = entry;
     } else {
       this.recordResult('probe_shared');
     }
-    return signal === undefined ? probing : raceAbort(probing, signal);
+    return this.waitFor(offsetKey, shared, signal);
+  }
+
+  /**
+   * Waits on a shared probe on behalf of one caller. A caller without a
+   * signal can never abort, so it holds its place until the probe settles.
+   * A caller whose signal aborts rejects with an AbortError at once and
+   * gives up its place; if it was the last waiter, the probe itself is
+   * aborted and dropped from {@link inFlight}, so a later lookup starts a
+   * fresh probe rather than joining one that is being torn down.
+   */
+  private waitFor(
+    offsetKey: string,
+    shared: SharedProbe,
+    signal: AbortSignal | undefined,
+  ): Promise<TxBoundary | null> {
+    shared.waiters++;
+    if (signal === undefined) return shared.promise;
+    return new Promise<TxBoundary | null>((resolve, reject) => {
+      const onAbort = () => {
+        shared.waiters--;
+        if (shared.waiters === 0) {
+          this.dropInFlight(offsetKey, shared);
+          shared.controller.abort();
+        }
+        const error = new Error('The operation was aborted');
+        error.name = 'AbortError';
+        reject(error);
+      };
+      signal.addEventListener('abort', onAbort, { once: true });
+      shared.promise.then(
+        (value) => {
+          signal.removeEventListener('abort', onAbort);
+          resolve(value);
+        },
+        (error) => {
+          signal.removeEventListener('abort', onAbort);
+          reject(error);
+        },
+      );
+    });
+  }
+
+  /**
+   * Removes `shared` from {@link inFlight} if it is still the entry for the
+   * offset. A probe aborted by its last waiter is dropped at once, and a new
+   * probe of the same offset may take its place before the old one settles;
+   * the identity check stops the old probe's cleanup removing the new one.
+   */
+  private dropInFlight(offsetKey: string, shared: SharedProbe): void {
+    if (this.inFlight.get(offsetKey) === shared) {
+      this.inFlight.delete(offsetKey);
+    }
   }
 
   /** One probe of the reference peer; null on any miss. */
@@ -481,29 +557,6 @@ export class ChunkMetadataAnchorSource implements TxBoundarySource {
       weaveOffset: anchored.txEndOffset,
     };
   }
-}
-
-/** `promise`, or an AbortError as soon as `signal` aborts. */
-function raceAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
-  signal.throwIfAborted();
-  return new Promise<T>((resolve, reject) => {
-    const onAbort = () => {
-      const error = new Error('The operation was aborted');
-      error.name = 'AbortError';
-      reject(error);
-    };
-    signal.addEventListener('abort', onAbort, { once: true });
-    promise.then(
-      (value) => {
-        signal.removeEventListener('abort', onAbort);
-        resolve(value);
-      },
-      (error) => {
-        signal.removeEventListener('abort', onAbort);
-        reject(error);
-      },
-    );
-  });
 }
 
 function hasAnyChunkHeader(headers: unknown): boolean {
