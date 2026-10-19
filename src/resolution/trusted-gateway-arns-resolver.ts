@@ -15,6 +15,20 @@ export const DEFAULT_ARNS_TTL_SECONDS = 60 * 15; // 15 minutes
 export const DEFAULT_ARNS_UNDERNAME_LIMIT = 10;
 export const DEFAULT_ARNS_UNDERNAME_INDEX = 0;
 
+/**
+ * Parses a numeric response header, falling back to `defaultValue` only when
+ * the header is missing or not a number. Unlike `parseInt(header) ||
+ * defaultValue`, a parsed value of 0 is preserved (e.g. an upstream
+ * undername limit of 0 must not become the default of 10).
+ */
+function parseHeaderInt(header: unknown, defaultValue: number): number {
+  if (typeof header !== 'string') {
+    return defaultValue;
+  }
+  const parsed = parseInt(header);
+  return Number.isNaN(parsed) ? defaultValue : parsed;
+}
+
 export class TrustedGatewayArNSResolver implements NameResolver {
   private log: winston.Logger;
   private trustedGatewayUrl: string;
@@ -78,12 +92,14 @@ export class TrustedGatewayArNSResolver implements NameResolver {
       const ttl =
         parseInt(response.headers[headerNames.arnsTtlSeconds.toLowerCase()]) ||
         DEFAULT_ARNS_TTL_SECONDS;
-      const limit =
-        parseInt(response.headers[headerNames.arnsLimit.toLowerCase()]) ||
-        DEFAULT_ARNS_UNDERNAME_LIMIT;
-      const index =
-        parseInt(response.headers[headerNames.arnsIndex.toLowerCase()]) ||
-        DEFAULT_ARNS_UNDERNAME_INDEX;
+      const limit = parseHeaderInt(
+        response.headers[headerNames.arnsLimit.toLowerCase()],
+        DEFAULT_ARNS_UNDERNAME_LIMIT,
+      );
+      const index = parseHeaderInt(
+        response.headers[headerNames.arnsIndex.toLowerCase()],
+        DEFAULT_ARNS_UNDERNAME_INDEX,
+      );
       if (typeof resolvedId !== 'string') {
         // No resolved ID is how the trusted gateway says the name doesn't
         // resolve (a 404 for an unregistered name); it isn't an error.
