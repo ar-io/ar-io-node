@@ -5,11 +5,13 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import { strict as assert } from 'node:assert';
-import { describe, it, beforeEach, afterEach } from 'node:test';
+import { describe, it, afterEach } from 'node:test';
 import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';
 import {
   TrustedGatewayArNSResolver,
   DEFAULT_ARNS_TTL_SECONDS,
+  DEFAULT_ARNS_UNDERNAME_LIMIT,
+  DEFAULT_ARNS_UNDERNAME_INDEX,
 } from './trusted-gateway-arns-resolver.js';
 import { headerNames } from '../constants.js';
 import { createTestLogger } from '../../test/test-logger.js';
@@ -225,6 +227,119 @@ describe('TrustedGatewayArNSResolver', () => {
 
       assert.equal(resolution.antId, undefined);
       assert.equal(resolution.resolvedId, resolvedId);
+    });
+    it('should preserve an upstream undername limit of 0', async () => {
+      interceptorId = axios.interceptors.request.use((config) => {
+        config.adapter = () =>
+          Promise.resolve({
+            status: 200,
+            statusText: 'OK',
+            headers: {
+              [headerNames.arnsResolvedId.toLowerCase()]: resolvedId,
+              [headerNames.arnsTtlSeconds.toLowerCase()]: '300',
+              [headerNames.arnsLimit.toLowerCase()]: '0',
+              [headerNames.arnsIndex.toLowerCase()]: '0',
+            },
+            config,
+            data: null,
+          });
+        return config;
+      });
+
+      const resolver = new TrustedGatewayArNSResolver({
+        log,
+        trustedGatewayUrl: 'https://__NAME__.turbo-gateway.com',
+      });
+
+      const resolution = await resolver.resolve({ name: 'zero-limit' });
+
+      assert.equal(resolution.limit, 0);
+      assert.equal(resolution.index, 0);
+    });
+
+    it('should preserve a nonzero upstream undername limit', async () => {
+      interceptorId = axios.interceptors.request.use((config) => {
+        config.adapter = () =>
+          Promise.resolve({
+            status: 200,
+            statusText: 'OK',
+            headers: {
+              [headerNames.arnsResolvedId.toLowerCase()]: resolvedId,
+              [headerNames.arnsTtlSeconds.toLowerCase()]: '300',
+              [headerNames.arnsLimit.toLowerCase()]: '25',
+              [headerNames.arnsIndex.toLowerCase()]: '3',
+            },
+            config,
+            data: null,
+          });
+        return config;
+      });
+
+      const resolver = new TrustedGatewayArNSResolver({
+        log,
+        trustedGatewayUrl: 'https://__NAME__.turbo-gateway.com',
+      });
+
+      const resolution = await resolver.resolve({ name: 'normal-limit' });
+
+      assert.equal(resolution.limit, 25);
+      assert.equal(resolution.index, 3);
+    });
+
+    it('should fall back to defaults when undername headers are missing', async () => {
+      interceptorId = axios.interceptors.request.use((config) => {
+        config.adapter = () =>
+          Promise.resolve({
+            status: 200,
+            statusText: 'OK',
+            headers: {
+              [headerNames.arnsResolvedId.toLowerCase()]: resolvedId,
+              [headerNames.arnsTtlSeconds.toLowerCase()]: '300',
+            },
+            config,
+            data: null,
+          });
+        return config;
+      });
+
+      const resolver = new TrustedGatewayArNSResolver({
+        log,
+        trustedGatewayUrl: 'https://__NAME__.turbo-gateway.com',
+      });
+
+      const resolution = await resolver.resolve({ name: 'missing-headers' });
+
+      assert.equal(resolution.limit, DEFAULT_ARNS_UNDERNAME_LIMIT);
+      assert.equal(resolution.index, DEFAULT_ARNS_UNDERNAME_INDEX);
+    });
+
+    it('should fall back to defaults when undername headers are not numbers', async () => {
+      interceptorId = axios.interceptors.request.use((config) => {
+        config.adapter = () =>
+          Promise.resolve({
+            status: 200,
+            statusText: 'OK',
+            headers: {
+              [headerNames.arnsResolvedId.toLowerCase()]: resolvedId,
+              [headerNames.arnsTtlSeconds.toLowerCase()]: '300',
+              [headerNames.arnsLimit.toLowerCase()]: 'not-a-number',
+              [headerNames.arnsIndex.toLowerCase()]: 'not-a-number',
+            },
+            config,
+            data: null,
+          });
+        return config;
+      });
+
+      const resolver = new TrustedGatewayArNSResolver({
+        log,
+        trustedGatewayUrl: 'https://__NAME__.turbo-gateway.com',
+      });
+
+      const resolution = await resolver.resolve({ name: 'bad-headers' });
+
+      assert.equal(resolution.limit, DEFAULT_ARNS_UNDERNAME_LIMIT);
+      assert.equal(resolution.index, DEFAULT_ARNS_UNDERNAME_INDEX);
     });
   });
 });
