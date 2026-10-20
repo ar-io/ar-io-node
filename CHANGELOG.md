@@ -38,7 +38,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   (`index-band-verify --arweave-nodes`, and `index-l2-verify` by default),
   so a header check trusts no gateway:
   - a root's signature must hash to its id and verify, binding its
-    `data_root` (two nodes must agree where arweave-js can't verify);
+    `data_root`, and the root must be format 2 and found in a block by two
+    machines (see Fixed);
   - every chunk's proof is validated against that `data_root` under the
     consensus rules for its weave offset, and the chunk must hash to the
     proof;
@@ -72,6 +73,48 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   opt-out.
 
 ### Fixed
+
+- **`index-l2-verify` could report `ok: true` on bad data; it now fails
+  closed.** Three audits found ways through. Fixed:
+  - NULLs passed every row predicate: a row with no id, height, root or
+    parent, a located item with no `data_size`, a nested item with no
+    parent. They now fail the new `required` check, and every predicate
+    treats NULL as failing.
+  - Nothing checked `tags` and `wallets` against `data_items`, the items
+    against the band's selection, the Parquet column types, or the order
+    of lookup files (which were sorted before digesting). The new
+    `consistency`, `selected` and `schema` checks do, and lookups are read
+    in file order and must be in their key's order.
+  - A directory entry without a readable `band.json`, a band reached
+    through a symlink, or a malformed `.publisher.json` was skipped
+    silently, and a `.publisher.json` could retire any band of its
+    publisher. These now fail `files`, and a claim counts only when the
+    claiming band covers the other's heights.
+  - A band that vanished mid-run, or a file deleted mid-run, crashed the run
+    or passed. That band now fails `complete` and the run goes on.
+  - The on-chain check passed roots no block holds (one node serving a
+    self-signed root), format-1 headers given a `data_root` they don't
+    sign, and bands whose sampled roots were mostly made up. Roots must now
+    be format 2 and placed in one block by two machines (or found in an L1
+    index, `--l1-bands-dir`); a root no node has fails the band; more than
+    20% unreadable fails it (`--max-unreadable-share`); a band with nothing
+    located fails unless `--allow-unlocated`; agreement in place of a
+    signature needs `--allow-agreement`; chunk proofs are checked under the
+    rules of the root's block, never laxer than strict borders.
+  - `--seed` did not repeat a run. It now seeds the order each band's
+    sample is read in too, per band by its id.
+  - Nothing bound the bands to their publisher: an id is a 48-bit digest
+    anyone can recompute for rows of their own. `--publication`, with
+    `--publisher-key` or `--registry-url`, checks every file against the
+    publisher's signed publication; the result now says `publisherBound`,
+    and lists every check it did not run under `skipped`.
+  - Through `tools/ar-io-node`, `index-l1-*` and `index-l2-*` spill to
+    `data/tmp/index-verify`, not the container layer on `/`; the spill is
+    capped at 80% of the free space, a run that could not fit is refused
+    before it starts, and an interrupted run removes its spill.
+  `index-band-verify --arweave-nodes` shares the root checks: roots must be
+  format 2 and found in a block by two machines, and agreement needs
+  `--allow-agreement`.
 
 - An index-swarm subscriber can now install a Parquet band whose files have
   large footers. The footer limit was 2 MiB, and turbo-gateway.com's
