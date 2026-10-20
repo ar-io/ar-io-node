@@ -112,6 +112,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     `data/tmp/index-verify`, not the container layer on `/`; the spill is
     capped at 80% of the free space, a run that could not fit is refused
     before it starts, and an interrupted run removes its spill.
+  - A sampled root the chain refutes (no `data_root`, format 1, a signature
+    that doesn't verify, not mined, in a block at another height than its
+    items) counted only as an error, tolerated up to 20%; it now fails the
+    band. A node that times out no longer keeps a made-up root from being
+    `missing`; two ports of one address are one machine.
+  - The publication is refused once expired (`--allow-expired`), a band it
+    lists in the range that the directory lacks fails, and `assurance` says
+    when its key came from a registry.
+  - New `coverage` check: heights asked for (`--from`/`--to`) that no
+    checked band covers fail. New `located` check: a band's unlocated items
+    must be exactly what its `band.json` declares and at most
+    `--max-unlocated-share` (0.001) of them.
+  - The spill also leaves 100 GB free, and spill folders a killed run left a
+    day ago are removed.
   `index-band-verify --arweave-nodes` shares the root checks: roots must be
   format 2 and found in a block by two machines, and agreement needs
   `--allow-agreement`.

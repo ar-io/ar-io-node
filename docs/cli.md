@@ -852,14 +852,16 @@ proves, and how to reproduce or repair a band that fails, is in
 | `--seed <n>` | Seeds that sample and the order it is read in, to repeat a run; the result reports the seed drawn when none is given |
 | `--arweave-nodes <urls>` | The Arweave nodes those reads go to (comma-separated, or `default`, the default: the `tip` and `data` nodes) |
 | `--allow-agreement` | Accept a root whose signature arweave-js won't verify when two other machines serve the same signed header (default: an error) |
-| `--allow-unlocated` | Pass a band whose items have no locations, so nothing of it can be read on chain (default: it fails `onchain`) |
+| `--allow-unlocated` | Pass a band whose items all have no locations, as its `band.json` declares, so nothing of it can be read on chain (default: it fails `located` and `onchain`) |
+| `--max-unlocated-share <fraction>` | The largest share of a band's items that may be unlocated (default `0.001`); its unlocated items must also be exactly what its `band.json` declares |
+| `--allow-expired` | Bind to a `--publication` past its `expiresAt` (default: refused) |
 | `--max-unreadable-share <fraction>` | The largest share of the items tried in a band that may sit in chunks no node holds (default `0.2`) |
 | `--band-deadline <seconds>` | How long one band's on-chain reads may take (default 1200); reads still pending then are errors |
 | `--gateway-url <url>` | Read through this gateway instead: faster, but trusted, and nobody then says the roots are mined. Exclusive with `--arweave-nodes` |
 | `--read-timeout <ms>` | How long each node, gateway or publication request may take (default 30000) |
 | `--from <height>`, `--to <height>` | Check only the bands inside these heights; a band only partly inside is listed under `partial` |
 | `--skip-lookups` | Leave out the lookup check, the slowest on large bands |
-| `--spill-max <size>` | The most the lookup and consistency checks may spill (default `128GB`, and never more than 80% of the space free under the temp directory) |
+| `--spill-max <size>` | The most the lookup and consistency checks may spill (default `128GB`; never more than 80% of the space free under the temp directory, nor into its last 100 GB) |
 
 It reads every row of every table in file order, so memory stays flat; the
 large lookups spill to a folder of their own under the system temp directory
@@ -884,32 +886,33 @@ killed outright (SIGKILL) can leave `ar-io-node-l2-verify-*` behind; delete it.
   "assurance": [
     "bound to publication https://turbo-gateway.com/ar-io/indexes/publication.json (sequence 157), signed by <observer address>",
     "roots found in the L1 index at data/indexes/installed/parquet-l1, which index-l1-verify must have checked for this to trust nothing",
-    "sampled roots placed in a block by two or more machines"
+    "sampled roots placed in a block at their items' height by two or more machines (by address); their position in the block is not checked"
   ],
   "checks": [
     { "name": "identity", "ok": true, "detail": "each band's id names its heights, its publisher's tag and the digest of its heights, selection and rows: internal consistency, not a signature" },
     { "name": "parents", "ok": false, "detail": "items directly in a root sit at offset 0; items in a nested bundle name one described in parents, whose payload starts where the item says",
       "failures": [{ "height": 1300000, "found": "l2-h1300000-1399999-3078e8b8-3f379144c94a: 28 items in a nested bundle that parents does not describe there", "expected": "0" }] }
   ],
-  "publication": { "publisher": "<wallet>", "keyId": "<observer address>", "sequence": 157, "issuedAt": "2026-10-20T00:00:00.000Z", "index": "ardrive-l2", "bound": true, "source": "https://turbo-gateway.com/ar-io/indexes/publication.json" },
-  "mined": { "l1BandsDir": "data/indexes/installed/parquet-l1", "checked": 23, "uncovered": [] },
+  "publication": { "publisher": "<wallet>", "keyId": "<observer address>", "keyFrom": "the registry at http://core:4000", "sequence": 157, "issuedAt": "2026-10-20T00:00:00.000Z", "expiresAt": "2026-10-21T00:00:00.000Z", "expired": false, "index": "ardrive-l2", "bound": true, "absent": [], "source": "https://turbo-gateway.com/ar-io/indexes/publication.json" },
+  "located": [{ "id": "l2-h1300000-1399999-3078e8b8-3f379144c94a", "items": 6760000, "unlocated": 2396, "declared": 2396, "share": 0.00035 }],
+  "mined": { "l1BandsDir": "data/indexes/installed/parquet-l1", "checks": { "height": true, "position": true }, "checked": 23, "uncovered": [] },
   "superseded": [],
   "partial": [],
   "vanished": [],
   "onchain": {
     "perBand": 20, "checked": 460, "ok": 460, "wrong": 0, "missing": 0, "unreadable": 12, "errors": 0,
     "failedBands": [], "unlocatedBands": [], "seed": 408427327,
-    "bands": [{ "id": "l2-h0-99999-3078e8b8-2af284ed33de", "located": 1200, "locatedShare": 0.98, "checked": 20, "ok": 20, "wrong": 0, "missing": 0, "unreadable": 1, "unreadableShare": 0.05, "errors": 0, "passed": true, "reasons": [] }],
-    "roots": { "from": "arweave-nodes", "proven": true, "allowAgreement": false, "roots": 420, "bySignature": 420, "byAgreement": 0, "minedByNodes": 420, "minedVia": "node-status", "chunksProven": 461, "reachableNodes": 21 }
+    "bands": [{ "id": "l2-h0-99999-3078e8b8-2af284ed33de", "located": 1200, "locatedShare": 0.98, "checked": 20, "ok": 20, "wrong": 0, "missing": 0, "unreadable": 1, "unreadableShare": 0.05, "errors": 0, "errorSample": [], "passed": true, "reasons": [] }],
+    "roots": { "from": "arweave-nodes", "proven": true, "allowAgreement": false, "roots": 420, "bySignature": 420, "byAgreement": 0, "minedByNodes": 420, "minedVia": "node-status", "checks": { "height": true, "position": false }, "chunksProven": 461, "reachableNodes": 21 }
   },
   "spill": { "capBytes": 128000000000, "freeBytes": 900000000000 },
   "seconds": 6670
 }
 ```
 
-Checks are `identity`, `publication` (with `--publication`), `selection`,
-`files`, `schema`, `tables`, `required`, `locations`, `parents`,
-`consistency`, `selected`, `lookups` (unless skipped), `mined` (with an L1
+Checks are `identity`, `publication` (with `--publication`), `coverage`,
+`selection`, `files`, `schema`, `tables`, `required`, `locations`,
+`parents`, `consistency`, `selected`, `located`, `lookups` (unless skipped), `mined` (with an L1
 index), `onchain` (unless `--onchain 0`) and `complete`. Each failure names
 the band it was found in and the height that band starts at; at most 20 are
 listed per check, the rest counted in `more`. `ok` is true when every check
