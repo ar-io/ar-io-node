@@ -40,7 +40,10 @@ import {
   checkBlockChain,
   checkTxRoot,
 } from '../../../lib/parquet-l1/chain.js';
-import { checkParquetDir } from '../../../lib/parquet/check.js';
+import {
+  checkParquetDir,
+  ParquetStructureError,
+} from '../../../lib/parquet/check.js';
 import { RowDigest } from '../../../lib/parquet/digest.js';
 import { LookupDescription } from '../../../lib/parquet/lookups.js';
 import { writeBandLookups } from '../../../lib/parquet-l1/lookups.js';
@@ -579,8 +582,12 @@ export async function exportL1Band({
       createdAt: bandTime(topTimestamp),
     };
     // Refuse to publish a band whose files every subscriber would refuse.
-    await checkParquetDir(bandDir).catch((error: Error) => {
-      throw new L1CheckError(error.message, 'footer');
+    await checkParquetDir(bandDir).catch((error: unknown) => {
+      // A footer subscribers refuse rejects the band; an I/O error is retried.
+      if (error instanceof ParquetStructureError) {
+        throw new L1CheckError(error.message, 'footer');
+      }
+      throw error;
     });
     await fs.writeFile(path.join(bandDir, BAND_FILE), serializeBandFile(band));
     await writePublisherFacts(bandDir, {

@@ -27,6 +27,13 @@ export interface ColumnSpec {
 }
 
 const MAGIC = Buffer.from('PAR1');
+
+/**
+ * A file that isn't Parquet of the shape a reader will parse. Thrown for
+ * what the file holds, never for failing to read it, so a caller can tell a
+ * file to refuse from an I/O error to retry.
+ */
+export class ParquetStructureError extends Error {}
 /**
  * A footer longer than this is not a footer we will parse. DuckDB decodes it
  * in this process, and its `memory_limit` does not bound that: decoding takes
@@ -61,20 +68,26 @@ export async function checkParquetStructure(file: string): Promise<void> {
   try {
     const { size } = await handle.stat();
     if (size < 12)
-      throw new Error(`${file}: too short for Parquet (${size} bytes)`);
+      throw new ParquetStructureError(
+        `${file}: too short for Parquet (${size} bytes)`,
+      );
     const head = Buffer.alloc(4);
     await handle.read(head, 0, 4, 0);
     const tail = Buffer.alloc(8);
     await handle.read(tail, 0, 8, size - 8);
     if (!head.equals(MAGIC) || !tail.subarray(4).equals(MAGIC)) {
-      throw new Error(`${file}: not a Parquet file (no PAR1 magic)`);
+      throw new ParquetStructureError(
+        `${file}: not a Parquet file (no PAR1 magic)`,
+      );
     }
     const footer = tail.readUInt32LE(0);
     if (footer === 0 || footer > size - 12) {
-      throw new Error(`${file}: footer length ${footer} doesn't fit the file`);
+      throw new ParquetStructureError(
+        `${file}: footer length ${footer} doesn't fit the file`,
+      );
     }
     if (footer > MAX_FOOTER_BYTES) {
-      throw new Error(
+      throw new ParquetStructureError(
         `${file}: footer length ${footer} is over the ${MAX_FOOTER_BYTES}-byte limit`,
       );
     }
@@ -88,7 +101,8 @@ export async function checkParquetStructure(file: string): Promise<void> {
  * directory. A publisher runs it before writing `band.json`, so a band its
  * subscribers would refuse is never published.
  *
- * @throws on the first file that fails, naming it.
+ * @throws {ParquetStructureError} on the first file that fails, naming it;
+ * an error reading the directory or a file propagates as it is.
  */
 export async function checkParquetDir(dir: string): Promise<void> {
   const names = (await fs.readdir(dir)).filter((n) => n.endsWith('.parquet'));

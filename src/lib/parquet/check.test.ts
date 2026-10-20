@@ -14,6 +14,7 @@ import {
   checkParquetDir,
   checkParquetStructure,
   MAX_FOOTER_BYTES,
+  ParquetStructureError,
 } from './check.js';
 
 /**
@@ -99,6 +100,19 @@ describe('checkParquetDir', () => {
     await fs.writeFile(path.join(dir, 'band.json'), '{}');
     await fs.writeFile(path.join(dir, '.publisher.json'), '{}');
     await checkParquetDir(dir);
+  });
+
+  it('throws a structure error for the file, and an I/O error as it is', async () => {
+    // A publisher rejects a band over the first and retries the second.
+    await writeShell(path.join(dir, 'tags.parquet'), MAX_FOOTER_BYTES + 1);
+    await assert.rejects(checkParquetDir(dir), ParquetStructureError);
+    const missing = path.join(dir, 'gone');
+    await assert.rejects(
+      checkParquetDir(missing),
+      (error: Error) =>
+        !(error instanceof ParquetStructureError) &&
+        (error as NodeJS.ErrnoException).code === 'ENOENT',
+    );
   });
 
   it('refuses a band with one file over the limit, naming it', async () => {
