@@ -112,14 +112,22 @@ its root or in a nested bundle, so a stratified draw would let it put
 fabricated items where fewer draws fall). It then draws nested items on top
 until `ceil(N/2)` drawn items are nested, where the band has them, so the
 nested path is always read; those count like the rest, but the bound below
-uses only the uniform N. The draw is the n located rows with the smallest
-`hash(row position, s)`, where `s` is the band's seed: the first 31 bits of
-`sha256("<run seed>|<band id>|<stratum>")` (stratum 0 for the uniform draw,
-1 for the nested top-up). It MUST be salted by the band's id, so two bands
-of the same layout never draw the same positions (`hash` is DuckDB's; an
-implementation without it gives the same verdicts with any hash of the row
-position and seed the publisher can't predict, since the seed is unknown
-to it). The seed is random per run and reported; `--seed`
+uses only the uniform N.
+
+The draw MUST be ordered by a keyed cryptographic hash. The key is
+`sha256("<run seed>|<band id>|<stratum>")` as 64 lowercase hex digits
+(stratum 0 for the uniform draw, 1 for the nested top-up); the drawn rows
+are the n located rows of `data_items` (row positions in the file from 0)
+whose `sha256("<key>:<position in decimal>")`, as lowercase hex, is
+smallest, ties by position. It MUST be salted by the band's id, so two bands
+of the same layout never draw the same positions. A non-cryptographic hash
+is not enough: DuckDB's `hash(row, seed)` is `g(row) XOR k(seed)`, so
+ordering by it picks rows by their XOR distance from one random value to a
+public function of the row, and a publisher that fabricated the rows whose
+`g` starts with three zero bits (12.5%) was caught in about 11% of runs,
+not the 93% the bound claims (against SHA-256: 93.7% of 300 runs). On the
+69-million-row h1.8M band of `ardrive-l2` the SHA-256 order takes about 25
+seconds on two threads. The seed is random per run and reported; `--seed`
 is for reproducing a run only (a publisher that knew the seed before
 publishing could grind its band against it).
 

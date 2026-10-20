@@ -112,12 +112,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     `data/tmp/index-verify`, not the container layer on `/`; the spill is
     capped at 80% of the free space, a run that could not fit is refused
     before it starts, and an interrupted run removes its spill.
-  - The on-chain sample drew only from about the first 82,000 rows of each
-    band (DuckDB's `USING SAMPLE reservoir … REPEATABLE`); it now draws the
-    N located rows with the smallest hash of their position and a per-band
-    seed (sha256 of the run's seed, the band's id and the stratum), uniform
-    over the whole band, with nested items topped up to half the draw. The
-    stated bound uses the uniform draw only.
+  - The on-chain sample was not uniform. First it drew only from about the
+    first 82,000 rows of each band (DuckDB's `USING SAMPLE reservoir …
+    REPEATABLE`); then, ordered by DuckDB's `hash(row, seed)`, which is a
+    public function of the row XORed with one of the seed, its draws were
+    clustered, so a publisher could fabricate a cluster of rows the draw
+    almost never touched (caught in 11% of runs where the bound claimed
+    93%). It now takes the N located rows with the smallest
+    `sha256("<key>:<row position>")`, the key being sha256 of the run's
+    seed, the band's id and the stratum, with nested items topped up to
+    half the draw; the stated bound uses the uniform draw only.
   - A node that only failed to connect, or a machine without the
     transaction at all, no longer counts against a root: before any
     verdict of absence every silent node is asked again, any still unheard
