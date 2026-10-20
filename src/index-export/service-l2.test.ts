@@ -126,7 +126,13 @@ describe('ExportService, parquet-l2', () => {
     publishDir: path.join(dir, 'published', 'root-tx-index'),
     workDir: path.join(dir, 'export'),
     l2Indexes: [
-      { name: 'ardrive-l2', selection: ARDRIVE, publishDir: indexDir() },
+      {
+        name: 'ardrive-l2',
+        selection: ARDRIVE,
+        keyTags: [],
+        statTags: [],
+        publishDir: indexDir(),
+      },
     ],
     l2SettleBlocks: 100,
     resettleIntervalMs: 0,
@@ -136,6 +142,7 @@ describe('ExportService, parquet-l2', () => {
   const run = async (
     options: RunOptions = {},
     more: Partial<ExportConfig> = {},
+    deps: Partial<ConstructorParameters<typeof ExportService>[0]> = {},
   ) => {
     const service = new ExportService({
       config: config(more),
@@ -149,6 +156,7 @@ describe('ExportService, parquet-l2', () => {
       openL2Source: async () => source,
       diskSpace: async () => ({ free: 1e13, total: 1e14 }),
       headerCheck: { retryDelayMs: 1 },
+      ...deps,
     });
     const report = await service.runOnce(options);
     const [index] = report.l2 ?? [];
@@ -450,6 +458,23 @@ describe('ExportService, parquet-l2', () => {
         );
       }
       assert.deepEqual(derived((await run({}, changed)).index), []);
+    });
+
+    it('derives before the source is opened, so a source outage holds no upgrade back', async () => {
+      await run({}, tagged());
+      const [first] = await live();
+      await downgrade(first);
+      const { index } = await run({}, tagged(), {
+        openL2Source: async () => {
+          throw new Error('ClickHouse is down');
+        },
+      });
+      assert.equal(index.failed?.reason, 'source');
+      assert.deepEqual(derived(index), [[first.id, 'published', 'layout']]);
+      assert.equal(
+        (await live()).find((b) => b.id === first.id)?.band.schema,
+        'l2-2',
+      );
     });
 
     it('holds the derive to --range', async () => {
@@ -790,7 +815,13 @@ describe('ExportService, parquet-l2 roots the network no longer serves', () => {
         publishDir: path.join(dir, 'published', 'root-tx-index'),
         workDir: path.join(dir, 'export'),
         l2Indexes: [
-          { name: 'ardrive-l2', selection: ARDRIVE, publishDir: indexDir() },
+          {
+            name: 'ardrive-l2',
+            selection: ARDRIVE,
+            keyTags: [],
+            statTags: [],
+            publishDir: indexDir(),
+          },
         ],
         l2SettleBlocks: 100,
         resettleIntervalMs: 0,
@@ -939,7 +970,13 @@ describe('ExportService, parquet-l2 roots the network no longer serves', () => {
         publishDir: path.join(dir, 'published', 'root-tx-index'),
         workDir: path.join(dir, 'export'),
         l2Indexes: [
-          { name: 'ardrive-l2', selection: ARDRIVE, publishDir: indexDir() },
+          {
+            name: 'ardrive-l2',
+            selection: ARDRIVE,
+            keyTags: [],
+            statTags: [],
+            publishDir: indexDir(),
+          },
         ],
         l2SettleBlocks: 100,
         resettleIntervalMs: 0,

@@ -1719,6 +1719,19 @@ export class ExportService {
       let closeWallets: (() => void) | undefined;
       try {
         await fs.mkdir(workDir, { recursive: true });
+
+        // 0. Layout upgrades: the key lookup and stats of every live band
+        // not derived for the index's tag names, added in place from the
+        // band's own tables. No source read and no header check, so it
+        // runs before the source is opened and before any build, outside
+        // the time budget. Held to `--range` when given, as an operator's
+        // run is.
+        await this.deriveL2(index, entry, {
+          workDir,
+          dryRun,
+          ...(options.range !== undefined ? { range: options.range } : {}),
+        });
+
         if (this.deps.openL2Source === undefined) {
           throw new RunFailure('source', 'no parquet-l2 source is configured');
         }
@@ -1933,18 +1946,6 @@ export class ExportService {
 
         const range =
           options.resettle !== undefined ? options.range : undefined;
-
-        // 0. Layout upgrades: the key lookup and stats of every live band
-        // not derived for the index's tag names, added in place from the
-        // band's own tables. No source read and no header check, so it
-        // runs before any build and outside the time budget. Held to
-        // `--range` when given, as an operator's run is.
-        await this.deriveL2(index, entry, {
-          workDir,
-          dryRun,
-          ...(options.range !== undefined ? { range: options.range } : {}),
-        });
-
         if (options.range !== undefined && options.resettle === undefined) {
           const bands = await live();
           await run(

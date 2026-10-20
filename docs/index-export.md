@@ -807,9 +807,10 @@ names than the index is configured with, is upgraded in place: each run,
 before any build and outside the time budget, derives the two files from
 the band's tables into the work directory, checks them, moves them into
 the band, and replaces `band.json` by a rename. The band keeps its id and
-its rows, no file already in it is touched, and nothing is read from the
-source or header-checked, so a subscriber that holds the band fetches
-only the two files and `band.json`. Each band is reported under the index's
+its rows, its tables and other lookups are not touched (a tag change
+replaces only the two files), and nothing is read from the source or
+header-checked, so a subscriber that holds the band fetches only the two
+files and `band.json`. Each band is reported under the index's
 `derived` (`reason`: `layout`, or `tags_changed` where the files were
 replaced) and counted as `index_export_runs_total{kind="derive"}`; a
 failure is logged and the builds go on. With `--range`, only the bands
