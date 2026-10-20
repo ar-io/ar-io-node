@@ -68,6 +68,7 @@ async function signedFixture(size: number | Buffer): Promise<Fixture> {
 type NodeBehaviour =
   | 'good'
   | 'down'
+  | 'slow'
   | 'empty'
   | 'busy'
   | 'packed'
@@ -89,6 +90,12 @@ function nodes(
     const behaviour = behaviours[node] ?? 'good';
     asked?.push(`${node}${u.pathname}`);
     if (behaviour === 'down') throw new Error('connect ECONNREFUSED');
+    if (behaviour === 'slow') {
+      throw new DOMException(
+        'The operation was aborted due to timeout',
+        'TimeoutError',
+      );
+    }
     if (behaviour === 'empty') return json(404, {});
     if (behaviour === 'busy') return json(429, {});
     const [, kind, a, b] = u.pathname.split('/');
@@ -202,6 +209,22 @@ describe('onChainRootSource', () => {
     });
     await assert.rejects(
       busyChunks.openRoot(f.id).read(0, 10),
+      (e: unknown) =>
+        e instanceof NodesRefusedError && e.busy === 1 && e.notFound === 1,
+    );
+  });
+
+  it('never reads a node that ran out of time as a node that lacks the data', async () => {
+    // The only node holding the root times out; the others say 404. That is
+    // an error, retried, never a root marked missing.
+    const src = onChainRootSource({
+      pool: pool(nodes(f, { 'a:1984': 'slow', 'b:1984': 'empty' }), [
+        'a:1984',
+        'b:1984',
+      ]),
+    });
+    await assert.rejects(
+      src.bind(f.id),
       (e: unknown) =>
         e instanceof NodesRefusedError && e.busy === 1 && e.notFound === 1,
     );

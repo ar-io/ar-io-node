@@ -227,6 +227,10 @@ export class ArweaveNodePool {
           ...(headers !== undefined ? { headers } : {}),
         });
       } catch (error) {
+        // A node that ran out of time may well hold it: slow, not absent.
+        // Only a node that could not be reached at all says nothing.
+        const name = (error as { name?: unknown }).name;
+        if (name === 'TimeoutError' || name === 'AbortError') busy += 1;
         lastProblem = `${node}: ${(error as Error).message}`;
         continue;
       }

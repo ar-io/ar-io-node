@@ -910,10 +910,14 @@ script or an agent can drive it without parsing prose.
 - **Paths:** pass the `dir` a build reports straight back as `--band-dir`;
   see [Paths](#paths).
 - **No network** except range reads of root transactions from
-  `--gateway-url` during the header check, `index-band-export`'s reads
-  from the ClickHouse it is given, `index-l1-verify --anchor-from`'s block
-  hash fetches (`/block/height/<n>`), and `index-l1-audit --data-from`'s
-  transaction data fetches. Band commands make no Solana RPC calls.
+  `--gateway-url` during the header check, `index-band-verify
+  --arweave-nodes` and `index-l2-verify`'s reads of root transactions from
+  Arweave nodes (`/tx`, `/tx/<id>/offset`, `/chunk/<offset>`; through a
+  gateway's `/raw` with `--gateway-url` instead; none with `--onchain 0`),
+  `index-band-export`'s reads from the ClickHouse it is given,
+  `index-l1-verify --anchor-from`'s block hash fetches
+  (`/block/height/<n>`), and `index-l1-audit --data-from`'s transaction data
+  fetches. Band commands make no Solana RPC calls.
 
 ### `index-band-build` result
 
