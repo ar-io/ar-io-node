@@ -23,9 +23,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - the lookups are checked against the tables;
   - a sample of items per band (`--onchain <n>`, 20 when not given) is read
     at their recorded locations from Arweave nodes and checked against their
-    ids. Items directly in their roots and items in nested bundles are
-    sampled apart, so rare nested items are always read; `--seed` repeats a
-    run.
+    ids. The items are drawn uniformly over every located item of the band,
+    then nested items are added until half the draw is nested, so rare
+    nested items are always read; `--seed` repeats a run.
   `--spill-max` sets how much the lookup check may spill (128 GB unless
   set; the 69-million-item h1.8M band of `ardrive-l2` peaks at about 65 GB,
   past the 16 GB `index-l1-verify` allowed before, which it now shares).
@@ -128,7 +128,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     leaves the item unchecked, and a status 404 denies a root only from a
     machine that serves its header.
   - A band with nothing verified on chain is inconclusive, whatever
-    `--max-unchecked` allows.
+    `--max-unchecked` allows. With k items allowed unchecked, the stated
+    bound treats them as possibly fabricated (a fabricated item behind
+    unseeded data comes back unchecked): the share p at which
+    P(at most k of N drawn are fabricated) is 5%, not the N − k draws it
+    first claimed (N = 20, k = 4: 41%, where 18% was stated).
   - The on-chain check draws its sample up front and never replaces an
     item: each ends `ok`, `wrong` or `unchecked`; any wrong fails the band,
     any unchecked (after a second try) leaves it inconclusive unless

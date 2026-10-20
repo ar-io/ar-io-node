@@ -155,15 +155,22 @@ once more, after the others. Then, per band:
 There is no pass ratio, no floor and no allowance for unreadable data, and
 none MAY be added: each tolerance tried so far let fabricated items through
 when stacked with another. `--max-unchecked` MUST be below `--onchain`. Each
-band reports `drawn`, `drawnUniform`, `ok`, `wrong`, `missing`, `unchecked`,
+band reports `drawn`, `drawnUniform`, `drawnNested`, `ok`, `wrong`, `missing`, `unchecked`,
 `uncheckedReasons` (`error`, `unreadable`, `deadline`) and an `errorSample`.
 
 **What a pass means.** With N items drawn uniformly and none wrong, a band
 in which a fraction p of the located items are fabricated passes with
 probability (1 − p)^N. With N = 20, a band with 14% or more fabricated
 located items would have been caught with 95% probability; smaller fractions
-may not be. Items allowed unchecked are counted as the attacker's: with k
-allowed, the bound is for N − k. `assurance` says this for the run. Raise
+may not be. Items allowed unchecked are treated as possibly fabricated: a
+fabricated item behind data nobody can read (an unseeded chunk, a root no
+node places) comes back unchecked, not wrong, so with k allowed a band
+passes when at most k of its N drawn items are fabricated, with probability
+P(Bin(N, p) ≤ k) = Σ_{i≤k} C(N, i) p^i (1 − p)^(N−i). The stated bound is
+the smallest p at which that is at most 5%: with N = 20, 14% for k = 0, 22%
+for k = 1, 41% for k = 4, 46% for k = 5. N is the fewest items drawn
+uniformly in any band (min(N, located)). `assurance` says this for the run.
+Raise
 `--onchain` to catch smaller fractions. Unlocated items are not checked on
 chain at all (see the `located` check).
 
