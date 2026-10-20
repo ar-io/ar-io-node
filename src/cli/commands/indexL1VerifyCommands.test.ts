@@ -296,7 +296,7 @@ describe('openBandsDuck', () => {
     // 128 GB, which DuckDB reports in GiB (119.2), not 90% of the disk.
     assert.match(
       cap.max,
-      /^(119\.[0-9]|12[0-8][0-9.]*) ?Gi?B$/,
+      /^(119\.[0-9]|12[0-8](\.[0-9]+)?) ?Gi?B$/,
       'capped, not 90% of the disk',
     );
     assert.equal(path.dirname(session.spill), root);
