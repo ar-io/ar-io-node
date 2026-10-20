@@ -63,6 +63,7 @@ import {
   orderByClause,
   canonicalTagNames,
   PARQUET_L2_SCHEMA,
+  ParquetL2LookupLayout,
   PARQUET_L2_TABLES,
   ParquetL2Band,
   ParquetL2Selection,
@@ -998,7 +999,11 @@ async function build(
     // Derived from the tables just written, and checked against them before
     // anything publishes: a lookup that disagrees is this build's fault,
     // not the rows'.
-    const layout = { schema: PARQUET_L2_SCHEMA, keyTags, statTags };
+    const layout: ParquetL2LookupLayout = {
+      schema: PARQUET_L2_SCHEMA,
+      keyTags,
+      statTags,
+    };
     const lookups = await writeBandLookups(duck, bandDir, { layout });
     const lookupProblems = await verifyBandLookups(duck, bandDir, {
       ...layout,
