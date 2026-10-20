@@ -21,6 +21,12 @@
   ],
   "expect": {
     "verdict": "refuted",
-    "check": "onchain"
+    "check": "onchain",
+    "failing": [
+      "onchain"
+    ],
+    "reason": [
+      "refuted"
+    ]
   }
 }

@@ -33,6 +33,10 @@
   },
   "expect": {
     "verdict": "refuted",
-    "check": "located"
+    "check": "located",
+    "failing": [
+      "located",
+      "onchain"
+    ]
   }
 }

@@ -20,6 +20,11 @@
   ],
   "expect": {
     "verdict": "refuted",
-    "check": "required"
+    "check": "required",
+    "failing": [
+      "locations",
+      "parents",
+      "required"
+    ]
   }
 }

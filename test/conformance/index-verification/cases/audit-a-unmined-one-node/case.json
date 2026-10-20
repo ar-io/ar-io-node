@@ -1,6 +1,6 @@
 {
   "id": "audit-a-unmined-one-node",
-  "description": "A self-signed root no block holds, served by one node",
+  "description": "A self-signed root no block holds, served by one node; the others don't have it at all, so they don't deny it either",
   "tampered": "unmined root",
   "kind": "onchain",
   "roots": {
@@ -44,7 +44,13 @@
     }
   ],
   "expect": {
-    "verdict": "refuted",
-    "check": "onchain"
+    "verdict": "unknown",
+    "check": "onchain",
+    "failing": [
+      "onchain"
+    ],
+    "reason": [
+      "unchecked"
+    ]
   }
 }

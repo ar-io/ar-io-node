@@ -18,6 +18,7 @@
     }
   ],
   "expect": {
-    "verdict": "verified"
+    "verdict": "verified",
+    "reason": []
   }
 }

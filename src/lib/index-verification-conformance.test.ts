@@ -50,15 +50,22 @@ describe('index-verification conformance', () => {
 
   for (const c of cases) {
     it(`${c.id}: ${c.expect.verdict}${c.expect.check !== undefined ? ` (${c.expect.check})` : ''}`, async () => {
+      const expectFailing = (failing: string[]) => {
+        // Exactly the checks the case names fail: none more.
+        assert.deepEqual(
+          [...failing].sort(),
+          [...(c.expect.failing ?? [])].sort(),
+          `failing ${failing.join(', ')}`,
+        );
+        if (c.expect.check !== undefined && c.expect.verdict !== 'verified') {
+          assert.ok(failing.includes(c.expect.check));
+        }
+      };
       if (c.kind === 'onchain') {
         const result = await runOnchainCase(c);
         assert.equal(result.verdict, c.expect.verdict, c.description);
-        if (c.expect.check !== undefined && c.expect.verdict !== 'verified') {
-          assert.ok(
-            result.failing.includes(c.expect.check),
-            result.failing.join(),
-          );
-        }
+        expectFailing(result.failing);
+        assert.deepEqual(result.reason, c.expect.reason ?? [], c.description);
         return;
       }
       const built = await buildBandsCase(duck, root, c);
@@ -68,12 +75,7 @@ describe('index-verification conformance', () => {
         c.expect.verdict,
         `${c.description}: failing ${result.failing.join(', ')}`,
       );
-      if (c.expect.check !== undefined && c.expect.verdict !== 'verified') {
-        assert.ok(
-          result.failing.includes(c.expect.check),
-          `${c.expect.check} not among ${result.failing.join(', ')}`,
-        );
-      }
+      expectFailing(result.failing);
       if (c.expect.publisherBound !== undefined) {
         assert.equal(result.publisherBound, c.expect.publisherBound);
       }
@@ -81,6 +83,13 @@ describe('index-verification conformance', () => {
         assert.equal(result.drawnUniform, c.expect.draw.drawnUniform);
         for (const offset of c.expect.draw.readsInclude ?? []) {
           assert.ok(result.reads.includes(offset), `${offset} not read`);
+        }
+        if (c.expect.draw.bandsDiffer === true) {
+          const sets = [...result.readsByRoot.values()].map((r) =>
+            [...r].sort((x, y) => x - y).join(','),
+          );
+          assert.equal(sets.length, 2, 'two bands read');
+          assert.notEqual(sets[0], sets[1], 'two bands drew the same items');
         }
       }
       if (c.expect.repeatable === true) {

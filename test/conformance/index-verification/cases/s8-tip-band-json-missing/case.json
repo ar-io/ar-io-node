@@ -22,6 +22,9 @@
   ],
   "expect": {
     "verdict": "refuted",
-    "check": "files"
+    "check": "files",
+    "failing": [
+      "files"
+    ]
   }
 }

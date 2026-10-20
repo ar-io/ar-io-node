@@ -81,7 +81,20 @@ export interface CaseExpect {
   /** The same seed draws the same items twice. */
   repeatable?: boolean;
   /** For a draw case: how the band's sample was drawn. */
-  draw?: { drawnUniform: number; readsInclude?: number[] };
+  draw?: {
+    drawnUniform: number;
+    readsInclude?: number[];
+    /** Two bands of one layout draw different positions under one seed. */
+    bandsDiffer?: boolean;
+  };
+  /** Every check that fails, exactly (for `refuted` and `unknown`). */
+  failing?: string[];
+  /**
+   * On-chain cases: why, exactly. Refuted: the kinds of wrong entries
+   * (`not-the-item`, `past-end`, `refuted`, `missing`). Unknown: one of
+   * `unchecked`, `nothing-verified`, `nothing-drawn`.
+   */
+  reason?: string[];
 }
 
 export interface Case {
@@ -193,7 +206,8 @@ type RowOp =
   | { op: 'pushNull'; table: string }
   | { op: 'clear'; table: string }
   | { op: 'unlocate'; row: number | 'all' }
-  | { op: 'moreDirect'; count: number };
+  | { op: 'moreDirect'; count: number }
+  | { op: 'moreNested'; count: number };
 
 function applyRowOp(
   rows: Record<string, unknown[][]>,
@@ -222,6 +236,36 @@ function applyRowOp(
       }
       if (op.row === 'all') rows.parents = [];
       return;
+    case 'moreNested': {
+      // More items in the nested bundle, each at its own offset in it.
+      const nestedItem = rows.data_items[1];
+      for (let i = 0; i < op.count; i += 1) {
+        const copy = [...nestedItem];
+        copy[0] = sha(`nested-${from}-${i}`);
+        const off = 10_000 * (i + 1);
+        copy.splice(
+          LOC('root_parent_offset'),
+          8,
+          3500,
+          off,
+          1300,
+          off + 1100,
+          off + 514,
+          512,
+          off + 2,
+          512,
+        );
+        rows.data_items.push(copy);
+        rows.tags.push([
+          from + 1,
+          copy[0],
+          0,
+          Buffer.from('App-Name'),
+          Buffer.from('ArDrive-Web'),
+        ]);
+      }
+      return;
+    }
     case 'moreDirect': {
       // More items directly in the root, each at its own offset.
       const direct = rows.data_items[0];
@@ -357,6 +401,7 @@ interface BuiltBands {
     failing: string[];
     publisherBound?: boolean;
     reads: number[];
+    readsByRoot: Map<string, number[]>;
     drawnUniform?: number;
   }>;
 }
@@ -365,10 +410,12 @@ interface BuiltBands {
 function strangerSource(
   reads: number[],
   answer: 'stranger' | 'busy',
+  byRoot: Map<string, number[]> = new Map(),
 ): RootSourceFactory {
-  return () => ({
+  return (root) => ({
     read: async (offset: number, size: number) => {
       reads.push(offset);
+      byRoot.set(root, [...(byRoot.get(root) ?? []), offset]);
       if (answer === 'busy') {
         throw Object.assign(new Error('busy'), { response: { status: 503 } });
       }
@@ -576,6 +623,7 @@ export async function buildBandsCase(
     dir,
     run: async (seedOverride) => {
       const reads: number[] = [];
+      const readsByRoot = new Map<string, number[]>();
       const stream = duck.stream.bind(duck);
       for (const d of during.filter((x) => x.when === 'onTable')) {
         const target = bands[d.band];
@@ -622,7 +670,11 @@ export async function buildBandsCase(
             ? {
                 onchain: {
                   perBand: options.onchain.perBand,
-                  openRoot: strangerSource(reads, options.onchain.source),
+                  openRoot: strangerSource(
+                    reads,
+                    options.onchain.source,
+                    readsByRoot,
+                  ),
                   concurrency: 1,
                   ...(seedOverride !== undefined ||
                   options.onchain.seed !== undefined
@@ -657,13 +709,19 @@ export async function buildBandsCase(
           failing,
           publisherBound: result.publisherBound,
           reads,
+          readsByRoot,
           ...(result.onchain !== undefined && result.onchain.bands.length > 0
             ? { drawnUniform: result.onchain.bands[0].drawnUniform }
             : {}),
         };
       } catch (error) {
         if (error instanceof L2BandsRefused) {
-          return { verdict: 'refuted', failing: ['refused'], reads };
+          return {
+            verdict: 'refuted',
+            failing: ['refused'],
+            reads,
+            readsByRoot,
+          };
         }
         throw error;
       } finally {
@@ -905,6 +963,8 @@ interface EntrySpec {
   fabricated?: boolean;
   /** A made-up root id altogether. */
   madeUp?: boolean;
+  /** A header range that runs past the root's end. */
+  pastEnd?: boolean;
   height?: number;
   repeat?: number;
 }
@@ -912,6 +972,7 @@ interface EntrySpec {
 export async function runOnchainCase(c: Case): Promise<{
   verdict: Verdict;
   failing: string[];
+  reason: string[];
 }> {
   const rootSpecs = (c.roots ?? {}) as Record<
     string,
@@ -950,6 +1011,12 @@ export async function runOnchainCase(c: Case): Promise<{
         ...item,
         ...(spec.fabricated === true || root.items.length === 0
           ? { id: crypto.randomBytes(32).toString('base64url') }
+          : {}),
+        ...(spec.pastEnd === true
+          ? {
+              rootOffset: root.data.length - 100,
+              rootDataOffset: root.data.length + 1000,
+            }
           : {}),
         rootTxId: root.id,
         height: spec.height ?? root.height,
@@ -993,13 +1060,40 @@ export async function runOnchainCase(c: Case): Promise<{
       ? { deadlineMs: options.deadlineMs }
       : {}),
   });
+  const kinds = [
+    ...new Set(
+      result.wrong.map((w) =>
+        w.missing === true
+          ? 'missing'
+          : /^offsets run past the end/.test(w.reason)
+            ? 'past-end'
+            : /^its root .* is refuted/.test(w.reason)
+              ? 'refuted'
+              : 'not-the-item',
+      ),
+    ),
+  ].sort();
+  const verdict: Verdict = result.passed
+    ? 'verified'
+    : result.wrong.length > 0
+      ? 'refuted'
+      : 'unknown';
   return {
-    verdict: result.passed
-      ? 'verified'
-      : result.wrong.length > 0
-        ? 'refuted'
-        : 'unknown',
+    verdict,
     failing: result.passed ? [] : ['onchain'],
+    reason:
+      verdict === 'refuted'
+        ? kinds
+        : verdict === 'unknown'
+          ? [
+              result.drawn === 0
+                ? 'nothing-drawn'
+                : result.ok === 0 &&
+                    result.unchecked.length <= (options.maxUnchecked ?? 0)
+                  ? 'nothing-verified'
+                  : 'unchecked',
+            ]
+          : [],
   };
 }
 

@@ -1,0 +1,34 @@
+{
+  "id": "past-end",
+  "description": "An item whose header range runs past its root's end",
+  "tampered": "1 of 20 past the end",
+  "kind": "onchain",
+  "roots": {
+    "G": {}
+  },
+  "nodes": {
+    "h1:1984": {},
+    "h2:1984": {},
+    "h3:1984": {}
+  },
+  "entries": [
+    {
+      "root": "G",
+      "repeat": 19
+    },
+    {
+      "root": "G",
+      "pastEnd": true
+    }
+  ],
+  "expect": {
+    "verdict": "refuted",
+    "check": "onchain",
+    "failing": [
+      "onchain"
+    ],
+    "reason": [
+      "past-end"
+    ]
+  }
+}

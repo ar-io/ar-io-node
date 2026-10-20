@@ -1,6 +1,6 @@
 {
   "id": "p1b-unmined-fake-root",
-  "description": "Items under a root only one node calls mined",
+  "description": "Items under a root only one node serves and calls mined; the others don't have it, so can neither confirm nor deny",
   "tampered": "4 of 20 under a root one node serves",
   "kind": "onchain",
   "roots": {
@@ -49,7 +49,13 @@
     }
   ],
   "expect": {
-    "verdict": "refuted",
-    "check": "onchain"
+    "verdict": "unknown",
+    "check": "onchain",
+    "failing": [
+      "onchain"
+    ],
+    "reason": [
+      "unchecked"
+    ]
   }
 }

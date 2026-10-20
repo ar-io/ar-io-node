@@ -29,6 +29,9 @@
   ],
   "expect": {
     "verdict": "refuted",
-    "check": "lookups"
+    "check": "lookups",
+    "failing": [
+      "lookups"
+    ]
   }
 }

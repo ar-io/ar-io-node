@@ -17,6 +17,9 @@
   ],
   "expect": {
     "verdict": "refuted",
-    "check": "consistency"
+    "check": "consistency",
+    "failing": [
+      "consistency"
+    ]
   }
 }

@@ -22,6 +22,9 @@
   "publication": {},
   "expect": {
     "verdict": "refuted",
-    "check": "publication"
+    "check": "publication",
+    "failing": [
+      "publication"
+    ]
   }
 }

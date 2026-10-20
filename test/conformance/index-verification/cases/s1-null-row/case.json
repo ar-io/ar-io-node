@@ -17,6 +17,13 @@
   ],
   "expect": {
     "verdict": "refuted",
-    "check": "required"
+    "check": "required",
+    "failing": [
+      "consistency",
+      "located",
+      "locations",
+      "required",
+      "selected"
+    ]
   }
 }

@@ -19,6 +19,9 @@
   ],
   "expect": {
     "verdict": "refuted",
-    "check": "schema"
+    "check": "schema",
+    "failing": [
+      "schema"
+    ]
   }
 }

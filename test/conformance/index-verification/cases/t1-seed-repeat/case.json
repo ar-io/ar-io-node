@@ -26,6 +26,9 @@
   "expect": {
     "verdict": "refuted",
     "check": "onchain",
-    "repeatable": true
+    "repeatable": true,
+    "failing": [
+      "onchain"
+    ]
   }
 }

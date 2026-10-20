@@ -1,0 +1,38 @@
+{
+  "id": "unmined-root-refuted",
+  "description": "A root whose header three machines serve, two of which say it is in no block",
+  "tampered": "root not mined",
+  "kind": "onchain",
+  "roots": {
+    "F": {}
+  },
+  "nodes": {
+    "h1:1984": {
+      "status": {
+        "*": "404"
+      }
+    },
+    "h2:1984": {
+      "status": {
+        "*": "404"
+      }
+    },
+    "h3:1984": {}
+  },
+  "entries": [
+    {
+      "root": "F",
+      "repeat": 2
+    }
+  ],
+  "expect": {
+    "verdict": "refuted",
+    "check": "onchain",
+    "failing": [
+      "onchain"
+    ],
+    "reason": [
+      "refuted"
+    ]
+  }
+}

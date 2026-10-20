@@ -29,6 +29,12 @@
   ],
   "expect": {
     "verdict": "unknown",
-    "check": "onchain"
+    "check": "onchain",
+    "failing": [
+      "onchain"
+    ],
+    "reason": [
+      "unchecked"
+    ]
   }
 }

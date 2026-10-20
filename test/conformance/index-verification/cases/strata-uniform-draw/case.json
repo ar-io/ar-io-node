@@ -31,6 +31,9 @@
       "readsInclude": [
         3500
       ]
-    }
+    },
+    "failing": [
+      "onchain"
+    ]
   }
 }

@@ -18,6 +18,10 @@
   ],
   "expect": {
     "verdict": "refuted",
-    "check": "identity"
+    "check": "identity",
+    "failing": [
+      "identity",
+      "tables"
+    ]
   }
 }

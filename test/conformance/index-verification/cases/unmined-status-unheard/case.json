@@ -1,0 +1,42 @@
+{
+  "id": "unmined-status-unheard",
+  "description": "Two machines that serve the header say it is in no block; a third stays busy on status",
+  "tampered": "status 503 on one node",
+  "kind": "onchain",
+  "roots": {
+    "F": {}
+  },
+  "nodes": {
+    "h1:1984": {
+      "status": {
+        "*": "404"
+      }
+    },
+    "h2:1984": {
+      "status": {
+        "*": "404"
+      }
+    },
+    "h3:1984": {
+      "status": {
+        "*": "503"
+      }
+    }
+  },
+  "entries": [
+    {
+      "root": "F",
+      "repeat": 2
+    }
+  ],
+  "expect": {
+    "verdict": "unknown",
+    "check": "onchain",
+    "failing": [
+      "onchain"
+    ],
+    "reason": [
+      "unchecked"
+    ]
+  }
+}

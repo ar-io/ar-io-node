@@ -15,6 +15,9 @@
   },
   "expect": {
     "verdict": "refuted",
-    "check": "coverage"
+    "check": "coverage",
+    "failing": [
+      "coverage"
+    ]
   }
 }
