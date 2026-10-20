@@ -36,10 +36,10 @@ import { requiredStringFromOptions } from '../utils.js';
 
 /**
  * The most a check may spill unless `--spill-max` says otherwise. The lookup
- * check of a 69-million-item band (h1.8M of `ardrive-l2`) needs more than
- * 16 GB; 64 GB covers every band published so far with room to grow.
+ * check of a 69-million-item band (h1.8M of `ardrive-l2`) peaks at about
+ * 65 GB (measured 2026-10-20); 128 GB leaves room for a band twice that.
  */
-export const BANDS_SPILL_MAX = '64GB';
+export const BANDS_SPILL_MAX = '128GB';
 /** A DuckDB size: digits and a unit (`16GB`, `512MB`, `1TB`). */
 export const SPILL_MAX_PATTERN =
   /^\d+(\.\d+)?\s*(KB|MB|GB|TB|KiB|MiB|GiB|TiB)$/i;
