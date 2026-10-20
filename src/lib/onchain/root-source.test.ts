@@ -17,7 +17,12 @@ import { default as Arweave } from 'arweave';
 import { BufferByteRangeSource } from '../../../test/buffer-byte-range-source.js';
 import { scanBundle } from '../ans104-bundle-scan.js';
 import { ShortRangeReadError } from '../http-byte-range-source.js';
-import { checkBandHeaders } from '../index-band/verify.js';
+import type { BandSampleEntry } from '../index-band/build.js';
+import {
+  checkBandHeaders,
+  checkDrawnHeaders,
+  type RootSourceFactory,
+} from '../index-band/verify.js';
 import {
   ArweaveNodePool,
   type FetchLike,
@@ -32,6 +37,47 @@ import {
 } from './root-source.js';
 
 const arweave = Arweave.init({});
+
+/**
+ * The L2 verifier's on-chain rule over a pool of candidates: a seeded draw
+ * of the targets' size, then every drawn entry checked, none replaced.
+ * Options of the old header check (ratios, floors) are ignored: the rule
+ * has none.
+ */
+function drawn(options: {
+  entries: BandSampleEntry[];
+  openRoot: RootSourceFactory;
+  targets?: Record<string, number>;
+  random?: () => number;
+  concurrency?: number;
+  retries?: number;
+  retryDelayMs?: number;
+  maxUnchecked?: number;
+  [other: string]: unknown;
+}) {
+  const pool = [...options.entries];
+  const random = options.random ?? (() => 0.5);
+  for (let i = pool.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(random() * (i + 1));
+    [pool[i], pool[j]] = [pool[j], pool[i]];
+  }
+  const size =
+    options.targets === undefined
+      ? pool.length
+      : Object.values(options.targets).reduce((a, b) => a + b, 0);
+  return checkDrawnHeaders({
+    entries: pool.slice(0, size),
+    openRoot: options.openRoot,
+    ...(options.concurrency !== undefined
+      ? { concurrency: options.concurrency }
+      : {}),
+    ...(options.retries !== undefined ? { retries: options.retries } : {}),
+    retryDelayMs: options.retryDelayMs ?? 1,
+    ...(options.maxUnchecked !== undefined
+      ? { maxUnchecked: options.maxUnchecked }
+      : {}),
+  });
+}
 
 /**
  * A real signed transaction, chunked and proven by arweave-js, placed in the
@@ -231,7 +277,7 @@ describe('onChainRootSource', () => {
     );
   });
 
-  it('asks a node that ran out of time once more while fewer than two machines said 404', async () => {
+  it('never calls a root missing while a node that may hold it stays unheard', async () => {
     // One 404 and a slow node: the slow one is asked again; still busy,
     // one machine's 404 is not enough, and the root is unchecked (an error).
     const asked: string[] = [];
@@ -248,8 +294,9 @@ describe('onChainRootSource', () => {
         (e as { response?: unknown }).response === undefined,
     );
     assert.equal(asked.filter((a) => a === `a:1984/tx/${f.id}`).length, 2);
-    // Two machines said 404: the root is missing, the slow node unheard
-    // (review P4).
+    // Two machines said 404, but the slow node, asked twice, stayed unheard:
+    // it may be the one holder, so the root is unchecked, never missing
+    // (review round 5, F2).
     const two = onChainRootSource({
       pool: pool(
         nodes(f, { 'a:1984': 'slow', 'b:1984': 'empty', 'c:1984': 'empty' }),
@@ -258,8 +305,22 @@ describe('onChainRootSource', () => {
     });
     await assert.rejects(
       two.bind(f.id),
+      (e: unknown) =>
+        e instanceof NodesRefusedError &&
+        (e as { response?: unknown }).response === undefined,
+    );
+    // Every node heard, two saying 404: missing.
+    const heard = onChainRootSource({
+      pool: pool(nodes(f, { 'b:1984': 'empty', 'c:1984': 'empty' }), [
+        'b:1984',
+        'c:1984',
+      ]),
+    });
+    await assert.rejects(
+      heard.bind(f.id),
       (e: unknown) => e instanceof NotOnNodesError && e.wholeRoot,
     );
+
     // For a chunk, a busy node is still an error, never a missing chunk.
     const chunks = onChainRootSource({
       requireMined: false,
@@ -709,7 +770,7 @@ describe('the on-chain check fails closed', () => {
         ),
       ),
     });
-    const r = await checkBandHeaders({
+    const r = await drawn({
       entries,
       totalRecords: entries.length,
       openRoot: src.openRoot,
@@ -731,7 +792,7 @@ describe('the on-chain check fails closed', () => {
         ),
       ),
     });
-    const r = await checkBandHeaders({
+    const r = await drawn({
       entries,
       totalRecords: entries.length,
       openRoot: src.openRoot,
@@ -753,7 +814,7 @@ describe('the on-chain check fails closed', () => {
       ),
     });
     await assert.rejects(src.bind(id), RootUnboundError);
-    const r = await checkBandHeaders({
+    const r = await drawn({
       entries,
       totalRecords: entries.length,
       openRoot: src.openRoot,
@@ -787,7 +848,7 @@ describe('the on-chain check fails closed', () => {
         tag: 'direct',
       });
     }
-    const r = await checkBandHeaders({
+    const r = await drawn({
       entries,
       totalRecords: 10_000,
       openRoot: src.openRoot,
@@ -807,7 +868,7 @@ describe('the on-chain check fails closed', () => {
     for (let i = 0; i < 40; i += 1)
       entries.push({ ...real[i % 2], tag: 'direct' });
     let reads = 0;
-    const r = await checkBandHeaders({
+    const r = await drawn({
       entries,
       totalRecords: 10_000,
       // Six reads in seven find their chunk gone.
@@ -843,7 +904,8 @@ describe('the on-chain check fails closed', () => {
       maxUnreadableShare: 0.2,
     });
     assert.equal(r.passed, false);
-    assert.ok(r.unreadableShare > 0.2);
+    assert.ok(r.unchecked.length > 0);
+    assert.equal(r.inconclusive, true);
   });
 });
 
@@ -1075,7 +1137,7 @@ describe('the on-chain check counts a refuted root against its band', () => {
       rootDataOffset: 1100,
       tag: 'direct',
     }));
-    const r = await checkBandHeaders({
+    const r = await drawn({
       ...VB,
       entries: twenty(good.entries, bad),
       openRoot: src.openRoot,
@@ -1097,7 +1159,7 @@ describe('the on-chain check counts a refuted root against its band', () => {
         'evil:1984',
       ]),
     });
-    const r = await checkBandHeaders({
+    const r = await drawn({
       ...VB,
       entries: twenty(good.entries, fake.entries),
       openRoot: src.openRoot,
@@ -1127,14 +1189,16 @@ describe('the on-chain check counts a refuted root against its band', () => {
       rootDataOffset: 1100,
       tag: 'direct',
     }));
-    const r = await checkBandHeaders({
+    const r = await drawn({
       ...VB,
       entries: twenty(good.entries, bad),
       openRoot: src.openRoot,
       random: random(1),
     });
+    // The slow node may hold the made-up roots: they are unchecked, and
+    // an unchecked entry leaves the band inconclusive, never passed.
     assert.equal(r.passed, false, r.reasons.join('; '));
-    assert.ok(r.missing.length > 0);
+    assert.ok(r.unchecked.length > 0);
   });
 
   it('fails a root nodes place at another height than its items give', async () => {
@@ -1146,7 +1210,7 @@ describe('the on-chain check counts a refuted root against its band', () => {
         'h2:1984',
       ]),
     });
-    const r = await checkBandHeaders({
+    const r = await drawn({
       ...VB,
       targets: { direct: 2 },
       entries: good.entries.map((e) => ({ ...e, height: HEIGHT + 1 })),
@@ -1155,7 +1219,7 @@ describe('the on-chain check counts a refuted root against its band', () => {
     assert.equal(r.passed, false);
     assert.match(r.wrong.map((w) => w.reason).join(), /height/);
     // At its own height, it passes.
-    const ok = await checkBandHeaders({
+    const ok = await drawn({
       ...VB,
       targets: { direct: 2 },
       entries: good.entries,
@@ -1305,7 +1369,7 @@ describe('one node cannot refute an honest root', () => {
     }
   });
   const check = (src: ReturnType<typeof onChainRootSource>, n = 8) =>
-    checkBandHeaders({
+    drawn({
       entries: Array.from({ length: n }, (_, i) => entries[i % entries.length]),
       totalRecords: n,
       openRoot: src.openRoot,
@@ -1408,7 +1472,7 @@ describe('one node cannot refute an honest root', () => {
         rootTxId: made,
       })),
     ];
-    const r = await checkBandHeaders({
+    const r = await drawn({
       entries: mixed,
       totalRecords: 20,
       openRoot: honest.openRoot,
@@ -1420,23 +1484,20 @@ describe('one node cannot refute an honest root', () => {
       retries: 0,
       retryDelayMs: 1,
     });
-    assert.equal(r.missing.length, 0);
+    // Unchecked, never wrong: the band is inconclusive, not refuted...
     assert.equal(r.wrong.length, 0);
-    assert.equal(r.errors.length, 4);
-    assert.equal(r.passed, true, r.reasons.join('; '));
-    // ...but never a pass by silence: all of them, and it fails its floor.
-    const all = await checkBandHeaders({
-      entries: mixed.slice(16),
-      totalRecords: 20,
+    assert.equal(r.unchecked.length, 4);
+    assert.equal(r.passed, false);
+    assert.equal(r.inconclusive, true);
+    // ...and passes only when that many unchecked entries are allowed.
+    const allowed = await drawn({
+      entries: mixed,
       openRoot: honest.openRoot,
-      targets: { direct: 4 },
-      minRecords: 0,
-      missingRootIsWrong: true,
       concurrency: 1,
       retries: 0,
-      retryDelayMs: 1,
+      maxUnchecked: 4,
     });
-    assert.equal(all.passed, false);
+    assert.equal(allowed.passed, true, allowed.reasons.join('; '));
   });
 });
 
@@ -1509,7 +1570,7 @@ describe('a bound root is never missing, and a block is its hash and height', ()
     });
     return {
       src,
-      result: checkBandHeaders({
+      result: drawn({
         entries: Array.from({ length: 20 }, (_, i) => ({
           ...entries[i % entries.length],
           height,
@@ -1570,9 +1631,9 @@ describe('a bound root is never missing, and a block is its hash and height', ()
       ['tip1:1984', 'tip2:1984', 'data1:1984'],
     );
     const r = await result;
-    assert.equal(r.missing.length, 0);
     assert.equal(r.wrong.length, 0);
-    assert.ok(r.errors.length > 0);
+    assert.ok(r.unchecked.length > 0);
+    assert.equal(r.inconclusive, true);
   });
 
   it('passes it once the busy holder answers on being asked again (D3b)', async () => {
@@ -1594,11 +1655,42 @@ describe('a bound root is never missing, and a block is its hash and height', ()
     );
     const r = await result;
     assert.equal(r.passed, true, r.reasons.join('; '));
-    assert.equal(r.missing.length, 0);
+    assert.equal(r.wrong.length, 0);
   });
 });
 
 describe('ArweaveNodePool machines', () => {
+  it('joins machines through a name whose addresses meet both, and knows mapped loopback', async () => {
+    const addresses: Record<string, string[]> = {
+      a: ['10.0.0.1'],
+      c: ['10.0.0.2'],
+      b: ['10.0.0.1', '10.0.0.2'],
+      m: ['::ffff:7f00:1'],
+      n: ['::ffff:127.0.0.2'],
+    };
+    const pool = new ArweaveNodePool({
+      urls: [
+        'http://a:1984',
+        'http://c:1984',
+        'http://b:1984',
+        'http://127.0.0.1:1984',
+        'http://m:1984',
+        'http://n:1984',
+      ],
+      fetch: async () => ({ status: 404, ok: false, json: async () => ({}) }),
+      lookupAll: async (host) => addresses[host] ?? [],
+    });
+    await pool.ready();
+    // a, c and b are one machine (b's addresses meet both); every loopback
+    // form is one.
+    assert.deepEqual(pool.urls, ['http://a:1984', 'http://127.0.0.1:1984']);
+    assert.equal(
+      pool.addressOf('http://a:1984') ===
+        pool.addressOf('http://127.0.0.1:1984'),
+      false,
+    );
+  });
+
   const answer: FetchLike = async () => ({
     status: 404,
     ok: false,
@@ -1637,5 +1729,241 @@ describe('ArweaveNodePool machines', () => {
       'http://nowhere.example:1984',
     ]);
     assert.deepEqual(pool.unresolved, ['http://nowhere.example:1984']);
+  });
+});
+
+/**
+ * Review round 5 (E1, E1c, E2, E2b, E3, E5): one denominator, no
+ * substitution. Every drawn entry is ok, wrong or unchecked; any unchecked
+ * entry leaves a band inconclusive (unless allowed), so fabricated items
+ * can't hide behind roots or chunks nobody can read, and an honest band is
+ * never refuted by a holder that was not heard.
+ */
+describe('the drawn sample: ok, wrong or unchecked, never replaced', () => {
+  const START = 40_000_000_000_000n;
+  type Served = {
+    header: Record<string, unknown>;
+    data: Buffer;
+    chunks: Fixture['chunks'];
+    start: bigint;
+  };
+  const json = (code: number, body: unknown) =>
+    Promise.resolve({ status: code, ok: code === 200, json: async () => body });
+  /** Every node serves every root honestly, unless `over` answers. */
+  const net =
+    (
+      served: Map<string, Served>,
+      over: (host: string, path: string) => ReturnType<FetchLike> | undefined,
+    ): FetchLike =>
+    async (url) => {
+      const u = new URL(url);
+      const answer = over(u.host, u.pathname);
+      if (answer !== undefined) return answer;
+      const [, kind, a, b] = u.pathname.split('/');
+      if (kind === 'tx') {
+        const f = served.get(a);
+        if (f === undefined) return json(404, {});
+        if (b === 'status') {
+          return json(200, {
+            block_indep_hash: 'B'.repeat(64),
+            block_height: 1000,
+            number_of_confirmations: 50,
+          });
+        }
+        if (b === 'offset') {
+          return json(200, {
+            offset: String(f.start + BigInt(f.data.length) - 1n),
+            size: String(f.data.length),
+          });
+        }
+        return json(200, f.header);
+      }
+      for (const f of served.values()) {
+        const rel = Number(BigInt(a) - f.start);
+        const c = f.chunks.find((x) => rel >= x.min && rel < x.max);
+        if (c !== undefined) {
+          return json(200, {
+            chunk: c.chunk.toString('base64url'),
+            data_path: c.dataPath.toString('base64url'),
+            packing: 'unpacked',
+          });
+        }
+      }
+      return json(404, {});
+    };
+  async function root(start: bigint) {
+    const signer = new ArweaveSigner(await arweave.wallets.generate());
+    const bundle = await bundleAndSignData(
+      [createData('one', signer), createData('two', signer)],
+      signer,
+    );
+    const f = await signedFixture(Buffer.from(bundle.getRaw()));
+    const entries: BandSampleEntry[] = [];
+    for await (const item of scanBundle({
+      source: new BufferByteRangeSource(f.data),
+      rootTxId: f.id,
+      bundleSize: f.data.length,
+    })) {
+      entries.push({
+        id: item.id,
+        rootTxId: f.id,
+        rootOffset: item.rootDataItemOffset,
+        rootDataOffset: item.rootDataOffset,
+        tag: 'direct',
+        height: 1000,
+      });
+    }
+    return {
+      id: f.id,
+      served: { header: f.header, data: f.data, chunks: f.chunks, start },
+      entries,
+    };
+  }
+  /** 16 honest items under one root, 4 fabricated ids under another real root. */
+  async function twoRoots(offset = 10_000_000n) {
+    const g = await root(START);
+    const r = await root(START + offset);
+    const entries = [
+      ...Array.from({ length: 16 }, (_, i) => g.entries[i % 2]),
+      ...Array.from({ length: 4 }, (_, i) => ({
+        ...r.entries[i % 2],
+        id: crypto.randomBytes(32).toString('base64url'),
+      })),
+    ];
+    return {
+      served: new Map([
+        [g.id, g.served],
+        [r.id, r.served],
+      ]),
+      entries,
+      g,
+      r,
+    };
+  }
+  const check = (
+    fetch: FetchLike,
+    names: string[],
+    entries: BandSampleEntry[],
+  ) => {
+    const src = onChainRootSource({
+      pool: new ArweaveNodePool({
+        urls: names.map((n) => `http://${n}`),
+        fetch,
+        dedupeByAddress: false,
+      }),
+    });
+    return checkDrawnHeaders({
+      entries,
+      openRoot: src.openRoot,
+      concurrency: 1,
+      retries: 0,
+      retryDelayMs: 1,
+    });
+  };
+  const N = ['n1:1984', 'n2:1984', 'n3:1984'];
+
+  it('leaves inconclusive a band with fabricated items under a mined root no node locates (E1)', async () => {
+    const { served, entries, r } = await twoRoots();
+    const res = await check(
+      net(served, (_, p) =>
+        p === `/tx/${r.id}/offset` ? json(404, {}) : undefined,
+      ),
+      N,
+      entries,
+    );
+    assert.equal(res.passed, false);
+    assert.equal(res.inconclusive, true);
+    assert.equal(res.unchecked.length, 4);
+    assert.equal(res.drawn, 20);
+  });
+
+  it('leaves inconclusive a band with fabricated items in chunks no node holds (E1c)', async () => {
+    const { served, entries } = await twoRoots();
+    const res = await check(
+      net(served, (_, p) =>
+        p.startsWith('/chunk/') &&
+        BigInt(p.split('/')[2]) >= START + 10_000_000n
+          ? json(404, {})
+          : undefined,
+      ),
+      N,
+      entries,
+    );
+    assert.equal(res.passed, false);
+    assert.equal(res.inconclusive, true);
+    assert.equal(res.unchecked.length, 4);
+  });
+
+  it('never calls an honest root missing when its only holder is unheard (E2)', async () => {
+    const g = await root(START);
+    const entries = Array.from({ length: 20 }, (_, i) => g.entries[i % 2]);
+    const res = await check(
+      net(new Map([[g.id, g.served]]), (host, p) => {
+        if (!/^\/tx\/[^/]+$/.test(p)) return undefined;
+        return host.startsWith('tip') ? json(404, {}) : json(503, {});
+      }),
+      ['tip1:1984', 'tip2:1984', 'data1:1984'],
+      entries,
+    );
+    assert.equal(res.wrong.length, 0);
+    assert.equal(res.inconclusive, true);
+  });
+
+  it('passes an honest band once a holder unheard at first answers on the second pass (E2b)', async () => {
+    const g = await root(START);
+    const entries = Array.from({ length: 20 }, (_, i) => g.entries[i % 2]);
+    let n = 0;
+    const res = await check(
+      net(new Map([[g.id, g.served]]), (host, p) => {
+        if (!/^\/tx\/[^/]+$/.test(p)) return undefined;
+        if (host.startsWith('tip')) return json(404, {});
+        return n++ < 2 ? json(503, {}) : undefined;
+      }),
+      ['tip1:1984', 'tip2:1984', 'data1:1984'],
+      entries,
+    );
+    assert.equal(res.passed, true, res.reasons.join('; '));
+    assert.equal(res.ok, 20);
+  });
+
+  it('never refutes a root over malformed offset answers (E3)', async () => {
+    const g = await root(START);
+    const entries = Array.from({ length: 20 }, (_, i) => g.entries[i % 2]);
+    const res = await check(
+      net(new Map([[g.id, g.served]]), (host, p) => {
+        if (!p.endsWith('/offset')) return undefined;
+        return host.startsWith('tip')
+          ? json(200, { error: 'x' })
+          : json(503, {});
+      }),
+      ['tip1:1984', 'tip2:1984', 'data1:1984'],
+      entries,
+    );
+    assert.equal(res.wrong.length, 0);
+    assert.equal(res.inconclusive, true);
+  });
+
+  it('does not stack allowances: 8 of 24 unreadable or unlocatable items leave the band inconclusive (E5)', async () => {
+    const a = await twoRoots();
+    const b = await twoRoots(60_000_000n);
+    const served = new Map([...a.served, ...b.served]);
+    const entries = [...a.entries, ...b.entries.slice(16)];
+    const res = await check(
+      net(served, (_, p) => {
+        if (p === `/tx/${a.r.id}/offset`) return json(404, {});
+        if (
+          p.startsWith('/chunk/') &&
+          BigInt(p.split('/')[2]) >= START + 60_000_000n
+        ) {
+          return json(404, {});
+        }
+        return undefined;
+      }),
+      N,
+      entries,
+    );
+    assert.equal(res.passed, false);
+    assert.equal(res.unchecked.length, 8);
+    assert.equal(res.drawn, 24);
   });
 });

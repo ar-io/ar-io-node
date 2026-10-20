@@ -239,12 +239,24 @@ export class ArweaveNodePool {
       return;
     }
     this.readying ??= (async () => {
-      const loopback = (address: string) =>
-        address === '::1' ||
-        address.startsWith('127.') ||
-        address.startsWith('::ffff:127.')
-          ? 'loopback'
-          : address.toLowerCase();
+      const loopback = (address: string) => {
+        const a = address.toLowerCase();
+        // IPv4 written in IPv6 (::ffff:a.b.c.d, or its hex form
+        // ::ffff:7f00:1) is that IPv4 address.
+        const mapped = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(a);
+        const v4 =
+          mapped !== null
+            ? [
+                parseInt(mapped[1], 16) >> 8,
+                parseInt(mapped[1], 16) & 255,
+                parseInt(mapped[2], 16) >> 8,
+                parseInt(mapped[2], 16) & 255,
+              ].join('.')
+            : a.startsWith('::ffff:') && isIP(a.slice(7)) === 4
+              ? a.slice(7)
+              : a;
+        return v4 === '::1' || v4.startsWith('127.') ? 'loopback' : v4;
+      };
       const resolved: Array<{ url: string; set: Set<string> }> = [];
       for (const url of this.urls) {
         const host = hostOf(url);
@@ -276,19 +288,39 @@ export class ArweaveNodePool {
           resolved.push({ url, set: new Set(found.map(loopback)) });
         }
       }
-      const kept: Array<{ url: string; set: Set<string> }> = [];
-      for (const node of resolved) {
-        const same = kept.find((k) => [...node.set].some((a) => k.set.has(a)));
-        if (same !== undefined) {
-          for (const a of node.set) same.set.add(a);
-          continue;
+      // Union-find over shared addresses: nodes joined by any chain of
+      // shared addresses are one machine, whatever order they came in.
+      const parent = resolved.map((_, i) => i);
+      const find = (i: number): number => {
+        while (parent[i] !== i) {
+          parent[i] = parent[parent[i]];
+          i = parent[i];
         }
-        kept.push(node);
+        return i;
+      };
+      const owner = new Map<string, number>();
+      resolved.forEach((node, i) => {
+        for (const address of node.set) {
+          const j = owner.get(address);
+          if (j === undefined) owner.set(address, i);
+          else parent[find(i)] = find(j);
+        }
+      });
+      const groups = new Map<number, number[]>();
+      resolved.forEach((_, i) => {
+        const r = find(i);
+        groups.set(r, [...(groups.get(r) ?? []), i]);
+      });
+      const kept: string[] = [];
+      for (const members of groups.values()) {
+        const first = Math.min(...members);
+        const addresses = members.flatMap((m) => [...resolved[m].set]).sort();
+        this.addresses.set(resolved[first].url, addresses[0]);
+        kept.push(resolved[first].url);
       }
-      for (const k of kept) {
-        this.addresses.set(k.url, [...k.set].sort()[0]);
-      }
-      this.urls.splice(0, this.urls.length, ...kept.map((k) => k.url));
+      const order = new Map(resolved.map((r, i) => [r.url, i]));
+      kept.sort((x, y) => order.get(x)! - order.get(y)!);
+      this.urls.splice(0, this.urls.length, ...kept);
     })();
     await this.readying;
   }

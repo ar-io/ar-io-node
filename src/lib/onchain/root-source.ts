@@ -285,13 +285,20 @@ export function onChainRootSource({
       const pure: Survey<Header> = { ...headers, faults: [] };
       const machines = definiteMachines(pure);
       if (machines >= 2 && against === 0) {
-        throw Object.assign(
-          new NotOnNodesError(
-            `${machines} machines have no header for ${id}${headers.busy.length > 0 ? ` (${headers.busy.length} busy twice, unheard)` : ''}`,
-            machines,
-            true,
-          ),
-          { unheard: headers.busy.length },
+        // Missing only when every node was heard: an unheard node may be
+        // the one holder, so the root is then unchecked, not missing.
+        if (headers.busy.length > 0) {
+          throw new NodesRefusedError(
+            `${machines} machines have no header for ${id}, and ${headers.busy.length} stayed busy (asked twice): unchecked`,
+            headers.absent.length,
+            headers.busy.length,
+            0,
+          );
+        }
+        throw new NotOnNodesError(
+          `${machines} machines have no header for ${id}`,
+          machines,
+          true,
         );
       }
       if (machines >= 2) {
@@ -427,23 +434,33 @@ export function onChainRootSource({
       }
       return [...by.entries()].sort((x, y) => y[1].size - x[1].size);
     };
+    const otherSize = new Set<string>();
     const offsets = await pool.survey<Placement>(
       `/tx/${id}/offset`,
-      (body) => {
+      (body, node) => {
         const { offset, size } = (body ?? {}) as {
           offset?: unknown;
           size?: unknown;
         };
-        if (typeof offset !== 'string' && typeof offset !== 'number') {
-          throw new Error('no offset in the answer');
+        // A body that isn't an offset is its node's fault, and says
+        // nothing of the root; only a size that parses and differs does.
+        const offsetText = typeof offset === 'number' ? String(offset) : offset;
+        const sizeText = typeof size === 'number' ? String(size) : size;
+        if (
+          typeof offsetText !== 'string' ||
+          !/^\d+$/.test(offsetText) ||
+          typeof sizeText !== 'string' ||
+          !/^\d+$/.test(sizeText)
+        ) {
+          throw new Error('not an offset answer');
         }
-        const parsed = Number(size);
-        if (parsed !== dataSize) {
+        if (Number(sizeText) !== dataSize) {
+          otherSize.add(pool.addressOf(node));
           throw new Error(
-            `the weave holds ${String(size)} bytes, its header signs ${dataSize}`,
+            `the weave holds ${sizeText} bytes, its header signs ${dataSize}`,
           );
         }
-        return { offset: BigInt(offset) };
+        return { offset: BigInt(offsetText) };
       },
       { enough: (sv) => (agreedOffset(sv)[0]?.[1].size ?? 0) >= 2 },
     );
@@ -470,7 +487,7 @@ export function onChainRootSource({
       // The root is bound and mined: a node without its place in the weave
       // holds no data for it, which says nothing against the root. Only two
       // machines giving another size refute it.
-      if (new Set(offsets.faults.map((x) => x.machine)).size >= 2) {
+      if (otherSize.size >= 2) {
         throw new RootUnboundError(
           `${id}: two or more machines give its place in the weave another size than its header signs`,
         );
@@ -514,12 +531,9 @@ export function onChainRootSource({
       // node reachable, nodes busy) is asked again next time.
       bound.set(id, pending);
       pending.catch((error) => {
-        // A root found missing while some nodes went unheard is asked again.
-        const unheard = ((error as { unheard?: number }).unheard ?? 0) > 0;
         if (
-          (!(error instanceof RootUnboundError) &&
-            !(error instanceof NotOnNodesError)) ||
-          unheard
+          !(error instanceof RootUnboundError) &&
+          !(error instanceof NotOnNodesError)
         ) {
           bound.delete(id);
         }

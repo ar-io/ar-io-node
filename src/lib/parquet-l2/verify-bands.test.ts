@@ -33,7 +33,11 @@ import {
 } from './layout.js';
 import { writeL1Band } from '../../../test/parquet-l2-fixture.js';
 import { writeBandLookups } from './lookups.js';
-import { L2BandsRefused, verifyL2Bands } from './verify-bands.js';
+import {
+  detectableFraction,
+  L2BandsRefused,
+  verifyL2Bands,
+} from './verify-bands.js';
 
 const LOC = (name: string) => 13 + DATA_ITEM_LOCATION_COLUMNS.indexOf(name);
 
@@ -508,7 +512,8 @@ describe('verifyL2Bands', () => {
       [...new Set(reads)].sort((x, y) => x - y),
       [0, 3500],
     );
-    assert.equal(result.onchain?.unreadable, 1);
+    // Read once more, still gone: unchecked, never replaced by another draw.
+    assert.equal(result.onchain?.unchecked, 1);
     assert.equal(result.onchain?.wrong, 1);
   });
 
@@ -1053,8 +1058,10 @@ describe('verifyL2Bands fails closed', () => {
     });
     assert.equal(unchecked.ok, true);
     assert.deepEqual(unchecked.mined?.uncovered, [id]);
-    assert.ok(!unchecked.skipped.includes('mined'));
-    assert.ok(unchecked.skipped.includes(`mined:partial:${id}`));
+    // Back-compatible: `mined` stays in skipped; the bands it left out are
+    // named apart.
+    assert.ok(unchecked.skipped.includes('mined'));
+    assert.deepEqual(unchecked.minedPartial, { bands: [id], count: 1 });
   });
 
   it('fails a band the publication lists in the range checked that the directory lacks (review 4)', async () => {
@@ -1195,5 +1202,57 @@ describe('verifyL2Bands fails closed', () => {
     assert.ok(failing(past).includes('coverage'));
     const exact = await verifyL2Bands(db, dir, { from: 100, to: 199 });
     assert.equal(exact.ok, true);
+  });
+
+  it('leaves a band inconclusive when a drawn item cannot be checked, and says what a pass means', async () => {
+    const dir = await fresh();
+    await writeBand(db, dir, 100, 199);
+    // The nested item's read fails in transport; the direct one is read.
+    const busy = strangerHeaders([], (offset) =>
+      offset === 3500
+        ? Object.assign(new Error('busy'), { response: { status: 503 } })
+        : undefined,
+    );
+    const result = await verifyL2Bands(db, dir, {
+      onchain: { perBand: 2, openRoot: busy },
+    });
+    assert.equal(result.ok, false);
+    const band = result.onchain!.bands[0];
+    assert.equal(band.drawn, 2);
+    assert.equal(band.unchecked, 1);
+    assert.equal(band.wrong, 1);
+    assert.deepEqual(result.onchain?.inconclusiveBands, []);
+    // Every read unheard: inconclusive, not failed for anything wrong.
+    const busyAll = strangerHeaders([], () =>
+      Object.assign(new Error('busy'), { response: { status: 503 } }),
+    );
+    const inconclusive = await verifyL2Bands(db, dir, {
+      onchain: { perBand: 2, openRoot: busyAll },
+    });
+    assert.equal(inconclusive.ok, false);
+    assert.equal(inconclusive.onchain?.inconclusiveBands.length, 1);
+    assert.equal(inconclusive.onchain?.bands[0].wrong, 0);
+    assert.deepEqual(inconclusive.onchain?.bands[0].uncheckedReasons, {
+      error: 2,
+    });
+    assert.match(
+      inconclusive.checks.find((c) => c.name === 'onchain')!.failures![0].found,
+      /inconclusive: 2 of 2 sampled entries could not be checked/,
+    );
+    // Allowed to leave them unchecked, it passes.
+    const allowed = await verifyL2Bands(db, dir, {
+      onchain: { perBand: 2, openRoot: busyAll, maxUnchecked: 2 },
+    });
+    assert.equal(allowed.ok, true, JSON.stringify(allowed.checks));
+    // What a pass of N drawn items means, in plain words: with 20 drawn,
+    // a band 14% fabricated is caught 95% of the time.
+    assert.ok(
+      inconclusive.assurance.some((a) => /fabricated/.test(a)),
+      inconclusive.assurance.join(' | '),
+    );
+    // With 20 drawn and none wrong, a band 14% fabricated passes 5% of
+    // the time.
+    assert.equal(Math.round(detectableFraction(20) * 1000), 139);
+    assert.ok((1 - detectableFraction(20)) ** 20 - 0.05 < 1e-9);
   });
 });

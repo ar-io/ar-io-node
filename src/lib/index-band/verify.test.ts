@@ -21,6 +21,7 @@ import { after, before, describe, it } from 'node:test';
 import { buildBand, BandSampleEntry, MAX_HEADER_BYTES } from './build.js';
 import {
   checkBandHeaders,
+  checkDrawnHeaders,
   gatewayRootSource,
   RootSourceFactory,
   sampleBandEntries,
@@ -37,6 +38,7 @@ import {
   MalformedTagCountRoot,
 } from '../../../test/malformed-tag-count-item.js';
 import { createTestLogger } from '../../../test/test-logger.js';
+import { NotOnNodesError } from '../onchain/arweave-nodes.js';
 
 const log = createTestLogger({ suite: 'checkBandHeaders' });
 const ROOT = 'VmFsaWRSb290VHhJZEZvclRoZUhlYWRlckNoZWNrMDE';
@@ -787,7 +789,7 @@ describe('checkBandHeaders', () => {
   });
 });
 
-describe('checkBandHeaders, failing closed for a verifier', () => {
+describe('checkDrawnHeaders: every drawn entry ok, wrong or unchecked', () => {
   let items: ScannedDataItem[];
   let rootBytes: Buffer;
 
@@ -830,6 +832,7 @@ describe('checkBandHeaders, failing closed for a verifier', () => {
       isOpen: () => true,
     });
     const pool = entries((i) => (i % 4 === 0 ? `made-up-${i}` : ROOT), 40);
+    // The old check passes over roots a source lacks, and passes.
     const lenient = await checkBandHeaders({
       entries: pool,
       totalRecords: 40,
@@ -839,22 +842,42 @@ describe('checkBandHeaders, failing closed for a verifier', () => {
       retries: 0,
     });
     assert.equal(lenient.passed, true, lenient.reasons.join('; '));
-    assert.equal(lenient.missing.length, 0);
-    const strict = await checkBandHeaders({
+    // The drawn check replaces none of them: a 404 that is no verdict about
+    // the root (a gateway's) leaves those entries unchecked, and the
+    // check inconclusive.
+    const drawn = await checkDrawnHeaders({
       entries: pool,
-      totalRecords: 40,
       openRoot,
-      minRecords: 0,
-      minVerified: 1,
       retries: 0,
-      missingRootIsWrong: true,
+      retryDelayMs: 1,
     });
-    assert.equal(strict.passed, false);
-    assert.equal(strict.missing.length, 10);
-    assert.match(strict.reasons.join('; '), /no answering source has/);
+    assert.equal(drawn.passed, false);
+    assert.equal(drawn.inconclusive, true);
+    assert.equal(drawn.unchecked.length, 10);
+    assert.equal(drawn.ok, 30);
+    assert.deepEqual(drawn.uncheckedReasons, { unreadable: 10 });
+    assert.match(drawn.reasons.join('; '), /inconclusive: 10 of 40/);
+    // A root the on-chain source finds missing is wrong.
+    const missing = await checkDrawnHeaders({
+      entries: pool,
+      openRoot: (root) => ({
+        ...openRoot(root),
+        read: async (offset: number, size: number) => {
+          if (root.startsWith('made-up')) {
+            throw new NotOnNodesError('two machines: no header', 2, true);
+          }
+          return new BufferByteRangeSource(rootBytes).read(offset, size);
+        },
+      }),
+      retries: 0,
+      retryDelayMs: 1,
+    });
+    assert.equal(missing.passed, false);
+    assert.equal(missing.inconclusive, false);
+    assert.equal(missing.wrong.filter((w) => w.missing === true).length, 10);
   });
 
-  it('fails a check its deadline cuts short, reads in flight counted as errors', async () => {
+  it('leaves unchecked what its deadline cuts short, and is inconclusive', async () => {
     let started = 0;
     const openRoot: RootSourceFactory = () => ({
       read: async (offset: number, size: number) => {
@@ -866,19 +889,17 @@ describe('checkBandHeaders, failing closed for a verifier', () => {
       close: async () => undefined,
       isOpen: () => true,
     });
-    const result = await checkBandHeaders({
+    const result = await checkDrawnHeaders({
       entries: entries(() => ROOT, 10),
-      totalRecords: 10,
       openRoot,
-      minRecords: 0,
       retries: 0,
+      retryDelayMs: 1,
       concurrency: 1,
       deadlineMs: 200,
     });
     assert.equal(result.passed, false);
-    assert.equal(result.deadlinePassed, true);
-    assert.equal(result.errors.length, 1);
+    assert.equal(result.inconclusive, true);
     assert.equal(result.ok, 2);
-    assert.match(result.reasons.join('; '), /deadline/);
+    assert.deepEqual(result.uncheckedReasons, { deadline: 8 });
   });
 });

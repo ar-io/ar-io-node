@@ -69,9 +69,9 @@ import type { Database } from 'duckdb-async';
 
 import { type BandSampleEntry, bandPublisherTag } from '../index-band/build.js';
 import {
-  checkBandHeaders,
-  HEADER_CHECK_POOL_FACTOR,
+  checkDrawnHeaders,
   RootSourceFactory,
+  type UncheckedReason,
 } from '../index-band/verify.js';
 import { publicKeyFromSolanaAddress } from '../httpsig.js';
 import {
@@ -106,6 +106,9 @@ import { verifyBandLookups } from './lookups.js';
 import { selectionDuckDb } from './selection.js';
 import { digestL2Table, L2TableError } from './tables.js';
 
+/** Bands listed in `minedPartial`; the rest are counted. */
+export const MAX_PARTIAL_LISTED = 50;
+
 /** Moved roots listed in a result; the rest are counted in the failure. */
 export const MAX_MOVED_REPORTED = 20;
 
@@ -138,14 +141,12 @@ export interface L2OnChainOptions {
    * random seed is drawn when not given; the result reports it.
    */
   seed?: number;
-  /** Overrides the seeded order a pool is read in (tests). */
-  random?: () => number;
   concurrency?: number;
   /**
-   * The largest share of the items tried in a band that may be under chunks
-   * no node holds (default 0.2). Past it the band fails.
+   * Drawn entries that may be left unchecked and the band still pass
+   * (default 0). Past it, a band with none wrong is inconclusive.
    */
-  maxUnreadableShare?: number;
+  maxUnchecked?: number;
   /**
    * Milliseconds one band's reads may take (default: no limit). Reads still
    * pending then are errors, and the band fails.
@@ -212,31 +213,35 @@ export interface L2OnChainBand {
   /** Rows of `data_items` with a location, and their share of the rows. */
   located: number;
   locatedShare: number;
-  checked: number;
+  /** Entries drawn; each is ok, wrong or unchecked. */
+  drawn: number;
   ok: number;
+  /** Proven contrary, `missing` roots among them. */
   wrong: number;
   missing: number;
-  unreadable: number;
-  unreadableShare: number;
-  errors: number;
-  /** A few of the transport errors, so a band's errors can be judged. */
+  unchecked: number;
+  /** Why entries were unchecked, by reason. */
+  uncheckedReasons: Partial<Record<UncheckedReason, number>>;
+  /** A few of the unchecked entries' errors. */
   errorSample: string[];
+  /** None wrong, but more unchecked than allowed. */
+  inconclusive: boolean;
   passed: boolean;
   reasons: string[];
 }
 
 export interface L2OnChainSummary {
-  checked: number;
+  drawn: number;
   ok: number;
   wrong: number;
-  /** Items under a root no node has at all: made up, or never mined. */
+  /** Items under a root no node has at all (two machines say so). */
   missing: number;
-  /** Items whose chunk no reachable node holds. */
-  unreadable: number;
-  /** Items that couldn't be checked (no node reachable, root unbound). */
-  errors: number;
-  /** Bands whose header check did not pass, by id, with the reasons. */
+  /** Items that couldn't be checked, after a second try. */
+  unchecked: number;
+  /** Bands with an entry wrong, by id, with the reasons. */
   failedBands: Array<{ id: string; reasons: string[] }>;
+  /** Bands with none wrong but more unchecked than allowed. */
+  inconclusiveBands: string[];
   /** Bands with items but none located: nothing to read on chain. */
   unlocatedBands: string[];
   /** Per band. */
@@ -281,6 +286,12 @@ export interface L2BandsVerifyResult {
    * with `ok` and `skipped`.
    */
   assurance: string[];
+  /**
+   * Bands an L1 index found for some bands left out of `mined` (at most
+   * {@link MAX_PARTIAL_LISTED}, with the count of all); `skipped` still
+   * lists `mined`.
+   */
+  minedPartial?: { bands: string[]; count: number };
   /** Per band: its unlocated items, what its band.json declares, the share. */
   located: Array<{
     id: string;
@@ -513,6 +524,15 @@ function hash32(text: string): number {
     h = Math.imul(h, 0x01000193) >>> 0;
   }
   return h >>> 0;
+}
+
+/**
+ * The smallest share of fabricated located items a band could hold and still
+ * pass `n` drawn entries with none wrong, at most `1 - confidence` of the
+ * time: (1 - p)^n = 1 - confidence. 20 drawn: 14%.
+ */
+export function detectableFraction(n: number, confidence = 0.95): number {
+  return n <= 0 ? 1 : 1 - (1 - confidence) ** (1 / n);
 }
 
 /** A seeded PRNG (mulberry32) giving numbers in [0, 1). */
@@ -865,13 +885,13 @@ export async function verifyL2Bands(
   }
 
   const onchainSummary: L2OnChainSummary = {
-    checked: 0,
+    drawn: 0,
     ok: 0,
     wrong: 0,
     missing: 0,
-    unreadable: 0,
-    errors: 0,
+    unchecked: 0,
     failedBands: [],
+    inconclusiveBands: [],
     unlocatedBands: [],
     bands: [],
     seed: options.onchain?.seed ?? crypto.randomInt(2 ** 31 - 1),
@@ -1318,29 +1338,47 @@ export async function verifyL2Bands(
       }
     }
 
-    // onchain
+    // onchain: one denominator, no substitution
     if (options.onchain !== undefined && band.tables.data_items.rows > 0) {
       const {
         perBand,
         openRoot,
-        random,
         concurrency,
-        maxUnreadableShare = 0.2,
+        maxUnchecked = 0,
         deadlineMs,
       } = options.onchain;
-      const pool = perBand * HEADER_CHECK_POOL_FACTOR;
-      // Each stratum is sampled on its own, after it is selected, so a band
-      // whose nested items are rare still has them checked. The seed, salted
-      // by the band's id (not its place in the run), makes the sample and
-      // the order it is read in repeatable.
+      const [counted] = (await duck.all(
+        `SELECT count(*) FILTER (WHERE "offset" IS NOT NULL) AS located,
+                count(*) FILTER (WHERE "offset" IS NOT NULL AND root_parent_offset = 0) AS direct,
+                count(*) FILTER (WHERE "offset" IS NOT NULL AND root_parent_offset <> 0) AS nested,
+                count(*) AS n FROM ${itemsFile}`,
+      )) as Array<Record<string, unknown>>;
+      const located = num(counted.located);
+      const locatedShare = num(counted.n) > 0 ? located / num(counted.n) : 0;
+      // The draw, up front: half directly in their roots, half in nested
+      // bundles (one stratum filling for the other where it runs short),
+      // so rare nested items are always drawn. The seed, salted by the
+      // band's id, makes it repeatable.
+      const directWant = Math.ceil(perBand / 2);
+      const directTake = Math.min(
+        num(counted.direct),
+        Math.max(directWant, perBand - num(counted.nested)),
+      );
+      const nestedTake = Math.min(num(counted.nested), perBand - directTake);
       const salt = hash32(id);
-      const stratumSample = async (where: string, stratum: number) =>
-        (await duck.all(`SELECT * FROM (
+      const stratumSample = async (
+        where: string,
+        size: number,
+        stratum: number,
+      ) =>
+        size <= 0
+          ? []
+          : ((await duck.all(`SELECT * FROM (
             SELECT id, height, root_transaction_id, root_parent_offset, "offset", data_offset
             FROM ${itemsFile} WHERE "offset" IS NOT NULL AND ${where})
-          USING SAMPLE reservoir(${pool} ROWS) REPEATABLE (${(onchainSummary.seed + salt + stratum) % 2 ** 31})`)) as Array<
-          Record<string, unknown>
-        >;
+          USING SAMPLE reservoir(${size} ROWS) REPEATABLE (${(onchainSummary.seed + salt + stratum) % 2 ** 31})`)) as Array<
+              Record<string, unknown>
+            >);
       const toEntries = (rows: Array<Record<string, unknown>>, label: string) =>
         rows.map(
           (r): BandSampleEntry => ({
@@ -1354,36 +1392,35 @@ export async function verifyL2Bands(
             height: num(r.height),
           }),
         );
-      const direct = toEntries(
-        await stratumSample('root_parent_offset = 0', 0),
-        'direct',
-      );
-      const nested = toEntries(
-        await stratumSample('root_parent_offset <> 0', 1),
-        'nested',
-      );
-      const [counted] = (await duck.all(
-        `SELECT count(*) FILTER (WHERE "offset" IS NOT NULL) AS located, count(*) AS n FROM ${itemsFile}`,
-      )) as Array<Record<string, unknown>>;
-      const located = num(counted.located);
-      const locatedShare = num(counted.n) > 0 ? located / num(counted.n) : 0;
-      const entries = [...direct, ...nested];
+      const entries = [
+        ...toEntries(
+          await stratumSample('root_parent_offset = 0', directTake, 0),
+          'direct',
+        ),
+        ...toEntries(
+          await stratumSample('root_parent_offset <> 0', nestedTake, 1),
+          'nested',
+        ),
+      ];
+      const empty = {
+        id,
+        located,
+        locatedShare,
+        drawn: 0,
+        ok: 0,
+        wrong: 0,
+        missing: 0,
+        unchecked: 0,
+        uncheckedReasons: {},
+        errorSample: [],
+        inconclusive: false,
+      };
       if (entries.length === 0) {
         // Items, none located: nothing can be read on chain, so the band is
         // not verified there, and fails unless that is allowed.
         onchainSummary.unlocatedBands.push(id);
         onchainSummary.bands.push({
-          id,
-          located,
-          locatedShare,
-          checked: 0,
-          ok: 0,
-          wrong: 0,
-          missing: 0,
-          unreadable: 0,
-          unreadableShare: 0,
-          errors: 0,
-          errorSample: [],
+          ...empty,
           passed: allowUnlocated,
           reasons: ['no located items to read on chain'],
         });
@@ -1396,46 +1433,29 @@ export async function verifyL2Bands(
         }
         return;
       }
-      const half = Math.ceil(perBand / 2);
-      const targets: Record<string, number> =
-        direct.length === 0
-          ? { nested: perBand }
-          : nested.length === 0
-            ? { direct: perBand }
-            : { direct: half, nested: Math.max(1, perBand - half) };
-      const result = await checkBandHeaders({
+      const result = await checkDrawnHeaders({
         entries,
-        totalRecords: band.tables.data_items.rows,
         openRoot,
-        targets,
-        minRecords: 0,
-        random: random ?? seededRandom((onchainSummary.seed ^ salt) >>> 0),
-        missingRootIsWrong: true,
-        maxUnreadableShare,
+        maxUnchecked,
         ...(deadlineMs !== undefined ? { deadlineMs } : {}),
         ...(concurrency !== undefined ? { concurrency } : {}),
       });
-      onchainSummary.checked += result.checked;
+      const missing = result.wrong.filter((w) => w.missing === true).length;
+      onchainSummary.drawn += result.drawn;
       onchainSummary.ok += result.ok;
       onchainSummary.wrong += result.wrong.length;
-      onchainSummary.missing += result.missing.length;
-      onchainSummary.unreadable += result.unreadable.length;
-      onchainSummary.errors += result.errors.length;
+      onchainSummary.missing += missing;
+      onchainSummary.unchecked += result.unchecked.length;
       onchainSummary.bands.push({
-        id,
-        located,
-        locatedShare,
-        checked: result.checked,
+        ...empty,
+        drawn: result.drawn,
         ok: result.ok,
         wrong: result.wrong.length,
-        missing: result.missing.length,
-        unreadable: result.unreadable.length,
-        unreadableShare: result.unreadableShare,
-        errors: result.errors.length,
-        errorSample: [...new Set(result.errors.map((e) => e.error))].slice(
-          0,
-          3,
-        ),
+        missing,
+        unchecked: result.unchecked.length,
+        uncheckedReasons: result.uncheckedReasons,
+        errorSample: result.errorSample,
+        inconclusive: result.inconclusive,
         passed: result.passed,
         reasons: result.reasons,
       });
@@ -1446,15 +1466,15 @@ export async function verifyL2Bands(
           'its header at its recorded location',
         );
       }
-      if (!result.passed) {
+      if (result.inconclusive) {
+        onchainSummary.inconclusiveBands.push(id);
+        fail(
+          onchainCheck,
+          result.reasons.join('; '),
+          `every drawn entry checked (at most ${maxUnchecked} unchecked)`,
+        );
+      } else if (!result.passed) {
         onchainSummary.failedBands.push({ id, reasons: result.reasons });
-        if (result.wrong.length === 0) {
-          fail(
-            onchainCheck,
-            result.reasons.join('; '),
-            'enough items verified',
-          );
-        }
       }
     }
   };
@@ -1501,12 +1521,21 @@ export async function verifyL2Bands(
   if (options.publication === undefined) skipped.push('publication');
   // Roots are found in blocks by the L1 index (every root of a covered band)
   // or by the root source (each sampled root); neither, and it is unchecked.
-  if (options.l1 === undefined) {
+  // A partly covered run keeps `mined` here (the check didn't run for every
+  // band) and names the bands left out in `minedPartial`.
+  if (
+    options.l1 === undefined ||
+    (minedSummary !== undefined && minedSummary.uncovered.length > 0)
+  ) {
     skipped.push('mined');
-  } else if (minedSummary !== undefined && minedSummary.uncovered.length > 0) {
-    // Checked for some bands only: which were not, named.
-    skipped.push(`mined:partial:${minedSummary.uncovered.join(',')}`);
   }
+  const minedPartial =
+    minedSummary !== undefined && minedSummary.uncovered.length > 0
+      ? {
+          bands: minedSummary.uncovered.slice(0, MAX_PARTIAL_LISTED),
+          count: minedSummary.uncovered.length,
+        }
+      : undefined;
 
   const keyFrom = options.publication?.keyFrom ?? 'operator';
   const assurance = [
@@ -1516,6 +1545,11 @@ export async function verifyL2Bands(
     ...(minedSummary !== undefined
       ? [
           `roots found in the L1 index at ${minedSummary.l1BandsDir}, at their block's height and place in it, for ${minedSummary.checked} bands; that index must have been checked (index-l1-verify) for this to trust nothing`,
+        ]
+      : []),
+    ...(options.onchain !== undefined
+      ? [
+          `on chain, ${options.onchain.perBand} located items drawn per band, none replaced: a band in which ${Math.ceil(detectableFraction(options.onchain.perBand) * 100)}% or more of the located items are fabricated would have been caught with 95% probability; smaller fractions may not be (unlocated items are not checked on chain at all)`,
         ]
       : []),
   ];
@@ -1531,6 +1565,7 @@ export async function verifyL2Bands(
     skipped,
     assurance,
     located: locatedReport,
+    ...(minedPartial !== undefined ? { minedPartial } : {}),
     publisherBound: bound !== undefined,
     ...(bound !== undefined
       ? {
