@@ -878,7 +878,7 @@ describe('ArweaveNodePool', () => {
   it('starts each request at the next node in turn', async () => {
     const asked: string[] = [];
     const pool = three(answering(() => 200, asked));
-    for (let i = 0; i < 3; i += 1) await pool.txHeader('x');
+    for (let i = 0; i < 3; i += 1) await pool.ask('/tx/x', (b) => b);
     assert.deepEqual(asked, ['a:1984', 'b:1984', 'c:1984']);
   });
 
@@ -890,19 +890,25 @@ describe('ArweaveNodePool', () => {
       () => clock,
     );
     // a times out, b and c say 404: a may hold it, so no verdict of absence.
-    await assert.rejects(pool.txHeader('x'), NodesRefusedError);
+    await assert.rejects(
+      pool.ask('/tx/x', (b) => b),
+      NodesRefusedError,
+    );
     asked.length = 0;
     // While a rests it is not asked, and still counts as busy.
-    await assert.rejects(pool.txHeader('x'), (e: unknown) => {
-      assert.ok(e instanceof NodesRefusedError);
-      assert.equal(e.busy, 1);
-      return true;
-    });
+    await assert.rejects(
+      pool.ask('/tx/x', (b) => b),
+      (e: unknown) => {
+        assert.ok(e instanceof NodesRefusedError);
+        assert.equal(e.busy, 1);
+        return true;
+      },
+    );
     assert.ok(!asked.includes('a:1984'), asked.join());
     // Rested, it is asked again.
     clock = 2000;
     asked.length = 0;
-    await assert.rejects(pool.txHeader('x'));
+    await assert.rejects(pool.ask('/tx/x', (b) => b));
     assert.ok(asked.includes('a:1984'));
   });
 
@@ -912,9 +918,15 @@ describe('ArweaveNodePool', () => {
       answering(() => 'refused', asked),
       () => 0,
     );
-    await assert.rejects(pool.txHeader('x'), /no Arweave node answered/);
+    await assert.rejects(
+      pool.ask('/tx/x', (b) => b),
+      /no Arweave node answered/,
+    );
     asked.length = 0;
-    await assert.rejects(pool.txHeader('x'), /no Arweave node answered/);
+    await assert.rejects(
+      pool.ask('/tx/x', (b) => b),
+      /no Arweave node answered/,
+    );
     assert.equal(asked.length, 3);
   });
 });
@@ -1169,14 +1181,14 @@ describe('the on-chain check counts a refuted root against its band', () => {
       fetch: hosts({ '127.0.0.1:1984': m, '127.0.0.1:1985': m }),
       dedupeByAddress: true,
     });
-    await assert.rejects(pool.txStatus(good.f.id, 2));
+    await assert.rejects(onChainRootSource({ pool }).bind(good.f.id));
     // Without resolving names, two ports of one host are one machine too.
     const plain = new ArweaveNodePool({
       urls: ['http://a:1984', 'http://a:1985'],
       fetch: hosts({ 'a:1984': m, 'a:1985': m }),
       dedupeByAddress: false,
     });
-    await assert.rejects(plain.txStatus(good.f.id, 2));
+    await assert.rejects(onChainRootSource({ pool: plain }).bind(good.f.id));
   });
 });
 
@@ -1425,5 +1437,205 @@ describe('one node cannot refute an honest root', () => {
       retryDelayMs: 1,
     });
     assert.equal(all.passed, false);
+  });
+});
+
+/**
+ * Review round 4 (D1-D3b): a liar naming the right block at a wrong height
+ * must neither refute an honest root nor pass a band's wrong height; nodes
+ * that hold no data answering 404 to /offset and /chunk must never make a
+ * bound root `missing`.
+ */
+describe('a bound root is never missing, and a block is its hash and height', () => {
+  const json = (code: number, body: unknown) =>
+    Promise.resolve({ status: code, ok: code === 200, json: async () => body });
+  let f: Fixture;
+  let entries: Array<{
+    id: string;
+    rootTxId: string;
+    rootOffset: number;
+    rootDataOffset: number;
+    tag: string;
+    height: number;
+  }>;
+  before(async () => {
+    const signer = new ArweaveSigner(await arweave.wallets.generate());
+    const bundle = await bundleAndSignData(
+      [createData('one', signer), createData('two', signer)],
+      signer,
+    );
+    f = await signedFixture(Buffer.from(bundle.getRaw()));
+    entries = [];
+    for await (const item of scanBundle({
+      source: new BufferByteRangeSource(f.data),
+      rootTxId: f.id,
+      bundleSize: f.data.length,
+    })) {
+      entries.push({
+        id: item.id,
+        rootTxId: f.id,
+        rootOffset: item.rootDataItemOffset,
+        rootDataOffset: item.rootDataOffset,
+        tag: 'direct',
+        height: 1000,
+      });
+    }
+  });
+  /** Every node honest (block B at 1000), unless `over` answers. */
+  const net =
+    (
+      over: (host: string, path: string) => ReturnType<FetchLike> | undefined,
+    ): FetchLike =>
+    async (url, init) => {
+      const u = new URL(url);
+      const answer = over(u.host, u.pathname);
+      if (answer !== undefined) return answer;
+      if (u.pathname.endsWith('/status')) {
+        return json(200, {
+          block_indep_hash: 'B'.repeat(64),
+          block_height: 1000,
+          number_of_confirmations: 50,
+        });
+      }
+      return nodes(f, {})(url, init);
+    };
+  const run = (fetch: FetchLike, names: string[], height = 1000) => {
+    const src = onChainRootSource({
+      pool: new ArweaveNodePool({
+        urls: names.map((n) => `http://${n}`),
+        fetch,
+        dedupeByAddress: false,
+      }),
+    });
+    return {
+      src,
+      result: checkBandHeaders({
+        entries: Array.from({ length: 20 }, (_, i) => ({
+          ...entries[i % entries.length],
+          height,
+        })),
+        totalRecords: 10_000,
+        openRoot: src.openRoot,
+        targets: { direct: 20 },
+        minRecords: 0,
+        missingRootIsWrong: true,
+        maxUnreadableShare: 0.2,
+        concurrency: 1,
+        retries: 0,
+        retryDelayMs: 1,
+      }),
+    };
+  };
+  const liar = (host: string, path: string) =>
+    host === 'liar:1984' && path.endsWith('/status')
+      ? json(200, {
+          block_indep_hash: 'B'.repeat(64),
+          block_height: 999,
+          number_of_confirmations: 50,
+        })
+      : undefined;
+
+  it('passes an honest root one node places in its block at another height, naming that node (D1)', async () => {
+    const { src, result } = run(net(liar), ['h0:1984', 'liar:1984', 'h2:1984']);
+    const r = await result;
+    assert.equal(r.passed, true, r.reasons.join('; '));
+    assert.equal(r.wrong.length, 0);
+    assert.ok(
+      src.nodeFaults().some((x) => x.node === 'http://liar:1984'),
+      JSON.stringify(src.nodeFaults()),
+    );
+  });
+
+  it('fails a band that gives a root the height one liar names (D2)', async () => {
+    const { result } = run(net(liar), ['h0:1984', 'liar:1984', 'h2:1984'], 999);
+    const r = await result;
+    assert.equal(r.passed, false);
+    assert.ok(r.wrong.length > 0);
+  });
+
+  it('never calls a bound root missing when nodes holding no data say 404 and the holder is busy (D3)', async () => {
+    const { result } = run(
+      net((host, path) => {
+        if (
+          host.startsWith('tip') &&
+          (path.endsWith('/offset') || path.startsWith('/chunk'))
+        ) {
+          return json(404, {});
+        }
+        if (host === 'data1:1984' && path.endsWith('/offset')) {
+          return json(503, {});
+        }
+        return undefined;
+      }),
+      ['tip1:1984', 'tip2:1984', 'data1:1984'],
+    );
+    const r = await result;
+    assert.equal(r.missing.length, 0);
+    assert.equal(r.wrong.length, 0);
+    assert.ok(r.errors.length > 0);
+  });
+
+  it('passes it once the busy holder answers on being asked again (D3b)', async () => {
+    let n = 0;
+    const { result } = run(
+      net((host, path) => {
+        if (
+          host.startsWith('tip') &&
+          (path.endsWith('/offset') || path.startsWith('/chunk'))
+        ) {
+          return json(404, {});
+        }
+        if (host === 'data1:1984' && path.endsWith('/offset') && n++ === 0) {
+          return Promise.reject(new DOMException('t', 'TimeoutError'));
+        }
+        return undefined;
+      }),
+      ['tip1:1984', 'tip2:1984', 'data1:1984'],
+    );
+    const r = await result;
+    assert.equal(r.passed, true, r.reasons.join('; '));
+    assert.equal(r.missing.length, 0);
+  });
+});
+
+describe('ArweaveNodePool machines', () => {
+  const answer: FetchLike = async () => ({
+    status: 404,
+    ok: false,
+    json: async () => ({}),
+  });
+
+  it('counts names whose addresses meet as one machine, loopback in any form as one, and says which names did not resolve', async () => {
+    const addresses: Record<string, string[]> = {
+      'a.example': ['10.0.0.1', 'fd00::1'],
+      'b.example': ['fd00::1'],
+      'c.example': ['10.0.0.3'],
+    };
+    const pool = new ArweaveNodePool({
+      urls: [
+        'http://127.0.0.1:1984',
+        'http://[::1]:1985',
+        'http://localhost:1986',
+        'http://a.example:1984',
+        'http://b.example:1984',
+        'http://c.example:1984',
+        'http://nowhere.example:1984',
+      ],
+      fetch: answer,
+      lookupAll: async (host) => {
+        if (host === 'localhost') return ['127.0.0.1', '::1'];
+        const found = addresses[host];
+        if (found === undefined) throw new Error('ENOTFOUND');
+        return found;
+      },
+    });
+    await pool.ready();
+    assert.deepEqual(pool.urls, [
+      'http://127.0.0.1:1984',
+      'http://a.example:1984',
+      'http://c.example:1984',
+      'http://nowhere.example:1984',
+    ]);
+    assert.deepEqual(pool.unresolved, ['http://nowhere.example:1984']);
   });
 });

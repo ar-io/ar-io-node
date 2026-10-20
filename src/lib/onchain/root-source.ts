@@ -206,42 +206,6 @@ export function onChainRootSource({
   };
   let faultCount = 0;
 
-  /**
-   * A refutation of the root, or a failure to check it: refuted only when
-   * at least two machines said something definite against it and none
-   * bound it; missing when all of that was absence.
-   */
-  const verdict = <T>(
-    id: string,
-    what: string,
-    survey: Survey<T>,
-    against: number,
-  ): Error => {
-    const machines = definiteMachines(survey);
-    if (machines === 0 && survey.busy.length === 0) {
-      return new NodesUnreachableError(
-        `no Arweave node answered for ${id} (${what})`,
-      );
-    }
-    const summary = `${survey.absent.length} said 404, ${survey.faults.length + against} served what doesn't hold up, ${survey.busy.length} busy`;
-    if (machines < 2) {
-      return new NodesRefusedError(
-        `${what} for ${id}: fewer than two machines answered anything definite (${summary})`,
-        survey.absent.length,
-        survey.busy.length,
-        survey.faults.length,
-      );
-    }
-    if (survey.faults.length === 0 && against === 0) {
-      return new NotOnNodesError(
-        `${what} for ${id}: ${summary}`,
-        machines,
-        true,
-      );
-    }
-    return new RootUnboundError(`${id}: ${what} (${summary})`);
-  };
-
   const bindRoot = async (id: string): Promise<BoundRoot> => {
     // The header: a node's that isn't this transaction's is that node's
     // fault; one that is (its signature hashes to the id) but isn't format
@@ -321,10 +285,13 @@ export function onChainRootSource({
       const pure: Survey<Header> = { ...headers, faults: [] };
       const machines = definiteMachines(pure);
       if (machines >= 2 && against === 0) {
-        throw new NotOnNodesError(
-          `${machines} machines have no header for ${id}`,
-          machines,
-          true,
+        throw Object.assign(
+          new NotOnNodesError(
+            `${machines} machines have no header for ${id}${headers.busy.length > 0 ? ` (${headers.busy.length} busy twice, unheard)` : ''}`,
+            machines,
+            true,
+          ),
+          { unheard: headers.busy.length },
         );
       }
       if (machines >= 2) {
@@ -373,13 +340,15 @@ export function onChainRootSource({
     let block: BoundRoot['block'];
     if (requireMined) {
       type Placed = { hash: string; height: number };
+      // A block is its hash and its height: machines agree on both, and
+      // an answer that names the agreed hash at another height is its
+      // node's fault.
+      const keyOf = (v: Placed) => `${v.hash}@${v.height}`;
       const agreed = (sv: Survey<Placed>) => {
         const by = new Map<string, Set<string>>();
         for (const a of sv.answers) {
-          by.set(
-            a.value.hash,
-            (by.get(a.value.hash) ?? new Set()).add(a.machine),
-          );
+          const k = keyOf(a.value);
+          by.set(k, (by.get(k) ?? new Set()).add(a.machine));
         }
         return [...by.entries()].find(([, m]) => m.size >= minAgreement)?.[0];
       };
@@ -407,16 +376,16 @@ export function onChainRootSource({
           absentStatuses: [404, 202],
         },
       );
-      const hash = agreed(status);
-      if (hash !== undefined) {
-        const at = status.answers.find((a) => a.value.hash === hash)!;
-        block = { indepHash: hash, height: at.value.height };
+      const key = agreed(status);
+      if (key !== undefined) {
+        const at = status.answers.find((a) => keyOf(a.value) === key)!;
+        block = { indepHash: at.value.hash, height: at.value.height };
         for (const a of status.answers) {
-          if (a.value.hash !== hash) {
+          if (keyOf(a.value) !== key) {
             fault(
               a.node,
               id,
-              `places it in block ${a.value.hash} at ${a.value.height}, not ${hash}`,
+              `places it in block ${a.value.hash} at height ${a.value.height}, not ${at.value.hash} at ${at.value.height}`,
             );
           }
         }
@@ -498,7 +467,20 @@ export function onChainRootSource({
           offsets.faults.length,
         );
       }
-      throw verdict(id, 'no place in the weave', offsets, 0);
+      // The root is bound and mined: a node without its place in the weave
+      // holds no data for it, which says nothing against the root. Only two
+      // machines giving another size refute it.
+      if (new Set(offsets.faults.map((x) => x.machine)).size >= 2) {
+        throw new RootUnboundError(
+          `${id}: two or more machines give its place in the weave another size than its header signs`,
+        );
+      }
+      throw new NodesRefusedError(
+        `${id}: no node gave its place in the weave (${offsets.absent.length} said 404, ${offsets.busy.length} busy, ${offsets.faults.length} gave another size): unchecked`,
+        offsets.absent.length,
+        offsets.busy.length,
+        offsets.faults.length,
+      );
     }
     for (const f of offsets.faults) fault(f.node, id, f.reason);
     for (const a of offsets.answers) {
@@ -532,9 +514,12 @@ export function onChainRootSource({
       // node reachable, nodes busy) is asked again next time.
       bound.set(id, pending);
       pending.catch((error) => {
+        // A root found missing while some nodes went unheard is asked again.
+        const unheard = ((error as { unheard?: number }).unheard ?? 0) > 0;
         if (
-          !(error instanceof RootUnboundError) &&
-          !(error instanceof NotOnNodesError)
+          (!(error instanceof RootUnboundError) &&
+            !(error instanceof NotOnNodesError)) ||
+          unheard
         ) {
           bound.delete(id);
         }
