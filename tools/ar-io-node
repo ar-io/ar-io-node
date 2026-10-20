@@ -20,6 +20,7 @@
 #   ./tools/ar-io-node index-l1-verify --bands-dir data/indexes/installed/parquet-l1
 #   ./tools/ar-io-node index-l1-import --bands-dir data/indexes/installed/parquet-l1 \
 #     --core-db data/sqlite/core.db
+#   ./tools/ar-io-node index-l2-verify --bands-dir data/indexes/installed/ardrive-l2
 #   ./tools/ar-io-node get-gateway --address <wallet>
 #
 # Mounts only what a command needs: data/indexes for index-band-* commands
@@ -27,7 +28,8 @@
 # rename stays on one filesystem), plus for index-band-export the SQLite
 # directory read-only and the ClickHouse settings; for index-l1-* commands
 # data/indexes read-only and the SQLite directory, read-write for
-# index-l1-import and read-only otherwise; for any other command only the file
+# index-l1-import and read-only otherwise; for index-l2-* commands
+# data/indexes read-only; for any other command only the file
 # a --wallet-file names, read-only. Band commands never take a key. It runs as
 # your user, so data/indexes/published/<index> must be writable by you;
 # index-l1-import runs as the owner of the core.db it writes, which on a
@@ -183,6 +185,19 @@ case "${COMMAND}" in
         DOCKER_ARGS+=(-v "$(realpath -e "${SECRETS_DIR}"):/run/secrets/index-export:ro")
       fi
     fi
+    join_gateway_network
+    ;;
+  index-l2-*)
+    # Bands are only read; root transactions come from Arweave nodes or a
+    # gateway (--gateway-url may name http://core:4000).
+    DATA_PATH="$(setting INDEX_SWARM_DATA_PATH)"
+    DATA_PATH="$(realpath -m "${DATA_PATH:-./data/indexes}")"
+    if [[ -d "${DATA_PATH}" ]]; then
+      DOCKER_ARGS+=(-v "${DATA_PATH}:/app/data/indexes:ro")
+      MOUNT_HOSTS+=("${DATA_PATH}")
+      MOUNT_TARGETS+=("data/indexes")
+    fi
+    rewrite_paths --bands-dir
     join_gateway_network
     ;;
   index-l1-*)

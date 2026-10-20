@@ -44,7 +44,6 @@
  *   in order, to the digest written; and every lookup read back to its
  *   digest and found to hold exactly the rows its tables give.
  */
-import crypto from 'node:crypto';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { setImmediate } from 'node:timers/promises';
@@ -85,7 +84,8 @@ import {
   ReadBudgetError,
   ReadUnavailableError,
 } from './gateway-reads.js';
-import { rowComparator, rowIdentity } from './order.js';
+import { rowComparator, rowIdentity } from '../../../lib/parquet-l2/order.js';
+import { digestL2Table, L2TableError } from '../../../lib/parquet-l2/tables.js';
 import { positionsByRoot, RootResolver, rootResolver } from './roots.js';
 import { selectionMatcher } from './selection.js';
 import type { L2ItemSource, RootPosition } from './source.js';
@@ -1183,44 +1183,16 @@ export async function digestTable(
   duck: Database,
   bandDir: string,
   spec: TableSpec,
-  { inFileOrder = false }: { inFileOrder?: boolean } = {},
+  options: { inFileOrder?: boolean } = {},
 ): Promise<{ rows: number; rowDigest: string }> {
-  const file = sqlString(path.join(bandDir, spec.file));
-  const digest = new RowDigest(spec.columns);
-  const names = spec.columns.map((c) => c.name);
-  const compare = rowComparator(spec);
-  let previous: unknown[] | undefined;
-  const stream = await duck.stream(
-    `SELECT ${quoted(spec.columns)} FROM read_parquet(${file})${inFileOrder ? '' : ` ORDER BY ${orderByClause(spec)}`}`,
-  );
-  for await (const row of stream) {
-    const values = names.map((n) => (row as Record<string, unknown>)[n]);
-    if (previous !== undefined && compare(previous, values) >= 0) {
-      throw new L2CheckError(
-        'order',
-        `${spec.file} holds two rows out of order or of one key`,
-      );
+  try {
+    return await digestL2Table(duck, bandDir, spec, options);
+  } catch (error) {
+    if (error instanceof L2TableError) {
+      throw new L2CheckError(error.reason, error.message, error.details);
     }
-    if (spec.name === 'wallets') {
-      const [address, key] = values as [Buffer, Buffer];
-      if (
-        !crypto
-          .createHash('sha256')
-          .update(Buffer.from(key))
-          .digest()
-          .equals(Buffer.from(address))
-      ) {
-        throw new L2CheckError(
-          'wallet_hash',
-          "an owner's key doesn't hash to its address",
-          [toB64Url(Buffer.from(address))],
-        );
-      }
-    }
-    digest.add(values);
-    previous = values;
+    throw error;
   }
-  return { rows: digest.rows, rowDigest: digest.hex() };
 }
 
 /** Unlocated counts with `unproven` counted as `ambiguous`. */

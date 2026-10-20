@@ -21,6 +21,7 @@ import {
   indexL1ImportOptions,
   indexL1AuditOptions,
   indexL1VerifyOptions,
+  indexL2VerifyOptions,
   indexBandVerifyOptions,
 } from './options.js';
 import { passthroughArgs, runSdkCli, sdkCli } from './passthrough.js';
@@ -29,6 +30,7 @@ import type {
   IndexBandExportCLIOptions,
   IndexL1ImportCLIOptions,
   IndexL1AuditCLIOptions,
+  IndexL2VerifyCLIOptions,
   IndexL1VerifyCLIOptions,
   IndexBandVerifyCLIOptions,
 } from './types.js';
@@ -43,6 +45,8 @@ const indexExportCommands = async () =>
   import('./commands/indexExportCommands.js');
 const indexL1ImportCommands = async () =>
   import('./commands/indexL1ImportCommands.js');
+const indexL2VerifyCommands = async () =>
+  import('./commands/indexL2VerifyCommands.js');
 const indexL1VerifyCommands = async () =>
   import('./commands/indexL1VerifyCommands.js');
 const indexL1AuditCommands = async () =>
@@ -192,6 +196,33 @@ makeCommand<IndexL1VerifyCLIOptions>({
     'grew the weave by exactly its transactions, and the first post-2.0',
     'block commits the running total, so one trusted block hash pins the',
     'size of every transaction beneath it. Exits 1 if a check fails.',
+    CONTRACT,
+  ].join('\n'),
+);
+
+makeCommand<IndexL2VerifyCLIOptions>({
+  name: 'index-l2-verify',
+  description:
+    'Check a directory of parquet-l2 bands (an L2 index such as ardrive-l2) as their holder can, and their locations against Arweave',
+  options: indexL2VerifyOptions,
+  action: async (options) =>
+    (await indexL2VerifyCommands()).indexL2VerifyCLICommand(options, {
+      log: createCliLogger({ debug: options.debug === true }),
+    }),
+}).addHelpText(
+  'after',
+  [
+    '',
+    'Example:',
+    '  ar-io-node index-l2-verify --bands-dir data/indexes/installed/ardrive-l2 \\',
+    '    --publisher 34LYvMptiDvBP5sqfh1oAd6Q4qFsy4PWaZ1HTFmML7h5',
+    '',
+    "Read-only, no gateway or database needed. Checks every band's id against",
+    'its contents, the set for overlaps and holes, every table row by row,',
+    'every location and parent link, and the lookups; then reads a sample of',
+    'items per band from Arweave nodes, proving each chunk against the chain,',
+    'and checks their headers hash to their ids. Exits 1 if a check fails.',
+    'See docs/index-verification.md.',
     CONTRACT,
   ].join('\n'),
 );

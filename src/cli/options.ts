@@ -143,6 +143,36 @@ export const optionMap = {
     description:
       'How many sources must answer for each anchor height (default 2)',
   },
+  arweaveNodes: {
+    alias: '--arweave-nodes <urls>',
+    description:
+      "Read root transactions from these Arweave nodes (comma-separated, or 'default' for the tip and data nodes), proving every byte against the chain: the root's signature binds its data_root, and every chunk's proof is checked. Exclusive with --gateway-url",
+  },
+  l2BandsDir: {
+    alias: '--bands-dir <path>',
+    description:
+      'A directory of parquet-l2 bands of one index, as the index-swarm sidecar installs them (data/indexes/installed/<index>) or index-export publishes them (data/indexes/published/<index>). Required',
+  },
+  verifyPublisher: {
+    alias: '--publisher <wallet>',
+    description:
+      "The publishing gateway's registered wallet: band ids are then checked whole, its tag included",
+  },
+  onchain: {
+    alias: '--onchain <n>',
+    description:
+      'Items per band whose headers are read at their recorded locations and checked against their ids (default 20; 0 leaves the check out). Read from Arweave nodes unless --gateway-url is given',
+  },
+  l2GatewayUrl: {
+    alias: '--gateway-url <url>',
+    description:
+      'For --onchain, read root transactions through this gateway instead of Arweave nodes: faster, but the gateway is trusted. Exclusive with --arweave-nodes',
+  },
+  l2SkipLookups: {
+    alias: '--skip-lookups',
+    description:
+      "Leave out the check of each band's lookup files against its tables, the slowest check on large bands",
+  },
   bandsDir: {
     alias: '--bands-dir <path>',
     description:
@@ -215,6 +245,7 @@ export const indexBandBuildOptions: CommanderOption[] = [
 export const indexBandVerifyOptions: CommanderOption[] = [
   optionMap.bandDir,
   optionMap.gatewayUrl,
+  optionMap.arweaveNodes,
   optionMap.readTimeout,
   optionMap.sampleSize,
 ];
@@ -238,6 +269,18 @@ export const indexL1VerifyOptions: CommanderOption[] = [
   optionMap.toHeight,
   optionMap.anchorFrom,
   optionMap.anchorMin,
+];
+
+export const indexL2VerifyOptions: CommanderOption[] = [
+  optionMap.l2BandsDir,
+  optionMap.verifyPublisher,
+  optionMap.onchain,
+  optionMap.arweaveNodes,
+  optionMap.l2GatewayUrl,
+  optionMap.readTimeout,
+  optionMap.fromHeight,
+  optionMap.toHeight,
+  optionMap.l2SkipLookups,
 ];
 
 export const indexL1AuditOptions: CommanderOption[] = [

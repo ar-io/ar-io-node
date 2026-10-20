@@ -50,10 +50,13 @@ export const BANDS_SPILL_MAX = '16GB';
  * fill the disk under it (through the wrapper, the container layer on `/`).
  */
 export async function openBandsDuck(
-  options: { tmpRoot?: string } = {},
+  options: { tmpRoot?: string; prefix?: string } = {},
 ): Promise<{ duck: Database; spill: string; close(): Promise<void> }> {
   const spill = await fsp.mkdtemp(
-    path.join(options.tmpRoot ?? os.tmpdir(), 'ar-io-node-l1-verify-'),
+    path.join(
+      options.tmpRoot ?? os.tmpdir(),
+      options.prefix ?? 'ar-io-node-l1-verify-',
+    ),
   );
   const removeSpill = () => fsp.rm(spill, { recursive: true, force: true });
   let duck: Database | undefined;

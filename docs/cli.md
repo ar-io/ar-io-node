@@ -34,6 +34,7 @@ The wrapper mounts only what a command needs:
 | `index-band-*` | `INDEX_SWARM_DATA_PATH` (default `./data/indexes`) at `data/indexes`, and the gateway's Docker network (`DOCKER_NETWORK_NAME`, default `ar-io-network`), so `--gateway-url http://core:4000` reaches the gateway |
 | `index-band-export` | Also `SQLITE_DATA_PATH` (default `./data/sqlite`) read-only at `data/sqlite`; `CLICKHOUSE_URL`, `CLICKHOUSE_USER` and `CLICKHOUSE_PASSWORD`, passed by name, so not on the command line (`docker inspect` of the running container shows them); and `INDEX_EXPORT_SECRETS_DIR`, if set, read-only at `/run/secrets/index-export` for peers' password files |
 | `index-l1-*` | `INDEX_SWARM_DATA_PATH` read-only at `data/indexes`; `SQLITE_DATA_PATH` at `data/sqlite`, read-write for `index-l1-import` and read-only for `index-l1-verify` and `index-l1-audit`; and the gateway's Docker network, so `--data-from` or `--anchor-from` can name `http://core:4000` |
+| `index-l2-*` | `INDEX_SWARM_DATA_PATH` read-only at `data/indexes`, and the gateway's Docker network, so `--gateway-url` can name `http://core:4000` |
 | any `ar.io` command | Nothing, except the file a `--wallet-file` (`-w`) names, read-only. A relative path is taken from where you ran the wrapper |
 
 It runs as your user, so what it writes is yours, and
@@ -161,7 +162,8 @@ Runs the header check on a built or installed band:
 | Option | Meaning |
 | --- | --- |
 | `--band-dir <path>` | The band's directory (it holds `manifest.json`). Required |
-| `--gateway-url <url>` | As for `index-band-build`. Required |
+| `--gateway-url <url>` | As for `index-band-build`. This or `--arweave-nodes` is required |
+| `--arweave-nodes <urls>` | Read the roots from these Arweave nodes instead (comma-separated, or `default`), proving every byte against the chain: see [Reading from the chain](index-verification.md#reading-from-the-chain---arweave-nodes). Exclusive with `--gateway-url` |
 | `--read-timeout <ms>` | As for `index-band-build` (default 30000) |
 | `--sample-size <n>` | Entries to read (default 150), from a pool ten times that |
 
@@ -813,6 +815,69 @@ rule of three, `3/n`, and says how little a clean sample rules out.
 `mismatchRate` replaces it once something does. The command exits 1 on any
 mismatch, and also when nothing could be audited, because a run that
 checked nothing proves no more than not running it.
+
+## `index-l2-verify`
+
+Checks a directory of `parquet-l2` bands, one L2 index such as `ardrive-l2`,
+as anyone holding them can: no gateway and no database, and, with the
+on-chain sample, nothing trusted but the chain. Read-only. What each check
+proves, and how to reproduce or repair a band that fails, is in
+[index-verification.md](index-verification.md).
+
+```bash
+# a subscriber's installed copy, every check, 20 items per band from Arweave nodes
+./tools/ar-io-node index-l2-verify --bands-dir data/indexes/installed/ardrive-l2 \
+  --publisher 34LYvMptiDvBP5sqfh1oAd6Q4qFsy4PWaZ1HTFmML7h5
+
+# a publisher's settled bands, through its own gateway for speed (trusted)
+./tools/ar-io-node index-l2-verify --bands-dir data/indexes/published/ardrive-l2 \
+  --to 2014999 --gateway-url http://core:4000
+```
+
+| Option | Meaning |
+| --- | --- |
+| `--bands-dir <path>` | The index's bands: `data/indexes/installed/<index>` or `data/indexes/published/<index>`. Required |
+| `--publisher <wallet>` | The publisher's wallet: ids are then checked whole, its tag included |
+| `--onchain <n>` | Items per band read at their recorded locations and checked against their ids (default 20; `0` leaves the check out) |
+| `--arweave-nodes <urls>` | The Arweave nodes those reads go to (comma-separated, or `default`, the default: the `tip` and `data` nodes) |
+| `--gateway-url <url>` | Read through this gateway instead: faster, but trusted. Exclusive with `--arweave-nodes` |
+| `--read-timeout <ms>` | How long each node or gateway request may take (default 30000) |
+| `--from <height>`, `--to <height>` | Check only the bands inside these heights |
+| `--skip-lookups` | Leave out the lookup check, the slowest on large bands |
+
+It reads every row of every table in file order, so memory stays flat; the
+large lookups spill to a folder of their own under the system temp directory
+(`TMPDIR`), at most 16 GB, removed when the run ends. A run killed outright can
+leave `ar-io-node-l2-verify-*` behind; delete it.
+
+### `index-l2-verify` result
+
+```json
+{
+  "bandsDir": "data/indexes/installed/ardrive-l2",
+  "selection": "{\"kind\":\"ans104-data-items\",\"tag\":{...}}",
+  "bands": 23,
+  "heightRange": [0, 2014999],
+  "items": 127829930,
+  "ok": true,
+  "checks": [
+    { "name": "identity", "ok": true, "detail": "..." },
+    { "name": "parents", "ok": false, "detail": "...",
+      "failures": [{ "height": 1300000, "found": "l2-h1300000-...: 28 items in a nested bundle that parents does not describe there", "expected": "0" }] }
+  ],
+  "onchain": {
+    "perBand": 20, "checked": 460, "ok": 460, "wrong": 0, "unreadable": 12, "errors": 0,
+    "failedBands": [],
+    "roots": { "from": "arweave-nodes", "proven": true, "roots": 440, "bySignature": 440, "byAgreement": 0, "chunksProven": 460, "reachableNodes": 21 }
+  },
+  "seconds": 8820
+}
+```
+
+Checks are `identity`, `selection`, `files`, `tables`, `locations`, `parents`,
+`lookups` (unless skipped) and `onchain` (unless `--onchain 0`). Each failure
+names the band it was found in and the height that band starts at; at most 20
+are listed per check, the rest counted in `more`.
 
 ## For scripts and agents
 

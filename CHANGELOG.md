@@ -6,6 +6,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **`index-l2-verify`: check an L2 index (a directory of `parquet-l2`
+  bands, such as `ardrive-l2`) as anyone holding it can.** It needs no
+  gateway and no database. Each band:
+  - its id is checked against its contents, and the set for overlaps and
+    holes;
+  - every table is read row by row, in order, against `band.json`, and every
+    owner key against its address;
+  - every item's location must be laid out as ANS-104 requires, with its
+    `data_size` the payload it gives;
+  - every nested item must name a parent bundle that `parents` describes
+    where its payload starts;
+  - the lookups are checked against the tables;
+  - a sample of items per band (`--onchain`, default 20) is read at their
+    recorded locations from Arweave nodes and checked against their ids.
+  `index-l1-verify` does the same for L1 bands. See
+  [docs/index-verification.md](docs/index-verification.md), new, which
+  covers every index kind: what each check proves, how to reproduce a band
+  and how to repair one.
+- **Reading roots from Arweave nodes, every byte proven**
+  (`index-band-verify --arweave-nodes`, and `index-l2-verify` by default),
+  so a header check trusts no gateway:
+  - a root's signature must hash to its id and verify, binding its
+    `data_root` (two nodes must agree where arweave-js can't verify);
+  - every chunk's proof is validated against that `data_root` under the
+    consensus rules for its weave offset, and the chunk must hash to the
+    proof;
+  - a node serving a chunk that fails is passed over.
+
 ### Changed
 
 - The `CHUNK_METADATA_ANCHOR_*` settings now pass through

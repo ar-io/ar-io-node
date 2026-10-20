@@ -15,7 +15,7 @@
  * back and every row checked against the one before it, so a disagreement
  * would refuse the band, never publish one out of order.
  */
-import type { TableSpec } from '../../../lib/parquet-l1/layout.js';
+import type { TableSpec } from '../parquet-l1/layout.js';
 
 type Value = unknown;
 
