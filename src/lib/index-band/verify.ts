@@ -543,6 +543,8 @@ export interface DrawnCheckOptions {
   retryDelayMs?: number;
   /** Milliseconds the whole check may take; what is unread then is unchecked. */
   deadlineMs?: number;
+  /** Injected in tests: the clock the deadline is read from. */
+  now?: () => number;
 }
 
 export interface DrawnCheckResult {
@@ -591,19 +593,19 @@ export async function checkDrawnHeaders({
   retries = 2,
   retryDelayMs = 2000,
   deadlineMs,
+  now = Date.now,
 }: DrawnCheckOptions): Promise<DrawnCheckResult> {
   if (!Number.isSafeInteger(maxUnchecked) || maxUnchecked < 0) {
     throw new Error(
       `maxUnchecked must be a whole number, 0 or above, not ${maxUnchecked}`,
     );
   }
-  const deadline =
-    deadlineMs !== undefined ? Date.now() + deadlineMs : undefined;
+  const deadline = deadlineMs !== undefined ? now() + deadlineMs : undefined;
   // Set when the deadline's timer fires, so no read starts after it however
   // the clock and the timer disagree by a millisecond.
   let deadlinePassed = false;
   const pastDeadline = () =>
-    deadlinePassed || (deadline !== undefined && Date.now() >= deadline);
+    deadlinePassed || (deadline !== undefined && now() >= deadline);
   type Outcome =
     | { kind: 'ok'; malformed?: string }
     | { kind: 'wrong'; reason: string; missing?: boolean }
@@ -649,7 +651,7 @@ export async function checkDrawnHeaders({
                   deadlinePassed = true;
                   reject(new DeadlinePassedError());
                 },
-                Math.max(0, deadline - Date.now()),
+                Math.max(0, deadline - now()),
               );
             }),
           ]);

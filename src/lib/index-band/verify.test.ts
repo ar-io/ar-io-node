@@ -903,4 +903,32 @@ describe('checkDrawnHeaders: every drawn entry ok, wrong or unchecked', () => {
     assert.equal(result.ok, 2);
     assert.deepEqual(result.uncheckedReasons, { deadline: 8 });
   });
+
+  it('starts no read once the deadline timer has fired, however the clock reads (review 9)', async () => {
+    let started = 0;
+    const openRoot: RootSourceFactory = () => ({
+      read: async (offset: number, size: number) => {
+        started += 1;
+        // The third read never answers; any later one would answer at once.
+        if (started === 3) await new Promise(() => undefined);
+        return new BufferByteRangeSource(rootBytes).read(offset, size);
+      },
+      close: async () => undefined,
+      isOpen: () => true,
+    });
+    // A clock that never reaches the deadline: only the timer can end it.
+    const frozen = Date.now();
+    const result = await checkDrawnHeaders({
+      entries: entries(() => ROOT, 10),
+      openRoot,
+      retries: 0,
+      retryDelayMs: 1,
+      concurrency: 1,
+      deadlineMs: 100,
+      now: () => frozen,
+    });
+    assert.equal(result.ok, 2);
+    assert.deepEqual(result.uncheckedReasons, { deadline: 8 });
+    assert.equal(started, 3);
+  });
 });
