@@ -94,6 +94,7 @@ import {
   BAND_FILE,
   bandFiles,
   bandTablesDigest,
+  idHeightRange,
   L2_BAND_ID_PATTERN,
   PARQUET_L2_LOOKUPS,
   PARQUET_L2_TABLES,
@@ -138,11 +139,6 @@ export interface L2OnChainOptions {
   random?: () => number;
   concurrency?: number;
   /**
-   * Pass a band with items but none located (nothing to read on chain).
-   * Default false: such a band is not verified on chain, and fails.
-   */
-  allowUnlocated?: boolean;
-  /**
    * The largest share of the items tried in a band that may be under chunks
    * no node holds (default 0.2). Past it the band fails.
    */
@@ -164,6 +160,15 @@ export interface L2PublicationOptions {
   publisherKey: string;
   /** The index's name in it, when it lists more than one `parquet-l2` index. */
   index?: string;
+  /** Accept a publication past its `expiresAt` (default: refused). */
+  allowExpired?: boolean;
+  /**
+   * Where the key came from, when not from the operator: a registry the
+   * run trusted for it, said in `assurance` and `publication.keyFrom`.
+   */
+  keyFrom?: string;
+  /** Injected in tests: the time expiry is judged at. */
+  now?: () => number;
 }
 
 export interface L2VerifyOptions {
@@ -183,6 +188,17 @@ export interface L2VerifyOptions {
    * band is listed in `mined.uncovered`.
    */
   l1?: { bandsDir: string; required: boolean };
+  /**
+   * The largest share of a band's items that may be unlocated (default
+   * 0.001: the most measured in a real `ardrive-l2` band is 0.00035).
+   * Unlocated items can't be checked on chain.
+   */
+  maxUnlocatedShare?: number;
+  /**
+   * Pass a band whose items are all unlocated (nothing of it can be read
+   * on chain), its unlocated items as declared. Default false.
+   */
+  allowUnlocated?: boolean;
   /** Called after each band, for progress. */
   progress?: (done: number, total: number, id: string) => void;
 }
@@ -200,6 +216,8 @@ export interface L2OnChainBand {
   unreadable: number;
   unreadableShare: number;
   errors: number;
+  /** A few of the transport errors, so a band's errors can be judged. */
+  errorSample: string[];
   passed: boolean;
   reasons: string[];
 }
@@ -244,14 +262,35 @@ export interface L2BandsVerifyResult {
   publication?: {
     publisher: string;
     keyId: string;
+    /** Where the key came from: `operator`, or the registry trusted for it. */
+    keyFrom: string;
     sequence: number;
     issuedAt: string;
+    expiresAt: string;
+    expired: boolean;
     index: string;
     bound: boolean;
+    /** Bands it lists in the range checked that the directory lacks. */
+    absent: string[];
   };
+  /**
+   * What the run bound the bands to, and what it did not, in sentences: read
+   * with `ok` and `skipped`.
+   */
+  assurance: string[];
+  /** Per band: its unlocated items, what its band.json declares, the share. */
+  located: Array<{
+    id: string;
+    items: number;
+    unlocated: number;
+    declared: number;
+    share: number;
+  }>;
   /** How roots were found in blocks, when they were. */
   mined?: {
     l1BandsDir: string;
+    /** What the L1 index checks of each root: its block's height and its place in it. */
+    checks: { height: true; position: true };
     /** Bands whose every root was found in the L1 index. */
     checked: number;
     /** Bands the L1 index doesn't cover. */
@@ -523,6 +562,15 @@ function boundPublication(
       `the publication's signature does not verify: ${verified.reason}`,
     );
   }
+  const now = (options.now ?? Date.now)();
+  if (
+    Date.parse(publication.expiresAt) < now &&
+    options.allowExpired !== true
+  ) {
+    throw new L2BandsRefused(
+      `the publication expired at ${publication.expiresAt} (sequence ${publication.sequence}, issued ${publication.issuedAt}): fetch a current one, or --allow-expired`,
+    );
+  }
   if (publisher !== undefined && publication.publisher !== publisher) {
     throw new L2BandsRefused(
       `the publication is ${publication.publisher}'s, not ${publisher}'s`,
@@ -597,6 +645,8 @@ export async function verifyL2Bands(
   options: L2VerifyOptions = {},
 ): Promise<L2BandsVerifyResult> {
   const began = Date.now();
+  const allowUnlocated = options.allowUnlocated === true;
+  const maxUnlocatedShare = options.maxUnlocatedShare ?? 0.001;
   // Reading every row in file order relies on DuckDB keeping it.
   await duck.exec('SET preserve_insertion_order = true');
   const found = await readL2BandsDir(bandsDir);
@@ -691,6 +741,32 @@ export async function verifyL2Bands(
     "every band's checks ran to their end, without a file vanishing or an I/O or DuckDB error",
   );
 
+  const coverage_ = check(
+    'coverage',
+    'every height asked for (--from/--to) lies in a band that is checked',
+  );
+  const located_ = check(
+    'located',
+    "every band's unlocated items are the ones its band.json declares, and no more than the share allowed",
+  );
+  // Heights asked for that no checked band covers: bands only partly
+  // inside the range are not checked, so their heights are not either.
+  const [spanFrom, spanTo] = span;
+  if (options.from !== undefined && options.from < spanFrom) {
+    addFailure(coverage_, {
+      height: options.from,
+      found: `heights ${options.from}-${spanFrom - 1} in no band checked`,
+      expected: 'a band over every height asked for',
+    });
+  }
+  if (options.to !== undefined && options.to > spanTo) {
+    addFailure(coverage_, {
+      height: spanTo + 1,
+      found: `heights ${spanTo + 1}-${options.to} in no band checked`,
+      expected: 'a band over every height asked for',
+    });
+  }
+
   // Entries that are not readable bands, and ones that vanished in range.
   for (const { entry, problem } of found.problems) {
     addFailure(files, {
@@ -724,6 +800,31 @@ export async function verifyL2Bands(
     );
     listed = new Map(bound.entry.bands.map((b) => [b.id, b]));
   }
+  // Bands the publication lists in the range checked that are not here: a
+  // set missing a band is not the publication's index.
+  const absent: string[] = [];
+  if (bound !== undefined) {
+    const here = new Set(found.bands.map((b) => b.id));
+    for (const band of bound.entry.bands) {
+      if (here.has(band.id)) continue;
+      const heights = idHeightRange(band.id);
+      const [lo, hi] =
+        heights ??
+        (band.heightRange !== undefined
+          ? [
+              band.heightRange[0],
+              band.heightRange[1] ?? Number.MAX_SAFE_INTEGER,
+            ]
+          : [0, Number.MAX_SAFE_INTEGER]);
+      if (!overlaps(lo, hi)) continue;
+      absent.push(band.id);
+      addFailure(publicationCheck, {
+        height: lo,
+        found: `${band.id}: listed in the publication, not in ${bandsDir}`,
+        expected: 'every band it lists in the range checked',
+      });
+    }
+  }
   const publisher = options.publisher ?? bound?.publication.publisher;
   const tag = publisher !== undefined ? bandPublisherTag(publisher) : undefined;
 
@@ -733,6 +834,7 @@ export async function verifyL2Bands(
     options.l1 !== undefined
       ? {
           l1BandsDir: options.l1.bandsDir,
+          checks: { height: true as const, position: true as const },
           checked: 0,
           uncovered: [] as string[],
         }
@@ -754,6 +856,7 @@ export async function verifyL2Bands(
     seed: options.onchain?.seed ?? crypto.randomInt(2 ** 31 - 1),
   };
   let items = 0;
+  const locatedReport: L2BandsVerifyResult['located'] = [];
   const sigLengths = signatureLengthsSql();
   const selectedSql = selectionDuckDb(ordered[0].band.selection);
 
@@ -1073,6 +1176,42 @@ export async function verifyL2Bands(
       );
     }
 
+    // located: what is unlocated is what band.json declares, and little
+    const [counts] = (await duck.all(
+      `SELECT count(*) AS n, count(*) FILTER (WHERE "offset" IS NULL) AS unlocated FROM ${itemsFile}`,
+    )) as Array<Record<string, unknown>>;
+    const total = num(counts.n);
+    const unlocated = num(counts.unlocated);
+    const declaredRaw = band.checks?.unlocated;
+    const declared =
+      typeof declaredRaw === 'number'
+        ? declaredRaw
+        : declaredRaw !== null &&
+            typeof declaredRaw === 'object' &&
+            !Array.isArray(declaredRaw)
+          ? Object.values(declaredRaw).reduce<number>(
+              (sum, n) => sum + (typeof n === 'number' ? n : Number.NaN),
+              0,
+            )
+          : 0;
+    const share = total > 0 ? unlocated / total : 0;
+    locatedReport.push({ id, items: total, unlocated, declared, share });
+    if (unlocated !== declared) {
+      fail(
+        located_,
+        `${unlocated} unlocated items`,
+        `the ${declared} its band.json declares (checks.unlocated)`,
+      );
+    }
+    const wholly = total > 0 && unlocated === total;
+    if (share > maxUnlocatedShare && !(wholly && allowUnlocated)) {
+      fail(
+        located_,
+        `${unlocated} of ${total} items unlocated (${share.toPrecision(3)})`,
+        `at most ${maxUnlocatedShare} of them${wholly ? ' (or --allow-unlocated)' : ''}`,
+      );
+    }
+
     // lookups
     if (options.lookups !== false) {
       for (const problem of await verifyBandLookups(duck, dir, band)) {
@@ -1137,7 +1276,6 @@ export async function verifyL2Bands(
         openRoot,
         random,
         concurrency,
-        allowUnlocated = false,
         maxUnreadableShare = 0.2,
         deadlineMs,
       } = options.onchain;
@@ -1149,7 +1287,7 @@ export async function verifyL2Bands(
       const salt = hash32(id);
       const stratumSample = async (where: string, stratum: number) =>
         (await duck.all(`SELECT * FROM (
-            SELECT id, root_transaction_id, root_parent_offset, "offset", data_offset
+            SELECT id, height, root_transaction_id, root_parent_offset, "offset", data_offset
             FROM ${itemsFile} WHERE "offset" IS NOT NULL AND ${where})
           USING SAMPLE reservoir(${pool} ROWS) REPEATABLE (${(onchainSummary.seed + salt + stratum) % 2 ** 31})`)) as Array<
           Record<string, unknown>
@@ -1164,6 +1302,7 @@ export async function verifyL2Bands(
             rootOffset: num(r.root_parent_offset) + num(r.offset),
             rootDataOffset: num(r.root_parent_offset) + num(r.data_offset),
             tag: label,
+            height: num(r.height),
           }),
         );
       const direct = toEntries(
@@ -1195,6 +1334,7 @@ export async function verifyL2Bands(
           unreadable: 0,
           unreadableShare: 0,
           errors: 0,
+          errorSample: [],
           passed: allowUnlocated,
           reasons: ['no located items to read on chain'],
         });
@@ -1243,6 +1383,10 @@ export async function verifyL2Bands(
         unreadable: result.unreadable.length,
         unreadableShare: result.unreadableShare,
         errors: result.errors.length,
+        errorSample: [...new Set(result.errors.map((e) => e.error))].slice(
+          0,
+          3,
+        ),
         passed: result.passed,
         reasons: result.reasons,
       });
@@ -1285,6 +1429,7 @@ export async function verifyL2Bands(
   const checks = [identity];
   if (options.publication !== undefined) checks.push(publicationCheck);
   checks.push(
+    coverage_,
     selectionCheck,
     files,
     schema,
@@ -1294,6 +1439,7 @@ export async function verifyL2Bands(
     parents,
     consistency,
     selected,
+    located_,
   );
   if (options.lookups !== false) checks.push(lookups);
   if (options.l1 !== undefined) checks.push(mined);
@@ -1313,6 +1459,18 @@ export async function verifyL2Bands(
     skipped.push('mined');
   }
 
+  const keyFrom = options.publication?.keyFrom ?? 'operator';
+  const assurance = [
+    bound !== undefined
+      ? `bound to the publication of ${bound.publication.publisher} (sequence ${bound.publication.sequence}, issued ${bound.publication.issuedAt}, expires ${bound.publication.expiresAt}), signed by ${bound.publication.signature?.keyId ?? ''}, ${keyFrom === 'operator' ? 'the key the operator gave' : `a key trusted to ${keyFrom}`}`
+      : 'not bound to any signature: the checks show only that the bands agree with themselves (no publication)',
+    ...(minedSummary !== undefined
+      ? [
+          `roots found in the L1 index at ${minedSummary.l1BandsDir}, at their block's height and place in it, for ${minedSummary.checked} bands; that index must have been checked (index-l1-verify) for this to trust nothing`,
+        ]
+      : []),
+  ];
+
   return {
     bandsDir,
     selection,
@@ -1322,16 +1480,24 @@ export async function verifyL2Bands(
     ok: checks.every((c) => c.ok),
     checks,
     skipped,
+    assurance,
+    located: locatedReport,
     publisherBound: bound !== undefined,
     ...(bound !== undefined
       ? {
           publication: {
             publisher: bound.publication.publisher,
             keyId: bound.publication.signature?.keyId ?? '',
+            keyFrom,
             sequence: bound.publication.sequence,
             issuedAt: bound.publication.issuedAt,
+            expiresAt: bound.publication.expiresAt,
+            expired:
+              Date.parse(bound.publication.expiresAt) <
+              (options.publication?.now ?? Date.now)(),
             index: bound.entry.name,
             bound: publicationCheck.ok,
+            absent,
           },
         }
       : {}),

@@ -521,14 +521,14 @@ describe('verifyL2Bands', () => {
         }
         r.parents = [];
       },
+      band: (b) => {
+        b.checks = { unlocated: { no_offsets: 2 } };
+      },
     });
     const reads: number[] = [];
     const result = await verifyL2Bands(db, dir, {
-      onchain: {
-        perBand: 2,
-        openRoot: strangerHeaders(reads),
-        allowUnlocated: true,
-      },
+      allowUnlocated: true,
+      onchain: { perBand: 2, openRoot: strangerHeaders(reads) },
     });
     assert.equal(result.ok, true);
     assert.deepEqual(result.onchain?.unlocatedBands, [id]);
@@ -551,6 +551,8 @@ const WALLET = getSolanaAddress(
 async function signedPublication(
   bandDirs: Array<{ dir: string; id: string }>,
   key: { privateKey: crypto.KeyObject; address: string },
+  expiresAt = '2099-01-01T00:00:00Z',
+  issuedAt = '2026-10-20T00:00:00Z',
 ): Promise<string> {
   const bands = [];
   for (const { dir, id } of bandDirs) {
@@ -572,8 +574,8 @@ async function signedPublication(
     publisher: WALLET,
     sequence: 3,
     previousManifestSha256: null,
-    issuedAt: '2026-10-20T00:00:00Z',
-    expiresAt: '2026-10-21T00:00:00Z',
+    issuedAt,
+    expiresAt,
     indexes: [{ name: 'ardrive-l2', kind: 'parquet-l2', bands }],
   };
   return serializeIndexPublication(
@@ -929,6 +931,9 @@ describe('verifyL2Bands fails closed', () => {
         }
         r.parents = [];
       },
+      band: (b) => {
+        b.checks = { unlocated: { no_offsets: 2 } };
+      },
     });
     const reads: number[] = [];
     const strict = await verifyL2Bands(db, dir, {
@@ -937,11 +942,8 @@ describe('verifyL2Bands fails closed', () => {
     assert.equal(strict.ok, false);
     assert.ok(failing(strict).includes('onchain'));
     const allowed = await verifyL2Bands(db, dir, {
-      onchain: {
-        perBand: 2,
-        openRoot: strangerHeaders(reads),
-        allowUnlocated: true,
-      },
+      allowUnlocated: true,
+      onchain: { perBand: 2, openRoot: strangerHeaders(reads) },
     });
     assert.equal(allowed.ok, true, JSON.stringify(allowed.checks));
     assert.equal(reads.length, 0);
@@ -973,6 +975,8 @@ describe('verifyL2Bands fails closed', () => {
     const result = await verifyL2Bands(db, dir, { from: 100, to: 250 });
     assert.deepEqual(result.partial, [tip.id]);
     assert.equal(result.bands, 1);
+    // Heights 200-250 were asked for and are not checked.
+    assert.equal(result.ok, false);
   });
 
   it('reports every check it did not run', async () => {
@@ -1036,5 +1040,145 @@ describe('verifyL2Bands fails closed', () => {
     assert.equal(unchecked.ok, true);
     assert.deepEqual(unchecked.mined?.uncovered, [id]);
     assert.ok(unchecked.skipped.includes('mined'));
+  });
+
+  it('fails a band the publication lists in the range checked that the directory lacks (review 4)', async () => {
+    const key = publisherKey();
+    const dir = await fresh();
+    const low = await writeBand(db, dir, 100, 199, { publisher: WALLET });
+    const tip = await writeBand(db, dir, 200, 299, { publisher: WALLET });
+    const document = await signedPublication([low, tip], key);
+    await fs.rm(tip.dir, { recursive: true });
+    const result = await verifyL2Bands(db, dir, {
+      publication: { document, publisherKey: key.address },
+    });
+    assert.equal(result.ok, false);
+    assert.ok(failing(result).includes('publication'));
+    // Outside the range checked, it is not missed.
+    const lower = await verifyL2Bands(db, dir, {
+      to: 199,
+      publication: { document, publisherKey: key.address },
+    });
+    assert.equal(lower.ok, true, JSON.stringify(lower.checks));
+  });
+
+  it('refuses an expired publication unless allowed, and reports its dates (review 5)', async () => {
+    const key = publisherKey();
+    const dir = await fresh();
+    const band = await writeBand(db, dir, 100, 199, { publisher: WALLET });
+    const document = await signedPublication(
+      [band],
+      key,
+      '2020-01-01T00:00:00Z',
+      '2019-12-31T00:00:00Z',
+    );
+    await assert.rejects(
+      verifyL2Bands(db, dir, {
+        publication: { document, publisherKey: key.address },
+      }),
+      /expired/,
+    );
+    const allowed = await verifyL2Bands(db, dir, {
+      publication: { document, publisherKey: key.address, allowExpired: true },
+    });
+    assert.equal(allowed.publication?.expiresAt, '2020-01-01T00:00:00Z');
+    assert.equal(allowed.publication?.issuedAt, '2019-12-31T00:00:00Z');
+    assert.equal(allowed.publication?.expired, true);
+    assert.equal(allowed.publication?.sequence, 3);
+  });
+
+  it('says in assurance when the publication key came from a registry (review 8)', async () => {
+    const key = publisherKey();
+    const dir = await fresh();
+    const band = await writeBand(db, dir, 100, 199, { publisher: WALLET });
+    const document = await signedPublication([band], key);
+    const result = await verifyL2Bands(db, dir, {
+      publication: {
+        document,
+        publisherKey: key.address,
+        keyFrom: 'registry http://core:4000',
+      },
+    });
+    assert.equal(result.publication?.keyFrom, 'registry http://core:4000');
+    assert.ok(
+      result.assurance.some((a) => a.includes('registry http://core:4000')),
+      result.assurance.join(' | '),
+    );
+  });
+
+  it('fails unlocated items its band.json does not declare, or too many of them (review 6)', async () => {
+    const unlocate = (r: Record<string, unknown[][]>) => {
+      for (const name of DATA_ITEM_LOCATION_COLUMNS) {
+        r.data_items[0][LOC(name)] = null;
+      }
+    };
+    const more = (r: Record<string, unknown[][]>) => {
+      // 1,999 located items beside the one unlocated: a share of 0.0005.
+      const direct = r.data_items[1];
+      for (let i = 0; i < 1998; i += 1) {
+        const copy = [...direct];
+        copy[0] = hash(`more-${i}`);
+        r.data_items.push(copy);
+        r.tags.push([
+          101,
+          copy[0],
+          0,
+          Buffer.from('App-Name'),
+          Buffer.from('ArDrive-App'),
+        ]);
+      }
+    };
+    // Undeclared: 1 unlocated, band.json says none.
+    const undeclared = await fresh();
+    await writeBand(db, undeclared, 100, 199, {
+      rows: (r) => {
+        unlocate(r);
+        more(r);
+      },
+    });
+    const a = await verifyL2Bands(db, undeclared);
+    assert.equal(a.ok, false);
+    assert.ok(failing(a).includes('located'), failing(a).join());
+    assert.deepEqual(
+      a.located.map(({ unlocated, declared }) => ({ unlocated, declared })),
+      [{ unlocated: 1, declared: 0 }],
+    );
+    // Declared, and under the share: passes.
+    const declared = await fresh();
+    await writeBand(db, declared, 100, 199, {
+      rows: (r) => {
+        unlocate(r);
+        more(r);
+      },
+      band: (b) => {
+        b.checks = { unlocated: { no_offsets: 1 } };
+      },
+    });
+    const b = await verifyL2Bands(db, declared);
+    assert.equal(b.ok, true, JSON.stringify(b.checks));
+    // Declared, but over the share (1 of 2): fails.
+    const many = await fresh();
+    await writeBand(db, many, 100, 199, {
+      rows: unlocate,
+      band: (band) => {
+        band.checks = { unlocated: { no_offsets: 1 } };
+      },
+    });
+    const c = await verifyL2Bands(db, many);
+    assert.ok(failing(c).includes('located'), failing(c).join());
+    const d = await verifyL2Bands(db, many, { maxUnlocatedShare: 0.6 });
+    assert.equal(d.ok, true, JSON.stringify(d.checks));
+  });
+
+  it('fails a part of the requested range no band covers (review 7)', async () => {
+    const dir = await fresh();
+    await writeBand(db, dir, 100, 199);
+    const r = await verifyL2Bands(db, dir, { from: 100, to: 250 });
+    assert.equal(r.ok, false);
+    assert.ok(failing(r).includes('coverage'), failing(r).join());
+    const past = await verifyL2Bands(db, dir, { from: 50 });
+    assert.ok(failing(past).includes('coverage'));
+    const exact = await verifyL2Bands(db, dir, { from: 100, to: 199 });
+    assert.equal(exact.ok, true);
   });
 });
