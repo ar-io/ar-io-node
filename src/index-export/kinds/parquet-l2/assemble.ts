@@ -332,6 +332,15 @@ export async function assembleWindow(
     };
     items.push(item);
 
+    // A nested item can be placed from its own row (an absolute offset)
+    // while its parent bundle cannot be placed at all: every copy of the
+    // parent's row is inconsistent (offsets taken from another copy of the
+    // bundle, the #937 class). The band would then locate the item under a
+    // parent `parents` does not describe, which a reader cannot check. It
+    // is left unlocated as `no_parent` until the parent's row is repaired;
+    // a resettle then locates it.
+    const unplaced =
+      nested && (parent === undefined || parent.places.length === 0);
     const settle = (
       settled: Exclude<ItemPlacement, { located: 'ambiguous' }>,
     ) => {
@@ -339,21 +348,22 @@ export async function assembleWindow(
         item.unlocated = settled.reason;
         return;
       }
-      // A nested item can be placed from its own row (an absolute offset)
-      // while its parent bundle cannot be placed at all: every copy of the
-      // parent's row is inconsistent (offsets taken from another copy of
-      // the bundle, the #937 class). The band would then locate the item
-      // under a parent `parents` does not describe, which a reader cannot
-      // check. It is left unlocated as `no_parent` until the parent's row
-      // is repaired; a resettle then locates it.
-      if (nested && (parent === undefined || parent.places.length === 0)) {
+      if (unplaced) {
         item.unlocated = 'no_parent';
         return;
       }
       item.location = settled.location;
       item.placement = settled.placement;
     };
-    if (placement.located === 'ambiguous') {
+    if (placement.located === 'ambiguous' && unplaced) {
+      // Nothing a header read could settle: under no parent, no reading
+      // locates the item, so its root is not read for it.
+      settle({
+        located: false,
+        reason: 'no_parent',
+        normalised: placement.normalised,
+      });
+    } else if (placement.located === 'ambiguous') {
       const ambiguous = placement;
       pending.push(
         (async () => {

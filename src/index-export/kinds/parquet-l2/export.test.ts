@@ -754,6 +754,16 @@ describe('exportL2Band, locations', () => {
       assert.equal(result.band.checks?.located, 0);
       assert.deepEqual(result.band.checks?.unlocated, { no_parent: 3 });
       assert.equal(result.band.tables.parents.rows, 0);
+      // The ambiguous rows (b2, b3) were not read from the root: no reading
+      // could place them under a parent the band does not describe.
+      assert.deepEqual(result.stats.proofs, {
+        relative: 0,
+        absolute: 0,
+        none: 0,
+        both: 0,
+        unproven: 0,
+      });
+      assert.equal(result.band.checks?.ambiguousProven, 0);
     } finally {
       await done(result);
     }
