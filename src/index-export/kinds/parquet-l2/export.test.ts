@@ -39,6 +39,7 @@ import { sqlPath } from '../../../lib/parquet/lookups.js';
 import { ParquetL2Kind } from '../../../index-swarm/kinds/parquet-l2.js';
 import { withBandWriter } from '../parquet-l1/export.js';
 import { deriveL1Bands } from '../parquet-l1/kind.js';
+import { compareL2Bands } from './compare.js';
 import { exportL2Band, L2CheckError, L2UnavailableError } from './export.js';
 import { GatewayReads } from './gateway-reads.js';
 import type { L2SourceRow } from './source.js';
@@ -810,6 +811,41 @@ describe('exportL2Band, locations', () => {
       assert.equal(result.band.checks?.ambiguousProven, 0);
     } finally {
       await done(result);
+    }
+  });
+
+  it('compares such a correction as corrected, not as an unlocated loss', async () => {
+    // The old band located the three items under their parent but, as a
+    // band built before the rule did, without a `parents` row describing
+    // the parent (its row was dropped as inconsistent): a location no
+    // reader can check.
+    const old = await exportBand(right(), n1());
+    const next = await exportBand(absolute(), [{ ...n1()[0], size: 1 }]);
+    try {
+      assert.equal(old.band.checks?.located, 3);
+      assert.deepEqual(next.band.checks?.unlocated, { no_parent: 3 });
+      await withBandWriter(path.join(dir, 'read'), async (duck) => {
+        // With the parent described, losing the locations is a loss.
+        const loss = await compareL2Bands(duck, [old.dir], next.dir, 10);
+        assert.equal(loss.unlocated, 3);
+        assert.equal(loss.corrected, 0);
+        assert.equal(loss.missing, 0);
+        // Without it, a correction.
+        const parents = path.join(old.dir, 'parents.parquet');
+        await duck.exec(
+          `COPY (SELECT * FROM read_parquet('${parents}') WHERE false) TO '${parents}.tmp' (FORMAT PARQUET)`,
+        );
+        await fs.rename(`${parents}.tmp`, parents);
+        const corrected = await compareL2Bands(duck, [old.dir], next.dir, 10);
+        assert.equal(corrected.unlocated, 0);
+        assert.deepEqual(corrected.unlocatedSample, []);
+        assert.equal(corrected.corrected, 3);
+        assert.equal(corrected.correctedSample.length, 3);
+        assert.equal(corrected.missing, 0);
+        assert.equal(corrected.relocated, 0);
+      });
+    } finally {
+      await done(old, next);
     }
   });
 

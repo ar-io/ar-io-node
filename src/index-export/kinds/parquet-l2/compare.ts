@@ -42,9 +42,21 @@ export interface L2Compare {
   /** Ids the old bands hold and the new one doesn't: never allowed. */
   missing: number;
   missingSample: string[];
-  /** (id, root) pairs located before and not now: never allowed. */
+  /**
+   * (id, root) pairs located before and not now, where the old location
+   * could be checked (directly in the root, or under a parent the old
+   * bands' `parents` describes at that place): never allowed.
+   */
   unlocated: number;
   unlocatedSample: string[];
+  /**
+   * (id, root) pairs located before only under a parent the old bands'
+   * `parents` does not describe at that place (a location no reader can
+   * check: the parent's own row was inconsistent, ar-io-node #937), and
+   * unlocated now. A correction, not a loss: allowed, and reported.
+   */
+  corrected: number;
+  correctedSample: string[];
   /** Located rows of an (id, root) the old bands located elsewhere. */
   relocated: number;
   /** Every relocated row, up to the cap, for the header check. */
@@ -108,33 +120,59 @@ export async function compareL2Bands(
   maxRelocated: number,
 ): Promise<L2Compare> {
   const old = `read_parquet([${oldDirs.map((dir) => file(dir)).join(', ')}])`;
+  const oldParents = `read_parquet([${oldDirs.map((dir) => file(dir, 'parents')).join(', ')}])`;
   const next = `read_parquet(${file(newDir)})`;
   await duck.exec(`
     CREATE OR REPLACE TEMP VIEW o AS SELECT * FROM ${old};
+    CREATE OR REPLACE TEMP VIEW op AS SELECT * FROM ${oldParents};
     CREATE OR REPLACE TEMP VIEW n AS SELECT * FROM ${next};`);
   const missingSql = 'SELECT DISTINCT o.id FROM o ANTI JOIN n ON n.id = o.id';
-  const unlocatedSql = `
-    SELECT DISTINCT o.id, o.root_transaction_id FROM o
-    ANTI JOIN (SELECT id, root_transaction_id FROM n WHERE "offset" IS NOT NULL) x
-      ON x.id = o.id AND x.root_transaction_id = o.root_transaction_id
-    WHERE o."offset" IS NOT NULL`;
-  const sameLocation = LOCATION.map((c) => `p."${c}" = n."${c}"`).join(' AND ');
+  // Pairs located before and not now, split by whether the old location
+  // could be checked: directly in the root, or under a parent that the old
+  // bands' `parents` describes where the item says its payload starts
+  // (the rule `index-l2-verify` checks). One checkable place is enough.
+  const lostSql = `
+    WITH lost AS (
+      SELECT DISTINCT o.id, o.root_transaction_id FROM o
+      ANTI JOIN (SELECT id, root_transaction_id FROM n WHERE "offset" IS NOT NULL) x
+        ON x.id = o.id AND x.root_transaction_id = o.root_transaction_id
+      WHERE o."offset" IS NOT NULL),
+    described AS (
+      SELECT DISTINCT o.id, o.root_transaction_id FROM o
+      WHERE o."offset" IS NOT NULL AND o.parent_id = o.root_transaction_id
+      UNION
+      SELECT DISTINCT o.id, o.root_transaction_id FROM o
+      SEMI JOIN op ON op.id = o.parent_id
+        AND op.root_transaction_id = o.root_transaction_id
+        AND op.root_parent_offset + op.data_offset = o.root_parent_offset
+      WHERE o."offset" IS NOT NULL)`;
+  const unlocatedSql = `${lostSql}
+    SELECT l.id, l.root_transaction_id FROM lost l
+    SEMI JOIN described d ON d.id = l.id AND d.root_transaction_id = l.root_transaction_id`;
+  const correctedSql = `${lostSql}
+    SELECT l.id, l.root_transaction_id FROM lost l
+    ANTI JOIN described d ON d.id = l.id AND d.root_transaction_id = l.root_transaction_id`;
+  // Written as semi and anti joins, not as correlated EXISTS / NOT EXISTS:
+  // DuckDB 1.4.2 plans those as a delim join over a parallel hash
+  // aggregate, whose thread states can fail to combine (an internal error,
+  // "Attempting to combine TupleDataCollection with mismatching types";
+  // the h1.3M band of ardrive-l2 hit it on 2 re-settles out of 2, on
+  // 2026-10-20). A hash semi or anti join has no such state.
+  const sameItem = (p: string) =>
+    `${p}.id = n.id AND ${p}.root_transaction_id = n.root_transaction_id`;
+  const sameLocation = LOCATION.map((c) => `q."${c}" = n."${c}"`).join(' AND ');
   const relocatedSql = `
     SELECT n.id, n.root_transaction_id, n.root_parent_offset, n."offset", n.data_offset
     FROM n
-    WHERE n."offset" IS NOT NULL
-      AND EXISTS (SELECT 1 FROM o p WHERE p.id = n.id
-        AND p.root_transaction_id = n.root_transaction_id AND p."offset" IS NOT NULL)
-      AND NOT EXISTS (SELECT 1 FROM o p WHERE p.id = n.id
-        AND p.root_transaction_id = n.root_transaction_id AND ${sameLocation})`;
+    SEMI JOIN o p ON ${sameItem('p')} AND p."offset" IS NOT NULL
+    ANTI JOIN o q ON ${sameItem('q')} AND ${sameLocation}
+    WHERE n."offset" IS NOT NULL`;
   const newlyLocatedSql = `
     SELECT n.id, n.root_transaction_id, n.root_parent_offset, n."offset", n.data_offset
     FROM n
-    WHERE n."offset" IS NOT NULL
-      AND EXISTS (SELECT 1 FROM o p WHERE p.id = n.id
-        AND p.root_transaction_id = n.root_transaction_id)
-      AND NOT EXISTS (SELECT 1 FROM o p WHERE p.id = n.id
-        AND p.root_transaction_id = n.root_transaction_id AND p."offset" IS NOT NULL)`;
+    SEMI JOIN o p ON ${sameItem('p')}
+    ANTI JOIN o q ON ${sameItem('q')} AND q."offset" IS NOT NULL
+    WHERE n."offset" IS NOT NULL`;
   const walletsMissingSql = `
     SELECT DISTINCT o.address AS id
     FROM read_parquet([${oldDirs.map((dir) => file(dir, 'wallets')).join(', ')}]) o
@@ -157,6 +195,8 @@ export async function compareL2Bands(
     missingSample: [],
     unlocated: await count(duck, unlocatedSql),
     unlocatedSample: [],
+    corrected: await count(duck, correctedSql),
+    correctedSample: [],
     relocated: await count(duck, relocatedSql),
     relocatedEntries: [],
     newlyLocated: await count(duck, newlyLocatedSql),
@@ -169,6 +209,7 @@ export async function compareL2Bands(
   }
   if (compare.missing > 0) compare.missingSample = await ids(missingSql);
   if (compare.unlocated > 0) compare.unlocatedSample = await ids(unlocatedSql);
+  if (compare.corrected > 0) compare.correctedSample = await ids(correctedSql);
   if (compare.relocated > 0 && compare.relocated <= maxRelocated) {
     const rows = (await duck.all(relocatedSql)) as LocatedRow[];
     compare.relocatedEntries = rows.map((row) => entry(row, L2_RELOCATED_TAG));
