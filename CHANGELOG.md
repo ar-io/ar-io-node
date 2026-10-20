@@ -96,13 +96,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     self-signed root), format-1 headers given a `data_root` they don't
     sign, and bands whose sampled roots were mostly made up. Roots must now
     be format 2 and placed in one block by two machines (or found in an L1
-    index, `--l1-bands-dir`); a root no node has fails the band; more than
-    a band with nothing
-    located fails unless `--allow-unlocated`; agreement in place of a
+    index, `--l1-bands-dir`); a root no node has fails the band; a band
+    with nothing located fails unless `--allow-unlocated`; agreement in place of a
     signature needs `--allow-agreement`; chunk proofs are checked under the
     rules of the root's block, never laxer than strict borders.
-  - `--seed` did not repeat a run. It now seeds the order each band's
-    sample is read in too, per band by its id.
+  - `--seed` did not repeat a run. Each band's draw is now seeded by
+    sha256 of the run's seed and the band's id; the seed is random per run
+    and reported, and `--seed` is for reproducing a run only.
   - Nothing bound the bands to their publisher: an id is a 48-bit digest
     anyone can recompute for rows of their own. `--publication`, with
     `--publisher-key` or `--registry-url`, checks every file against the

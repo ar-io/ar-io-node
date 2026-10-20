@@ -855,8 +855,8 @@ proves, and how to reproduce or repair a band that fails, is in
 | `--allow-unlocated` | Pass a band whose items all have no locations, as its `band.json` declares, so nothing of it can be read on chain (default: it fails `located` and `onchain`) |
 | `--max-unlocated-share <fraction>` | The largest share of a band's items that may be unlocated (default `0.001`); its unlocated items must also be exactly what its `band.json` declares |
 | `--allow-expired` | Bind to a `--publication` past its `expiresAt` (default: refused) |
-| `--max-unchecked <n>` | Drawn items per band that may stay unchecked (nodes busy, chunks unseeded, a root no node places) and the band still pass (default 0); past it, with none wrong, the band is inconclusive. No drawn item is ever replaced by another draw |
-| `--band-deadline <seconds>` | How long one band's on-chain reads may take (default 1200); reads still pending then are errors |
+| `--max-unchecked <n>` | Drawn items per band that may stay unchecked (nodes busy, chunks unseeded, a root no node places) and the band still pass (default 0); past it, with none wrong, the band is inconclusive. Must be below `--onchain`; a band never passes with nothing verified, and `assurance` counts the allowed unchecked as the attacker's. No drawn item is ever replaced by another draw |
+| `--band-deadline <seconds>` | How long one band's on-chain reads may take (default 1200); items not read by then are unchecked |
 | `--gateway-url <url>` | Read through this gateway instead: faster, but trusted, and nobody then says the roots are mined. Exclusive with `--arweave-nodes` |
 | `--read-timeout <ms>` | How long each node, gateway or publication request may take (default 30000) |
 | `--from <height>`, `--to <height>` | Check only the bands inside these heights; a band only partly inside is listed under `partial` |
@@ -928,8 +928,10 @@ not who published them. When an L1 index covers only some bands, `skipped` still
 lists `mined` and `minedPartial` names the bands it left out
 (`{ "bands": [...], "count": n }`, at most 50 listed). A band with none wrong
 but more unchecked items than `--max-unchecked` is listed in
-`onchain.inconclusiveBands` and fails `onchain` with its own reason. `onchain.bands` gives each band's located share and
-unreadable share.
+`onchain.inconclusiveBands` and fails `onchain` with its own reason, as is
+one with nothing verified at all. `onchain.bands` gives each band's located
+share, how many items were drawn (`drawn`, of them `drawnUniform` over
+every located item, the rest nested items on top), and how each ended.
 
 ## For scripts and agents
 
