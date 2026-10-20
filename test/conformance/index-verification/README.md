@@ -200,7 +200,7 @@ that key, or, with `key: "other"`, against another fresh key.
 | `writeFile {band, file, text}` | writes the file |
 | `appendByte {band, file}` | appends one `0x00` byte |
 | `reverseFile {band, file}` | rewrites the Parquet file with its rows sorted descending on every column |
-| `recast {band, table, columns, add}` | rewrites the table's Parquet file with each column named in `columns` cast to the given type (e.g. `tag_count` as VARCHAR text, `block_transaction_index` as BIGINT), and, with `add`, one more column at the end of type `add.type` holding `add.value` in every row |
+| `recast {band, table or file, columns, add}` | rewrites the table's Parquet file (or, with `file`, any Parquet file of the band, a lookup's included) with each column named in `columns` cast to the given type (e.g. `tag_count` as VARCHAR text, `block_transaction_index` as BIGINT), and, with `add`, one more column at the end of type `add.type` holding `add.value` in every row |
 | `supersedes {band, target}` | writes `.publisher.json` `{"supersedes":["<target's id>"]}` |
 | `renameId {band, from, to}` | renames the band's directory, replacing `from` with `to` in its name |
 | `renameGeneration {band, generation}` | renames it `<id>~<generation>` |
@@ -210,6 +210,7 @@ that key, or, with `key: "other"`, against another fresh key.
 | `editBandJson {band, checks}` | rewrites `band.json` with `checks` set |
 | `emptyFile {band, file}` | rewrites the Parquet file with the same columns and no rows |
 | `editParquet {band, file, row, column, value}` | rewrites the Parquet file with one cell changed (the row by its position in the file, from 0), rows in their order |
+| `rederiveLookup {band, lookup, keyTags, statTags}` | rewrites the lookup's file derived for these tag names instead of the band's, and its `{rows, rowDigest}` in `band.json` to match |
 | `redescribeLookup {band, lookup}` | rewrites the lookup's `{rows, rowDigest}` in `band.json` to describe the file as it now is, digested in the lookup's order (a lying publisher) |
 | `deleteDuringRun {band}` | deletes the band once the verifier has finished the band before it |
 | `deleteFileDuringRun {band, file}` | deletes the file as the verifier starts reading it |

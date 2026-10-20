@@ -1,0 +1,39 @@
+{
+  "id": "l2-2-stats-wrong-tag-set",
+  "description": "stats derived for the key tags instead of the stat tags band.json names, band.json describing them",
+  "tampered": "stats derived by App-Name where statTags is empty",
+  "kind": "bands",
+  "bands": [
+    {
+      "from": 100,
+      "to": 199,
+      "layout": {
+        "schema": "l2-2",
+        "keyTags": [
+          "App-Name"
+        ],
+        "statTags": []
+      }
+    }
+  ],
+  "files": [
+    {
+      "op": "rederiveLookup",
+      "band": 0,
+      "lookup": "stats",
+      "keyTags": [
+        "App-Name"
+      ],
+      "statTags": [
+        "App-Name"
+      ]
+    }
+  ],
+  "expect": {
+    "verdict": "refuted",
+    "check": "lookups",
+    "failing": [
+      "lookups"
+    ]
+  }
+}

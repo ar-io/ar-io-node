@@ -1,0 +1,22 @@
+{
+  "id": "l2-2-key-and-stat-tags-differ",
+  "description": "A sound l2-2 band whose key tags and stat tags differ (stats by no tag, key by App-Name)",
+  "tampered": "nothing",
+  "kind": "bands",
+  "bands": [
+    {
+      "from": 100,
+      "to": 199,
+      "layout": {
+        "schema": "l2-2",
+        "keyTags": [
+          "App-Name"
+        ],
+        "statTags": []
+      }
+    }
+  ],
+  "expect": {
+    "verdict": "verified"
+  }
+}

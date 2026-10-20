@@ -523,7 +523,9 @@ type FileOp =
   | {
       op: 'recast';
       band: number;
-      table: string;
+      /** A table by name, or any Parquet file of the band by file name. */
+      table?: string;
+      file?: string;
       /** Columns rewritten as another type, each value cast. */
       columns: Record<string, string>;
       /** A column added at the end, every row holding `value`. */
@@ -545,7 +547,14 @@ type FileOp =
       column: string;
       value: CaseValue;
     }
-  | { op: 'redescribeLookup'; band: number; lookup: string };
+  | { op: 'redescribeLookup'; band: number; lookup: string }
+  | {
+      op: 'rederiveLookup';
+      band: number;
+      lookup: string;
+      keyTags: string[];
+      statTags: string[];
+    };
 
 /** What a case's directory and run are made of, built. */
 interface BuiltBands {
@@ -692,8 +701,10 @@ export async function buildBandsCase(
         break;
       }
       case 'recast': {
-        const spec = PARQUET_L2_TABLES.find((t) => t.name === op.table)!;
-        const p = path.join(band.dir, spec.file);
+        const p = path.join(
+          band.dir,
+          op.file ?? PARQUET_L2_TABLES.find((t) => t.name === op.table)!.file,
+        );
         const replaced = Object.entries(op.columns)
           .map(([name, type]) => `CAST("${name}" AS ${type}) AS "${name}"`)
           .join(', ');
@@ -769,6 +780,23 @@ export async function buildBandsCase(
                  FROM read_parquet('${p}', file_row_number = true) ORDER BY file_row_number) TO '${p}.x' (FORMAT PARQUET)`,
         );
         await fs.rename(`${p}.x`, p);
+        break;
+      }
+      case 'rederiveLookup': {
+        // The lookup derived for other tag names than band.json gives, and
+        // band.json made to describe the file as written.
+        const file = path.join(band.dir, BAND_FILE);
+        const parsed = parseBandFile(await fs.readFile(file, 'utf8'));
+        const described = await writeBandLookups(duck, band.dir, {
+          layout: {
+            schema: 'l2-2',
+            keyTags: canonicalTagNames(op.keyTags),
+            statTags: canonicalTagNames(op.statTags),
+          },
+          only: [op.lookup],
+        });
+        parsed.lookups[op.lookup] = described[op.lookup];
+        await fs.writeFile(file, serializeBandFile(parsed));
         break;
       }
       case 'redescribeLookup': {
