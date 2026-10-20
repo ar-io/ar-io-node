@@ -231,10 +231,9 @@ describe('onChainRootSource', () => {
     );
   });
 
-  it('asks a node that ran out of time once more before the 404s stand for a root', async () => {
-    // A node times out; the others say 404. It is asked again; still busy,
-    // it is left out, and the root is missing: a slow node never turns a
-    // root no node has into a tolerated error (review P4).
+  it('asks a node that ran out of time once more while fewer than two machines said 404', async () => {
+    // One 404 and a slow node: the slow one is asked again; still busy,
+    // one machine's 404 is not enough, and the root is unchecked (an error).
     const asked: string[] = [];
     const src = onChainRootSource({
       pool: pool(
@@ -244,9 +243,23 @@ describe('onChainRootSource', () => {
     });
     await assert.rejects(
       src.bind(f.id),
-      (e: unknown) => e instanceof NotOnNodesError && e.wholeRoot,
+      (e: unknown) =>
+        e instanceof NodesRefusedError &&
+        (e as { response?: unknown }).response === undefined,
     );
     assert.equal(asked.filter((a) => a === `a:1984/tx/${f.id}`).length, 2);
+    // Two machines said 404: the root is missing, the slow node unheard
+    // (review P4).
+    const two = onChainRootSource({
+      pool: pool(
+        nodes(f, { 'a:1984': 'slow', 'b:1984': 'empty', 'c:1984': 'empty' }),
+        ['a:1984', 'b:1984', 'c:1984'],
+      ),
+    });
+    await assert.rejects(
+      two.bind(f.id),
+      (e: unknown) => e instanceof NotOnNodesError && e.wholeRoot,
+    );
     // For a chunk, a busy node is still an error, never a missing chunk.
     const chunks = onChainRootSource({
       requireMined: false,
@@ -280,7 +293,10 @@ describe('onChainRootSource', () => {
       (e: unknown) => e instanceof NotOnNodesError && e.wholeRoot === false,
     );
     const noRoot = onChainRootSource({
-      pool: pool(nodes(f, { 'a:1984': 'empty' }), ['a:1984']),
+      pool: pool(nodes(f, { 'a:1984': 'empty', 'b:1984': 'empty' }), [
+        'a:1984',
+        'b:1984',
+      ]),
     });
     await assert.rejects(
       noRoot.openRoot(f.id).read(0, 10),
@@ -342,7 +358,14 @@ describe('onChainRootSource', () => {
         ['n:1984'],
       ),
     });
-    await assert.rejects(src.bind(f.id), RootUnboundError);
+    // One node serving another transaction's header is that node's fault:
+    // the root is unchecked, not refuted.
+    await assert.rejects(
+      src.bind(f.id),
+      (e: unknown) =>
+        e instanceof NodesRefusedError && !(e instanceof RootUnboundError),
+    );
+    assert.equal(src.nodeFaults()[0]?.node, 'http://n:1984');
   });
 
   it('binds by agreement only when allowed, and then only by other machines serving the same signed header', async () => {
@@ -434,11 +457,11 @@ describe('onChainRootSource', () => {
       ),
     });
     await assert.rejects(unconfirmed.bind(f.id));
-    // In no block anywhere: the root is not on chain.
+    // In no block anywhere: the root is not on chain, refuted.
     const nowhere = onChainRootSource({ pool: pool(statusFrom({}), names) });
     await assert.rejects(
       nowhere.bind(f.id),
-      (e: unknown) => e instanceof NotOnNodesError && e.wholeRoot,
+      (e: unknown) => e instanceof RootUnboundError && e.refutes,
     );
     // Two machines, one block.
     const mined = onChainRootSource({
@@ -1154,5 +1177,253 @@ describe('the on-chain check counts a refuted root against its band', () => {
       dedupeByAddress: false,
     });
     await assert.rejects(plain.txStatus(good.f.id, 2));
+  });
+});
+
+/**
+ * Review round 3: one bad or lying node must never fail an honest band,
+ * any more than it may pass a bad one. Its answer is its own fault
+ * (`nodeFaults`), and other nodes are asked; a root is refuted only on
+ * evidence from two machines.
+ */
+describe('one node cannot refute an honest root', () => {
+  type Mode =
+    | 'honest'
+    | 'absent'
+    | 'busy'
+    | 'otherHeader'
+    | 'format1'
+    | 'badproof'
+    | 'wrongSize';
+  /** Nodes serving one fixture, each as its mode says. */
+  const serving =
+    (
+      f: Fixture,
+      modes: Record<string, Mode>,
+      status = { height: 1000, hash: 'B'.repeat(64) },
+    ): FetchLike =>
+    async (url) => {
+      const json = (code: number, body: unknown) =>
+        Promise.resolve({
+          status: code,
+          ok: code === 200,
+          json: async () => body,
+        });
+      const u = new URL(url);
+      const mode = modes[u.host] ?? 'honest';
+      if (mode === 'busy') return json(429, {});
+      if (mode === 'absent') return json(404, {});
+      const [, kind, a, b] = u.pathname.split('/');
+      if (kind === 'tx') {
+        if (a !== f.id) return json(404, {});
+        if (b === 'status') {
+          return json(200, {
+            block_indep_hash: status.hash,
+            block_height: status.height,
+            number_of_confirmations: 9,
+          });
+        }
+        if (b === 'offset') {
+          const size = mode === 'wrongSize' ? f.data.length + 1 : f.data.length;
+          return json(200, {
+            offset: String(f.start + BigInt(f.data.length) - 1n),
+            size: String(size),
+          });
+        }
+        if (mode === 'otherHeader') {
+          return json(200, {
+            ...f.header,
+            signature: crypto.randomBytes(512).toString('base64url'),
+          });
+        }
+        if (mode === 'format1') return json(200, { ...f.header, format: 1 });
+        return json(200, f.header);
+      }
+      if (kind === 'chunk') {
+        const rel = Number(BigInt(a) - f.start);
+        const c = f.chunks.find((x) => rel >= x.min && rel < x.max);
+        if (c === undefined) return json(404, {});
+        const dataPath = Buffer.from(c.dataPath);
+        if (mode === 'badproof') dataPath[0] ^= 1;
+        return json(200, {
+          chunk: c.chunk.toString('base64url'),
+          data_path: dataPath.toString('base64url'),
+          packing: 'unpacked',
+        });
+      }
+      return json(404, {});
+    };
+  const poolOf = (fetch: FetchLike, names: string[]) =>
+    new ArweaveNodePool({
+      urls: names.map((n) => `http://${n}`),
+      fetch,
+      dedupeByAddress: false,
+    });
+
+  let f: Fixture;
+  let entries: Array<{
+    id: string;
+    rootTxId: string;
+    rootOffset: number;
+    rootDataOffset: number;
+    tag: string;
+    height: number;
+  }>;
+  before(async () => {
+    const signer = new ArweaveSigner(await arweave.wallets.generate());
+    const bundle = await bundleAndSignData(
+      [createData('one', signer), createData('two', signer)],
+      signer,
+    );
+    f = await signedFixture(Buffer.from(bundle.getRaw()));
+    entries = [];
+    for await (const item of scanBundle({
+      source: new BufferByteRangeSource(f.data),
+      rootTxId: f.id,
+      bundleSize: f.data.length,
+    })) {
+      entries.push({
+        id: item.id,
+        rootTxId: f.id,
+        rootOffset: item.rootDataItemOffset,
+        rootDataOffset: item.rootDataOffset,
+        tag: 'direct',
+        height: 1000,
+      });
+    }
+  });
+  const check = (src: ReturnType<typeof onChainRootSource>, n = 8) =>
+    checkBandHeaders({
+      entries: Array.from({ length: n }, (_, i) => entries[i % entries.length]),
+      totalRecords: n,
+      openRoot: src.openRoot,
+      targets: { direct: n },
+      minRecords: 0,
+      missingRootIsWrong: true,
+      maxUnreadableShare: 0.2,
+      concurrency: 1,
+      retries: 0,
+      retryDelayMs: 1,
+    });
+
+  for (const mode of ['otherHeader', 'format1', 'wrongSize'] as const) {
+    it(`passes an honest band when the first node asked serves a ${mode} answer, and names that node (a)`, async () => {
+      const src = onChainRootSource({
+        pool: poolOf(serving(f, { 'bad:1984': mode }), [
+          'bad:1984',
+          'h1:1984',
+          'h2:1984',
+        ]),
+      });
+      const r = await check(src);
+      assert.equal(r.passed, true, r.reasons.join('; '));
+      assert.equal(r.wrong.length, 0);
+      const faults = src.nodeFaults();
+      assert.ok(
+        faults.some((x) => x.node === 'http://bad:1984' && x.rootTxId === f.id),
+        JSON.stringify(faults),
+      );
+      assert.ok(faults.every((x) => x.node === 'http://bad:1984'));
+    });
+  }
+
+  it('passes an honest band when one node serves chunks with bad proofs, and names that node (a)', async () => {
+    const src = onChainRootSource({
+      pool: poolOf(serving(f, { 'bad:1984': 'badproof' }), [
+        'bad:1984',
+        'h1:1984',
+        'h2:1984',
+      ]),
+    });
+    const r = await check(src);
+    assert.equal(r.passed, true, r.reasons.join('; '));
+    const faults = src.nodeFaults();
+    assert.ok(faults.length > 0);
+    assert.ok(
+      faults.every((x) => x.node === 'http://bad:1984'),
+      JSON.stringify(faults),
+    );
+  });
+
+  it('refutes a root whose format-1 header two machines serve', async () => {
+    const src = onChainRootSource({
+      pool: poolOf(serving(f, { 'h1:1984': 'format1', 'h2:1984': 'format1' }), [
+        'h1:1984',
+        'h2:1984',
+      ]),
+    });
+    await assert.rejects(
+      src.bind(f.id),
+      (e: unknown) => e instanceof RootUnboundError && e.refutes,
+    );
+  });
+
+  it('calls a root one machine lacks, the rest busy, an error, never refuted (c)', async () => {
+    const made = crypto.randomBytes(32).toString('base64url');
+    const src = onChainRootSource({
+      pool: poolOf(
+        serving(f, {
+          'gone:1984': 'absent',
+          'b1:1984': 'busy',
+          'b2:1984': 'busy',
+        }),
+        ['gone:1984', 'b1:1984', 'b2:1984'],
+      ),
+    });
+    await assert.rejects(
+      src.bind(made),
+      (e: unknown) =>
+        e instanceof NodesRefusedError &&
+        !(e instanceof RootUnboundError) &&
+        (e as { response?: unknown }).response === undefined,
+    );
+    // Tolerated as errors: 4 of 20 such roots leave an honest band passing...
+    const honest = onChainRootSource({
+      pool: poolOf(
+        async (url, init) =>
+          url.includes(made)
+            ? new URL(url).host === 'h1:1984'
+              ? { status: 404, ok: false, json: async () => ({}) }
+              : { status: 429, ok: false, json: async () => ({}) }
+            : serving(f, {})(url, init),
+        ['h1:1984', 'h2:1984', 'h3:1984'],
+      ),
+    });
+    const mixed = [
+      ...Array.from({ length: 16 }, (_, i) => entries[i % entries.length]),
+      ...Array.from({ length: 4 }, () => ({
+        ...entries[0],
+        rootTxId: made,
+      })),
+    ];
+    const r = await checkBandHeaders({
+      entries: mixed,
+      totalRecords: 20,
+      openRoot: honest.openRoot,
+      targets: { direct: 20 },
+      minRecords: 0,
+      missingRootIsWrong: true,
+      maxUnreadableShare: 0.2,
+      concurrency: 1,
+      retries: 0,
+      retryDelayMs: 1,
+    });
+    assert.equal(r.missing.length, 0);
+    assert.equal(r.wrong.length, 0);
+    assert.equal(r.errors.length, 4);
+    assert.equal(r.passed, true, r.reasons.join('; '));
+    // ...but never a pass by silence: all of them, and it fails its floor.
+    const all = await checkBandHeaders({
+      entries: mixed.slice(16),
+      totalRecords: 20,
+      openRoot: honest.openRoot,
+      targets: { direct: 4 },
+      minRecords: 0,
+      missingRootIsWrong: true,
+      concurrency: 1,
+      retries: 0,
+      retryDelayMs: 1,
+    });
+    assert.equal(all.passed, false);
   });
 });

@@ -325,8 +325,18 @@ export async function indexL2VerifyCLICommand(
           proven: true,
           allowAgreement: options.allowAgreement === true,
           ...onchain.stats(),
+          // Answers single nodes gave that didn't hold up: their faults,
+          // passed over for other nodes, never held against a band.
+          nodeFaultCount: onchain.nodeFaultCount(),
+          nodeFaults: onchain.nodeFaults().map((f) => ({ ...f })),
         }),
-        close: () => undefined,
+        close: () => {
+          for (const fault of onchain.nodeFaults()) {
+            log.warn('An Arweave node gave an answer that did not hold up', {
+              ...fault,
+            });
+          }
+        },
       };
     }
   }

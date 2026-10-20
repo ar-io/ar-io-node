@@ -74,6 +74,24 @@ export interface TxStatus {
   nodes: string[];
 }
 
+/** What each node of a pool said to one request ({@link ArweaveNodePool.survey}). */
+export interface Survey<T> {
+  answers: Array<{ node: string; machine: string; value: T }>;
+  faults: Array<{ node: string; machine: string; reason: string }>;
+  absent: Array<{ node: string; machine: string }>;
+  /** Nodes that timed out or answered 429, 5xx or the like. */
+  busy: string[];
+}
+
+/** Machines that said something definite in a survey. */
+export function definiteMachines<T>(survey: Survey<T>): number {
+  return new Set([
+    ...survey.answers.map((a) => a.machine),
+    ...survey.faults.map((f) => f.machine),
+    ...survey.absent.map((a) => a.machine),
+  ]).size;
+}
+
 /** A chunk as a node serves it, decoded. */
 export interface NodeChunk {
   chunk: Buffer;
@@ -424,6 +442,97 @@ export class ArweaveNodePool {
       busy,
       refused,
     );
+  }
+
+  /**
+   * Asks nodes one by one, each once, recording what each said, until
+   * `enough` says the answers so far settle the question; for checks that
+   * must tell a fault of one node from a fact about the data.
+   *
+   * Each node's answer is sorted: `answers` (200, and `judge` accepted it),
+   * `faults` (200, and `judge` refused it, with why), `absent` (a status in
+   * `absentStatuses`, 404 by default), or `busy` (timed out, 429, 5xx,
+   * anything else). A node that couldn't be reached says nothing. Resting
+   * nodes are not asked at first; when fewer than two machines gave anything
+   * definite (an answer, a fault or an absence), the busy and resting ones
+   * are asked once more, so a slow node is heard before a lone answer is
+   * taken as all there is.
+   */
+  async survey<T>(
+    path: string,
+    judge: (body: unknown, node: string) => T | Promise<T>,
+    {
+      enough = () => false,
+      absentStatuses = [404],
+      headers,
+    }: {
+      enough?: (survey: Survey<T>) => boolean;
+      absentStatuses?: number[];
+      headers?: Record<string, string>;
+    } = {},
+  ): Promise<Survey<T>> {
+    await this.prepare();
+    const { nodes, restingBusy } = this.order();
+    const survey: Survey<T> = {
+      answers: [],
+      faults: [],
+      absent: [],
+      busy: [],
+    };
+    const machine = (node: string) => this.addressOf(node);
+    const askOne = async (node: string) => {
+      let response;
+      try {
+        response = await this.fetchFn(`${node}${path}`, {
+          signal: AbortSignal.timeout(this.timeoutMs),
+          ...(headers !== undefined ? { headers } : {}),
+        });
+      } catch (error) {
+        const name = (error as { name?: unknown }).name;
+        if (name === 'TimeoutError' || name === 'AbortError') {
+          survey.busy.push(node);
+        }
+        this.rest(node, error);
+        return;
+      }
+      this.reachable.add(node);
+      if (absentStatuses.includes(response.status)) {
+        survey.absent.push({ node, machine: machine(node) });
+        return;
+      }
+      if (!response.ok) {
+        survey.busy.push(node);
+        return;
+      }
+      try {
+        const value = await judge(await response.json(), node);
+        survey.answers.push({ node, machine: machine(node), value });
+      } catch (error) {
+        if (error instanceof NodeLacksError) {
+          survey.absent.push({ node, machine: machine(node) });
+        } else {
+          survey.faults.push({
+            node,
+            machine: machine(node),
+            reason: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+    };
+    for (const node of nodes) {
+      await askOne(node);
+      if (enough(survey)) return survey;
+    }
+    survey.busy.push(...restingBusy);
+    if (definiteMachines(survey) < 2 && survey.busy.length > 0) {
+      const again = [...new Set(survey.busy)];
+      survey.busy = [];
+      for (const node of again) {
+        await askOne(node);
+        if (enough(survey)) return survey;
+      }
+    }
+    return survey;
   }
 
   /** The transaction's header, raw, as the node serves it. */

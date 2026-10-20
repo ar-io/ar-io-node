@@ -65,9 +65,12 @@ import {
 } from '../merkle-path-parser.js';
 import {
   ArweaveNodePool,
+  definiteMachines,
   NodeChunk,
+  NodesRefusedError,
+  NodesUnreachableError,
   NotOnNodesError,
-  TooFewMinedError,
+  type Survey,
 } from './arweave-nodes.js';
 
 /**
@@ -107,6 +110,16 @@ export interface OnChainRootSourceStats {
   /** Nodes that answered any request. */
   reachableNodes: number;
 }
+
+/** An answer a node gave that didn't hold up: its fault, not its root's. */
+export interface NodeFault {
+  node: string;
+  rootTxId: string;
+  what: string;
+}
+
+/** Node faults kept for a report; the rest are counted. */
+export const MAX_NODE_FAULTS = 200;
 
 export interface OnChainRootSourceOptions {
   pool: ArweaveNodePool;
@@ -157,14 +170,6 @@ const signatureId = (header: Record<string, unknown>): string | undefined =>
         .toString('base64url')
     : undefined;
 
-const field = (header: Record<string, unknown>, name: string): string => {
-  const value = header[name];
-  if (typeof value !== 'string') {
-    throw new RootUnboundError(`the root's header has no ${name}`);
-  }
-  return value;
-};
-
 /**
  * Root transactions read from Arweave nodes, proven. Roots are bound once
  * and remembered for the run.
@@ -178,6 +183,9 @@ export function onChainRootSource({
 }: OnChainRootSourceOptions): {
   openRoot: RootSourceFactory;
   bind: (rootTxId: string) => Promise<BoundRoot>;
+  /** Answers nodes gave that didn't hold up (at most {@link MAX_NODE_FAULTS}). */
+  nodeFaults: () => NodeFault[];
+  nodeFaultCount: () => number;
   stats: () => OnChainRootSourceStats;
 } {
   const bound = new Map<string, Promise<BoundRoot>>();
@@ -190,99 +198,318 @@ export function onChainRootSource({
   /** The node that last proved a chunk of each root, asked first next time. */
   const lastNode = new Map<string, string>();
 
+  /** Answers that didn't hold up, each its node's fault, not its root's. */
+  const faults: NodeFault[] = [];
+  const fault = (node: string, rootTxId: string, what: string) => {
+    if (faults.length < MAX_NODE_FAULTS) faults.push({ node, rootTxId, what });
+    faultCount += 1;
+  };
+  let faultCount = 0;
+
+  /**
+   * A refutation of the root, or a failure to check it: refuted only when
+   * at least two machines said something definite against it and none
+   * bound it; missing when all of that was absence.
+   */
+  const verdict = <T>(
+    id: string,
+    what: string,
+    survey: Survey<T>,
+    against: number,
+  ): Error => {
+    const machines = definiteMachines(survey);
+    if (machines === 0 && survey.busy.length === 0) {
+      return new NodesUnreachableError(
+        `no Arweave node answered for ${id} (${what})`,
+      );
+    }
+    const summary = `${survey.absent.length} said 404, ${survey.faults.length + against} served what doesn't hold up, ${survey.busy.length} busy`;
+    if (machines < 2) {
+      return new NodesRefusedError(
+        `${what} for ${id}: fewer than two machines answered anything definite (${summary})`,
+        survey.absent.length,
+        survey.busy.length,
+        survey.faults.length,
+      );
+    }
+    if (survey.faults.length === 0 && against === 0) {
+      return new NotOnNodesError(
+        `${what} for ${id}: ${summary}`,
+        machines,
+        true,
+      );
+    }
+    return new RootUnboundError(`${id}: ${what} (${summary})`);
+  };
+
   const bindRoot = async (id: string): Promise<BoundRoot> => {
-    let servedBy = '';
-    const header = await pool.ask(
+    // The header: a node's that isn't this transaction's is that node's
+    // fault; one that is (its signature hashes to the id) but isn't format
+    // 2, carries no data, or won't verify is evidence about the root, which
+    // two machines must give before it refutes it.
+    type Header = {
+      header: Record<string, unknown>;
+      verified: boolean;
+      problem?: string;
+    };
+    const headers = await pool.survey<Header>(
       `/tx/${id}`,
-      (body, node) => {
+      async (body) => {
         if (body === null || typeof body !== 'object' || Array.isArray(body)) {
           throw new Error('not a transaction header');
         }
-        servedBy = node;
-        return body as Record<string, unknown>;
+        const header = body as Record<string, unknown>;
+        const hashed = signatureId(header);
+        if (hashed !== id) {
+          throw new Error(`served another transaction's header (${hashed})`);
+        }
+        const dataSize = Number(header.data_size);
+        const problem = !isFormat2(header)
+          ? `not a format-2 transaction (format ${JSON.stringify(header.format)}): its signature does not cover a data_root`
+          : typeof header.data_root !== 'string' ||
+              header.data_root.length === 0
+            ? 'no data_root: no data whose chunks can be proven'
+            : !Number.isSafeInteger(dataSize) || dataSize <= 0
+              ? 'no data to read'
+              : undefined;
+        return {
+          header,
+          verified: problem === undefined && (await verifyHeader(header)),
+          ...(problem !== undefined ? { problem } : {}),
+        };
       },
-      undefined,
-      undefined,
-      true,
+      { enough: (sv) => sv.answers.some((a) => a.value.verified) },
     );
-    field(header, 'signature');
-    const hashed = signatureId(header);
-    if (hashed !== id) {
-      throw new RootUnboundError(
-        `the header served for ${id} is another transaction's (${hashed})`,
+    let chosen: Record<string, unknown> | undefined;
+    let binding: RootBinding = 'signature';
+    const verified = headers.answers.find((a) => a.value.verified);
+    if (verified !== undefined) {
+      chosen = verified.value.header;
+    } else if (allowAgreement) {
+      // Format-2 headers of this id with data, unverifiable, the same data
+      // served by enough machines.
+      const groups = new Map<string, Set<string>>();
+      for (const a of headers.answers) {
+        if (a.value.problem !== undefined) continue;
+        const key = `${String(a.value.header.data_root)}:${String(a.value.header.data_size)}`;
+        groups.set(key, (groups.get(key) ?? new Set()).add(a.machine));
+      }
+      const [best] = [...groups.entries()].sort(
+        (x, y) => y[1].size - x[1].size,
       );
+      if (best !== undefined && best[1].size >= minAgreement + 1) {
+        chosen = headers.answers.find(
+          (a) =>
+            `${String(a.value.header.data_root)}:${String(a.value.header.data_size)}` ===
+            best[0],
+        )!.value.header;
+        binding = 'agreement';
+      }
     }
-    // Only a format-2 signature covers data_root and data_size: a format-1
-    // header that carries them carries them unsigned.
-    if (!isFormat2(header)) {
-      throw new RootUnboundError(
-        `${id} is not a format-2 transaction (format ${JSON.stringify(header.format)}): its signature does not cover a data_root`,
-      );
-    }
-    const dataRootText = field(header, 'data_root');
-    if (dataRootText.length === 0) {
-      throw new RootUnboundError(
-        `${id} has no data_root (a format-1 transaction): its data has no chunk proofs to check`,
-      );
-    }
-    const dataRoot = Buffer.from(dataRootText, 'base64url');
-    const dataSize = Number(field(header, 'data_size'));
-    if (!Number.isSafeInteger(dataSize) || dataSize <= 0) {
-      throw new RootUnboundError(`${id} has no data to read`);
-    }
-
-    let binding: RootBinding;
-    if (await verifyHeader(header)) {
-      binding = 'signature';
-    } else if (!allowAgreement) {
-      throw new RootUnboundError(
-        `${id}: its signature doesn't verify, and binding by nodes' agreement is not allowed (--allow-agreement)`,
-      );
-    } else {
-      // Other machines than the one that served it, each serving a header of
-      // this id (its signature hashing to it), format 2, with the same data.
-      const agreeing = await pool.txHeaders(
-        id,
-        minAgreement,
-        (h) =>
-          signatureId(h) === id &&
-          isFormat2(h) &&
-          h.data_root === dataRootText &&
-          String(h.data_size) === String(dataSize),
-        [servedBy],
-      );
-      if (agreeing.length < minAgreement) {
-        throw new RootUnboundError(
-          `${id}: its signature doesn't verify and ${agreeing.length} other machines agree on its data (need ${minAgreement})`,
+    if (chosen === undefined) {
+      // No binding. Answers of the root itself count against it; another
+      // transaction's header counts against its node only.
+      for (const f of headers.faults) fault(f.node, id, f.reason);
+      const against = headers.answers.length;
+      const reasons = [
+        ...new Set(
+          headers.answers.map(
+            (a) => a.value.problem ?? "its signature doesn't verify",
+          ),
+        ),
+      ];
+      const pure: Survey<Header> = { ...headers, faults: [] };
+      const machines = definiteMachines(pure);
+      if (machines >= 2 && against === 0) {
+        throw new NotOnNodesError(
+          `${machines} machines have no header for ${id}`,
+          machines,
+          true,
         );
       }
-      binding = 'agreement';
-    }
-
-    // Signed is not mined: nodes on distinct machines must place it in a
-    // block, unless the caller found it in a checked L1 index.
-    let block: BoundRoot['block'];
-    if (requireMined) {
-      let status;
-      try {
-        status = await pool.txStatus(id, minAgreement);
-      } catch (error) {
-        // Nodes that say it is in no block, beside too few that place it
-        // in one: not mined, as far as the chain says.
-        if (error instanceof TooFewMinedError && error.notFound > 0) {
-          throw new RootUnboundError(`${id} is not mined: ${error.message}`);
-        }
-        throw error;
+      if (machines >= 2) {
+        throw new RootUnboundError(
+          `${id} can't be bound: ${reasons.join('; ')}${allowAgreement ? '' : ' (agreement in place of a signature needs --allow-agreement)'}`,
+        );
       }
-      block = { indepHash: status.blockIndepHash, height: status.blockHeight };
-    }
-
-    const where = await pool.txOffset(id);
-    if (where.size !== dataSize) {
-      throw new RootUnboundError(
-        `${id}: the weave holds ${where.size} bytes, its header signs ${dataSize}`,
+      if (definiteMachines(headers) === 0 && headers.busy.length === 0) {
+        throw new NodesUnreachableError(`no Arweave node answered /tx/${id}`);
+      }
+      throw new NodesRefusedError(
+        `no header that binds ${id}, and fewer than two machines said anything of the root itself (${headers.absent.length} said 404, ${against} served it unbindable, ${headers.faults.length} served another transaction's header, ${headers.busy.length} busy)`,
+        headers.absent.length,
+        headers.busy.length,
+        headers.faults.length,
       );
     }
+    // Answers that disagree with the binding were their nodes' faults.
+    for (const a of headers.answers) {
+      if (a.value.header === chosen) continue;
+      if (
+        binding === 'signature' &&
+        !a.value.verified &&
+        a.value.header.data_root === chosen.data_root
+      ) {
+        fault(
+          a.node,
+          id,
+          a.value.problem ?? "a header whose signature doesn't verify",
+        );
+      } else if (
+        a.value.header.data_root !== chosen.data_root ||
+        a.value.problem !== undefined
+      ) {
+        fault(a.node, id, a.value.problem ?? 'a header with other data');
+      }
+    }
+    for (const f of headers.faults) fault(f.node, id, f.reason);
+    const dataRootText = String(chosen.data_root);
+    const dataRoot = Buffer.from(dataRootText, 'base64url');
+    const dataSize = Number(chosen.data_size);
+
+    // Signed is not mined: two machines must place it in one block (unless
+    // the caller found it in a checked L1 index); two that say it is in
+    // none refute it.
+    let block: BoundRoot['block'];
+    if (requireMined) {
+      type Placed = { hash: string; height: number };
+      const agreed = (sv: Survey<Placed>) => {
+        const by = new Map<string, Set<string>>();
+        for (const a of sv.answers) {
+          by.set(
+            a.value.hash,
+            (by.get(a.value.hash) ?? new Set()).add(a.machine),
+          );
+        }
+        return [...by.entries()].find(([, m]) => m.size >= minAgreement)?.[0];
+      };
+      const status = await pool.survey<Placed>(
+        `/tx/${id}/status`,
+        (body) => {
+          const b = (body ?? {}) as Record<string, unknown>;
+          const hash = b.block_indep_hash;
+          const height = Number(b.block_height);
+          const confirmations = Number(b.number_of_confirmations);
+          if (
+            typeof hash !== 'string' ||
+            hash.length === 0 ||
+            !Number.isSafeInteger(height) ||
+            !Number.isSafeInteger(confirmations) ||
+            confirmations < 1
+          ) {
+            throw new Error('not a block status');
+          }
+          return { hash, height };
+        },
+        // 202 is "pending": in no block yet.
+        {
+          enough: (sv) => agreed(sv) !== undefined,
+          absentStatuses: [404, 202],
+        },
+      );
+      const hash = agreed(status);
+      if (hash !== undefined) {
+        const at = status.answers.find((a) => a.value.hash === hash)!;
+        block = { indepHash: hash, height: at.value.height };
+        for (const a of status.answers) {
+          if (a.value.hash !== hash) {
+            fault(
+              a.node,
+              id,
+              `places it in block ${a.value.hash} at ${a.value.height}, not ${hash}`,
+            );
+          }
+        }
+        for (const f of status.faults) fault(f.node, id, f.reason);
+      } else {
+        const absentMachines = new Set(status.absent.map((a) => a.machine))
+          .size;
+        if (absentMachines >= 2) {
+          // In no block, as two machines say: a claim otherwise is its
+          // node's fault.
+          for (const a of status.answers) {
+            fault(
+              a.node,
+              id,
+              `places it in block ${a.value.hash}, which ${absentMachines} machines deny`,
+            );
+          }
+          throw new RootUnboundError(
+            `${id} is not mined: ${absentMachines} machines say it is in no block`,
+          );
+        }
+        throw new NodesRefusedError(
+          `${id}: fewer than ${minAgreement} machines place it in one block, and fewer than two say it is in none (${status.answers.length} placed it, ${absentMachines} denied, ${status.busy.length} busy)`,
+          status.absent.length,
+          status.busy.length,
+          status.faults.length,
+        );
+      }
+    }
+
+    // Its place in the weave: an answer whose size isn't the signed one is
+    // its node's fault; two machines agreeing settle it.
+    type Placement = { offset: bigint };
+    const agreedOffset = (sv: Survey<Placement>) => {
+      const by = new Map<string, Set<string>>();
+      for (const a of sv.answers) {
+        const k = String(a.value.offset);
+        by.set(k, (by.get(k) ?? new Set()).add(a.machine));
+      }
+      return [...by.entries()].sort((x, y) => y[1].size - x[1].size);
+    };
+    const offsets = await pool.survey<Placement>(
+      `/tx/${id}/offset`,
+      (body) => {
+        const { offset, size } = (body ?? {}) as {
+          offset?: unknown;
+          size?: unknown;
+        };
+        if (typeof offset !== 'string' && typeof offset !== 'number') {
+          throw new Error('no offset in the answer');
+        }
+        const parsed = Number(size);
+        if (parsed !== dataSize) {
+          throw new Error(
+            `the weave holds ${String(size)} bytes, its header signs ${dataSize}`,
+          );
+        }
+        return { offset: BigInt(offset) };
+      },
+      { enough: (sv) => (agreedOffset(sv)[0]?.[1].size ?? 0) >= 2 },
+    );
+    const ranked = agreedOffset(offsets);
+    const top = ranked[0];
+    // Two machines agreeing, or the only one that answered at all: a wrong
+    // offset can't pass wrong bytes, its chunks would not prove.
+    const settled =
+      top !== undefined &&
+      (top[1].size >= 2 ||
+        (ranked.length === 1 && definiteMachines(offsets) >= 1))
+        ? BigInt(top[0])
+        : undefined;
+    if (settled === undefined) {
+      for (const f of offsets.faults) fault(f.node, id, f.reason);
+      if (ranked.length > 1) {
+        throw new NodesRefusedError(
+          `${id}: nodes place it at ${ranked.length} offsets in the weave`,
+          offsets.absent.length,
+          offsets.busy.length,
+          offsets.faults.length,
+        );
+      }
+      throw verdict(id, 'no place in the weave', offsets, 0);
+    }
+    for (const f of offsets.faults) fault(f.node, id, f.reason);
+    for (const a of offsets.answers) {
+      if (a.value.offset !== settled)
+        fault(
+          a.node,
+          id,
+          `places it at offset ${a.value.offset}, not ${settled}`,
+        );
+    }
+
     if (binding === 'signature') counts.bySignature += 1;
     else counts.byAgreement += 1;
     if (block !== undefined) counts.minedByNodes += 1;
@@ -290,7 +517,7 @@ export function onChainRootSource({
       id,
       dataRoot,
       dataSize,
-      start: where.offset - BigInt(dataSize) + 1n,
+      start: settled - BigInt(dataSize) + 1n,
       binding,
       ...(block !== undefined ? { block } : {}),
     };
@@ -319,39 +546,56 @@ export function onChainRootSource({
   /** One proven chunk holding root byte `rel`, and its bounds in the root. */
   const provenChunk = async (root: BoundRoot, rel: number) => {
     const absolute = root.start + BigInt(rel);
-    return pool.chunk(
+    // A node whose chunk doesn't prove is passed over; once another proves
+    // it, the first was that node's fault.
+    const refused: Array<{ node: string; what: string }> = [];
+    const proven = await pool.chunk(
       absolute,
       async (served: NodeChunk) => {
-        const parsed = await parseDataPath({
-          dataRoot: root.dataRoot,
-          dataSize: root.dataSize,
-          dataPath: served.dataPath,
-          offset: rel,
-          ruleset: rulesetForRoot(root.start),
-        });
-        const { startOffset, endOffset } = parsed.boundaries;
-        if (!parsed.validated) throw new Error('its proof does not validate');
-        if (
-          !crypto
-            .createHash('sha256')
-            .update(served.chunk)
-            .digest()
-            .equals(parsed.chunkData)
-        ) {
-          throw new Error('the chunk does not hash to its proof');
+        try {
+          return await prove(served);
+        } catch (error) {
+          refused.push({
+            node: served.node,
+            what: `chunk at ${absolute}: ${error instanceof Error ? error.message : String(error)}`,
+          });
+          throw error;
         }
-        if (served.chunk.length !== endOffset - startOffset) {
-          throw new Error('the chunk is not the length its proof gives');
-        }
-        if (rel < startOffset || rel >= endOffset) {
-          throw new Error('the proof is for another chunk');
-        }
-        counts.chunksProven += 1;
-        lastNode.set(root.id, served.node);
-        return { chunk: served.chunk, start: startOffset, end: endOffset };
       },
       lastNode.get(root.id),
     );
+    for (const r of refused) fault(r.node, root.id, r.what);
+    return proven;
+
+    async function prove(served: NodeChunk) {
+      const parsed = await parseDataPath({
+        dataRoot: root.dataRoot,
+        dataSize: root.dataSize,
+        dataPath: served.dataPath,
+        offset: rel,
+        ruleset: rulesetForRoot(root.start),
+      });
+      const { startOffset, endOffset } = parsed.boundaries;
+      if (!parsed.validated) throw new Error('its proof does not validate');
+      if (
+        !crypto
+          .createHash('sha256')
+          .update(served.chunk)
+          .digest()
+          .equals(parsed.chunkData)
+      ) {
+        throw new Error('the chunk does not hash to its proof');
+      }
+      if (served.chunk.length !== endOffset - startOffset) {
+        throw new Error('the chunk is not the length its proof gives');
+      }
+      if (rel < startOffset || rel >= endOffset) {
+        throw new Error('the proof is for another chunk');
+      }
+      counts.chunksProven += 1;
+      lastNode.set(root.id, served.node);
+      return { chunk: served.chunk, start: startOffset, end: endOffset };
+    }
   };
 
   /** A bound root, refused if nodes place it in another block than expected. */
@@ -401,6 +645,8 @@ export function onChainRootSource({
   return {
     openRoot,
     bind,
+    nodeFaults: () => [...faults],
+    nodeFaultCount: () => faultCount,
     stats: () => ({
       roots: bound.size,
       ...counts,
