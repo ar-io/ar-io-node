@@ -59,6 +59,8 @@ export async function digestL2Table(
   const compare = rowComparator(spec);
   let previous: unknown[] | undefined;
   const columns = spec.columns.map((c) => `"${c.name}"`).join(', ');
+  // File order is only what DuckDB returns while it keeps insertion order.
+  if (inFileOrder) await duck.exec('SET preserve_insertion_order = true');
   const stream = await duck.stream(
     `SELECT ${columns} FROM read_parquet(${file})${inFileOrder ? '' : ` ORDER BY ${orderByClause(spec)}`}`,
   );

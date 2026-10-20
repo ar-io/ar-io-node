@@ -77,6 +77,7 @@ export interface IndexL2VerifyCLIOptions extends GlobalCLIOptions {
   bandsDir?: string;
   publisher?: string;
   onchain?: string;
+  seed?: string;
   arweaveNodes?: string;
   gatewayUrl?: string;
   readTimeout?: string;

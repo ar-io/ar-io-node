@@ -31,14 +31,17 @@ gateway, this one included:
    `data_root` and `data_size`. arweave-js fails to verify a few valid
    transactions; for those, at least two nodes must serve the same `data_root`
    and `data_size` instead. The result says which (`bySignature`,
-   `byAgreement`).
+   `byAgreement`). Agreement is weaker: the default pool's nodes are all run
+   by one operator, so a root bound by agreement trusts that operator.
 2. **Its place in the weave** comes from `/tx/{id}/offset`, whose size must be
    the signed `data_size`.
 3. **Every chunk is proven.** Its `data_path` must validate against the signed
    `data_root` under the consensus rules for its weave offset (strict data split
    above 30.6T bytes, rebasing above 151T). The chunk must hash to the path's
    leaf, and it is placed by the bounds the proof gives, never by assuming 256
-   KiB chunks. A node whose chunk fails is passed over for the next.
+   KiB chunks. A node whose chunk fails is passed over for the next. A wrong
+   `/tx/{id}/offset` can't pass wrong bytes: the chunks it leads to would not
+   prove against the root's `data_root`.
 
 What a header read comes to, as every header check sorts it:
 
@@ -46,12 +49,20 @@ What a header read comes to, as every header check sorts it:
 | ------------ | ------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
 | `ok`         | the bytes at the recorded location are a data item header whose signature hashes to the item's id | for the band                                      |
 | `wrong`      | something else is there, or the range runs past the root                                          | **against** the band: its offsets are wrong       |
-| `unreadable` | no reachable node holds the root or that chunk: data gone network-wide (old roots, purged items)  | neither way; another sample is taken in its place |
-| `errors`     | nothing could be read (no node reachable, a root that can't be bound)                             | against the pass ratio; rerun                     |
+| `unreadable` | every node that answered said 404 for the root, or for the chunk holding the header: data gone network-wide (unseeded or purged) | neither way; another sample is taken in its place |
+| `errors`     | nothing usable came back: nodes busy or failing (429, 5xx), a chunk no node could prove, no node reachable, a root that can't be bound | against the pass ratio; rerun                     |
+
+A 404 counts only when **every** node that answered said 404 (a node that has a
+chunk only packed counts as not having it). One busy node (429, 5xx) among
+them, or one whose chunk failed its proof, makes it an error instead: that node
+may hold the data, and an unprovable chunk is the node's fault, not an absence.
+A missing chunk is that item's alone; a missing root (header or offset) is
+every item's under it.
 
 The default pool is the `tip` and `data` nodes ar-io-node reads chunks from
 (`PREFERRED_CHUNK_GET_NODE_URLS`'s default). `data` nodes each hold a partition
-of the weave, so most answer 404 for most offsets; that is normal. Name your own
+of the weave, so most answer 404 for most offsets; that is normal. The node
+that proved a root's last chunk is asked first for its next. Name your own
 with `--arweave-nodes http://a:1984,http://b:1984`. With `--gateway-url`
 instead, roots are read through that gateway's `/raw`: faster, but that gateway
 is trusted.
@@ -74,15 +85,16 @@ root, `root_parent_offset` is 0.
 | `files`     | a band lacks a file its layout requires, or holds one it doesn't                                                                                                                                                                                                                                                                                                                    |
 | `tables`    | a table's rows, read in file order, are out of their table's order, or don't digest to what `band.json` says, or an owner key doesn't hash to its address                                                                                                                                                                                                                           |
 | `locations` | a location is partly set; or isn't laid out as ANS-104 requires (signature right after the 2-byte type, owner right after the signature, payload after the owner and inside the item); or `data_size` isn't the payload the location gives; or the signature or owner length isn't its type's; or an id, address or root isn't 32 bytes; or an item lies outside its band's heights |
-| `parents`   | an item directly in its root isn't at offset 0 of it, or an item in a nested bundle names one `parents` doesn't describe where the item says its payload starts                                                                                                                                                                                                                     |
+| `parents`   | an item directly in its root isn't at offset 0 of it, or an item in a nested bundle names one `parents` doesn't describe where the item says its payload starts, or a `parents` row's payload doesn't start inside it (offsets taken from another copy of the bundle)                                                                                                         |
 | `lookups`   | a lookup file doesn't hold exactly the rows its tables give (`--skip-lookups` leaves this out)                                                                                                                                                                                                                                                                                      |
-| `onchain`   | a sampled item's header, read at its recorded location, is not that item, or too few could be verified (`--onchain <n>` per band, default 20; `0` leaves it out)                                                                                                                                                                                                                    |
+| `onchain`   | a sampled item's header, read at its recorded location, is not that item, or too few could be verified (`--onchain <n>` items per band, default 20; `0` leaves it out). Items directly in their roots and items in nested bundles are sampled apart, half each, so rare nested items are always read. `--seed` repeats a run; the result reports the seed it drew. A band whose items have no locations has nothing to read and is listed under `unlocatedBands` |
 
 The set is refused outright (exit 1, no checks run) if its bands overlap or
 leave a hole: that is not one index. `--from` and `--to` check only the bands
-inside those heights. A publisher's published directory may hold a superseded
-tip band beside its replacement; check up to the settled top (`--to`), or check
-the installed set a subscriber holds.
+inside those heights. A publisher's published directory may hold a replaced tip
+band beside its replacement until it is pruned: a band its own publisher's
+newer band supersedes (`.publisher.json`) is left out, as a subscriber leaves
+it out, and listed under `superseded`.
 
 **Cost.** Every row is read, in file order, so memory stays flat; the large
 lookups spill to the system temp directory (at most 16 GB). On one host, a
@@ -116,8 +128,9 @@ or diff the two bands' rows, not just their ids.
 | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `identity`, `files` or `tables` failure in an **installed** band | the copy is damaged or not what was signed: remove it and let the sidecar fetch it again; if it recurs, tell the publisher                             |
 | the same in a **published** band                                 | rebuild it (`--range`, above), check the rebuild, and publish it in its place (`index-export --once --resettle --range <from>-<to>` for a frozen band) |
-| `locations`, `parents` or `onchain` `wrong`                      | the builder placed items wrongly: report it upstream with the band id and the failures; the publisher rebuilds and re-settles the band once fixed      |
-| many `unreadable`                                                | not a fault of the index: the roots are gone network-wide. Seeding the missing chunks again (where the data still exists) makes them readable          |
+| `locations`, `parents` or `onchain` `wrong`                      | the builder placed items wrongly, or its source holds a wrong row: report it upstream with the band id and the failures; the publisher repairs the source, then rebuilds and re-settles the band |
+| many `unreadable`                                                | not a fault of the index: every node said 404, so the data is gone network-wide. Seeding the missing chunks again (where the data still exists) makes them readable |
+| many `errors`                                                    | rerun (nodes were busy); if a chunk keeps failing its proof, the nodes serving it are at fault, not the index                                       |
 | `lookups`                                                        | the lookups are derived: rebuilding the band rewrites them                                                                                             |
 
 For `root-tx-index` bands, `index-export --once --resettle[=full]` re-checks and
@@ -132,6 +145,6 @@ Run the command, read stdout (or stderr on exit 1) as JSON, and act on `ok` and
 each check's `failures`. Each failure names the band (`found` starts with its
 id) and the height it starts at. `onchain` adds counts (`checked`, `ok`,
 `wrong`, `unreadable`, `errors`) and, under `roots`, how the roots were read and
-bound. Never treat `unreadable` as a fault of the index, and never treat a
-passing sample as proof of every row: the row-by-row checks are what cover every
-row.
+bound. `unreadable` is never a fault of the index; `errors` are never a verdict
+on it either way, so rerun before acting on them. Never treat a passing sample
+as proof of every row: the row-by-row checks are what cover every row.

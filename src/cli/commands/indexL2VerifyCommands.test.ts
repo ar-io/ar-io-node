@@ -41,7 +41,12 @@ describe('index-l2-verify', () => {
   });
 
   it('refuses a height or count that is not a whole number', async () => {
-    for (const bad of [{ from: '-1' }, { to: 'x' }, { onchain: '2.5' }]) {
+    for (const bad of [
+      { from: '-1' },
+      { to: 'x' },
+      { onchain: '2.5' },
+      { seed: 'y' },
+    ]) {
       await assert.rejects(
         indexL2VerifyCLICommand({ bandsDir: '/nowhere', ...bad }, { log }),
         L2VerifyRefused,

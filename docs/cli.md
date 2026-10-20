@@ -836,9 +836,10 @@ proves, and how to reproduce or repair a band that fails, is in
 
 | Option | Meaning |
 | --- | --- |
-| `--bands-dir <path>` | The index's bands: `data/indexes/installed/<index>` or `data/indexes/published/<index>`. Required |
+| `--bands-dir <path>` | The index's bands: `data/indexes/installed/<index>` or `data/indexes/published/<index>`, as the node sees them (through `tools/ar-io-node`, under the node's own `data/indexes`, wherever that lives on the host). Required |
 | `--publisher <wallet>` | The publisher's wallet: ids are then checked whole, its tag included |
-| `--onchain <n>` | Items per band read at their recorded locations and checked against their ids (default 20; `0` leaves the check out) |
+| `--onchain <n>` | Items per band read at their recorded locations and checked against their ids, half directly in their roots and half in nested bundles (20 when not given; `0` leaves the check out) |
+| `--seed <n>` | Seeds that sample, to repeat a run; the result reports the seed drawn when none is given |
 | `--arweave-nodes <urls>` | The Arweave nodes those reads go to (comma-separated, or `default`, the default: the `tip` and `data` nodes) |
 | `--gateway-url <url>` | Read through this gateway instead: faster, but trusted. Exclusive with `--arweave-nodes` |
 | `--read-timeout <ms>` | How long each node or gateway request may take (default 30000) |
@@ -890,7 +891,7 @@ script or an agent can drive it without parsing prose.
 | --- | --- | --- |
 | Exit code | `0` | `1` (`130` when interrupted with Ctrl-C) |
 | stdout | Exactly one JSON value, the command's result, written in full before the process exits | Empty |
-| stderr | Log lines (`info:`, `warn:`) only | Log lines, then either one line of error text, or the result as JSON: for a band refused by the header check, a band or range `index-l1-import` refused, a failed `index-l1-verify` or a failed `index-l1-audit` |
+| stderr | Log lines (`info:`, `warn:`) only | Log lines, then either one line of error text, or the result as JSON: for a band refused by the header check, a band or range `index-l1-import` refused, a failed `index-l1-verify`, `index-l2-verify` or `index-l1-audit` |
 
 - **Read stdout, branch on the exit code.** Never parse stderr for success;
   log lines may change.

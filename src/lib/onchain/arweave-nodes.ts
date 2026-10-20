@@ -31,6 +31,27 @@ export const DEFAULT_ARWEAVE_NODE_URLS = [
   ),
 ];
 
+/**
+ * An `--arweave-nodes` value: `default` for {@link DEFAULT_ARWEAVE_NODE_URLS},
+ * else comma-separated URLs, trimmed, without trailing slashes,
+ * de-duplicated.
+ *
+ * @throws Error when it names no URL.
+ */
+export function parseNodeUrls(value: string): string[] {
+  if (value.trim() === 'default') return DEFAULT_ARWEAVE_NODE_URLS;
+  const urls = [
+    ...new Set(
+      value
+        .split(',')
+        .map((u) => u.trim().replace(/\/+$/, ''))
+        .filter((u) => u.length > 0),
+    ),
+  ];
+  if (urls.length === 0) throw new Error('--arweave-nodes lists no URL');
+  return urls;
+}
+
 /** What a node says about a transaction's place in the weave. */
 export interface TxOffset {
   /** The absolute weave offset of the transaction's last byte. */
@@ -46,13 +67,37 @@ export interface NodeChunk {
   node: string;
 }
 
-/** No reachable node had it (each answered 404, or nothing usable). */
+/**
+ * Every node that answered said 404 (or had it only packed): the data is not
+ * on the network as far as these nodes know. `wholeRoot` is set when what is
+ * missing is the transaction itself (its header or its place in the weave),
+ * not one chunk of it.
+ */
 export class NotOnNodesError extends Error {
   /** Read as a 404 by checks that sort a 404 from other failures. */
   readonly response = { status: 404 };
   constructor(
     message: string,
     readonly asked: number,
+    readonly wholeRoot: boolean,
+  ) {
+    super(message);
+  }
+}
+
+/**
+ * Nodes answered, but none usefully, and not every one said 404: some were
+ * busy or failing (429, 5xx), or served an answer that was refused (`refused`:
+ * a chunk whose proof doesn't validate, a header that isn't one). Never read
+ * as missing data: a busy node may hold it, and an unprovable chunk is a
+ * fault of the node, not an absence.
+ */
+export class NodesRefusedError extends Error {
+  constructor(
+    message: string,
+    readonly notFound: number,
+    readonly busy: number,
+    readonly refused: number,
   ) {
     super(message);
   }
@@ -60,6 +105,12 @@ export class NotOnNodesError extends Error {
 
 /** No node could be reached at all: the network, not the data. */
 export class NodesUnreachableError extends Error {}
+
+/**
+ * Thrown by a parse to say the node lacks the thing in a usable form (a
+ * packed chunk): counted as its 404, not as a refused answer.
+ */
+export class NodeLacksError extends Error {}
 
 export type FetchLike = (
   url: string,
@@ -144,21 +195,31 @@ export class ArweaveNodePool {
   }
 
   /**
-   * Asks each node in turn until one returns 200 with a body `parse`
-   * accepts. 404s and unusable bodies move on to the next node.
+   * Asks each node in turn (`prefer` first, when given: the node that last
+   * served this root usually holds the next chunk) until one returns 200
+   * with a body `parse` accepts. Any other answer moves on to the next node.
    *
-   * @throws NotOnNodesError when every reachable node lacked it.
+   * @throws NotOnNodesError when every node that answered said 404.
+   * @throws NodesRefusedError when some answered otherwise (busy, failing,
+   *   or with an answer `parse` refused).
    * @throws NodesUnreachableError when no node answered at all.
    */
   async ask<T>(
     path: string,
     parse: (body: unknown, node: string) => T | Promise<T>,
     headers?: Record<string, string>,
+    prefer?: string,
   ): Promise<T> {
     await this.prepare();
-    let answered = 0;
+    const order =
+      prefer !== undefined && this.urls.includes(prefer)
+        ? [prefer, ...this.urls.filter((u) => u !== prefer)]
+        : this.urls;
+    let notFound = 0;
+    let busy = 0;
+    let refused = 0;
     let lastProblem = '';
-    for (const node of this.urls) {
+    for (const node of order) {
       let response;
       try {
         response = await this.fetchFn(`${node}${path}`, {
@@ -170,25 +231,38 @@ export class ArweaveNodePool {
         continue;
       }
       this.reachable.add(node);
-      answered += 1;
       if (!response.ok) {
+        if (response.status === 404) notFound += 1;
+        else busy += 1;
         lastProblem = `${node}: HTTP ${response.status}`;
         continue;
       }
       try {
         return await parse(await response.json(), node);
       } catch (error) {
+        if (error instanceof NodeLacksError) notFound += 1;
+        else refused += 1;
         lastProblem = `${node}: ${(error as Error).message}`;
       }
     }
+    const answered = notFound + busy + refused;
     if (answered === 0) {
       throw new NodesUnreachableError(
         `no Arweave node answered ${path} (${lastProblem})`,
       );
     }
-    throw new NotOnNodesError(
-      `none of ${answered} nodes had ${path} (last: ${lastProblem})`,
-      answered,
+    if (notFound === answered) {
+      throw new NotOnNodesError(
+        `none of ${answered} nodes had ${path} (last: ${lastProblem})`,
+        answered,
+        !path.startsWith('/chunk/'),
+      );
+    }
+    throw new NodesRefusedError(
+      `no usable answer for ${path}: ${notFound} said 404, ${busy} busy or failing, ${refused} refused (last: ${lastProblem})`,
+      notFound,
+      busy,
+      refused,
     );
   }
 
@@ -253,6 +327,7 @@ export class ArweaveNodePool {
   chunk<T = NodeChunk>(
     absoluteOffset: bigint,
     accept: (chunk: NodeChunk) => T | Promise<T> = (c) => c as unknown as T,
+    prefer?: string,
   ): Promise<T> {
     return this.ask(
       `/chunk/${absoluteOffset}`,
@@ -267,7 +342,7 @@ export class ArweaveNodePool {
           packing?: unknown;
         };
         if (packing !== undefined && packing !== 'unpacked') {
-          throw new Error(`a ${String(packing)} chunk, not unpacked`);
+          throw new NodeLacksError(`a ${String(packing)} chunk, not unpacked`);
         }
         return accept({
           chunk: b64urlDecode(chunk, 'chunk'),
@@ -276,6 +351,7 @@ export class ArweaveNodePool {
         });
       },
       { 'x-packing': 'unpacked' },
+      prefer,
     );
   }
 }

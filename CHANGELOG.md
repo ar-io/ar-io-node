@@ -18,11 +18,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - every item's location must be laid out as ANS-104 requires, with its
     `data_size` the payload it gives;
   - every nested item must name a parent bundle that `parents` describes
-    where its payload starts;
+    where its payload starts, and every `parents` row's payload must start
+    inside it;
   - the lookups are checked against the tables;
-  - a sample of items per band (`--onchain`, default 20) is read at their
-    recorded locations from Arweave nodes and checked against their ids.
-  `index-l1-verify` does the same for L1 bands. See
+  - a sample of items per band (`--onchain <n>`, 20 when not given) is read
+    at their recorded locations from Arweave nodes and checked against their
+    ids. Items directly in their roots and items in nested bundles are
+    sampled apart, so rare nested items are always read; `--seed` repeats a
+    run.
+  A band that its own publisher's newer band supersedes is left out. For L1
+  bands, `index-l1-verify` checks the chain's own commitments instead. See
   [docs/index-verification.md](docs/index-verification.md), new, which
   covers every index kind: what each check proves, how to reproduce a band
   and how to repair one.
@@ -34,7 +39,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - every chunk's proof is validated against that `data_root` under the
     consensus rules for its weave offset, and the chunk must hash to the
     proof;
-  - a node serving a chunk that fails is passed over.
+  - a node serving a chunk that fails is passed over;
+  - a root or chunk counts as gone (`unreadable`) only when every node that
+    answered said 404. Busy nodes (429, 5xx) and chunks no node could prove
+    are errors, never missing data, and a missing chunk is only that item's,
+    not its root's.
 
 ### Changed
 

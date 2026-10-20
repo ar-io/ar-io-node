@@ -21,6 +21,7 @@ import {
 import {
   ArweaveNodePool,
   DEFAULT_ARWEAVE_NODE_URLS,
+  parseNodeUrls,
 } from '../../lib/onchain/arweave-nodes.js';
 import { onChainRootSource } from '../../lib/onchain/root-source.js';
 import type {
@@ -46,21 +47,14 @@ const whole = (value: string | undefined, flag: string): number | undefined => {
   return n;
 };
 
-/** Comma-separated URLs, trimmed, without trailing slashes, de-duplicated. */
+/** `--arweave-nodes`, read as {@link parseNodeUrls} reads it. */
 export function urlList(value: string | undefined): string[] | undefined {
   if (value === undefined) return undefined;
-  if (value.trim() === 'default') return DEFAULT_ARWEAVE_NODE_URLS;
-  const urls = [
-    ...new Set(
-      value
-        .split(',')
-        .map((u) => u.trim().replace(/\/+$/, ''))
-        .filter((u) => u.length > 0),
-    ),
-  ];
-  if (urls.length === 0)
-    throw new L2VerifyRefused('--arweave-nodes lists no URL');
-  return urls;
+  try {
+    return parseNodeUrls(value);
+  } catch (error) {
+    throw new L2VerifyRefused((error as Error).message);
+  }
 }
 
 export interface IndexL2VerifyDeps {
@@ -79,6 +73,7 @@ export async function indexL2VerifyCLICommand(
   const perBand =
     whole(options.onchain, '--onchain') ?? DEFAULT_ONCHAIN_PER_BAND;
   const timeoutMs = whole(options.readTimeout, '--read-timeout') ?? 30000;
+  const seed = whole(options.seed, '--seed');
   if (options.gatewayUrl !== undefined && options.arweaveNodes !== undefined) {
     throw new L2VerifyRefused(
       '--gateway-url and --arweave-nodes are exclusive',
@@ -144,7 +139,13 @@ export async function indexL2VerifyCLICommand(
         : {}),
       lookups: options.skipLookups !== true,
       ...(source !== undefined
-        ? { onchain: { perBand, openRoot: source.openRoot } }
+        ? {
+            onchain: {
+              perBand,
+              openRoot: source.openRoot,
+              ...(seed !== undefined ? { seed } : {}),
+            },
+          }
         : {}),
       progress: (done, total, id) =>
         log.info('Checked band', { done, total, id }),
@@ -171,6 +172,7 @@ export async function indexL2VerifyCLICommand(
           : {}),
         ...(c.more !== undefined ? { more: c.more } : {}),
       })),
+      superseded: out.superseded,
       ...(out.onchain !== undefined && source !== undefined
         ? { onchain: { perBand, ...out.onchain, roots: source.describe() } }
         : {}),

@@ -28,7 +28,7 @@ import {
 } from '../../lib/index-band/verify.js';
 import {
   ArweaveNodePool,
-  DEFAULT_ARWEAVE_NODE_URLS,
+  parseNodeUrls,
 } from '../../lib/onchain/arweave-nodes.js';
 import { onChainRootSource } from '../../lib/onchain/root-source.js';
 import type {
@@ -291,10 +291,7 @@ export async function indexBandVerifyCLICommand(
       ? {
           openRoot: onChainRootSource({
             pool: new ArweaveNodePool({
-              urls:
-                options.arweaveNodes === 'default'
-                  ? DEFAULT_ARWEAVE_NODE_URLS
-                  : options.arweaveNodes.split(','),
+              urls: parseNodeUrls(options.arweaveNodes),
               ...(readTimeout !== undefined ? { timeoutMs: readTimeout } : {}),
             }),
           }).openRoot,

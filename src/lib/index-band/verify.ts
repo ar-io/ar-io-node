@@ -251,7 +251,7 @@ export async function checkBandHeaders({
     } catch (error) {
       // A range the root doesn't have means the offsets are wrong: a 416
       // when it starts past the end, or a trimmed (short) 206 when it
-      // starts inside and runs past it. A root the gateway doesn't have
+      // starts inside and runs past it. A root (or chunk) the source doesn't have
       // (404) is gone; anything else (a timeout, a 429, a 5xx) means it
       // couldn't be checked.
       if (isWrongRange(error)) {
@@ -264,7 +264,9 @@ export async function checkBandHeaders({
         return true;
       }
       if (isGone(error)) {
-        gone.add(entry.rootTxId);
+        // A missing chunk is this item's alone: other items of the root may
+        // sit in chunks that are still held.
+        if (!isChunkOnly(error)) gone.add(entry.rootTxId);
         return goneRoot();
       }
       errors.push({
@@ -390,7 +392,7 @@ export async function checkBandHeaders({
     // the usual cause is a gateway that has to fetch the roots itself.
     const unchecked =
       errors.length > 0
-        ? `; ${errors.length} could not be read from the gateway (most often: ${mostCommon(errors.map((e) => e.error))}), so try a gateway that has these root transactions`
+        ? `; ${errors.length} could not be read from the root source (most often: ${mostCommon(errors.map((e) => e.error))}); rerun, or read through another source`
         : '';
     reasons.push(
       `${ok} of ${checked} checked entries passed, under ${Math.round(minOkRatio * 100)}%${unchecked}`,
@@ -403,7 +405,7 @@ export async function checkBandHeaders({
     ok < verifiedFloor
   ) {
     reasons.push(
-      `${ok} entries verified, fewer than ${verifiedFloor}: of the ${tried} tried, ${unreadable.length} are under roots the gateway doesn't have (404) and ${errors.length} could not be read${tried === entries.length ? '; the sample ran out' : ''}`,
+      `${ok} entries verified, fewer than ${verifiedFloor}: of the ${tried} tried, ${unreadable.length} are under roots or chunks the source doesn't have (404) and ${errors.length} could not be read${tried === entries.length ? '; the sample ran out' : ''}`,
     );
   }
 
@@ -432,6 +434,10 @@ const isWrongRange = (error: unknown) =>
 /** A root the gateway doesn't have: not to be retried, nor counted against. */
 const isGone = (error: unknown) =>
   (error as { response?: { status?: number } }).response?.status === 404;
+
+/** A 404 for one chunk of a root (from Arweave nodes), not the whole root. */
+const isChunkOnly = (error: unknown) =>
+  (error as { wholeRoot?: boolean }).wholeRoot === false;
 
 async function readWithRetries(
   read: () => Promise<Buffer>,

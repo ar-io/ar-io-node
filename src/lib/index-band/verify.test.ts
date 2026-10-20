@@ -498,7 +498,7 @@ describe('checkBandHeaders', () => {
       assert.equal(result.unreadableShare, 1);
       assert.match(
         result.reasons.join(' '),
-        /0 entries verified, fewer than 8: of the 20 tried, 20 are under roots the gateway doesn't have \(404\) and 0 could not be read; the sample ran out/,
+        /0 entries verified, fewer than 8: of the 20 tried, 20 are under roots or chunks the source doesn't have \(404\) and 0 could not be read; the sample ran out/,
       );
     });
 
@@ -701,7 +701,7 @@ describe('checkBandHeaders', () => {
     assert.match(
       result.reasons.join(' '),
       new RegExp(
-        `${items.length} could not be read from the gateway \\(most often: gateway unreachable\\), so try a gateway that has these root transactions`,
+        `${items.length} could not be read from the root source \\(most often: gateway unreachable\\); rerun, or read through another source`,
       ),
     );
   });

@@ -37,6 +37,7 @@
  *   their ids (`checkBandHeaders`, over whatever root source is given:
  *   `onChainRootSource` proves every byte against the chain).
  */
+import crypto from 'node:crypto';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { SIG_CONFIG } from '@dha-team/arbundles';
@@ -48,6 +49,8 @@ import {
   HEADER_CHECK_POOL_FACTOR,
   RootSourceFactory,
 } from '../index-band/verify.js';
+import { supersededBands } from '../index-publication.js';
+import { readPublisherFacts } from '../parquet-l1/layout.js';
 import { addFailure, type VerifyCheck } from '../parquet-l1/verify.js';
 import {
   BAND_FILE,
@@ -72,12 +75,19 @@ export interface L2BandOnDisk {
   /** Its id: the directory name, less an installed generation (`~…`). */
   id: string;
   band: ParquetL2Band;
+  /** The bands its publisher says it replaces (`.publisher.json`), if any. */
+  supersedes?: string[];
 }
 
 export interface L2OnChainOptions {
   /** Items per band to read (at most; fewer where a band holds fewer). */
   perBand: number;
   openRoot: RootSourceFactory;
+  /**
+   * Seeds the sample, so a run can be repeated (given the same DuckDB thread
+   * count). A random seed is drawn when not given; the result reports it.
+   */
+  seed?: number;
   random?: () => number;
   concurrency?: number;
 }
@@ -105,6 +115,10 @@ export interface L2OnChainSummary {
   errors: number;
   /** Bands whose header check did not pass, by id, with the reasons. */
   failedBands: Array<{ id: string; reasons: string[] }>;
+  /** Bands with items but none located: nothing to read on chain. */
+  unlocatedBands: string[];
+  /** The sample's seed: `--seed` repeats it. */
+  seed: number;
 }
 
 export interface L2BandsVerifyResult {
@@ -116,6 +130,8 @@ export interface L2BandsVerifyResult {
   items: number;
   ok: boolean;
   checks: VerifyCheck[];
+  /** Bands left out because a band of the same publisher replaces them. */
+  superseded: string[];
   onchain?: L2OnChainSummary;
   seconds: number;
 }
@@ -160,9 +176,53 @@ export async function readL2BandsDir(
         `${entry.name}: ${BAND_FILE} is not an l2 band file: ${(error as Error).message}`,
       );
     }
-    bands.push({ dir, id: entry.name.split('~')[0], band });
+    const facts = await readPublisherFacts(dir).catch(() => undefined);
+    bands.push({
+      dir,
+      id: entry.name.split('~')[0],
+      band,
+      ...(facts?.supersedes !== undefined
+        ? { supersedes: facts.supersedes }
+        : {}),
+    });
   }
   return bands;
+}
+
+/**
+ * The bands no other band replaces, by the rule a subscriber applies to a
+ * publication (`supersededBands`), with each claim held to its own
+ * publisher's bands. A publisher's published directory keeps a replaced
+ * tip band beside its replacement until it is pruned; an installed set
+ * holds only live bands, so nothing is left out of it.
+ */
+export function liveL2Bands(bands: ReadonlyArray<L2BandOnDisk>): {
+  live: L2BandOnDisk[];
+  superseded: string[];
+} {
+  const tagOf = (id: string) => id.split('-')[3];
+  const gone = supersededBands(
+    bands.map((b) => ({
+      id: b.id,
+      files: [],
+      ...(b.supersedes !== undefined
+        ? {
+            metadata: {
+              supersedes: b.supersedes.filter(
+                (other) => tagOf(other) === tagOf(b.id),
+              ),
+            },
+          }
+        : {}),
+    })),
+  );
+  return {
+    live: bands.filter((b) => !gone.has(b.id)),
+    superseded: bands
+      .filter((b) => gone.has(b.id))
+      .map((b) => b.id)
+      .sort(),
+  };
 }
 
 /**
@@ -214,7 +274,9 @@ export async function verifyL2Bands(
   options: L2VerifyOptions = {},
 ): Promise<L2BandsVerifyResult> {
   const began = Date.now();
-  const all = await readL2BandsDir(bandsDir);
+  // Reading every row in file order relies on DuckDB keeping it.
+  await duck.exec('SET preserve_insertion_order = true');
+  const { live: all, superseded } = liveL2Bands(await readL2BandsDir(bandsDir));
   const inRange = all.filter(
     ({ band }) =>
       (options.from === undefined || band.heightRange[0] >= options.from) &&
@@ -272,6 +334,8 @@ export async function verifyL2Bands(
     unreadable: 0,
     errors: 0,
     failedBands: [],
+    unlocatedBands: [],
+    seed: options.onchain?.seed ?? crypto.randomInt(2 ** 31 - 1),
   };
   let items = 0;
   const sigLengths = signatureLengthsSql();
@@ -362,6 +426,13 @@ export async function verifyL2Bands(
     // locations
     const itemsFile = `read_parquet(${sqlString(path.join(dir, 'data_items.parquet'))})`;
     const parentsFile = `read_parquet(${sqlString(path.join(dir, 'parents.parquet'))})`;
+    // Offsets are unsigned 64-bit; a malformed row (a payload that starts
+    // past its item's end) would underflow them, so the arithmetic is done
+    // in 128 bits and such a row is counted, not a crash.
+    const wide = (cols: string[]) =>
+      `* REPLACE (${cols.map((c) => `CAST("${c}" AS HUGEINT) AS "${c}"`).join(', ')})`;
+    const itemsWide = `(SELECT ${wide(['root_parent_offset', 'offset', 'size', 'data_offset', 'owner_offset', 'owner_size', 'signature_offset', 'signature_size', 'data_size'])} FROM ${itemsFile})`;
+    const parentsWide = `(SELECT ${wide(['root_parent_offset', 'offset', 'size', 'data_offset'])} FROM ${parentsFile})`;
     const [loc] = (await duck.all(`SELECT
       count(*) FILTER (WHERE NOT (
         (root_parent_offset IS NULL AND "offset" IS NULL AND size IS NULL AND data_offset IS NULL AND owner_offset IS NULL AND owner_size IS NULL AND signature_offset IS NULL AND signature_size IS NULL)
@@ -375,7 +446,7 @@ export async function verifyL2Bands(
         OR (owner_address IS NOT NULL AND octet_length(owner_address) <> 32)
         OR (target IS NOT NULL AND octet_length(target) <> 32) OR (anchor IS NOT NULL AND octet_length(anchor) <> 32)) AS bad_widths,
       count(*) FILTER (WHERE height < ${from} OR height > ${to}) AS outside
-      FROM ${itemsFile}`)) as Array<Record<string, unknown>>;
+      FROM ${itemsWide}`)) as Array<Record<string, unknown>>;
     for (const [key, what] of [
       ['part_location', 'items with part of a location'],
       [
@@ -394,13 +465,15 @@ export async function verifyL2Bands(
 
     // parents
     const [par] = (await duck.all(`WITH located AS (
-        SELECT parent_id, root_transaction_id, root_parent_offset FROM ${itemsFile} WHERE "offset" IS NOT NULL)
+        SELECT parent_id, root_transaction_id, root_parent_offset FROM ${itemsWide} WHERE "offset" IS NOT NULL)
       SELECT
         count(*) FILTER (WHERE parent_id = root_transaction_id AND root_parent_offset <> 0) AS direct_off_zero,
         count(*) FILTER (WHERE parent_id <> root_transaction_id AND NOT EXISTS (
-          SELECT 1 FROM ${parentsFile} p WHERE p.id = located.parent_id
+          SELECT 1 FROM ${parentsWide} p WHERE p.id = located.parent_id
             AND p.root_transaction_id = located.root_transaction_id
-            AND p.root_parent_offset + p.data_offset = located.root_parent_offset)) AS undescribed
+            AND p.root_parent_offset + p.data_offset = located.root_parent_offset)) AS undescribed,
+        (SELECT count(*) FROM ${parentsWide} WHERE NOT (
+          size > 0 AND data_offset > "offset" AND data_offset <= "offset" + size)) AS bad_parent_layout
       FROM located`)) as Array<Record<string, unknown>>;
     if (num(par.direct_off_zero) > 0) {
       fail(
@@ -413,6 +486,13 @@ export async function verifyL2Bands(
       fail(
         parents,
         `${num(par.undescribed)} items in a nested bundle that parents does not describe there`,
+        '0',
+      );
+    }
+    if (num(par.bad_parent_layout) > 0) {
+      fail(
+        parents,
+        `${num(par.bad_parent_layout)} parents whose payload does not start inside them`,
         '0',
       );
     }
@@ -431,26 +511,50 @@ export async function verifyL2Bands(
     ) {
       const { perBand, openRoot, random, concurrency } = options.onchain;
       const pool = perBand * HEADER_CHECK_POOL_FACTOR;
-      const sample =
-        (await duck.all(`SELECT id, root_transaction_id, root_parent_offset, "offset", data_offset,
-          CASE WHEN root_parent_offset = 0 THEN 'direct' ELSE 'nested' END AS stratum
-        FROM ${itemsFile} WHERE "offset" IS NOT NULL USING SAMPLE ${pool} ROWS`)) as Array<
+      // Each stratum is sampled on its own, after it is selected, so a band
+      // whose nested items are rare still has them checked. The seed makes
+      // the sample repeatable; each band gets its own.
+      const stratumSample = async (where: string, salt: number) =>
+        (await duck.all(`SELECT * FROM (
+            SELECT id, root_transaction_id, root_parent_offset, "offset", data_offset
+            FROM ${itemsFile} WHERE "offset" IS NOT NULL AND ${where})
+          USING SAMPLE reservoir(${pool} ROWS) REPEATABLE (${(onchainSummary.seed + index * 2 + salt) % 2 ** 31})`)) as Array<
           Record<string, unknown>
         >;
-      const entries: BandSampleEntry[] = sample.map((r) => ({
-        id: Buffer.from(r.id as Buffer).toString('base64url'),
-        rootTxId: Buffer.from(r.root_transaction_id as Buffer).toString(
-          'base64url',
-        ),
-        rootOffset: num(r.root_parent_offset) + num(r.offset),
-        rootDataOffset: num(r.root_parent_offset) + num(r.data_offset),
-        tag: r.stratum as string,
-      }));
-      const nested = entries.filter((e) => e.tag === 'nested').length;
-      const targets = {
-        direct: Math.max(1, Math.ceil(perBand / 2)),
-        nested: nested > 0 ? Math.max(1, Math.floor(perBand / 2)) : 0,
-      };
+      const toEntries = (rows: Array<Record<string, unknown>>, tag: string) =>
+        rows.map(
+          (r): BandSampleEntry => ({
+            id: Buffer.from(r.id as Buffer).toString('base64url'),
+            rootTxId: Buffer.from(r.root_transaction_id as Buffer).toString(
+              'base64url',
+            ),
+            rootOffset: num(r.root_parent_offset) + num(r.offset),
+            rootDataOffset: num(r.root_parent_offset) + num(r.data_offset),
+            tag,
+          }),
+        );
+      const direct = toEntries(
+        await stratumSample('root_parent_offset = 0', 0),
+        'direct',
+      );
+      const nested = toEntries(
+        await stratumSample('root_parent_offset <> 0', 1),
+        'nested',
+      );
+      const entries = [...direct, ...nested];
+      if (entries.length === 0) {
+        // Items, none located: the row checks cover them; nothing to read.
+        onchainSummary.unlocatedBands.push(id);
+        options.progress?.(index + 1, ordered.length, id);
+        continue;
+      }
+      const half = Math.ceil(perBand / 2);
+      const targets: Record<string, number> =
+        direct.length === 0
+          ? { nested: perBand }
+          : nested.length === 0
+            ? { direct: perBand }
+            : { direct: half, nested: Math.max(1, perBand - half) };
       const result = await checkBandHeaders({
         entries,
         totalRecords: band.tables.data_items.rows,
@@ -497,6 +601,7 @@ export async function verifyL2Bands(
     items,
     ok: checks.every((c) => c.ok),
     checks,
+    superseded,
     ...(options.onchain !== undefined ? { onchain: onchainSummary } : {}),
     seconds: (Date.now() - began) / 1000,
   };

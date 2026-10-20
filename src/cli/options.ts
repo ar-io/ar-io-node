@@ -168,6 +168,11 @@ export const optionMap = {
     description:
       'For --onchain, read root transactions through this gateway instead of Arweave nodes: faster, but the gateway is trusted. Exclusive with --arweave-nodes',
   },
+  onchainSeed: {
+    alias: '--seed <n>',
+    description:
+      "Seeds --onchain's sample, to repeat a run (the result reports the seed it drew when none is given)",
+  },
   l2SkipLookups: {
     alias: '--skip-lookups',
     description:
@@ -277,6 +282,7 @@ export const indexL2VerifyOptions: CommanderOption[] = [
   optionMap.onchain,
   optionMap.arweaveNodes,
   optionMap.l2GatewayUrl,
+  optionMap.onchainSeed,
   optionMap.readTimeout,
   optionMap.fromHeight,
   optionMap.toHeight,

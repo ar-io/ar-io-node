@@ -28,9 +28,11 @@
  *
  * What a read comes to, as the header check sorts it: bytes; a range past the
  * root's end is a {@link ShortRangeReadError} (the offsets are wrong); a
- * chunk no reachable node has is a 404 (`NotOnNodesError`: data gone
- * network-wide, as for a gateway that doesn't have the root); anything else
- * (no node reachable, a root that can't be bound) is a transport failure.
+ * root or chunk every answering node says 404 to is a 404 (`NotOnNodesError`:
+ * data gone network-wide; `wholeRoot` says whether the root itself is gone
+ * or one chunk of it); anything else (busy or failing nodes, a chunk no node
+ * can prove, no node reachable, a root that can't be bound) is an error, to
+ * be retried or reported, never read as missing data.
  */
 import crypto from 'node:crypto';
 import { default as Arweave } from 'arweave';
@@ -42,7 +44,7 @@ import { getRulesetForOffset, parseDataPath } from '../merkle-path-parser.js';
 import {
   ArweaveNodePool,
   NodeChunk,
-  NodesUnreachableError,
+  NotOnNodesError,
 } from './arweave-nodes.js';
 
 /** A root whose id can't be bound to its data: no check can be made. */
@@ -114,6 +116,8 @@ export function onChainRootSource({
 } {
   const bound = new Map<string, Promise<BoundRoot>>();
   const counts = { bySignature: 0, byAgreement: 0, chunksProven: 0 };
+  /** The node that last proved a chunk of each root, asked first next time. */
+  const lastNode = new Map<string, string>();
 
   const bindRoot = async (id: string): Promise<BoundRoot> => {
     const header = await pool.txHeader(id);
@@ -180,11 +184,16 @@ export function onChainRootSource({
     if (pending === undefined) {
       pending = bindRoot(id);
       // A definitive failure to bind is remembered for the run: asking again
-      // would only ask the same nodes the same question. Not reaching any
-      // node is not definitive, so that root is asked again next time.
+      // would only ask the same nodes the same question. Anything else (no
+      // node reachable, nodes busy) is asked again next time.
       bound.set(id, pending);
       pending.catch((error) => {
-        if (error instanceof NodesUnreachableError) bound.delete(id);
+        if (
+          !(error instanceof RootUnboundError) &&
+          !(error instanceof NotOnNodesError)
+        ) {
+          bound.delete(id);
+        }
       });
     }
     return pending;
@@ -193,34 +202,39 @@ export function onChainRootSource({
   /** One proven chunk holding root byte `rel`, and its bounds in the root. */
   const provenChunk = async (root: BoundRoot, rel: number) => {
     const absolute = root.start + BigInt(rel);
-    return pool.chunk(absolute, async (served: NodeChunk) => {
-      const parsed = await parseDataPath({
-        dataRoot: root.dataRoot,
-        dataSize: root.dataSize,
-        dataPath: served.dataPath,
-        offset: rel,
-        ruleset: getRulesetForOffset(Number(absolute)),
-      });
-      const { startOffset, endOffset } = parsed.boundaries;
-      if (!parsed.validated) throw new Error('its proof does not validate');
-      if (
-        !crypto
-          .createHash('sha256')
-          .update(served.chunk)
-          .digest()
-          .equals(parsed.chunkData)
-      ) {
-        throw new Error('the chunk does not hash to its proof');
-      }
-      if (served.chunk.length !== endOffset - startOffset) {
-        throw new Error('the chunk is not the length its proof gives');
-      }
-      if (rel < startOffset || rel >= endOffset) {
-        throw new Error('the proof is for another chunk');
-      }
-      counts.chunksProven += 1;
-      return { chunk: served.chunk, start: startOffset, end: endOffset };
-    });
+    return pool.chunk(
+      absolute,
+      async (served: NodeChunk) => {
+        const parsed = await parseDataPath({
+          dataRoot: root.dataRoot,
+          dataSize: root.dataSize,
+          dataPath: served.dataPath,
+          offset: rel,
+          ruleset: getRulesetForOffset(Number(absolute)),
+        });
+        const { startOffset, endOffset } = parsed.boundaries;
+        if (!parsed.validated) throw new Error('its proof does not validate');
+        if (
+          !crypto
+            .createHash('sha256')
+            .update(served.chunk)
+            .digest()
+            .equals(parsed.chunkData)
+        ) {
+          throw new Error('the chunk does not hash to its proof');
+        }
+        if (served.chunk.length !== endOffset - startOffset) {
+          throw new Error('the chunk is not the length its proof gives');
+        }
+        if (rel < startOffset || rel >= endOffset) {
+          throw new Error('the proof is for another chunk');
+        }
+        counts.chunksProven += 1;
+        lastNode.set(root.id, served.node);
+        return { chunk: served.chunk, start: startOffset, end: endOffset };
+      },
+      lastNode.get(root.id),
+    );
   };
 
   const openRoot: RootSourceFactory = (rootTxId: string): ByteRangeSource => ({

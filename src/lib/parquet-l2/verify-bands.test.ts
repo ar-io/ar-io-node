@@ -27,6 +27,25 @@ import {
 import { writeBandLookups } from './lookups.js';
 import { L2BandsRefused, verifyL2Bands } from './verify-bands.js';
 
+const LOC = (name: string) => 13 + DATA_ITEM_LOCATION_COLUMNS.indexOf(name);
+
+/** A source whose every read is an Arweave-signed header of no item here. */
+const strangerHeaders =
+  (reads: number[], fail?: (offset: number) => unknown): RootSourceFactory =>
+  () => ({
+    read: async (offset: number, size: number) => {
+      reads.push(offset);
+      const error = fail?.(offset);
+      if (error !== undefined) throw error;
+      const header = Buffer.alloc(size);
+      header.writeUInt16LE(1, 0);
+      crypto.randomBytes(512).copy(header, 2);
+      return header;
+    },
+    close: async () => undefined,
+    isOpen: () => true,
+  });
+
 const PUBLISHER = 'publisher-wallet-for-tests-0000000000000000';
 const SELECTION = {
   kind: 'ans104-data-items' as const,
@@ -330,5 +349,148 @@ describe('verifyL2Bands', () => {
       [...new Set(reads)].sort((x, y) => x - y),
       [0, 3500],
     );
+  });
+
+  it('counts a payload that starts past its item as a bad layout, not a crash', async () => {
+    const dir = await fresh();
+    await writeBand(db, dir, 100, 199, {
+      rows: (r) => {
+        // offset + size - data_offset would underflow an unsigned 64-bit.
+        r.data_items[0][LOC('data_offset')] = 99_999;
+      },
+    });
+    assert.deepEqual(failing(await verifyL2Bands(db, dir)), ['locations']);
+  });
+
+  it('fails parents for a nested bundle whose payload does not start inside it', async () => {
+    const dir = await fresh();
+    await writeBand(db, dir, 100, 199, {
+      rows: (r) => {
+        // Still where the item says its payload starts (0 + 3500), but the
+        // bundle's own header would begin after it: another copy's offsets.
+        r.parents[0][3] = 5000;
+      },
+    });
+    const result = await verifyL2Bands(db, dir);
+    assert.deepEqual(failing(result), ['parents']);
+    assert.match(
+      result.checks.find((c) => c.name === 'parents')!.failures![0].found,
+      /payload does not start inside them/,
+    );
+  });
+
+  it("leaves out a band its publisher's newer band replaces, and only its own", async () => {
+    const dir = await fresh();
+    const old = await writeBand(db, dir, 100, 199);
+    const next = await writeBand(db, dir, 100, 249, {
+      rows: (r) => {
+        r.tags[0][4] = Buffer.from('ArDrive-Next');
+      },
+    });
+    await fs.writeFile(
+      path.join(next.dir, '.publisher.json'),
+      JSON.stringify({ supersedes: [old.id] }),
+    );
+    const result = await verifyL2Bands(db, dir);
+    assert.equal(result.ok, true);
+    assert.equal(result.bands, 1);
+    assert.deepEqual(result.superseded, [old.id]);
+
+    // A claim on another publisher's band is no claim: the set overlaps.
+    const foreign = await fresh();
+    const theirs = await writeBand(db, foreign, 100, 199);
+    const otherTag = theirs.id.replace(
+      `-${bandPublisherTag(PUBLISHER)}-`,
+      '-0badc0de-',
+    );
+    await fs.rename(theirs.dir, path.join(foreign, otherTag));
+    const ours = await writeBand(db, foreign, 100, 249, {
+      rows: (r) => {
+        r.tags[0][4] = Buffer.from('ArDrive-Next');
+      },
+    });
+    await fs.writeFile(
+      path.join(ours.dir, '.publisher.json'),
+      JSON.stringify({ supersedes: [otherTag] }),
+    );
+    await assert.rejects(verifyL2Bands(db, foreign), /overlap/);
+  });
+
+  it('samples nested items however rare, repeatably by seed', async () => {
+    const dir = await fresh();
+    await writeBand(db, dir, 100, 199, {
+      rows: (r) => {
+        // 200 more items directly in the root, beside one nested item.
+        const direct = r.data_items[0];
+        for (let i = 0; i < 200; i += 1) {
+          const copy = [...direct];
+          copy[0] = hash(`direct-${i}`);
+          r.data_items.push(copy);
+        }
+      },
+    });
+    const run = async (seed: number) => {
+      const reads: number[] = [];
+      const result = await verifyL2Bands(db, dir, {
+        lookups: false,
+        onchain: { perBand: 2, openRoot: strangerHeaders(reads), seed },
+      });
+      return { reads, result };
+    };
+    const first = await run(7);
+    // perBand 2: one direct, one nested, never two direct.
+    assert.ok(first.reads.includes(3500));
+    assert.equal(first.result.onchain?.seed, 7);
+    const again = await run(7);
+    assert.deepEqual(
+      [...new Set(again.reads)].sort((x, y) => x - y),
+      [...new Set(first.reads)].sort((x, y) => x - y),
+    );
+  });
+
+  it('reads past a missing chunk to the rest of its root', async () => {
+    const dir = await fresh();
+    await writeBand(db, dir, 100, 199);
+    // Both items share a root; the nested one's chunk is gone. Its 404 is
+    // its own: the item directly in the root is still read.
+    const reads: number[] = [];
+    const result = await verifyL2Bands(db, dir, {
+      onchain: {
+        perBand: 2,
+        openRoot: strangerHeaders(reads, (offset) =>
+          offset === 3500
+            ? Object.assign(new Error('gone'), {
+                response: { status: 404 },
+                wholeRoot: false,
+              })
+            : undefined,
+        ),
+      },
+    });
+    assert.deepEqual(
+      [...new Set(reads)].sort((x, y) => x - y),
+      [0, 3500],
+    );
+    assert.equal(result.onchain?.unreadable, 1);
+    assert.equal(result.onchain?.wrong, 1);
+  });
+
+  it('passes a band with items but no locations, with nothing to read on chain', async () => {
+    const dir = await fresh();
+    const { id } = await writeBand(db, dir, 100, 199, {
+      rows: (r) => {
+        for (const row of r.data_items) {
+          for (const name of DATA_ITEM_LOCATION_COLUMNS) row[LOC(name)] = null;
+        }
+        r.parents = [];
+      },
+    });
+    const reads: number[] = [];
+    const result = await verifyL2Bands(db, dir, {
+      onchain: { perBand: 2, openRoot: strangerHeaders(reads) },
+    });
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.onchain?.unlocatedBands, [id]);
+    assert.equal(reads.length, 0);
   });
 });
