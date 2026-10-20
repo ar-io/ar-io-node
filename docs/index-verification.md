@@ -78,9 +78,8 @@ id that can't bind it); two machines agree on its block, hash and height,
 at a height other than the band gives; two machines say it is in no block.
 A block is its hash and its height together: a node naming the agreed hash
 at another height is that node's fault. Fewer than two machines saying
-anything definite is an error, tolerated within the pass ratio and the
-band's floor of verified items, never a refutation and never a pass by
-silence. Before any verdict of absence, busy and resting nodes are asked
+anything definite leaves the item unchecked: never a refutation, and never
+a pass (see below). Before any verdict of absence, busy and resting nodes are asked
 once more.
 
 **A bound root is never missing.** Once a root is bound (a format-2 header
@@ -88,28 +87,60 @@ whose signature hashes to its id and verifies) and two machines place it in
 a block, nothing about its data can make it `missing`: a node answering 404
 to `/tx/{id}/offset` or to a chunk holds no data for it, which says nothing
 against it. In the default pool the `tip` nodes and some `data` nodes answer
-404 to `/offset` for mined transactions while serving their headers. Such a
-root with no node giving its place, or with a holder busy, is an error.
-`missing` is only for a root no node binds and two machines answer 404 for;
-a verdict of `missing` reached while some node stayed busy is not remembered
-for the run, so the root is asked again for its next item.
+404 to `/offset` for mined transactions while serving their headers.
+`missing` is only for a root no node binds, two machines answering 404 for
+its header, and every node heard: a node that stayed busy may be the one
+holder, so then the root is unchecked.
 
-What a header read comes to, as every header check sorts it:
+### `index-l2-verify`: one denominator, no substitution
 
-| Outcome      | Means                                                                                             | Counts                                            |
-| ------------ | ------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
-| `ok`         | the bytes at the recorded location are a data item header whose signature hashes to the item's id | for the band                                      |
-| `wrong`      | something else is there, or the range runs past the root; or the chain **refutes** the root, on two machines' word: no `data_root`, format 1, a signature that doesn't verify (without `--allow-agreement`), in no block, in a block at another height than the band says, or a size other than its header signs | **against** the band: one fails it |
-| `missing`    | `index-l2-verify` only: no node binds the root and two machines or more answered 404 for its header (busy and resting nodes asked once more first): a root id made up. Never a bound root: its offset or chunks unavailable are errors | **against** the band: one fails it |
-| `unreadable` | every node that answered said 404 for the chunk holding the header: data gone network-wide (unseeded or purged). For `index-band-verify`, a root gone this way too | neither way, and another sample is taken in its place; `index-l2-verify` fails a band where more than `--max-unreadable-share` (20%) of the items tried are unreadable |
-| `errors`     | a failure to check, never a refutation: nodes busy or failing (429, 5xx) and nothing else said, a chunk no node could prove, no node reachable, nodes naming different blocks, a read still pending at the band's deadline | against the pass ratio; rerun. `onchain.bands[].errorSample` shows a few per band |
+For each band, `--onchain N` located items are drawn up front (seeded per
+band by its id; half directly in their roots, half in nested bundles, one
+stratum filling for the other where it runs short). Every drawn item ends in
+exactly one of:
 
-A chunk counts as `unreadable` only when **every** node that answered said
-404, a busy one asked again first (a node that has a chunk only packed counts
-as not having it). One still busy (429, 5xx) among them, or one whose chunk
-failed its proof, makes it an error instead: that node may hold the data, and
-an unprovable chunk is the node's fault, not an absence. A missing chunk is
-that item's alone; a missing root is every item's under it.
+| Outcome     | Means |
+| ----------- | ----- |
+| `ok`        | its header, read at its recorded location from a root bound and found in a block, every chunk proven, hashes to its id |
+| `wrong`     | proven contrary: another item, or no item, is there; the range runs past the root; the chain refutes the root on two machines' word (no `data_root`, format 1, a signature that doesn't verify without `--allow-agreement`, in no block, in a block at another height than the band says, another size than its header signs); or the root is `missing` |
+| `unchecked` | anything else: nodes busy, failing or unreachable; a root bound but placed by no node; a chunk no node holds (unseeded, purged); a holder never heard; nodes naming different blocks; the band's deadline (`--band-deadline`) |
+
+**No drawn item is ever replaced** by another draw because of how it ended:
+redrawing is what would let fabricated items hide behind roots or chunks
+nobody can read. After the first pass, every `unchecked` item is read once
+more, after the others. Then:
+
+- any `wrong` item fails the band;
+- else more `unchecked` items than `--max-unchecked` (0 unless set) make it
+  **inconclusive**: `ok: false`, the reason "inconclusive: N of M sampled
+  entries could not be checked — rerun, or allow with --max-unchecked", and
+  the band listed in `onchain.inconclusiveBands`;
+- else it passes.
+
+There is no pass ratio, no floor and no allowance for unreadable data. Each
+band reports `drawn`, `ok`, `wrong`, `missing`, `unchecked`,
+`uncheckedReasons` (`error`, `unreadable`, `deadline`) and an `errorSample`.
+
+**What a pass means.** With N items drawn and none wrong, a band in which a
+fraction p of the located items are fabricated passes with probability
+(1 − p)^N. With N = 20, a band with 14% or more fabricated located items
+would have been caught with 95% probability; smaller fractions may not be.
+`assurance` says this for the N of the run. Raise `--onchain` to catch
+smaller fractions. Unlocated items are not checked on chain at all (see the
+`located` check).
+
+`index-band-verify` keeps its own rule (a pool walked until each stratum's
+target is read, roots gone passed over, 80% of the items read must pass):
+it checks a publisher's band before publishing, not a holder's.
+
+What one read comes to, as `index-band-verify` sorts it:
+
+| Outcome      | Means | Counts |
+| ------------ | ----- | ------ |
+| `ok`         | the bytes at the recorded location are a data item header whose signature hashes to the item's id | for the band |
+| `wrong`      | something else is there, the range runs past the root, or the chain refutes the root | **against** the band: one fails it |
+| `unreadable` | every node or the gateway said 404 for the root or the chunk: data gone network-wide | neither way; another sample is taken in its place |
+| `errors`     | nothing usable came back | against the pass ratio; rerun |
 
 A machine is the set of addresses a node's name resolves to (A and AAAA);
 two nodes whose sets meet are one machine, every loopback address and
@@ -125,7 +156,7 @@ request starts at the next node in turn. A node that times out or refuses a
 connection rests for five minutes and is not asked; while it rests, one that
 timed out counts as busy (it may hold the data), so its silence is never read
 as missing data. Each band's reads have a deadline (`--band-deadline`, 20
-minutes): reads still pending then are errors, and the band fails. Name your own
+minutes): items not read by then are unchecked. Name your own
 with `--arweave-nodes http://a:1984,http://b:1984`. With `--gateway-url`
 instead, roots are read through that gateway's `/raw`: faster, but that gateway
 is trusted.
@@ -165,7 +196,7 @@ ran passed; read it with `skipped`, `publisherBound` and `assurance`**
 | `selected`    | an item has no tag the band's selection takes (the name byte for byte, the value starting with `valuePrefix` and not `excludeValuePrefix`, as the exporter selects)                                                                                                                                                                                                                  |
 | `lookups`     | a lookup file, read in the order it holds its rows, is out of its key's order (a reader's search over its row groups would miss keys), or doesn't digest to what `band.json` says, or doesn't hold exactly the rows its tables give (`--skip-lookups` leaves this out)                                                                                                            |
 | `mined`       | with an L1 index: a root isn't in the index's `block_transactions` at the height its items give, or is there at another `block_transaction_index`. Every root of every band, not a sample. A root at another index is listed in `mined.moved` with both positions: two indexes disagreeing on a block's order may be the L1 index's fault (`tx_root` doesn't bind the order), so check it with `index-l1-verify` and compare with the publisher's own L1 index. It fails all the same |
-| `onchain`     | a sampled item's header, read at its recorded location, is not that item; a sampled root is `missing`; more than `--max-unreadable-share` of the items tried are unreadable; too few could be verified; the band's deadline passed; or the band has items but none located, so nothing of it can be read on chain (`--allow-unlocated` passes such a band). `--onchain <n>` items per band, default 20; `0` leaves it out. Items directly in their roots and items in nested bundles are sampled apart, half each, so rare nested items are always read. `--seed` repeats a run exactly (the sample, and the order it is read in, both seeded per band by its id); the result reports the seed it drew |
+| `onchain`     | a drawn item is `wrong`, or more than `--max-unchecked` (0) drawn items are `unchecked` (the band is then inconclusive), or the band has items but none located, so nothing of it can be read on chain (`--allow-unlocated` passes such a band). See [one denominator, no substitution](#index-l2-verify-one-denominator-no-substitution). `--onchain <n>` items per band, default 20; `0` leaves it out. `--seed` repeats a run's draw exactly; the result reports the seed it drew |
 | `complete`    | a band could not be read to the end of its checks: a file vanished mid-run, an I/O or DuckDB error. That band fails and the run goes on to the next; the full result is always written                                                                                                                                                                                             |
 
 **Bound to a publisher: `--publication`.** Without it, `publisherBound` is
@@ -257,8 +288,7 @@ or diff the two bands' rows, not just their ids.
 | `publication` failure                                            | the bytes are not the ones the publisher signed: remove an installed copy and let the sidecar fetch it again; for a published band, republish |
 | `mined` failure                                                  | the L2 band and the L1 index disagree on where a root is. For `moved` roots (same block, another position), the L1 index may be the one wrong: two publishers' L1 indexes have been seen to order a few blocks differently, which `tx_root` doesn't catch. Check the L1 index (`index-l1-verify`) and compare `mined.moved` with the publisher's own L1 index; if yours holds, the L2 band's positions are wrong, so report it upstream |
 | `locations`, `parents` or `onchain` `wrong` or `missing`         | the builder placed items wrongly, or its source holds a wrong row: report it upstream with the band id and the failures; the publisher repairs the source, then rebuilds and re-settles the band |
-| many `unreadable`                                                | not a fault of the index: every node said 404, so the data is gone network-wide. Seeding the missing chunks again (where the data still exists) makes them readable |
-| many `errors`                                                    | rerun (nodes were busy); if a chunk keeps failing its proof, the nodes serving it are at fault, not the index                                       |
+| an inconclusive band (`onchain.inconclusiveBands`)               | rerun first: most `unchecked` items are busy nodes. If `uncheckedReasons` shows `unreadable` (chunks no node holds), the data is gone network-wide or unseeded, which the index can't prove either way; seeding it again makes it readable. Allowing some with `--max-unchecked` weakens what a pass means: those items are not checked at all |
 | `lookups`                                                        | the lookups are derived: rebuilding the band rewrites them                                                                                             |
 
 For `root-tx-index` bands, `index-export --once --resettle[=full]` re-checks and

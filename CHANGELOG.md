@@ -97,7 +97,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     sign, and bands whose sampled roots were mostly made up. Roots must now
     be format 2 and placed in one block by two machines (or found in an L1
     index, `--l1-bands-dir`); a root no node has fails the band; more than
-    20% unreadable fails it (`--max-unreadable-share`); a band with nothing
+    a band with nothing
     located fails unless `--allow-unlocated`; agreement in place of a
     signature needs `--allow-agreement`; chunk proofs are checked under the
     rules of the root's block, never laxer than strict borders.
@@ -112,6 +112,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     `data/tmp/index-verify`, not the container layer on `/`; the spill is
     capped at 80% of the free space, a run that could not fit is refused
     before it starts, and an interrupted run removes its spill.
+  - The on-chain check draws its sample up front and never replaces an
+    item: each ends `ok`, `wrong` or `unchecked`; any wrong fails the band,
+    any unchecked (after a second try) leaves it inconclusive unless
+    `--max-unchecked` allows it. The pass ratio, floor and
+    `--max-unreadable-share` are gone: tolerances stacked let fabricated
+    items through. `assurance` says what a pass of N items means.
   - A sampled root the chain refutes (no `data_root`, format 1, a signature
     that doesn't verify, not mined, in a block at another height than its
     items) counted only as an error, tolerated up to 20%; it now fails the

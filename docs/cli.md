@@ -855,7 +855,7 @@ proves, and how to reproduce or repair a band that fails, is in
 | `--allow-unlocated` | Pass a band whose items all have no locations, as its `band.json` declares, so nothing of it can be read on chain (default: it fails `located` and `onchain`) |
 | `--max-unlocated-share <fraction>` | The largest share of a band's items that may be unlocated (default `0.001`); its unlocated items must also be exactly what its `band.json` declares |
 | `--allow-expired` | Bind to a `--publication` past its `expiresAt` (default: refused) |
-| `--max-unreadable-share <fraction>` | The largest share of the items tried in a band that may sit in chunks no node holds (default `0.2`) |
+| `--max-unchecked <n>` | Drawn items per band that may stay unchecked (nodes busy, chunks unseeded, a root no node places) and the band still pass (default 0); past it, with none wrong, the band is inconclusive. No drawn item is ever replaced by another draw |
 | `--band-deadline <seconds>` | How long one band's on-chain reads may take (default 1200); reads still pending then are errors |
 | `--gateway-url <url>` | Read through this gateway instead: faster, but trusted, and nobody then says the roots are mined. Exclusive with `--arweave-nodes` |
 | `--read-timeout <ms>` | How long each node, gateway or publication request may take (default 30000) |
@@ -890,7 +890,8 @@ beating.
   "assurance": [
     "bound to publication https://turbo-gateway.com/ar-io/indexes/publication.json (sequence 157), signed by <observer address>",
     "roots found in the L1 index at data/indexes/installed/parquet-l1, which index-l1-verify must have checked for this to trust nothing",
-    "sampled roots placed in a block at their items' height by two or more machines (by address); their position in the block is not checked"
+    "sampled roots placed in a block at their items' height by two or more machines (by address); their position in the block is not checked",
+    "on chain, 20 located items drawn per band, none replaced: a band in which 14% or more of the located items are fabricated would have been caught with 95% probability; smaller fractions may not be (unlocated items are not checked on chain at all)"
   ],
   "checks": [
     { "name": "identity", "ok": true, "detail": "each band's id names its heights, its publisher's tag and the digest of its heights, selection and rows: internal consistency, not a signature" },
@@ -904,9 +905,9 @@ beating.
   "partial": [],
   "vanished": [],
   "onchain": {
-    "perBand": 20, "checked": 460, "ok": 460, "wrong": 0, "missing": 0, "unreadable": 12, "errors": 0,
-    "failedBands": [], "unlocatedBands": [], "seed": 408427327,
-    "bands": [{ "id": "l2-h0-99999-3078e8b8-2af284ed33de", "located": 1200, "locatedShare": 0.98, "checked": 20, "ok": 20, "wrong": 0, "missing": 0, "unreadable": 1, "unreadableShare": 0.05, "errors": 0, "errorSample": [], "passed": true, "reasons": [] }],
+    "perBand": 20, "drawn": 460, "ok": 460, "wrong": 0, "missing": 0, "unchecked": 0,
+    "failedBands": [], "inconclusiveBands": [], "unlocatedBands": [], "seed": 408427327,
+    "bands": [{ "id": "l2-h0-99999-3078e8b8-2af284ed33de", "located": 1200, "locatedShare": 0.98, "drawn": 20, "ok": 20, "wrong": 0, "missing": 0, "unchecked": 0, "uncheckedReasons": {}, "errorSample": [], "inconclusive": false, "passed": true, "reasons": [] }],
     "roots": { "from": "arweave-nodes", "proven": true, "allowAgreement": false, "roots": 420, "bySignature": 420, "byAgreement": 0, "minedByNodes": 420, "minedVia": "node-status", "checks": { "height": true, "position": false }, "chunksProven": 461, "reachableNodes": 21 }
   },
   "spill": { "capBytes": 128000000000, "freeBytes": 900000000000 },
@@ -923,7 +924,11 @@ listed per check, the rest counted in `more`. `ok` is true when every check
 that ran passed; `skipped` names those that did not run (`lookups`,
 `onchain`, `publication`, `mined`), so a script must read both:
 `ok: true` with `publisherBound: false` says the bands agree with themselves,
-not who published them. `onchain.bands` gives each band's located share and
+not who published them. When an L1 index covers only some bands, `skipped` still
+lists `mined` and `minedPartial` names the bands it left out
+(`{ "bands": [...], "count": n }`, at most 50 listed). A band with none wrong
+but more unchecked items than `--max-unchecked` is listed in
+`onchain.inconclusiveBands` and fails `onchain` with its own reason. `onchain.bands` gives each band's located share and
 unreadable share.
 
 ## For scripts and agents
