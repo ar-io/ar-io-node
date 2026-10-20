@@ -183,11 +183,15 @@ async function writeBand(
   }
   const band: ParquetL2Band = {
     version: 1,
-    schema: 'l2-1',
+    schema: 'l2-2',
     heightRange: [from, to],
     selection: SELECTION,
+    keyTags: ['App-Name'],
+    statTags: ['App-Name'],
     tables,
-    lookups: await writeBandLookups(db, staging),
+    lookups: await writeBandLookups(db, staging, {
+      layout: { schema: 'l2-2', keyTags: ['App-Name'], statTags: ['App-Name'] },
+    }),
     createdAt: '2026-10-20T00:00:00.000Z',
   };
   const id = l2BandId(band, bandPublisherTag(tamper.publisher ?? PUBLISHER));
@@ -312,6 +316,46 @@ describe('verifyL2Bands', () => {
       path.join(band, 'lookup_id.parquet'),
     );
     assert.deepEqual(failing(await verifyL2Bands(db, dir)), ['lookups']);
+  });
+
+  it('fails lookups when the key lookup was derived for other tag names than the band says', async () => {
+    const dir = await fresh();
+    const { dir: band } = await writeBand(db, dir, 100, 199);
+    // Derived for no key tags: no rows, where App-Name's heights belong.
+    await db.exec(
+      `COPY (SELECT * FROM read_parquet('${path.join(band, 'lookup_key.parquet')}') LIMIT 0) TO '${path.join(band, 'lookup_key.parquet')}.tmp' (FORMAT PARQUET)`,
+    );
+    await fs.rename(
+      path.join(band, 'lookup_key.parquet.tmp'),
+      path.join(band, 'lookup_key.parquet'),
+    );
+    const result = await verifyL2Bands(db, dir);
+    assert.deepEqual(failing(result), ['lookups']);
+    assert.match(
+      result.checks.find((c) => c.name === 'lookups')!.failures[0].found,
+      /lookup_key\.parquet: holds 0 rows/,
+    );
+  });
+
+  it('passes an l2-1 band beside an l2-2 one: each checked by its own layout', async () => {
+    const dir = await fresh();
+    await writeBand(db, dir, 100, 199);
+    const { dir: older, band } = await writeBand(db, dir, 200, 299);
+    const { keyTags: _k, statTags: _s, ...rest } = band;
+    const { key: _key, stats: _stats, ...lookups } = band.lookups;
+    await fs.rm(path.join(older, 'lookup_key.parquet'));
+    await fs.rm(path.join(older, 'stats.parquet'));
+    await fs.writeFile(
+      path.join(older, BAND_FILE),
+      serializeBandFile({ ...rest, schema: 'l2-1', lookups }),
+    );
+    const result = await verifyL2Bands(db, dir);
+    assert.deepEqual(
+      failing(result),
+      [],
+      JSON.stringify(result.checks.filter((c) => !c.ok)),
+    );
+    assert.equal(result.bands, 2);
   });
 
   it('refuses a set whose bands overlap or leave a hole', async () => {

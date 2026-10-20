@@ -16,7 +16,9 @@
  * index holds it more than once there, the copies are compared by where
  * they place it: one place, and its children are placed under it; two, and
  * its children are left unlocated (`parent_two_places`), since which one
- * holds them is unknown.
+ * holds them is unknown. None (every copy of the parent's row is
+ * inconsistent), and its children are left unlocated too (`no_parent`): a
+ * band never locates an item under a parent `parents` does not describe.
  */
 import {
   AmbiguousCandidate,
@@ -330,17 +332,38 @@ export async function assembleWindow(
     };
     items.push(item);
 
+    // A nested item can be placed from its own row (an absolute offset)
+    // while its parent bundle cannot be placed at all: every copy of the
+    // parent's row is inconsistent (offsets taken from another copy of the
+    // bundle, the #937 class). The band would then locate the item under a
+    // parent `parents` does not describe, which a reader cannot check. It
+    // is left unlocated as `no_parent` until the parent's row is repaired;
+    // a resettle then locates it.
+    const unplaced =
+      nested && (parent === undefined || parent.places.length === 0);
     const settle = (
       settled: Exclude<ItemPlacement, { located: 'ambiguous' }>,
     ) => {
-      if (settled.located) {
-        item.location = settled.location;
-        item.placement = settled.placement;
-      } else {
+      if (!settled.located) {
         item.unlocated = settled.reason;
+        return;
       }
+      if (unplaced) {
+        item.unlocated = 'no_parent';
+        return;
+      }
+      item.location = settled.location;
+      item.placement = settled.placement;
     };
-    if (placement.located === 'ambiguous') {
+    if (placement.located === 'ambiguous' && unplaced) {
+      // Nothing a header read could settle: under no parent, no reading
+      // locates the item, so its root is not read for it.
+      settle({
+        located: false,
+        reason: 'no_parent',
+        normalised: placement.normalised,
+      });
+    } else if (placement.located === 'ambiguous') {
       const ambiguous = placement;
       pending.push(
         (async () => {

@@ -54,8 +54,12 @@ import {
 } from '../../../src/lib/onchain/arweave-nodes.js';
 import { onChainRootSource } from '../../../src/lib/onchain/root-source.js';
 import { RowDigest } from '../../../src/lib/parquet/digest.js';
+import { digestLookup } from '../../../src/lib/parquet/lookups.js';
 import {
   BAND_FILE,
+  canonicalTagNames,
+  lookupsOf,
+  parseBandFile,
   DATA_ITEM_LOCATION_COLUMNS,
   l2BandId,
   orderByClause,
@@ -324,6 +328,8 @@ interface BandSpec {
    * `honest` source.
    */
   real?: { direct: number; nested: number };
+  /** `l2-2` with its key and stat tag names; `l2-1` when not given. */
+  layout?: { schema: 'l2-2'; keyTags?: string[]; statTags?: string[] };
   /** `wallet`: tagged for the case's registered publisher wallet. */
   publisher?: 'default' | 'wallet';
   rows?: RowOp[];
@@ -472,16 +478,26 @@ async function writeBand(
     for (const row of read) digest.add(table.columns.map((c) => row[c.name]));
     tables[table.name] = { rows: digest.rows, rowDigest: digest.hex() };
   }
+  // l2-1 unless the case names l2-2, whose key lookup and stats are
+  // derived for the tag names the case gives.
+  const layout =
+    spec.layout?.schema === 'l2-2'
+      ? {
+          schema: 'l2-2' as const,
+          keyTags: canonicalTagNames(spec.layout.keyTags ?? []),
+          statTags: canonicalTagNames(spec.layout.statTags ?? []),
+        }
+      : { schema: 'l2-1' as const };
   const band: ParquetL2Band = {
     version: 1,
-    schema: 'l2-1',
+    ...layout,
     heightRange: [spec.from, spec.to],
     selection: {
       kind: 'ans104-data-items',
       tag: { name: 'App-Name', valuePrefix: 'ArDrive' },
     },
     tables,
-    lookups: await writeBandLookups(duck, staging),
+    lookups: await writeBandLookups(duck, staging, { layout }),
     createdAt: '2026-10-20T00:00:00.000Z',
   };
   const id = l2BandId(
@@ -519,7 +535,17 @@ type FileOp =
   | { op: 'symlinkElsewhere'; band: number }
   | { op: 'removeDir'; band: number }
   | { op: 'rebuild'; band: number; spec: BandSpec }
-  | { op: 'editBandJson'; band: number; checks: Record<string, unknown> };
+  | { op: 'editBandJson'; band: number; checks: Record<string, unknown> }
+  | { op: 'emptyFile'; band: number; file: string }
+  | {
+      op: 'editParquet';
+      band: number;
+      file: string;
+      row: number;
+      column: string;
+      value: CaseValue;
+    }
+  | { op: 'redescribeLookup'; band: number; lookup: string };
 
 /** What a case's directory and run are made of, built. */
 interface BuiltBands {
@@ -711,6 +737,52 @@ export async function buildBandsCase(
       case 'rebuild': {
         await fs.rm(band.dir, { recursive: true });
         bands[op.band] = await writeBand(duck, dir, op.spec, wallet);
+        break;
+      }
+      case 'emptyFile': {
+        // The same columns and types, no rows.
+        const p = path.join(band.dir, op.file);
+        await duck.exec(
+          `COPY (SELECT * FROM read_parquet('${p}') LIMIT 0) TO '${p}.x' (FORMAT PARQUET)`,
+        );
+        await fs.rename(`${p}.x`, p);
+        break;
+      }
+      case 'editParquet': {
+        // One cell changed, the row (by its position in the file) and
+        // every other value as they were, rows in their order.
+        const p = path.join(band.dir, op.file);
+        const v = value(op.value);
+        const literalOf = Buffer.isBuffer(v)
+          ? `from_hex('${v.toString('hex')}')`
+          : v === null
+            ? 'NULL'
+            : String(v);
+        const types = (await duck.all(
+          `DESCRIBE SELECT * FROM read_parquet('${p}')`,
+        )) as Array<{ column_name: string; column_type: string }>;
+        const type = types.find(
+          (t) => t.column_name === op.column,
+        )!.column_type;
+        await duck.exec(
+          `COPY (SELECT * EXCLUDE (file_row_number) REPLACE (CASE WHEN file_row_number = ${op.row} THEN CAST(${literalOf} AS ${type}) ELSE "${op.column}" END AS "${op.column}")
+                 FROM read_parquet('${p}', file_row_number = true) ORDER BY file_row_number) TO '${p}.x' (FORMAT PARQUET)`,
+        );
+        await fs.rename(`${p}.x`, p);
+        break;
+      }
+      case 'redescribeLookup': {
+        // A lying publisher: band.json made to describe the file as it is.
+        const file = path.join(band.dir, BAND_FILE);
+        const parsed = parseBandFile(await fs.readFile(file, 'utf8'));
+        const spec = lookupsOf(parsed).find((l) => l.name === op.lookup)!;
+        parsed.lookups[op.lookup] = await digestLookup(
+          duck,
+          spec,
+          path.join(band.dir, spec.file),
+          { order: 'numeric' },
+        );
+        await fs.writeFile(file, serializeBandFile(parsed));
         break;
       }
       case 'editBandJson': {

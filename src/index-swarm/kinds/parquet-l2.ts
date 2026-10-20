@@ -43,7 +43,7 @@ import {
   bandTablesDigest,
   idHeightRange,
   MAX_BAND_FILE_BYTES,
-  PARQUET_L2_LOOKUPS,
+  lookupsOf,
   PARQUET_L2_SCHEMAS,
   PARQUET_L2_TABLES,
   parseBandFile,
@@ -258,8 +258,9 @@ export class ParquetL2Kind implements ArtifactKind {
         });
       }
       // Lookups get the same footer check: their columns as the layout
-      // declares them, and the rows their band says.
-      for (const spec of PARQUET_L2_LOOKUPS) {
+      // declares them (the key and stats files' by the band's tag names),
+      // and the rows their band says.
+      for (const spec of lookupsOf(declared)) {
         await checkParquetFile(db, path.join(dir, spec.file), {
           columns: spec.columns,
           rows: declared.lookups[spec.name].rows,

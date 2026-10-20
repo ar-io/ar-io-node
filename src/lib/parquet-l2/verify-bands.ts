@@ -96,7 +96,7 @@ import {
   bandTablesDigest,
   idHeightRange,
   L2_BAND_ID_PATTERN,
-  PARQUET_L2_LOOKUPS,
+  lookupsOf,
   PARQUET_L2_TABLES,
   type ParquetL2Band,
   parseBandFile,
@@ -1085,7 +1085,7 @@ export async function verifyL2Bands(
     // schema: before any row is read by name
     let schemaOk = true;
     // Row counts are the tables' and lookups' checks, which read the rows.
-    for (const spec of [...PARQUET_L2_TABLES, ...PARQUET_L2_LOOKUPS]) {
+    for (const spec of [...PARQUET_L2_TABLES, ...lookupsOf(band)]) {
       try {
         await checkParquetFile(duck, path.join(dir, spec.file), {
           columns: spec.columns,
