@@ -53,6 +53,7 @@ import type { Database } from 'duckdb-async';
 import { BandSampleEntry, Reservoir } from '../../../lib/index-band/build.js';
 import { HEADER_CHECK_POOL_FACTOR } from '../../../lib/index-band/verify.js';
 import { toB64Url } from '../../../lib/encoding.js';
+import { checkParquetDir } from '../../../lib/parquet/check.js';
 import { RowDigest } from '../../../lib/parquet/digest.js';
 import type { TableSpec } from '../../../lib/parquet-l1/layout.js';
 import {
@@ -1011,6 +1012,8 @@ async function build(
       },
       createdAt,
     };
+    // Refuse to publish a band whose files every subscriber would refuse.
+    await checkParquetDir(bandDir);
     await fs.writeFile(path.join(bandDir, BAND_FILE), serializeBandFile(band));
     const sampled = [
       ...new Map(

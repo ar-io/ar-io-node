@@ -40,6 +40,7 @@ import {
   checkBlockChain,
   checkTxRoot,
 } from '../../../lib/parquet-l1/chain.js';
+import { checkParquetDir } from '../../../lib/parquet/check.js';
 import { RowDigest } from '../../../lib/parquet/digest.js';
 import { LookupDescription } from '../../../lib/parquet/lookups.js';
 import { writeBandLookups } from '../../../lib/parquet-l1/lookups.js';
@@ -577,6 +578,8 @@ export async function exportL1Band({
       lookups,
       createdAt: bandTime(topTimestamp),
     };
+    // Refuse to publish a band whose files every subscriber would refuse.
+    await checkParquetDir(bandDir);
     await fs.writeFile(path.join(bandDir, BAND_FILE), serializeBandFile(band));
     await writePublisherFacts(bandDir, {
       ...(supersedes.length > 0 ? { supersedes } : {}),

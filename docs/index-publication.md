@@ -529,8 +529,12 @@ time as `createdAt`; readers accept both, and a publisher settles its own in
 place.
 
 A reader checks each file against the signed digests, then its footer and
-schema against the layout and the row counts in `band.json`. The file set it
-expects is the one the layout declares. A reader that does not know a layout
+schema against the layout and the row counts in `band.json`. It refuses a
+footer longer than 8 MiB before parsing it, since decoding a footer takes
+about 20 times its size in memory; at DuckDB's default row-group size, that
+limit allows about 1.8 billion rows per file. A publisher runs the same check
+before it writes `band.json`, so it never publishes a band its readers would
+refuse. The file set it expects is the one the layout declares. A reader that does not know a layout
 refuses the band and names the layout.
 
 ## Lookup files
