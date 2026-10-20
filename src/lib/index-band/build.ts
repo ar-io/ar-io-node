@@ -109,6 +109,11 @@ export interface BandSampleEntry {
   rootDataOffset: number;
   /** The entry's sample tag; absent for the general sample. */
   tag?: string;
+  /**
+   * The height its band says its root is at, when the band says: a root
+   * source that finds roots in blocks checks it.
+   */
+  height?: number;
 }
 
 /** A band built and read back, not yet published. */

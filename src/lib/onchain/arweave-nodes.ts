@@ -118,6 +118,23 @@ export class NodesRefusedError extends Error {
   }
 }
 
+/**
+ * Fewer machines than needed place a transaction in a block. With nodes
+ * that said it is in none (`notFound`), that refutes it; with only busy
+ * ones, it is a failure to check.
+ */
+export class TooFewMinedError extends NodesRefusedError {
+  constructor(
+    message: string,
+    notFound: number,
+    busy: number,
+    refused: number,
+    readonly agreeing: number,
+  ) {
+    super(message, notFound, busy, refused);
+  }
+}
+
 /** No node could be reached at all: the network, not the data. */
 export class NodesUnreachableError extends Error {}
 
@@ -210,14 +227,14 @@ export class ArweaveNodePool {
 
   /**
    * Resolves the pool once, each name with a timeout, dropping nodes that
-   * share an address. Without dedupe (tests), a node's host and port is its
-   * address.
+   * share an address. A machine is its address alone: two ports of one
+   * address are one machine, never two that agree. Without dedupe (tests),
+   * a node's host name is its address.
    */
   private async prepare(): Promise<void> {
     const hostKey = (url: string) => {
       try {
-        const u = new URL(url);
-        return `${u.hostname}:${u.port}`;
+        return new URL(url).hostname;
       } catch {
         return url;
       }
@@ -245,7 +262,7 @@ export class ArweaveNodePool {
               );
             }),
           ]);
-          key = `${address}:${u.port}`;
+          key = address;
         } catch {
           // Unresolvable now: keep it, it simply won't answer.
         } finally {
@@ -272,7 +289,11 @@ export class ArweaveNodePool {
    * rest after a timeout, as busy), unless every node rests, when all are
    * asked.
    */
-  private order(prefer?: string): { nodes: string[]; resting: number } {
+  private order(prefer?: string): {
+    nodes: string[];
+    resting: number;
+    restingBusy: string[];
+  } {
     const start = this.turn % this.urls.length;
     this.turn += 1;
     const rotated = [...this.urls.slice(start), ...this.urls.slice(0, start)];
@@ -283,12 +304,13 @@ export class ArweaveNodePool {
     const now = this.now();
     const asleep = (u: string) => (this.resting.get(u)?.until ?? 0) > now;
     const awake = ordered.filter((u) => !asleep(u));
-    if (awake.length === 0) return { nodes: ordered, resting: 0 };
-    return {
-      nodes: awake,
-      resting: ordered.filter((u) => asleep(u) && this.resting.get(u)!.busy)
-        .length,
-    };
+    if (awake.length === 0) {
+      return { nodes: ordered, resting: 0, restingBusy: [] };
+    }
+    const restingBusy = ordered.filter(
+      (u) => asleep(u) && this.resting.get(u)!.busy,
+    );
+    return { nodes: awake, resting: restingBusy.length, restingBusy };
   }
 
   /** Rests a node that timed out (busy) or could not be reached. */
@@ -305,6 +327,12 @@ export class ArweaveNodePool {
    * served this root usually holds the next chunk) until one returns 200
    * with a body `parse` accepts. Any other answer moves on to the next node.
    *
+   * With `settle` (for a transaction itself, not a chunk), when nothing
+   * usable came back and some nodes said 404 while others were busy or
+   * resting after a timeout, the busy ones are asked once more, rest or
+   * not; any still busy are then left out, so the 404s stand. A slow node
+   * can then never turn a root no node has into a tolerated error.
+   *
    * @throws NotOnNodesError when every node that answered said 404.
    * @throws NodesRefusedError when some answered otherwise (busy, failing,
    *   or with an answer `parse` refused).
@@ -315,16 +343,19 @@ export class ArweaveNodePool {
     parse: (body: unknown, node: string) => T | Promise<T>,
     headers?: Record<string, string>,
     prefer?: string,
+    settle = false,
   ): Promise<T> {
     await this.prepare();
-    const { nodes: order, resting } = this.order(prefer);
+    const { nodes: order, restingBusy } = this.order(prefer);
     let notFound = 0;
-    // A resting node may well hold it: it counts as busy, so its silence is
-    // never read as the data missing.
-    let busy = resting;
     let refused = 0;
-    let lastProblem = resting > 0 ? `${resting} nodes resting` : '';
-    for (const node of order) {
+    // A resting node may well hold it: it counts as busy, so its silence is
+    // never read as the data missing (unless `settle` asks it again).
+    const busyNodes: string[] = [...restingBusy];
+    let lastProblem =
+      restingBusy.length > 0 ? `${restingBusy.length} nodes resting` : '';
+    const found: { value?: T; done: boolean } = { done: false };
+    const tryNode = async (node: string) => {
       let response;
       try {
         response = await this.fetchFn(`${node}${path}`, {
@@ -335,26 +366,45 @@ export class ArweaveNodePool {
         // A node that ran out of time may well hold it: slow, not absent.
         // Only a node that could not be reached at all says nothing.
         const name = (error as { name?: unknown }).name;
-        if (name === 'TimeoutError' || name === 'AbortError') busy += 1;
+        if (name === 'TimeoutError' || name === 'AbortError') {
+          busyNodes.push(node);
+        }
         lastProblem = `${node}: ${(error as Error).message}`;
         this.rest(node, error);
-        continue;
+        return;
       }
       this.reachable.add(node);
       if (!response.ok) {
         if (response.status === 404) notFound += 1;
-        else busy += 1;
+        else busyNodes.push(node);
         lastProblem = `${node}: HTTP ${response.status}`;
-        continue;
+        return;
       }
       try {
-        return await parse(await response.json(), node);
+        found.value = await parse(await response.json(), node);
+        found.done = true;
       } catch (error) {
         if (error instanceof NodeLacksError) notFound += 1;
         else refused += 1;
         lastProblem = `${node}: ${(error as Error).message}`;
       }
+    };
+    for (const node of order) {
+      await tryNode(node);
+      if (found.done) return found.value as T;
     }
+    let leftOut = 0;
+    if (settle && notFound > 0 && refused === 0 && busyNodes.length > 0) {
+      const again = [...new Set(busyNodes)];
+      busyNodes.length = 0;
+      for (const node of again) {
+        await tryNode(node);
+        if (found.done) return found.value as T;
+      }
+      leftOut = busyNodes.length;
+      busyNodes.length = 0;
+    }
+    const busy = busyNodes.length;
     const answered = notFound + busy + refused;
     if (answered === 0) {
       throw new NodesUnreachableError(
@@ -363,7 +413,7 @@ export class ArweaveNodePool {
     }
     if (notFound === answered) {
       throw new NotOnNodesError(
-        `none of ${answered} nodes had ${path} (last: ${lastProblem})`,
+        `none of ${answered} nodes had ${path}${leftOut > 0 ? ` (${leftOut} more busy twice, left out)` : ''} (last: ${lastProblem})`,
         answered,
         !path.startsWith('/chunk/'),
       );
@@ -513,19 +563,22 @@ export class ArweaveNodePool {
         refused,
       );
     }
-    if (agreeing.size === 0 && notFound > 0 && busy === 0 && refused === 0) {
+    // A node that is only busy is left out: every node that answered
+    // saying the transaction is in no block makes it absent.
+    if (agreeing.size === 0 && notFound > 0 && refused === 0) {
       throw new NotOnNodesError(
-        `none of ${notFound} nodes has ${txId} in a block`,
+        `none of ${notFound} nodes has ${txId} in a block${busy > 0 ? ` (${busy} busy, left out)` : ''}`,
         notFound,
         true,
       );
     }
     if (agreeing.size < min) {
-      throw new NodesRefusedError(
+      throw new TooFewMinedError(
         `${agreeing.size} machines place ${txId} in a block, fewer than ${min} (${notFound} said it is in none, ${busy} busy or failing, ${refused} refused)`,
         notFound,
         busy,
         refused,
+        agreeing.size,
       );
     }
     return {
@@ -537,20 +590,26 @@ export class ArweaveNodePool {
   }
 
   txOffset(txId: string): Promise<TxOffset> {
-    return this.ask(`/tx/${txId}/offset`, (body) => {
-      const { offset, size } = (body ?? {}) as {
-        offset?: unknown;
-        size?: unknown;
-      };
-      if (typeof offset !== 'string' && typeof offset !== 'number') {
-        throw new Error('no offset in the answer');
-      }
-      const parsedSize = Number(size);
-      if (!Number.isSafeInteger(parsedSize) || parsedSize <= 0) {
-        throw new Error('no size in the answer');
-      }
-      return { offset: BigInt(offset), size: parsedSize };
-    });
+    return this.ask(
+      `/tx/${txId}/offset`,
+      (body) => {
+        const { offset, size } = (body ?? {}) as {
+          offset?: unknown;
+          size?: unknown;
+        };
+        if (typeof offset !== 'string' && typeof offset !== 'number') {
+          throw new Error('no offset in the answer');
+        }
+        const parsedSize = Number(size);
+        if (!Number.isSafeInteger(parsedSize) || parsedSize <= 0) {
+          throw new Error('no size in the answer');
+        }
+        return { offset: BigInt(offset), size: parsedSize };
+      },
+      undefined,
+      undefined,
+      true,
+    );
   }
 
   /**

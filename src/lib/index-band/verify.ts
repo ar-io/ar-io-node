@@ -22,8 +22,23 @@ import { MAX_HEADER_BYTES, Reservoir } from './build.js';
 import type { BandSampleEntry } from './build.js';
 import { bandEntries, readBandManifest } from './read.js';
 
-/** Opens the data of a root transaction for range reads. */
-export type RootSourceFactory = (rootTxId: string) => ByteRangeSource;
+/**
+ * What a band says of a root, for a source that can check it: the height of
+ * the block holding it.
+ */
+export interface RootExpectation {
+  height?: number;
+}
+
+/**
+ * Opens the data of a root transaction for range reads. A source that can
+ * check `expect` refuses the root (an error with `refutes: true`) when the
+ * chain disagrees with it.
+ */
+export type RootSourceFactory = (
+  rootTxId: string,
+  expect?: RootExpectation,
+) => ByteRangeSource;
 
 /**
  * Candidates a caller samples for each entry the check is to read, so that
@@ -104,7 +119,10 @@ export interface HeaderCheckResult {
   /** Entries read: passed, wrong, or failed in transport. */
   checked: number;
   ok: number;
-  /** Entries whose header names another ID or ends somewhere else. */
+  /**
+   * Entries whose header names another ID or ends somewhere else, or whose
+   * root the source refutes (an error with `refutes: true`).
+   */
   wrong: Array<{ id: string; reason: string; tag?: string }>;
   /** Entries that couldn't be checked (read failed, unknown signature type). */
   errors: Array<{ id: string; error: string; tag?: string }>;
@@ -294,7 +312,10 @@ export async function checkBandHeaders({
     if (gone.has(entry.rootTxId)) {
       return missingRootIsWrong ? missingRoot() : goneRoot();
     }
-    const source = openRoot(entry.rootTxId);
+    const source = openRoot(
+      entry.rootTxId,
+      entry.height !== undefined ? { height: entry.height } : undefined,
+    );
     let bytes: Buffer;
     try {
       const reading = readWithRetries(
@@ -336,6 +357,18 @@ export async function checkBandHeaders({
           ...tagOf(entry),
           id: entry.id,
           reason: 'offsets run past the end of the root transaction',
+        });
+        return true;
+      }
+      // A root the chain refutes (no data it signs, never mined, in another
+      // block than the band says) is as wrong as a header that isn't the
+      // item: definitive, never retried, never tolerated.
+      if (isRefuted(error)) {
+        stratum(entry).wrong += 1;
+        wrong.push({
+          ...tagOf(entry),
+          id: entry.id,
+          reason: `its root ${entry.rootTxId} is refuted: ${error instanceof Error ? error.message : String(error)}`,
         });
         return true;
       }
@@ -534,6 +567,10 @@ const isWrongRange = (error: unknown) =>
   error instanceof ShortRangeReadError ||
   (error as { response?: { status?: number } }).response?.status === 416;
 
+/** A root the chain refutes: counted wrong. */
+const isRefuted = (error: unknown) =>
+  (error as { refutes?: unknown } | undefined)?.refutes === true;
+
 /** A root the gateway doesn't have: not to be retried, nor counted against. */
 const isGone = (error: unknown) =>
   (error as { response?: { status?: number } }).response?.status === 404;
@@ -551,7 +588,12 @@ async function readWithRetries(
     try {
       return await read();
     } catch (error) {
-      if (attempt >= retries || isWrongRange(error) || isGone(error)) {
+      if (
+        attempt >= retries ||
+        isWrongRange(error) ||
+        isGone(error) ||
+        isRefuted(error)
+      ) {
         throw error;
       }
       await new Promise((resolve) =>

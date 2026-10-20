@@ -231,19 +231,42 @@ describe('onChainRootSource', () => {
     );
   });
 
-  it('never reads a node that ran out of time as a node that lacks the data', async () => {
-    // The only node holding the root times out; the others say 404. That is
-    // an error, retried, never a root marked missing.
+  it('asks a node that ran out of time once more before the 404s stand for a root', async () => {
+    // A node times out; the others say 404. It is asked again; still busy,
+    // it is left out, and the root is missing: a slow node never turns a
+    // root no node has into a tolerated error (review P4).
+    const asked: string[] = [];
     const src = onChainRootSource({
-      pool: pool(nodes(f, { 'a:1984': 'slow', 'b:1984': 'empty' }), [
-        'a:1984',
-        'b:1984',
-      ]),
+      pool: pool(
+        nodes(f, { 'a:1984': 'slow', 'b:1984': 'empty' }, undefined, asked),
+        ['a:1984', 'b:1984'],
+      ),
     });
     await assert.rejects(
       src.bind(f.id),
-      (e: unknown) =>
-        e instanceof NodesRefusedError && e.busy === 1 && e.notFound === 1,
+      (e: unknown) => e instanceof NotOnNodesError && e.wholeRoot,
+    );
+    assert.equal(asked.filter((a) => a === `a:1984/tx/${f.id}`).length, 2);
+    // For a chunk, a busy node is still an error, never a missing chunk.
+    const chunks = onChainRootSource({
+      requireMined: false,
+      pool: pool(
+        (url, init) =>
+          new URL(url).pathname.startsWith('/chunk/')
+            ? url.includes('a:1984')
+              ? Promise.reject(new DOMException('timed out', 'TimeoutError'))
+              : Promise.resolve({
+                  status: 404,
+                  ok: false,
+                  json: async () => ({}),
+                })
+            : nodes(f, {})(url, init),
+        ['a:1984', 'b:1984'],
+      ),
+    });
+    await assert.rejects(
+      chunks.openRoot(f.id).read(0, 10),
+      (e: unknown) => e instanceof NodesRefusedError && e.busy === 1,
     );
   });
 
@@ -390,7 +413,11 @@ describe('onChainRootSource', () => {
     const one = onChainRootSource({
       pool: pool(statusFrom({ 'a:1984': block('X') }), names),
     });
-    await assert.rejects(one.bind(f.id), NodesRefusedError);
+    // ... and the others say it is in none: refuted, not merely unchecked.
+    await assert.rejects(
+      one.bind(f.id),
+      (e: unknown) => e instanceof RootUnboundError && e.refutes,
+    );
     // Two blocks named: a fork, or a liar.
     const forked = onChainRootSource({
       pool: pool(
@@ -866,5 +893,266 @@ describe('ArweaveNodePool', () => {
     asked.length = 0;
     await assert.rejects(pool.txHeader('x'), /no Arweave node answered/);
     assert.equal(asked.length, 3);
+  });
+});
+
+/**
+ * The second review's reproductions: a band passed with some of its sampled
+ * roots refuted outright (a data-less root, an unmined one), or made up
+ * while a node timed out, because those reads landed among tolerated
+ * errors. A refuted root fails the band, as a wrong header does.
+ */
+describe('the on-chain check counts a refuted root against its band', () => {
+  const START = 40_000_000_000_000n;
+  const HEIGHT = 1000;
+  type Served = {
+    header: Record<string, unknown>;
+    data?: Buffer;
+    chunks?: Fixture['chunks'];
+  };
+  const json = (status: number, body: unknown) =>
+    Promise.resolve({ status, ok: status === 200, json: async () => body });
+  /** Each host serves the transactions listed for it; anything else 404. */
+  const hosts =
+    (byHost: Record<string, Map<string, Served>>): FetchLike =>
+    async (url) => {
+      const u = new URL(url);
+      const served = byHost[u.host];
+      if (served === undefined) return json(404, {});
+      const [, kind, a, b] = u.pathname.split('/');
+      if (kind === 'tx') {
+        const f = served.get(a);
+        if (f === undefined) return json(404, {});
+        if (b === 'status') {
+          return json(200, {
+            block_indep_hash: 'B'.repeat(64),
+            block_height: HEIGHT,
+            number_of_confirmations: 50,
+          });
+        }
+        if (b === 'offset') {
+          const size = f.data?.length ?? 0;
+          return json(200, {
+            offset: String(START + BigInt(size) - 1n),
+            size: String(size),
+          });
+        }
+        return json(200, f.header);
+      }
+      for (const f of served.values()) {
+        if (f.data === undefined) continue;
+        const rel = Number(BigInt(a) - START);
+        const c = f.chunks!.find((x) => rel >= x.min && rel < x.max);
+        if (c !== undefined) {
+          return json(200, {
+            chunk: c.chunk.toString('base64url'),
+            data_path: c.dataPath.toString('base64url'),
+            packing: 'unpacked',
+          });
+        }
+      }
+      return json(404, {});
+    };
+  const poolOf = (fetch: FetchLike, names: string[]) =>
+    new ArweaveNodePool({
+      urls: names.map((n) => `http://${n}`),
+      fetch,
+      dedupeByAddress: false,
+    });
+  /** As verify-bands calls the header check. */
+  const VB = {
+    minRecords: 0,
+    missingRootIsWrong: true,
+    maxUnreadableShare: 0.2,
+    concurrency: 1,
+    retries: 0,
+    retryDelayMs: 1,
+    totalRecords: 10_000,
+    targets: { direct: 20 },
+  };
+  const random = (seed: number) => {
+    let a = seed;
+    return () => {
+      a = (a * 1103515245 + 12345) % 2 ** 31;
+      return a / 2 ** 31;
+    };
+  };
+
+  async function signedRoot() {
+    const signer = new ArweaveSigner(await arweave.wallets.generate());
+    const bundle = await bundleAndSignData(
+      [createData('one', signer), createData('two', signer)],
+      signer,
+    );
+    const f = await signedFixture(Buffer.from(bundle.getRaw()));
+    const entries = [];
+    for await (const item of scanBundle({
+      source: new BufferByteRangeSource(f.data),
+      rootTxId: f.id,
+      bundleSize: f.data.length,
+    })) {
+      entries.push({
+        id: item.id,
+        rootTxId: f.id,
+        rootOffset: item.rootDataItemOffset,
+        rootDataOffset: item.rootDataOffset,
+        tag: 'direct',
+        height: HEIGHT,
+      });
+    }
+    return {
+      f,
+      served: { header: f.header, data: f.data, chunks: f.chunks } as Served,
+      entries,
+    };
+  }
+  const twenty = <T>(real: T[], bad: T[]) => [
+    ...Array.from({ length: 16 }, (_, i) => real[i % real.length]),
+    ...Array.from({ length: 4 }, (_, i) => bad[i % bad.length]),
+  ];
+
+  it('fails a band 4 of 20 of whose sampled items sit under a data-less root (P1)', async () => {
+    const good = await signedRoot();
+    const jwk = await arweave.wallets.generate();
+    const transfer = await arweave.createTransaction(
+      { target: 'x'.repeat(43), quantity: '1', last_tx: '', reward: '0' },
+      jwk,
+    );
+    await arweave.transactions.sign(transfer, jwk);
+    const m = new Map<string, Served>([
+      [good.f.id, good.served],
+      [
+        transfer.id,
+        { header: transfer.toJSON() as unknown as Record<string, unknown> },
+      ],
+    ]);
+    const src = onChainRootSource({
+      pool: poolOf(hosts({ 'h1:1984': m, 'h2:1984': m }), [
+        'h1:1984',
+        'h2:1984',
+        'h3:1984',
+      ]),
+    });
+    const bad = Array.from({ length: 4 }, () => ({
+      id: crypto.randomBytes(32).toString('base64url'),
+      rootTxId: transfer.id,
+      rootOffset: 0,
+      rootDataOffset: 1100,
+      tag: 'direct',
+    }));
+    const r = await checkBandHeaders({
+      ...VB,
+      entries: twenty(good.entries, bad),
+      openRoot: src.openRoot,
+      random: random(1),
+    });
+    assert.equal(r.passed, false, r.reasons.join('; '));
+    assert.ok(r.wrong.length > 0);
+  });
+
+  it('fails a band 4 of 20 of whose sampled items sit under a root only one node calls mined (P1b)', async () => {
+    const good = await signedRoot();
+    const fake = await signedRoot();
+    const gm = new Map([[good.f.id, good.served]]);
+    const em = new Map([...gm, [fake.f.id, fake.served]]);
+    const src = onChainRootSource({
+      pool: poolOf(hosts({ 'h1:1984': gm, 'h2:1984': gm, 'evil:1984': em }), [
+        'h1:1984',
+        'h2:1984',
+        'evil:1984',
+      ]),
+    });
+    const r = await checkBandHeaders({
+      ...VB,
+      entries: twenty(good.entries, fake.entries),
+      openRoot: src.openRoot,
+      random: random(1),
+    });
+    assert.equal(r.passed, false, r.reasons.join('; '));
+    assert.ok(r.wrong.length > 0);
+  });
+
+  it('fails a band 4 of 20 of whose roots are made up, though a node times out (P4)', async () => {
+    const good = await signedRoot();
+    const gm = new Map([[good.f.id, good.served]]);
+    const base = hosts({ 'h1:1984': gm, 'h2:1984': gm });
+    const fetch: FetchLike = async (url, init) => {
+      if (new URL(url).host === 'slow:1984') {
+        throw new DOMException('timed out', 'TimeoutError');
+      }
+      return base(url, init);
+    };
+    const src = onChainRootSource({
+      pool: poolOf(fetch, ['h1:1984', 'h2:1984', 'slow:1984']),
+    });
+    const bad = Array.from({ length: 4 }, () => ({
+      id: crypto.randomBytes(32).toString('base64url'),
+      rootTxId: crypto.randomBytes(32).toString('base64url'),
+      rootOffset: 0,
+      rootDataOffset: 1100,
+      tag: 'direct',
+    }));
+    const r = await checkBandHeaders({
+      ...VB,
+      entries: twenty(good.entries, bad),
+      openRoot: src.openRoot,
+      random: random(1),
+    });
+    assert.equal(r.passed, false, r.reasons.join('; '));
+    assert.ok(r.missing.length > 0);
+  });
+
+  it('fails a root nodes place at another height than its items give', async () => {
+    const good = await signedRoot();
+    const m = new Map([[good.f.id, good.served]]);
+    const src = onChainRootSource({
+      pool: poolOf(hosts({ 'h1:1984': m, 'h2:1984': m }), [
+        'h1:1984',
+        'h2:1984',
+      ]),
+    });
+    const r = await checkBandHeaders({
+      ...VB,
+      targets: { direct: 2 },
+      entries: good.entries.map((e) => ({ ...e, height: HEIGHT + 1 })),
+      openRoot: src.openRoot,
+    });
+    assert.equal(r.passed, false);
+    assert.match(r.wrong.map((w) => w.reason).join(), /height/);
+    // At its own height, it passes.
+    const ok = await checkBandHeaders({
+      ...VB,
+      targets: { direct: 2 },
+      entries: good.entries,
+      openRoot: onChainRootSource({
+        pool: poolOf(hosts({ 'h1:1984': m, 'h2:1984': m }), [
+          'h1:1984',
+          'h2:1984',
+        ]),
+      }).openRoot,
+    });
+    assert.equal(ok.passed, true, ok.reasons.join('; '));
+  });
+
+  it('counts two ports of one address as one machine (P3)', async () => {
+    const good = await signedRoot();
+    const m = new Map([[good.f.id, good.served]]);
+    const pool = new ArweaveNodePool({
+      urls: [
+        'http://127.0.0.1:1984',
+        'http://127.0.0.1:1985',
+        'http://h1:1984',
+      ],
+      fetch: hosts({ '127.0.0.1:1984': m, '127.0.0.1:1985': m }),
+      dedupeByAddress: true,
+    });
+    await assert.rejects(pool.txStatus(good.f.id, 2));
+    // Without resolving names, two ports of one host are one machine too.
+    const plain = new ArweaveNodePool({
+      urls: ['http://a:1984', 'http://a:1985'],
+      fetch: hosts({ 'a:1984': m, 'a:1985': m }),
+      dedupeByAddress: false,
+    });
+    await assert.rejects(plain.txStatus(good.f.id, 2));
   });
 });

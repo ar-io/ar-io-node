@@ -25,9 +25,14 @@
  *    which roots were bound which way.
  * 2. The root is mined: unless the caller has checked that itself
  *    (`requireMined: false`, for a root found in a checked L1 index), at
- *    least `minAgreement` nodes on distinct machines must place it in one
- *    block, with a confirmation (`/tx/{id}/status`). A signature proves who
- *    signed a transaction, not that the chain took it.
+ *    least `minAgreement` nodes on distinct machines (by address) must
+ *    place it in one block, with a confirmation (`/tx/{id}/status`), at the
+ *    height the band gives (`expect.height`; the position in the block
+ *    can't be read from the status). A signature proves who signed a
+ *    transaction, not that the chain took it.
+ *
+ * Whatever refutes a root is a {@link RootUnboundError} (`refutes`), which
+ * a header check counts wrong.
  * 3. The root's place in the weave comes from `/tx/{id}/offset`, whose size
  *    must be the signed `data_size`.
  * 4. Every chunk read is proven: its `data_path` must validate against the
@@ -49,7 +54,10 @@ import { default as Arweave } from 'arweave';
 
 import type { ByteRangeSource } from '../byte-range-source.js';
 import { ShortRangeReadError } from '../http-byte-range-source.js';
-import type { RootSourceFactory } from '../index-band/verify.js';
+import type {
+  RootExpectation,
+  RootSourceFactory,
+} from '../index-band/verify.js';
 import {
   getRulesetForOffset,
   parseDataPath,
@@ -59,10 +67,19 @@ import {
   ArweaveNodePool,
   NodeChunk,
   NotOnNodesError,
+  TooFewMinedError,
 } from './arweave-nodes.js';
 
-/** A root whose id can't be bound to its data: no check can be made. */
-export class RootUnboundError extends Error {}
+/**
+ * A root the chain refutes: its id can't be bound to data it signs (no
+ * data_root, format 1, another transaction's header, a signature that
+ * doesn't verify), or it is not mined (nodes say it is in no block, or too
+ * few place it in one), or it is in another block than its band says. A
+ * header check counts it wrong (`refutes`), never as a failure to read.
+ */
+export class RootUnboundError extends Error {
+  readonly refutes = true;
+}
 
 /** How a root's id was bound to its `data_root` (see the module doc). */
 export type RootBinding = 'signature' | 'agreement';
@@ -175,13 +192,19 @@ export function onChainRootSource({
 
   const bindRoot = async (id: string): Promise<BoundRoot> => {
     let servedBy = '';
-    const header = await pool.ask(`/tx/${id}`, (body, node) => {
-      if (body === null || typeof body !== 'object' || Array.isArray(body)) {
-        throw new Error('not a transaction header');
-      }
-      servedBy = node;
-      return body as Record<string, unknown>;
-    });
+    const header = await pool.ask(
+      `/tx/${id}`,
+      (body, node) => {
+        if (body === null || typeof body !== 'object' || Array.isArray(body)) {
+          throw new Error('not a transaction header');
+        }
+        servedBy = node;
+        return body as Record<string, unknown>;
+      },
+      undefined,
+      undefined,
+      true,
+    );
     field(header, 'signature');
     const hashed = signatureId(header);
     if (hashed !== id) {
@@ -240,7 +263,17 @@ export function onChainRootSource({
     // block, unless the caller found it in a checked L1 index.
     let block: BoundRoot['block'];
     if (requireMined) {
-      const status = await pool.txStatus(id, minAgreement);
+      let status;
+      try {
+        status = await pool.txStatus(id, minAgreement);
+      } catch (error) {
+        // Nodes that say it is in no block, beside too few that place it
+        // in one: not mined, as far as the chain says.
+        if (error instanceof TooFewMinedError && error.notFound > 0) {
+          throw new RootUnboundError(`${id} is not mined: ${error.message}`);
+        }
+        throw error;
+      }
       block = { indepHash: status.blockIndepHash, height: status.blockHeight };
     }
 
@@ -321,13 +354,31 @@ export function onChainRootSource({
     );
   };
 
-  const openRoot: RootSourceFactory = (rootTxId: string): ByteRangeSource => ({
-    getSize: async () => (await bind(rootTxId)).dataSize,
+  /** A bound root, refused if nodes place it in another block than expected. */
+  const boundAs = async (rootTxId: string, expect?: RootExpectation) => {
+    const root = await bind(rootTxId);
+    if (
+      expect?.height !== undefined &&
+      root.block !== undefined &&
+      root.block.height !== expect.height
+    ) {
+      throw new RootUnboundError(
+        `nodes place ${rootTxId} in block ${root.block.height}, its band at height ${expect.height}`,
+      );
+    }
+    return root;
+  };
+
+  const openRoot: RootSourceFactory = (
+    rootTxId: string,
+    expect?: RootExpectation,
+  ): ByteRangeSource => ({
+    getSize: async () => (await boundAs(rootTxId, expect)).dataSize,
     // Nothing held per source: the pool's requests are each their own.
     close: async () => undefined,
     isOpen: () => true,
     read: async (offset: number, size: number): Promise<Buffer> => {
-      const root = await bind(rootTxId);
+      const root = await boundAs(rootTxId, expect);
       if (offset < 0 || size < 0) throw new Error('negative range');
       if (offset + size > root.dataSize) {
         throw new ShortRangeReadError(
