@@ -325,17 +325,62 @@ describe('openBandsDuck', () => {
     await assert.rejects(fsp.stat(session.spill), { code: 'ENOENT' });
   });
 
-  it('caps the spill at 80% of the space free under the temp root', async () => {
+  it('caps the spill at 80% of the space free under the temp root, and leaves 100 GB of it', async () => {
     const session = await openBandsDuck({
       tmpRoot: root,
-      freeBytes: async () => 10 * 2 ** 30,
+      spillMax: '10TB',
+      freeBytes: async () => 1000e9,
     });
     try {
-      assert.equal(session.spillCapBytes, Math.floor(8 * 2 ** 30));
-      const [cap] = (await session.duck.all(
+      assert.equal(session.spillCapBytes, 800e9);
+    } finally {
+      await session.close();
+    }
+    // 150 GB free: 80% would leave 30 GB, under the 100 GB reserve.
+    const tight = await openBandsDuck({
+      tmpRoot: root,
+      spillMax: '10TB',
+      freeBytes: async () => 150e9,
+    });
+    try {
+      assert.equal(tight.spillCapBytes, 50e9);
+      const [cap] = (await tight.duck.all(
         "SELECT current_setting('max_temp_directory_size') AS max",
       )) as Array<{ max: string }>;
-      assert.match(cap.max, /^8(\.0)? ?GiB$/);
+      assert.match(cap.max, /^46\.[0-9] ?GiB$/);
+    } finally {
+      await tight.close();
+    }
+    // Under the reserve: nothing to spill into.
+    const none = await openBandsDuck({
+      tmpRoot: root,
+      freeBytes: async () => 50e9,
+    });
+    assert.equal(none.spillCapBytes, 0);
+    await none.close();
+  });
+
+  it('removes spill folders of its own kind left a day ago, and no others', async () => {
+    const old = path.join(root, 'ar-io-node-l2-verify-stale');
+    const recent = path.join(root, 'ar-io-node-l2-verify-recent');
+    const other = path.join(root, 'something-else');
+    for (const dir of [old, recent, other]) {
+      await fsp.mkdir(dir);
+      await fsp.writeFile(path.join(dir, 'x.block'), 'spill');
+    }
+    const dayAgo = new Date(Date.now() - 25 * 3600 * 1000);
+    await fsp.utimes(old, dayAgo, dayAgo);
+    await fsp.utimes(other, dayAgo, dayAgo);
+    const session = await openBandsDuck({
+      tmpRoot: root,
+      prefix: 'ar-io-node-l2-verify-',
+      freeBytes: roomy,
+    });
+    try {
+      assert.deepEqual(session.removedStale, [old]);
+      await assert.rejects(fsp.stat(old), { code: 'ENOENT' });
+      assert.ok((await fsp.stat(recent)).isDirectory());
+      assert.ok((await fsp.stat(other)).isDirectory());
     } finally {
       await session.close();
     }

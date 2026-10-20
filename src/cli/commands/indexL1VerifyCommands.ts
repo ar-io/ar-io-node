@@ -56,6 +56,10 @@ export function spillBytes(size: string): number {
 
 /** The share of the spill directory's free space a run may spill into. */
 export const SPILL_FREE_SHARE = 0.8;
+/** Space a run always leaves free under its spill, whatever else it may take. */
+export const SPILL_RESERVE_BYTES = 100e9;
+/** A spill folder older than this was left by a killed run. */
+export const STALE_SPILL_MS = 24 * 3600 * 1000;
 
 /**
  * A DuckDB session for checking bands: bounded memory, two threads, no
@@ -67,8 +71,9 @@ export const SPILL_FREE_SHARE = 0.8;
  * so checking the lookups of a large band failed on the directory, not the
  * band. The spill goes in a folder of its own under the system temp
  * directory (`TMPDIR`), which `close` removes, and is capped so a run cannot
- * fill the disk under it: at `spillMax`, and at most
- * {@link SPILL_FREE_SHARE} of the space free there when the run starts
+ * fill the disk under it: at `spillMax`, at most {@link SPILL_FREE_SHARE}
+ * of the space free there when the run starts, and never into the last
+ * {@link SPILL_RESERVE_BYTES} of it
  * (`tools/ar-io-node` mounts a folder under the node's data directory
  * there, so the container layer on `/` is never the one filled). An
  * interrupt (SIGINT, SIGTERM) removes the folder before the process ends.
@@ -87,6 +92,8 @@ export async function openBandsDuck(
   /** What the spill is capped at, in bytes, and the bytes free when it opened. */
   spillCapBytes: number;
   freeBytes: number;
+  /** Spill folders a killed run left, removed as this one opened. */
+  removedStale: string[];
   close(): Promise<void>;
 }> {
   const spillMax = options.spillMax ?? BANDS_SPILL_MAX;
@@ -103,13 +110,32 @@ export async function openBandsDuck(
       return Number(stats.bavail) * Number(stats.bsize);
     })
   )(tmpRoot);
-  const spillCapBytes = Math.min(
-    spillBytes(spillMax),
-    Math.floor(freeBytes * SPILL_FREE_SHARE),
+  const spillCapBytes = Math.max(
+    0,
+    Math.min(
+      spillBytes(spillMax),
+      Math.floor(freeBytes * SPILL_FREE_SHARE),
+      freeBytes - SPILL_RESERVE_BYTES,
+    ),
   );
-  const spill = await fsp.mkdtemp(
-    path.join(tmpRoot, options.prefix ?? 'ar-io-node-l1-verify-'),
-  );
+  const prefix = options.prefix ?? 'ar-io-node-l1-verify-';
+  // Folders of this kind a killed run (SIGKILL) left a day or more ago.
+  const removedStale: string[] = [];
+  for (const name of await fsp.readdir(tmpRoot).catch(() => [] as string[])) {
+    if (!name.startsWith(prefix)) continue;
+    const dir = path.join(tmpRoot, name);
+    const stat = await fsp.lstat(dir).catch(() => undefined);
+    if (
+      stat === undefined ||
+      !stat.isDirectory() ||
+      Date.now() - stat.mtimeMs < STALE_SPILL_MS
+    ) {
+      continue;
+    }
+    await fsp.rm(dir, { recursive: true, force: true });
+    removedStale.push(dir);
+  }
+  const spill = await fsp.mkdtemp(path.join(tmpRoot, prefix));
   const removeSpill = () => fsp.rm(spill, { recursive: true, force: true });
   // An interrupted run leaves no spill behind: removed, then the signal's
   // usual end (exit 130 for Ctrl-C) follows.
@@ -145,6 +171,7 @@ export async function openBandsDuck(
     spill,
     spillCapBytes,
     freeBytes,
+    removedStale,
     close: async () => {
       try {
         await opened.close();
@@ -175,6 +202,9 @@ async function verifyBandsCLI(
   });
   const { duck } = session;
   try {
+    for (const dir of session.removedStale) {
+      log.warn('Removed a spill folder a killed run left', { dir });
+    }
     log.info('Checking bands', { bandsDir, spill: session.spill });
     const out = await verifyBands(duck, bandsDir, {
       ...(whole(options.from, '--from') !== undefined

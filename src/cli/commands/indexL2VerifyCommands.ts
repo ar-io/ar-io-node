@@ -41,7 +41,7 @@ import type {
 import { verifyL2Bands } from '../../lib/parquet-l2/verify-bands.js';
 import type { IndexL2VerifyCLIOptions, JsonSerializable } from '../types.js';
 import { requiredStringFromOptions } from '../utils.js';
-import { openBandsDuck } from './indexL1VerifyCommands.js';
+import { openBandsDuck, SPILL_RESERVE_BYTES } from './indexL1VerifyCommands.js';
 
 /** Items per band read on chain when `--onchain` is not given. */
 export const DEFAULT_ONCHAIN_PER_BAND = 20;
@@ -196,6 +196,10 @@ export async function indexL2VerifyCLICommand(
     options.maxUnreadableShare,
     '--max-unreadable-share',
   );
+  const maxUnlocatedShare = fraction(
+    options.maxUnlocatedShare,
+    '--max-unlocated-share',
+  );
   const deadlineSeconds =
     whole(options.bandDeadline, '--band-deadline') ??
     DEFAULT_BAND_DEADLINE_SECONDS;
@@ -209,6 +213,7 @@ export async function indexL2VerifyCLICommand(
       ['--publisher-key', options.publisherKey],
       ['--registry-url', options.registryUrl],
       ['--index', options.index],
+      ['--allow-expired', options.allowExpired === true ? 'yes' : undefined],
     ] as const) {
       if (value !== undefined) {
         throw new L2VerifyRefused(`${flag} is only for --publication`);
@@ -226,7 +231,13 @@ export async function indexL2VerifyCLICommand(
   // The publication, and the key it must be signed with: given, or the one
   // the publisher's gateway record names.
   let publication:
-    | { document: Buffer; publisherKey: string; index?: string; source: string }
+    | {
+        document: Buffer;
+        publisherKey: string;
+        index?: string;
+        source: string;
+        keyFrom?: string;
+      }
     | undefined;
   if (options.publication !== undefined) {
     const document = await readPublication(options.publication, timeoutMs);
@@ -260,6 +271,11 @@ export async function indexL2VerifyCLICommand(
       document,
       publisherKey,
       source: options.publication,
+      ...(options.publisherKey === undefined
+        ? {
+            keyFrom: `the registry at ${options.registryUrl ?? 'the injected registry'}`,
+          }
+        : {}),
       ...(options.index !== undefined ? { index: options.index } : {}),
     };
   }
@@ -334,9 +350,12 @@ export async function indexL2VerifyCLICommand(
       const need = (await largestBandBytes(bandsDir)) * SPILL_PER_PARQUET_BYTE;
       if (need > session.spillCapBytes) {
         throw new L2VerifyRefused(
-          `the largest band is expected to spill about ${gib(need)}, more than the ${gib(session.spillCapBytes)} the spill is capped at (--spill-max, or 80% of the ${gib(session.freeBytes)} free under ${path.dirname(session.spill)}): free space there, point TMPDIR elsewhere, or --skip-lookups`,
+          `the largest band is expected to spill about ${gib(need)}, more than the ${gib(session.spillCapBytes)} the spill is capped at (--spill-max; 80% of the ${gib(session.freeBytes)} free under ${path.dirname(session.spill)}; and that free space less a ${gib(SPILL_RESERVE_BYTES)} reserve): free space there, point TMPDIR elsewhere, or --skip-lookups`,
         );
       }
+    }
+    for (const dir of session.removedStale) {
+      log.warn('Removed a spill folder a killed run left', { dir });
     }
     log.info('Checking L2 bands', {
       bandsDir,
@@ -361,16 +380,21 @@ export async function indexL2VerifyCLICommand(
               ...(publication.index !== undefined
                 ? { index: publication.index }
                 : {}),
+              ...(publication.keyFrom !== undefined
+                ? { keyFrom: publication.keyFrom }
+                : {}),
+              allowExpired: options.allowExpired === true,
             },
           }
         : {}),
       ...(l1 !== undefined ? { l1 } : {}),
+      allowUnlocated: options.allowUnlocated === true,
+      ...(maxUnlocatedShare !== undefined ? { maxUnlocatedShare } : {}),
       ...(source !== undefined
         ? {
             onchain: {
               perBand,
               openRoot: source.openRoot,
-              allowUnlocated: options.allowUnlocated === true,
               deadlineMs: deadlineSeconds * 1000,
               ...(maxUnreadableShare !== undefined
                 ? { maxUnreadableShare }
@@ -393,19 +417,16 @@ export async function indexL2VerifyCLICommand(
       skipped.splice(skipped.indexOf('mined'), 1);
     }
     const assurance = [
-      out.publisherBound
-        ? `bound to publication ${publication?.source} (sequence ${out.publication?.sequence}), signed by ${out.publication?.keyId}`
-        : 'not bound to any signature: the checks show only that the bands agree with themselves (no --publication)',
-      ...(out.mined !== undefined
+      ...out.assurance,
+      ...(roots?.minedVia === 'node-status'
         ? [
-            `roots found in the L1 index at ${out.mined.l1BandsDir}, which index-l1-verify must have checked for this to trust nothing`,
+            "sampled roots placed in a block at their items' height by two or more machines (by address); their position in the block is not checked",
           ]
         : []),
-      ...(roots?.minedVia === 'node-status'
-        ? ['sampled roots placed in a block by two or more machines']
-        : []),
       ...(roots?.trusted === true
-        ? [`root bytes and roots trusted to ${String(roots.url)}`]
+        ? [
+            `root bytes trusted to ${String(roots.url)}, and nothing says the sampled roots are mined`,
+          ]
         : []),
     ];
     const answer = {
@@ -436,12 +457,25 @@ export async function indexL2VerifyCLICommand(
       ...(out.publication !== undefined
         ? { publication: { ...out.publication, source: publication?.source } }
         : {}),
+      located: out.located,
       ...(out.mined !== undefined ? { mined: out.mined } : {}),
       superseded: out.superseded,
       partial: out.partial,
       vanished: out.vanished,
       ...(out.onchain !== undefined && source !== undefined
-        ? { onchain: { perBand, ...out.onchain, roots: source.describe() } }
+        ? {
+            onchain: {
+              perBand,
+              ...out.onchain,
+              roots: {
+                ...(roots as object),
+                // What finding a root in a block checks, by this source.
+                ...(roots?.minedVia === 'node-status'
+                  ? { checks: { height: true, position: false } }
+                  : {}),
+              },
+            },
+          }
         : {}),
       spill: {
         capBytes: session.spillCapBytes,

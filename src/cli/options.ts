@@ -211,12 +211,22 @@ export const optionMap = {
   allowUnlocated: {
     alias: '--allow-unlocated',
     description:
-      'Pass a band whose items have no locations, so nothing of it can be read on chain (default: such a band fails the onchain check)',
+      'Pass a band whose items all have no locations (as its band.json declares), so nothing of it can be read on chain (default: such a band fails the located and onchain checks)',
   },
   maxUnreadableShare: {
     alias: '--max-unreadable-share <fraction>',
     description:
       'The largest share of the items tried in a band that may sit in chunks no node holds (default 0.2)',
+  },
+  maxUnlocatedShare: {
+    alias: '--max-unlocated-share <fraction>',
+    description:
+      "The largest share of a band's items that may be unlocated, so not checkable on chain (default 0.001); a band's unlocated items must also be exactly the ones its band.json declares",
+  },
+  allowExpired: {
+    alias: '--allow-expired',
+    description:
+      'Bind to a --publication past its expiresAt (default: refused)',
   },
   bandDeadline: {
     alias: '--band-deadline <seconds>',
@@ -348,6 +358,8 @@ export const indexL2VerifyOptions: CommanderOption[] = [
   optionMap.allowAgreement,
   optionMap.allowUnlocated,
   optionMap.maxUnreadableShare,
+  optionMap.maxUnlocatedShare,
+  optionMap.allowExpired,
   optionMap.bandDeadline,
 ];
 
