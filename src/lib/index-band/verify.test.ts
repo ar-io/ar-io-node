@@ -786,3 +786,99 @@ describe('checkBandHeaders', () => {
     assert.equal(checked.passed, true, checked.reasons.join('; '));
   });
 });
+
+describe('checkBandHeaders, failing closed for a verifier', () => {
+  let items: ScannedDataItem[];
+  let rootBytes: Buffer;
+
+  before(async () => {
+    const signer = new ArweaveSigner(await Arweave.init({}).wallets.generate());
+    const bundle = await bundleAndSignData(
+      [createData('one', signer), createData('two', signer)],
+      signer,
+    );
+    rootBytes = bundle.getRaw();
+    items = [];
+    for await (const item of scanBundle({
+      source: new BufferByteRangeSource(rootBytes),
+      rootTxId: ROOT,
+      bundleSize: rootBytes.length,
+    })) {
+      items.push(item);
+    }
+  });
+
+  const entries = (rootOf: (i: number) => string, n: number) =>
+    Array.from({ length: n }, (_, i) => ({
+      id: items[i % items.length].id,
+      rootTxId: rootOf(i),
+      rootOffset: items[i % items.length].rootDataItemOffset,
+      rootDataOffset: items[i % items.length].rootDataOffset,
+    }));
+
+  it('counts a root no source has as missing, and fails on it, only when told to', async () => {
+    const openRoot: RootSourceFactory = (root) => ({
+      read: async (offset: number, size: number) => {
+        if (root.startsWith('made-up')) {
+          throw Object.assign(new Error('404'), {
+            response: { status: 404 },
+          });
+        }
+        return new BufferByteRangeSource(rootBytes).read(offset, size);
+      },
+      close: async () => undefined,
+      isOpen: () => true,
+    });
+    const pool = entries((i) => (i % 4 === 0 ? `made-up-${i}` : ROOT), 40);
+    const lenient = await checkBandHeaders({
+      entries: pool,
+      totalRecords: 40,
+      openRoot,
+      minRecords: 0,
+      minVerified: 1,
+      retries: 0,
+    });
+    assert.equal(lenient.passed, true, lenient.reasons.join('; '));
+    assert.equal(lenient.missing.length, 0);
+    const strict = await checkBandHeaders({
+      entries: pool,
+      totalRecords: 40,
+      openRoot,
+      minRecords: 0,
+      minVerified: 1,
+      retries: 0,
+      missingRootIsWrong: true,
+    });
+    assert.equal(strict.passed, false);
+    assert.equal(strict.missing.length, 10);
+    assert.match(strict.reasons.join('; '), /no answering source has/);
+  });
+
+  it('fails a check its deadline cuts short, reads in flight counted as errors', async () => {
+    let started = 0;
+    const openRoot: RootSourceFactory = () => ({
+      read: async (offset: number, size: number) => {
+        started += 1;
+        // The third read never answers.
+        if (started === 3) await new Promise(() => undefined);
+        return new BufferByteRangeSource(rootBytes).read(offset, size);
+      },
+      close: async () => undefined,
+      isOpen: () => true,
+    });
+    const result = await checkBandHeaders({
+      entries: entries(() => ROOT, 10),
+      totalRecords: 10,
+      openRoot,
+      minRecords: 0,
+      retries: 0,
+      concurrency: 1,
+      deadlineMs: 200,
+    });
+    assert.equal(result.passed, false);
+    assert.equal(result.deadlinePassed, true);
+    assert.equal(result.errors.length, 1);
+    assert.equal(result.ok, 2);
+    assert.match(result.reasons.join('; '), /deadline/);
+  });
+});

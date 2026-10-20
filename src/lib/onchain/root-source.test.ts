@@ -24,7 +24,12 @@ import {
   NodesRefusedError,
   NotOnNodesError,
 } from './arweave-nodes.js';
-import { onChainRootSource, RootUnboundError } from './root-source.js';
+import { ValidationRuleset } from '../merkle-path-parser.js';
+import {
+  onChainRootSource,
+  RootUnboundError,
+  rulesetForRoot,
+} from './root-source.js';
 
 const arweave = Arweave.init({});
 
@@ -99,6 +104,13 @@ function nodes(
     if (behaviour === 'empty') return json(404, {});
     if (behaviour === 'busy') return json(429, {});
     const [, kind, a, b] = u.pathname.split('/');
+    if (kind === 'tx' && b === 'status') {
+      return json(200, {
+        block_height: 1_500_000,
+        block_indep_hash: 'B'.repeat(64),
+        number_of_confirmations: 3,
+      });
+    }
     if (kind === 'tx' && b === 'offset') {
       return json(200, {
         offset: String(f.start + BigInt(f.data.length) - 1n),
@@ -144,7 +156,10 @@ describe('onChainRootSource', () => {
   });
 
   it('reads proven bytes across chunk boundaries, binding the root by its signature', async () => {
-    const src = onChainRootSource({ pool: pool(nodes(f, {}), ['n1:1984']) });
+    const src = onChainRootSource({
+      pool: pool(nodes(f, {}), ['n1:1984']),
+      requireMined: false,
+    });
     const root = src.openRoot(f.id);
     const at = f.chunks[0].max - 100; // spans the first boundary
     assert.deepEqual(
@@ -192,9 +207,11 @@ describe('onChainRootSource', () => {
         'a:1984',
         'b:1984',
       ]),
+      requireMined: false,
     });
     await busy.bind(f.id);
     const busyChunks = onChainRootSource({
+      requireMined: false,
       pool: pool(
         (url, init) =>
           new URL(url).pathname.startsWith('/chunk/')
@@ -233,6 +250,7 @@ describe('onChainRootSource', () => {
   it('counts a packed chunk as not held, and tells a missing chunk from a missing root', async () => {
     const packed = onChainRootSource({
       pool: pool(nodes(f, { 'a:1984': 'packed' }), ['a:1984']),
+      requireMined: false,
     });
     await assert.rejects(
       packed.openRoot(f.id).read(0, 10),
@@ -258,6 +276,7 @@ describe('onChainRootSource', () => {
         'b:1984',
       ]),
       verifyHeader: async () => true,
+      requireMined: false,
     });
     const root = src.openRoot(f.id);
     await root.read(0, 10);
@@ -279,7 +298,10 @@ describe('onChainRootSource', () => {
   });
 
   it('refuses a range past the root as a short read: the offsets are wrong', async () => {
-    const src = onChainRootSource({ pool: pool(nodes(f, {}), ['n:1984']) });
+    const src = onChainRootSource({
+      pool: pool(nodes(f, {}), ['n:1984']),
+      requireMined: false,
+    });
     await assert.rejects(
       src.openRoot(f.id).read(f.data.length - 10, 20),
       ShortRangeReadError,
@@ -300,17 +322,125 @@ describe('onChainRootSource', () => {
     await assert.rejects(src.bind(f.id), RootUnboundError);
   });
 
-  it('binds by agreement when the signature does not verify, and only then', async () => {
-    const twoAgree = onChainRootSource({
-      pool: pool(nodes(f, {}), ['a:1984', 'b:1984']),
+  it('binds by agreement only when allowed, and then only by other machines serving the same signed header', async () => {
+    const names = ['a:1984', 'b:1984', 'c:1984'];
+    // Refused unless --allow-agreement.
+    const refused = onChainRootSource({
+      pool: pool(nodes(f, {}), names),
       verifyHeader: async () => false,
     });
-    assert.equal((await twoAgree.bind(f.id)).binding, 'agreement');
-    const oneOnly = onChainRootSource({
-      pool: pool(nodes(f, { 'b:1984': 'empty' }), ['a:1984', 'b:1984']),
+    await assert.rejects(refused.bind(f.id), /--allow-agreement/);
+    // Allowed: the serving node and two others.
+    const threeAgree = onChainRootSource({
+      pool: pool(nodes(f, {}), names),
       verifyHeader: async () => false,
+      allowAgreement: true,
     });
-    await assert.rejects(oneOnly.bind(f.id), RootUnboundError);
+    assert.equal((await threeAgree.bind(f.id)).binding, 'agreement');
+    assert.equal(threeAgree.stats().byAgreement, 1);
+    // Two machines in all: the one that served it does not count.
+    const twoOnly = onChainRootSource({
+      pool: pool(nodes(f, { 'c:1984': 'empty' }), names),
+      verifyHeader: async () => false,
+      allowAgreement: true,
+    });
+    await assert.rejects(twoOnly.bind(f.id), RootUnboundError);
+    // An agreeing node whose header is another transaction's, or format 1,
+    // agrees with nothing.
+    for (const edit of [
+      { signature: crypto.randomBytes(512).toString('base64url') },
+      { format: 1 },
+    ]) {
+      const forged = onChainRootSource({
+        pool: pool(
+          nodes(f, {}, (node) =>
+            node === 'c:1984' ? { ...f.header, ...edit } : f.header,
+          ),
+          ['a:1984', 'b:1984', 'c:1984'],
+        ),
+        verifyHeader: async () => false,
+        allowAgreement: true,
+      });
+      // Whichever node serves the header, c's never counts toward agreement
+      // (and when c serves first, its header is refused outright).
+      await assert.rejects(forged.bind(f.id), RootUnboundError);
+    }
+  });
+
+  it('refuses a root nodes do not place in one block on two machines', async () => {
+    const statusFrom =
+      (answers: Record<string, unknown>): FetchLike =>
+      async (url, init) => {
+        const u = new URL(url);
+        if (u.pathname.endsWith('/status')) {
+          const answer = answers[u.host];
+          return answer === undefined
+            ? { status: 404, ok: false, json: async () => ({}) }
+            : { status: 200, ok: true, json: async () => answer };
+        }
+        return nodes(f, {})(url, init);
+      };
+    const block = (hash: string, confirmations = 3) => ({
+      block_height: 1_500_000,
+      block_indep_hash: hash,
+      number_of_confirmations: confirmations,
+    });
+    const names = ['a:1984', 'b:1984', 'c:1984'];
+    // One node says mined, the rest 404: not enough.
+    const one = onChainRootSource({
+      pool: pool(statusFrom({ 'a:1984': block('X') }), names),
+    });
+    await assert.rejects(one.bind(f.id), NodesRefusedError);
+    // Two blocks named: a fork, or a liar.
+    const forked = onChainRootSource({
+      pool: pool(
+        statusFrom({ 'a:1984': block('X'), 'b:1984': block('Y') }),
+        names,
+      ),
+    });
+    await assert.rejects(forked.bind(f.id), NodesRefusedError);
+    // No confirmation is no block.
+    const unconfirmed = onChainRootSource({
+      pool: pool(
+        statusFrom({ 'a:1984': block('X', 0), 'b:1984': block('X', 0) }),
+        names,
+      ),
+    });
+    await assert.rejects(unconfirmed.bind(f.id));
+    // In no block anywhere: the root is not on chain.
+    const nowhere = onChainRootSource({ pool: pool(statusFrom({}), names) });
+    await assert.rejects(
+      nowhere.bind(f.id),
+      (e: unknown) => e instanceof NotOnNodesError && e.wholeRoot,
+    );
+    // Two machines, one block.
+    const mined = onChainRootSource({
+      pool: pool(
+        statusFrom({ 'a:1984': block('X'), 'b:1984': block('X') }),
+        names,
+      ),
+    });
+    assert.deepEqual((await mined.bind(f.id)).block, {
+      indepHash: 'X',
+      height: 1_500_000,
+    });
+    assert.equal(mined.stats().minedByNodes, 1);
+  });
+
+  it('checks proofs under strict borders at the least, by the root’s start', () => {
+    assert.equal(rulesetForRoot(0n), ValidationRuleset.STRICT_BORDERS);
+    assert.equal(
+      rulesetForRoot(30_607_159_107_830n - 1n),
+      ValidationRuleset.STRICT_BORDERS,
+    );
+    assert.equal(
+      rulesetForRoot(30_607_159_107_830n),
+      ValidationRuleset.STRICT_DATA_SPLIT,
+    );
+    assert.equal(
+      rulesetForRoot(151_066_495_197_430n),
+      ValidationRuleset.OFFSET_REBASE_SUPPORT,
+    );
   });
 });
 
@@ -342,7 +472,10 @@ describe('the header check over proven roots', () => {
       rootOffset: item.rootDataItemOffset,
       rootDataOffset: item.rootDataOffset,
     }));
-    const src = onChainRootSource({ pool: pool(nodes(f, {}), ['n:1984']) });
+    const src = onChainRootSource({
+      pool: pool(nodes(f, {}), ['n:1984']),
+      requireMined: false,
+    });
     const good = await checkBandHeaders({
       entries,
       totalRecords: entries.length,
@@ -366,5 +499,372 @@ describe('the header check over proven roots', () => {
     });
     assert.equal(bad.wrong.length, 1);
     assert.equal(bad.passed, false);
+  });
+});
+
+/**
+ * The fail-open reproductions of the index-l2-verify audit of the on-chain
+ * check: a root no one mined, a format-1 header given a data_root, and a
+ * band whose sampled roots mostly do not exist. Each must fail the band.
+ */
+describe('the on-chain check fails closed', () => {
+  const START = 40_000_000_000_000n;
+  const BLOCK = crypto.randomBytes(48).toString('base64url');
+
+  interface Served {
+    header: Record<string, unknown>;
+    data: Buffer;
+    chunks: Fixture['chunks'];
+  }
+
+  /**
+   * Nodes that serve `served` (header, offset, chunks) when `holds` says
+   * so, and a `/tx/{id}/status` naming one block when `mined` says so;
+   * 404 for anything else.
+   */
+  const network =
+    (
+      served: Map<string, Served>,
+      holds: (node: string) => boolean,
+      mined: (node: string) => boolean,
+    ): FetchLike =>
+    async (url) => {
+      const json = (status: number, body: unknown) =>
+        Promise.resolve({ status, ok: status === 200, json: async () => body });
+      const u = new URL(url);
+      const [, kind, a, b] = u.pathname.split('/');
+      if (kind === 'tx') {
+        const f = served.get(a);
+        if (f === undefined) return json(404, {});
+        if (b === 'status') {
+          return mined(u.host)
+            ? json(200, {
+                block_height: 1_500_000,
+                block_indep_hash: BLOCK,
+                number_of_confirmations: 10,
+              })
+            : json(404, {});
+        }
+        if (!holds(u.host)) return json(404, {});
+        if (b === 'offset') {
+          return json(200, {
+            offset: String(START + BigInt(f.data.length) - 1n),
+            size: String(f.data.length),
+          });
+        }
+        return json(200, f.header);
+      }
+      if (kind === 'chunk' && holds(u.host)) {
+        const rel = Number(BigInt(a) - START);
+        for (const f of served.values()) {
+          const c = f.chunks.find((x) => rel >= x.min && rel < x.max);
+          if (c !== undefined) {
+            return json(200, {
+              chunk: c.chunk.toString('base64url'),
+              data_path: c.dataPath.toString('base64url'),
+              packing: 'unpacked',
+            });
+          }
+        }
+      }
+      return json(404, {});
+    };
+
+  const three = (fetch: FetchLike) =>
+    new ArweaveNodePool({
+      urls: ['http://honest1:1984', 'http://honest2:1984', 'http://evil:1984'],
+      fetch,
+      dedupeByAddress: false,
+    });
+
+  async function bundleRoot(format: 1 | 2 = 2): Promise<{
+    id: string;
+    served: Served;
+    entries: Array<{
+      id: string;
+      rootTxId: string;
+      rootOffset: number;
+      rootDataOffset: number;
+    }>;
+  }> {
+    const signer = new ArweaveSigner(await arweave.wallets.generate());
+    const bundle = await bundleAndSignData(
+      [createData('fabricated', signer), createData('also fake', signer)],
+      signer,
+    );
+    const data = Buffer.from(bundle.getRaw());
+    const jwk = await arweave.wallets.generate();
+    const helper = await arweave.createTransaction(
+      { data, last_tx: '', reward: '0' },
+      jwk,
+    );
+    await helper.prepareChunks(data);
+    const chunks = helper.chunks!.chunks.map((c, i) => {
+      const got = helper.getChunk(i, data);
+      return {
+        min: c.minByteRange,
+        max: c.maxByteRange,
+        chunk: Buffer.from(got.chunk, 'base64url'),
+        dataPath: Buffer.from(got.data_path, 'base64url'),
+      };
+    });
+    let tx = helper;
+    let header: Record<string, unknown>;
+    if (format === 1) {
+      // A real, honestly signed format-1 transaction with no data, its
+      // header given the data_root of other bytes after signing.
+      tx = await arweave.createTransaction(
+        {
+          format: 1,
+          target: 'x'.repeat(43),
+          quantity: '1',
+          last_tx: '',
+          reward: '0',
+        } as never,
+        jwk,
+      );
+      await arweave.transactions.sign(tx, jwk);
+      header = tx.toJSON() as unknown as Record<string, unknown>;
+      header.data_root = helper.data_root;
+      header.data_size = String(data.length);
+    } else {
+      await arweave.transactions.sign(tx, jwk);
+      header = tx.toJSON() as unknown as Record<string, unknown>;
+      header.data = '';
+    }
+    const entries = [];
+    for await (const item of scanBundle({
+      source: new BufferByteRangeSource(data),
+      rootTxId: tx.id,
+      bundleSize: data.length,
+    })) {
+      entries.push({
+        id: item.id,
+        rootTxId: tx.id,
+        rootOffset: item.rootDataItemOffset,
+        rootDataOffset: item.rootDataOffset,
+      });
+    }
+    return { id: tx.id, served: { header, data, chunks }, entries };
+  }
+
+  it('fails a self-signed root no block holds, served by one node (audit A)', async () => {
+    const { id, served, entries } = await bundleRoot();
+    const src = onChainRootSource({
+      pool: three(
+        network(
+          new Map([[id, served]]),
+          (node) => node === 'evil:1984',
+          (node) => node === 'evil:1984',
+        ),
+      ),
+    });
+    const r = await checkBandHeaders({
+      entries,
+      totalRecords: entries.length,
+      openRoot: src.openRoot,
+      minRecords: 0,
+      retries: 0,
+    });
+    assert.equal(r.passed, false);
+    await assert.rejects(src.bind(id));
+  });
+
+  it('passes the same root once two nodes say a block holds it', async () => {
+    const { id, served, entries } = await bundleRoot();
+    const src = onChainRootSource({
+      pool: three(
+        network(
+          new Map([[id, served]]),
+          () => true,
+          (node) => node !== 'evil:1984',
+        ),
+      ),
+    });
+    const r = await checkBandHeaders({
+      entries,
+      totalRecords: entries.length,
+      openRoot: src.openRoot,
+      minRecords: 0,
+      retries: 0,
+    });
+    assert.equal(r.passed, true, r.reasons.join('; '));
+  });
+
+  it('refuses a format-1 header given a data_root after it was signed (audit B)', async () => {
+    const { id, served, entries } = await bundleRoot(1);
+    const src = onChainRootSource({
+      pool: three(
+        network(
+          new Map([[id, served]]),
+          () => true,
+          () => true,
+        ),
+      ),
+    });
+    await assert.rejects(src.bind(id), RootUnboundError);
+    const r = await checkBandHeaders({
+      entries,
+      totalRecords: entries.length,
+      openRoot: src.openRoot,
+      minRecords: 0,
+      retries: 0,
+    });
+    assert.equal(r.passed, false);
+    assert.equal(src.stats().bySignature, 0);
+  });
+
+  it('fails a band whose sampled roots mostly exist nowhere (audit C)', async () => {
+    const { id, served, entries: real } = await bundleRoot();
+    const src = onChainRootSource({
+      pool: three(
+        network(
+          new Map([[id, served]]),
+          () => true,
+          () => true,
+        ),
+      ),
+    });
+    const entries = [];
+    for (let i = 0; i < 30; i += 1)
+      entries.push({ ...real[i % 2], tag: 'direct' });
+    for (let i = 0; i < 170; i += 1) {
+      entries.push({
+        id: crypto.randomBytes(32).toString('base64url'),
+        rootTxId: crypto.randomBytes(32).toString('base64url'),
+        rootOffset: 0,
+        rootDataOffset: 1100,
+        tag: 'direct',
+      });
+    }
+    const r = await checkBandHeaders({
+      entries,
+      totalRecords: 10_000,
+      openRoot: src.openRoot,
+      targets: { direct: 20 },
+      minRecords: 0,
+      concurrency: 1,
+      retries: 0,
+      missingRootIsWrong: true,
+      maxUnreadableShare: 0.2,
+    });
+    assert.equal(r.passed, false);
+  });
+
+  it('fails a band most of whose sampled chunks no node holds', async () => {
+    const { id, served, entries: real } = await bundleRoot();
+    const entries = [];
+    for (let i = 0; i < 40; i += 1)
+      entries.push({ ...real[i % 2], tag: 'direct' });
+    let reads = 0;
+    const r = await checkBandHeaders({
+      entries,
+      totalRecords: 10_000,
+      // Six reads in seven find their chunk gone.
+      openRoot: (root) => {
+        const src = onChainRootSource({
+          pool: three(
+            network(
+              new Map([[id, served]]),
+              () => true,
+              () => true,
+            ),
+          ),
+        }).openRoot(root);
+        return {
+          ...src,
+          read: async (offset: number, size: number) => {
+            reads += 1;
+            if (reads % 7 !== 0) {
+              throw Object.assign(new Error('chunk gone'), {
+                response: { status: 404 },
+                wholeRoot: false,
+              });
+            }
+            return src.read(offset, size);
+          },
+        };
+      },
+      targets: { direct: 4 },
+      minRecords: 0,
+      concurrency: 1,
+      retries: 0,
+      missingRootIsWrong: true,
+      maxUnreadableShare: 0.2,
+    });
+    assert.equal(r.passed, false);
+    assert.ok(r.unreadableShare > 0.2);
+  });
+});
+
+describe('ArweaveNodePool', () => {
+  const answering =
+    (
+      status: (node: string) => number | 'refused' | 'timeout',
+      asked: string[],
+    ): FetchLike =>
+    async (url) => {
+      const node = new URL(url).host;
+      asked.push(node);
+      const answer = status(node);
+      if (answer === 'refused') throw new Error('connect ECONNREFUSED');
+      if (answer === 'timeout') {
+        throw new DOMException('timed out', 'TimeoutError');
+      }
+      return {
+        status: answer,
+        ok: answer === 200,
+        json: async () => ({ id: 'x' }),
+      };
+    };
+  const three = (fetch: FetchLike, now?: () => number) =>
+    new ArweaveNodePool({
+      urls: ['http://a:1984', 'http://b:1984', 'http://c:1984'],
+      fetch,
+      dedupeByAddress: false,
+      ...(now !== undefined ? { now, restMs: 1000 } : {}),
+    });
+
+  it('starts each request at the next node in turn', async () => {
+    const asked: string[] = [];
+    const pool = three(answering(() => 200, asked));
+    for (let i = 0; i < 3; i += 1) await pool.txHeader('x');
+    assert.deepEqual(asked, ['a:1984', 'b:1984', 'c:1984']);
+  });
+
+  it('rests a node that timed out, counting it busy while it rests, never missing data', async () => {
+    let clock = 0;
+    const asked: string[] = [];
+    const pool = three(
+      answering((node) => (node === 'a:1984' ? 'timeout' : 404), asked),
+      () => clock,
+    );
+    // a times out, b and c say 404: a may hold it, so no verdict of absence.
+    await assert.rejects(pool.txHeader('x'), NodesRefusedError);
+    asked.length = 0;
+    // While a rests it is not asked, and still counts as busy.
+    await assert.rejects(pool.txHeader('x'), (e: unknown) => {
+      assert.ok(e instanceof NodesRefusedError);
+      assert.equal(e.busy, 1);
+      return true;
+    });
+    assert.ok(!asked.includes('a:1984'), asked.join());
+    // Rested, it is asked again.
+    clock = 2000;
+    asked.length = 0;
+    await assert.rejects(pool.txHeader('x'));
+    assert.ok(asked.includes('a:1984'));
+  });
+
+  it('rests a node that refused a connection, and asks every node when all rest', async () => {
+    const asked: string[] = [];
+    const pool = three(
+      answering(() => 'refused', asked),
+      () => 0,
+    );
+    await assert.rejects(pool.txHeader('x'), /no Arweave node answered/);
+    asked.length = 0;
+    await assert.rejects(pool.txHeader('x'), /no Arweave node answered/);
+    assert.equal(asked.length, 3);
   });
 });

@@ -74,6 +74,26 @@ export interface HeaderCheckOptions {
   retries?: number;
   /** Pause before the first retry, doubling after (default 2,000 ms). */
   retryDelayMs?: number;
+  /**
+   * Count an entry whose root no answering source has at all (a 404 that
+   * is not for one chunk: the header, its place in the weave, or the whole
+   * root through a gateway) as `missing`, which fails the check, rather than
+   * as `unreadable`, which doesn't. A verifier sets it, so that root ids
+   * made up for a band fail it (default false: a publisher's pre-publish
+   * check passes over roots the network has lost).
+   */
+  missingRootIsWrong?: boolean;
+  /**
+   * The largest share of tried entries that may be unreadable (chunks no
+   * source holds) for the check to pass, in [0, 1] (default 1: no limit).
+   */
+  maxUnreadableShare?: number;
+  /**
+   * Milliseconds the whole check may take. Past it no further entry is
+   * started, reads in flight are counted as errors, and the check fails:
+   * a band is never passed on what was read before time ran out alone.
+   */
+  deadlineMs?: number;
 }
 
 export interface HeaderCheckResult {
@@ -94,6 +114,13 @@ export interface HeaderCheckResult {
    * gone once is not asked for again.
    */
   unreadable: Array<{ id: string; rootTxId: string; tag?: string }>;
+  /**
+   * With `missingRootIsWrong`: entries under a root no answering source has
+   * at all. Each one fails the check.
+   */
+  missing: Array<{ id: string; rootTxId: string; tag?: string }>;
+  /** Whether `deadlineMs` passed before the check was done. */
+  deadlinePassed: boolean;
   /** Candidates handed to the check. */
   poolSize: number;
   /**
@@ -171,10 +198,23 @@ export async function checkBandHeaders({
   concurrency = 8,
   retries = 2,
   retryDelayMs = 2000,
+  missingRootIsWrong = false,
+  maxUnreadableShare = 1,
+  deadlineMs,
 }: HeaderCheckOptions): Promise<HeaderCheckResult> {
   const wrong: HeaderCheckResult['wrong'] = [];
   const errors: HeaderCheckResult['errors'] = [];
   const unreadable: HeaderCheckResult['unreadable'] = [];
+  const missing: HeaderCheckResult['missing'] = [];
+  const deadline =
+    deadlineMs !== undefined ? Date.now() + deadlineMs : undefined;
+  let deadlinePassed = false;
+  const pastDeadline = () => {
+    if (deadline !== undefined && Date.now() >= deadline) {
+      deadlinePassed = true;
+    }
+    return deadlinePassed;
+  };
   const malformed: HeaderCheckResult['malformed'] = [];
   let ok = 0;
   const byTag: HeaderCheckResult['byTag'] = {};
@@ -206,6 +246,7 @@ export async function checkBandHeaders({
   const gone = new Set<string>();
   // The next entry of a stratum still short of its target, if any.
   const next = (): BandSampleEntry | undefined => {
+    if (pastDeadline()) return undefined;
     for (const [tag, pool] of pools) {
       if (
         pool.length > 0 &&
@@ -239,15 +280,50 @@ export async function checkBandHeaders({
       });
       return false;
     };
-    if (gone.has(entry.rootTxId)) return goneRoot();
+    // A root no source has at all, when that fails the check: read, and
+    // counted against it.
+    const missingRoot = () => {
+      stratum(entry).wrong += 1;
+      missing.push({
+        ...tagOf(entry),
+        id: entry.id,
+        rootTxId: entry.rootTxId,
+      });
+      return true;
+    };
+    if (gone.has(entry.rootTxId)) {
+      return missingRootIsWrong ? missingRoot() : goneRoot();
+    }
     const source = openRoot(entry.rootTxId);
     let bytes: Buffer;
     try {
-      bytes = await readWithRetries(
+      const reading = readWithRetries(
         () => source.read(entry.rootOffset, headerBytes),
         retries,
         retryDelayMs,
       );
+      if (deadline === undefined) {
+        bytes = await reading;
+      } else {
+        let timer: NodeJS.Timeout | undefined;
+        reading.catch(() => undefined);
+        try {
+          bytes = await Promise.race([
+            reading,
+            new Promise<never>((_, reject) => {
+              timer = setTimeout(
+                () => {
+                  deadlinePassed = true;
+                  reject(new DeadlinePassedError());
+                },
+                Math.max(0, deadline - Date.now()),
+              );
+            }),
+          ]);
+        } finally {
+          clearTimeout(timer);
+        }
+      }
     } catch (error) {
       // A range the root doesn't have means the offsets are wrong: a 416
       // when it starts past the end, or a trimmed (short) 206 when it
@@ -266,8 +342,9 @@ export async function checkBandHeaders({
       if (isGone(error)) {
         // A missing chunk is this item's alone: other items of the root may
         // sit in chunks that are still held.
-        if (!isChunkOnly(error)) gone.add(entry.rootTxId);
-        return goneRoot();
+        if (isChunkOnly(error)) return goneRoot();
+        gone.add(entry.rootTxId);
+        return missingRootIsWrong ? missingRoot() : goneRoot();
       }
       errors.push({
         ...tagOf(entry),
@@ -370,8 +447,9 @@ export async function checkBandHeaders({
     Array.from({ length: Math.max(1, concurrency) }, () => worker()),
   );
 
-  const checked = ok + wrong.length + errors.length;
+  const checked = ok + wrong.length + missing.length + errors.length;
   const tried = checked + unreadable.length;
+  const unreadableShare = tried > 0 ? unreadable.length / tried : 0;
   const verifiedFloor =
     minVerified ??
     Math.ceil(minOkRatio * Math.min(target, DEFAULT_MIN_VERIFIED));
@@ -385,9 +463,24 @@ export async function checkBandHeaders({
   if (wrong.length > 0) {
     reasons.push(`${wrong.length} of ${checked} checked entries are wrong`);
   }
+  if (missing.length > 0) {
+    reasons.push(
+      `${missing.length} of ${checked} checked entries are under roots no answering source has at all (${new Set(missing.map((m) => m.rootTxId)).size} roots): made up, or never mined`,
+    );
+  }
+  if (deadlinePassed) {
+    reasons.push(
+      `the check's deadline (${deadlineMs} ms) passed with entries still to read`,
+    );
+  }
+  if (unreadableShare > maxUnreadableShare) {
+    reasons.push(
+      `${unreadable.length} of ${tried} entries tried (${Math.round(unreadableShare * 100)}%) are under chunks no source holds, over the ${Math.round(maxUnreadableShare * 100)}% allowed`,
+    );
+  }
   // When entries are wrong, that is the reason; the counts add nothing.
   const underRatio = checked > 0 && ok / checked < minOkRatio;
-  if (wrong.length === 0 && underRatio) {
+  if (wrong.length === 0 && missing.length === 0 && underRatio) {
     // Say why: an entry the gateway couldn't serve isn't a wrong one, and
     // the usual cause is a gateway that has to fetch the roots itself.
     const unchecked =
@@ -400,6 +493,7 @@ export async function checkBandHeaders({
   }
   if (
     wrong.length === 0 &&
+    missing.length === 0 &&
     !underRatio &&
     entries.length > 0 &&
     ok < verifiedFloor
@@ -418,12 +512,21 @@ export async function checkBandHeaders({
     wrong,
     errors,
     unreadable,
+    missing,
+    deadlinePassed,
     poolSize: entries.length,
-    unreadableShare: tried > 0 ? unreadable.length / tried : 0,
+    unreadableShare,
     malformedTags: malformed.length,
     malformed,
     byTag,
   };
+}
+
+/** A read still in flight when a check's deadline passed. */
+export class DeadlinePassedError extends Error {
+  constructor() {
+    super("the check's deadline passed during this read");
+  }
 }
 
 /** A range that runs past the root: the offsets are wrong, not the network. */

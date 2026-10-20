@@ -14,17 +14,27 @@
  * Nothing a node says is taken on its word:
  *
  * 1. The root's header binds its id to its data: the id must be the SHA-256
- *    of the signature, and the signature must verify (the transaction signs
- *    its `data_root` and `data_size`). arweave-js fails to verify some valid
- *    transactions, so when it does, at least `minAgreement` nodes must serve
- *    the same `data_root` and `data_size` instead; the report says which.
- * 2. The root's place in the weave comes from `/tx/{id}/offset`, whose size
+ *    of the signature, the header must be format 2 (only a format-2
+ *    signature covers `data_root`; a format-1 header carrying one carries
+ *    it unsigned), and the signature must verify. arweave-js fails to verify
+ *    some valid transactions; when it does, the root is refused unless
+ *    `allowAgreement` is set, and then at least `minAgreement` other nodes,
+ *    on machines other than the one that served the header and each other,
+ *    must serve a header for the same id, itself format 2 and hashing to
+ *    the id, with the same `data_root` and `data_size`. The report says
+ *    which roots were bound which way.
+ * 2. The root is mined: unless the caller has checked that itself
+ *    (`requireMined: false`, for a root found in a checked L1 index), at
+ *    least `minAgreement` nodes on distinct machines must place it in one
+ *    block, with a confirmation (`/tx/{id}/status`). A signature proves who
+ *    signed a transaction, not that the chain took it.
+ * 3. The root's place in the weave comes from `/tx/{id}/offset`, whose size
  *    must be the signed `data_size`.
- * 3. Every chunk read is proven: its `data_path` must validate against the
- *    signed `data_root` under the consensus rules for its weave offset, the
- *    chunk must hash to the path's leaf, and it is placed by the bounds the
- *    proof gives, never by assuming 256 KiB chunks. A node whose chunk fails
- *    is passed over for the next.
+ * 4. Every chunk read is proven: its `data_path` must validate against the
+ *    signed `data_root` under the consensus rules for the root's place in
+ *    the weave, the chunk must hash to the path's leaf, and it is placed by
+ *    the bounds the proof gives, never by assuming 256 KiB chunks. A node
+ *    whose chunk fails is passed over for the next.
  *
  * What a read comes to, as the header check sorts it: bytes; a range past the
  * root's end is a {@link ShortRangeReadError} (the offsets are wrong); a
@@ -40,7 +50,11 @@ import { default as Arweave } from 'arweave';
 import type { ByteRangeSource } from '../byte-range-source.js';
 import { ShortRangeReadError } from '../http-byte-range-source.js';
 import type { RootSourceFactory } from '../index-band/verify.js';
-import { getRulesetForOffset, parseDataPath } from '../merkle-path-parser.js';
+import {
+  getRulesetForOffset,
+  parseDataPath,
+  ValidationRuleset,
+} from '../merkle-path-parser.js';
 import {
   ArweaveNodePool,
   NodeChunk,
@@ -60,12 +74,18 @@ export interface BoundRoot {
   /** Absolute weave offset of the root's first byte. */
   start: bigint;
   binding: RootBinding;
+  /** The block nodes place it in, when this source checked that. */
+  block?: { indepHash: string; height: number };
 }
 
 export interface OnChainRootSourceStats {
   roots: number;
   bySignature: number;
   byAgreement: number;
+  /** Roots found in a block by nodes' status answers. */
+  minedByNodes: number;
+  /** How a root is known to be mined: by nodes here, or by the caller. */
+  minedVia: 'node-status' | 'caller';
   chunksProven: number;
   /** Nodes that answered any request. */
   reachableNodes: number;
@@ -73,8 +93,21 @@ export interface OnChainRootSourceStats {
 
 export interface OnChainRootSourceOptions {
   pool: ArweaveNodePool;
-  /** Nodes that must agree on a root's data when its signature won't verify. */
+  /**
+   * Machines that must agree: on a root's data when its signature won't
+   * verify, and on the block that holds it (default 2).
+   */
   minAgreement?: number;
+  /**
+   * Bind a root whose signature arweave-js won't verify by nodes' agreement
+   * on its data (default false: such a root is refused).
+   */
+  allowAgreement?: boolean;
+  /**
+   * Require nodes to place each root in a block (default true). False only
+   * where the caller has found every root in a checked L1 index.
+   */
+  requireMined?: boolean;
   /** Injected in tests: whether arweave-js verifies a header. */
   verifyHeader?: (header: Record<string, unknown>) => Promise<boolean>;
 }
@@ -93,6 +126,20 @@ async function arweaveVerify(
   }
 }
 
+/** Whether a header is a format-2 transaction's, the only kind whose signature covers `data_root`. */
+const isFormat2 = (header: Record<string, unknown>) =>
+  header.format === 2 || header.format === '2';
+
+/** The SHA-256 of a header's signature, base64url: the id it is the header of. */
+const signatureId = (header: Record<string, unknown>): string | undefined =>
+  typeof header.signature === 'string' && header.signature.length > 0
+    ? crypto
+        .createHash('sha256')
+        .update(Buffer.from(header.signature, 'base64url'))
+        .digest()
+        .toString('base64url')
+    : undefined;
+
 const field = (header: Record<string, unknown>, name: string): string => {
   const value = header[name];
   if (typeof value !== 'string') {
@@ -108,6 +155,8 @@ const field = (header: Record<string, unknown>, name: string): string => {
 export function onChainRootSource({
   pool,
   minAgreement = 2,
+  allowAgreement = false,
+  requireMined = true,
   verifyHeader = arweaveVerify,
 }: OnChainRootSourceOptions): {
   openRoot: RootSourceFactory;
@@ -115,21 +164,36 @@ export function onChainRootSource({
   stats: () => OnChainRootSourceStats;
 } {
   const bound = new Map<string, Promise<BoundRoot>>();
-  const counts = { bySignature: 0, byAgreement: 0, chunksProven: 0 };
+  const counts = {
+    bySignature: 0,
+    byAgreement: 0,
+    minedByNodes: 0,
+    chunksProven: 0,
+  };
   /** The node that last proved a chunk of each root, asked first next time. */
   const lastNode = new Map<string, string>();
 
   const bindRoot = async (id: string): Promise<BoundRoot> => {
-    const header = await pool.txHeader(id);
-    const signature = Buffer.from(field(header, 'signature'), 'base64url');
-    const hashed = crypto
-      .createHash('sha256')
-      .update(signature)
-      .digest()
-      .toString('base64url');
+    let servedBy = '';
+    const header = await pool.ask(`/tx/${id}`, (body, node) => {
+      if (body === null || typeof body !== 'object' || Array.isArray(body)) {
+        throw new Error('not a transaction header');
+      }
+      servedBy = node;
+      return body as Record<string, unknown>;
+    });
+    field(header, 'signature');
+    const hashed = signatureId(header);
     if (hashed !== id) {
       throw new RootUnboundError(
         `the header served for ${id} is another transaction's (${hashed})`,
+      );
+    }
+    // Only a format-2 signature covers data_root and data_size: a format-1
+    // header that carries them carries them unsigned.
+    if (!isFormat2(header)) {
+      throw new RootUnboundError(
+        `${id} is not a format-2 transaction (format ${JSON.stringify(header.format)}): its signature does not cover a data_root`,
       );
     }
     const dataRootText = field(header, 'data_root');
@@ -147,19 +211,37 @@ export function onChainRootSource({
     let binding: RootBinding;
     if (await verifyHeader(header)) {
       binding = 'signature';
+    } else if (!allowAgreement) {
+      throw new RootUnboundError(
+        `${id}: its signature doesn't verify, and binding by nodes' agreement is not allowed (--allow-agreement)`,
+      );
     } else {
-      const headers = await pool.txHeaders(id, minAgreement + 2);
-      const agreeing = headers.filter(
-        ({ header: h }) =>
+      // Other machines than the one that served it, each serving a header of
+      // this id (its signature hashing to it), format 2, with the same data.
+      const agreeing = await pool.txHeaders(
+        id,
+        minAgreement,
+        (h) =>
+          signatureId(h) === id &&
+          isFormat2(h) &&
           h.data_root === dataRootText &&
           String(h.data_size) === String(dataSize),
+        [servedBy],
       );
       if (agreeing.length < minAgreement) {
         throw new RootUnboundError(
-          `${id}: its signature doesn't verify and ${agreeing.length} of ${headers.length} nodes agree on its data (need ${minAgreement})`,
+          `${id}: its signature doesn't verify and ${agreeing.length} other machines agree on its data (need ${minAgreement})`,
         );
       }
       binding = 'agreement';
+    }
+
+    // Signed is not mined: nodes on distinct machines must place it in a
+    // block, unless the caller found it in a checked L1 index.
+    let block: BoundRoot['block'];
+    if (requireMined) {
+      const status = await pool.txStatus(id, minAgreement);
+      block = { indepHash: status.blockIndepHash, height: status.blockHeight };
     }
 
     const where = await pool.txOffset(id);
@@ -170,12 +252,14 @@ export function onChainRootSource({
     }
     if (binding === 'signature') counts.bySignature += 1;
     else counts.byAgreement += 1;
+    if (block !== undefined) counts.minedByNodes += 1;
     return {
       id,
       dataRoot,
       dataSize,
       start: where.offset - BigInt(dataSize) + 1n,
       binding,
+      ...(block !== undefined ? { block } : {}),
     };
   };
 
@@ -210,7 +294,7 @@ export function onChainRootSource({
           dataSize: root.dataSize,
           dataPath: served.dataPath,
           offset: rel,
-          ruleset: getRulesetForOffset(Number(absolute)),
+          ruleset: rulesetForRoot(root.start),
         });
         const { startOffset, endOffset } = parsed.boundaries;
         if (!parsed.validated) throw new Error('its proof does not validate');
@@ -269,7 +353,27 @@ export function onChainRootSource({
     stats: () => ({
       roots: bound.size,
       ...counts,
+      minedVia: requireMined ? 'node-status' : 'caller',
       reachableNodes: pool.reachable.size,
     }),
   };
+}
+
+/**
+ * The consensus rules a root's chunk proofs are checked under. Arweave picks
+ * them by the start offset of the block holding the transaction
+ * (`ar_poa:get_data_path_validation_ruleset/3`), so every chunk of one
+ * transaction is checked under one ruleset, and never one laxer than strict
+ * borders: below the strict data-split threshold it is
+ * `strict_borders_ruleset`, not the basic one. The root's own start is the
+ * nearest offset this source knows to its block's; it can differ from it
+ * only for a transaction in one of the two blocks that straddle a
+ * threshold, where it may ask for the later rules: a valid proof refused
+ * there is an error, never a pass.
+ */
+export function rulesetForRoot(start: bigint): ValidationRuleset {
+  const ruleset = getRulesetForOffset(Number(start));
+  return ruleset === ValidationRuleset.BASIC
+    ? ValidationRuleset.STRICT_BORDERS
+    : ruleset;
 }
