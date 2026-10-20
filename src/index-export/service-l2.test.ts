@@ -25,7 +25,14 @@ import {
 } from '../../test/parquet-l2-fixture.js';
 import { toB64Url } from '../lib/encoding.js';
 import { createTestLogger } from '../../test/test-logger.js';
-import { readPublisherFacts } from '../lib/parquet-l1/layout.js';
+import { BAND_FILE, readPublisherFacts } from '../lib/parquet-l1/layout.js';
+import {
+  bandFiles,
+  parseBandFile,
+  serializeBandFile,
+} from '../lib/parquet-l2/layout.js';
+import { verifyBandLookups } from '../lib/parquet-l2/lookups.js';
+import { withBandWriter } from './kinds/parquet-l1/export.js';
 import type { ExportConfig } from './config.js';
 import { deriveL2Bands, L2LiveBand } from './kinds/parquet-l2/bands.js';
 import type { L2SourceRow } from './kinds/parquet-l2/source.js';
@@ -320,6 +327,146 @@ describe('ExportService, parquet-l2', () => {
     assert.equal(step.compare?.relocated, 1);
     assert.equal(step.header?.byTag.relocated?.wrong, 1);
     assert.ok((await live()).some((b) => b.id === d1.id));
+  });
+
+  describe('key lookup and stats, derived in place', () => {
+    const derived = (index: { derived?: any[] } | undefined) =>
+      (index?.derived ?? []).map((d) => [d.id, d.result, d.reason]);
+    /** Takes a published band back to l2-1: no key or stat tags, no files for them. */
+    const downgrade = async (band: L2LiveBand) => {
+      const { keyTags: _k, statTags: _s, ...rest } = band.band;
+      const { key: _key, stats: _stats, ...lookups } = band.band.lookups;
+      await fs.rm(path.join(band.dir, 'lookup_key.parquet'));
+      await fs.rm(path.join(band.dir, 'stats.parquet'));
+      await fs.writeFile(
+        path.join(band.dir, BAND_FILE),
+        serializeBandFile({ ...rest, schema: 'l2-1', lookups }),
+      );
+    };
+    const tableStats = async (dir: string) =>
+      Object.fromEntries(
+        await Promise.all(
+          ['data_items', 'tags', 'wallets', 'parents'].map(async (t) => {
+            const stat = await fs.stat(path.join(dir, `${t}.parquet`));
+            return [t, [stat.size, stat.mtimeMs]];
+          }),
+        ),
+      );
+    const tagged = () => ({
+      l2Indexes: [
+        {
+          name: 'ardrive-l2',
+          selection: ARDRIVE,
+          keyTags: ['App-Name'],
+          statTags: ['App-Name'],
+          publishDir: indexDir(),
+        },
+      ],
+    });
+
+    it('writes every band as l2-2, for the index’s tag names', async () => {
+      const { index } = await run({}, tagged());
+      assert.deepEqual(derived(index), [], 'nothing to derive from a build');
+      for (const band of await live()) {
+        assert.equal(band.band.schema, 'l2-2');
+        assert.deepEqual(band.band.keyTags, ['App-Name']);
+        assert.deepEqual(band.band.statTags, ['App-Name']);
+        assert.ok(band.band.lookups.key.rows > 0, band.id);
+        assert.deepEqual(
+          (await fs.readdir(band.dir)).filter((n) => !n.startsWith('.')).sort(),
+          bandFiles('l2-2'),
+        );
+      }
+    });
+
+    it('derives an l2-1 band’s key lookup and stats in place: same id, tables untouched, before any build', async () => {
+      await run({}, tagged());
+      const [first, ...rest] = await live();
+      await downgrade(first);
+      assert.equal((await live())[0].band.schema, 'l2-1');
+      const before = await tableStats(first.dir);
+      const facts = await readPublisherFacts(first.dir);
+
+      const { report, index } = await run({}, tagged());
+      assert.deepEqual(derived(index), [[first.id, 'published', 'layout']]);
+      const [outcome] = index.derived ?? [];
+      assert.ok((outcome?.rows?.key ?? 0) > 0);
+      assert.ok((outcome?.rows?.stats ?? 0) > 0);
+      assert.equal(runResult(report), 'published');
+      // Derived before the builds: the log line order, and no band rebuilt.
+      assert.deepEqual(
+        index.steps.filter((s) => s.result === 'published'),
+        [],
+      );
+      const bands = await live();
+      assert.equal(bands.length, rest.length + 1);
+      const upgraded = bands.find((b) => b.id === first.id)!;
+      assert.equal(upgraded.band.schema, 'l2-2');
+      assert.deepEqual(upgraded.band.keyTags, ['App-Name']);
+      assert.deepEqual(await tableStats(first.dir), before, 'tables untouched');
+      assert.deepEqual(await readPublisherFacts(first.dir), facts);
+      assert.deepEqual(
+        (await fs.readdir(first.dir)).filter((n) => !n.startsWith('.')).sort(),
+        bandFiles('l2-2'),
+      );
+      await withBandWriter(path.join(dir, 'read'), async (duck) => {
+        assert.deepEqual(
+          await verifyBandLookups(duck, first.dir, upgraded.band),
+          [],
+        );
+      });
+      // Current now: nothing more to derive.
+      assert.deepEqual(derived((await run({}, tagged())).index), []);
+    });
+
+    it('derives again when the index’s tag names change, and on a dry run changes nothing', async () => {
+      await run({}, tagged());
+      const bands = await live();
+      const changed = {
+        l2Indexes: [
+          { ...tagged().l2Indexes[0], keyTags: ['App-Name', 'Content-Type'] },
+        ],
+      };
+      const dry = await run({ dryRun: true }, changed);
+      assert.deepEqual(
+        derived(dry.index),
+        bands.map((b) => [b.id, 'dry_run', 'dry_run']),
+      );
+      for (const band of await live()) {
+        assert.deepEqual(band.band.keyTags, ['App-Name'], 'unchanged');
+      }
+      const { index } = await run({}, changed);
+      assert.deepEqual(
+        derived(index),
+        bands.map((b) => [b.id, 'published', 'tags_changed']),
+      );
+      for (const band of await live()) {
+        assert.deepEqual(band.band.keyTags, ['App-Name', 'Content-Type']);
+        assert.deepEqual(
+          parseBandFile(
+            await fs.readFile(path.join(band.dir, BAND_FILE), 'utf8'),
+          ).keyTags,
+          ['App-Name', 'Content-Type'],
+        );
+      }
+      assert.deepEqual(derived((await run({}, changed)).index), []);
+    });
+
+    it('holds the derive to --range', async () => {
+      await run({}, tagged());
+      const bands = await live();
+      for (const band of bands) await downgrade(band);
+      const target = bands[0];
+      const { index } = await run(
+        { range: [target.from, target.to], resettle: 'full' },
+        tagged(),
+      );
+      assert.deepEqual(derived(index), [[target.id, 'published', 'layout']]);
+      assert.deepEqual(
+        (await live()).map((b) => b.band.schema),
+        bands.map((b) => (b.id === target.id ? 'l2-2' : 'l2-1')),
+      );
+    });
   });
 
   it('builds a pinned range in a dry run, publishing nothing', async () => {

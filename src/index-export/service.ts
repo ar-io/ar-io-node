@@ -89,6 +89,12 @@ import {
   runL1Step,
 } from './kinds/parquet-l1/kind.js';
 import { deriveL2Bands, L2LiveBand } from './kinds/parquet-l2/bands.js';
+import type { L2IndexConfig } from './kinds/parquet-l2/config.js';
+import {
+  L2DeriveOutcome,
+  planL2Derive,
+  runL2Derive,
+} from './kinds/parquet-l2/derive.js';
 import {
   L2Outcome,
   runL2Step,
@@ -203,6 +209,8 @@ export interface L2IndexReport {
   failed?: { reason: string; message: string };
   /** The index's live band ids after the run. */
   liveIds?: string[];
+  /** Published bands whose key lookup and stats were derived and added in place. */
+  derived?: L2DeriveOutcome[];
   /** What bands built from the source this run settled against, by id (for the state). */
   fingerprints?: Record<string, BandFingerprint>;
   /** Gated re-settles passed by bands with unreadable reads, by id (for the state). */
@@ -323,6 +331,7 @@ export function runResult(report: RunReport): string {
     ...(report.l1Normalized ?? []),
     ...(report.l2 ?? []).flatMap((index) => [
       ...index.steps,
+      ...(index.derived ?? []),
       ...(index.failed !== undefined
         ? [
             {
@@ -1924,6 +1933,18 @@ export class ExportService {
 
         const range =
           options.resettle !== undefined ? options.range : undefined;
+
+        // 0. Layout upgrades: the key lookup and stats of every live band
+        // not derived for the index's tag names, added in place from the
+        // band's own tables. No source read and no header check, so it
+        // runs before any build and outside the time budget. Held to
+        // `--range` when given, as an operator's run is.
+        await this.deriveL2(index, entry, {
+          workDir,
+          dryRun,
+          ...(options.range !== undefined ? { range: options.range } : {}),
+        });
+
         if (options.range !== undefined && options.resettle === undefined) {
           const bands = await live();
           await run(
@@ -2086,6 +2107,53 @@ export class ExportService {
       await fs
         .rmdir(path.join(config.workDir, 'dry-run'))
         .catch(() => undefined);
+    }
+  }
+
+  /**
+   * Derives the key lookup and stats of every live band of an index that
+   * lacks them, or carries them for other tag names, in place. A failure
+   * is logged and reported, never a stop: the builds don't depend on it.
+   */
+  private async deriveL2(
+    index: L2IndexConfig,
+    entry: L2IndexReport,
+    {
+      workDir,
+      dryRun,
+      range,
+    }: { workDir: string; dryRun: boolean; range?: [number, number] },
+  ): Promise<void> {
+    const { config, log } = this.deps;
+    try {
+      const bands = (
+        await deriveL2Bands(index.publishDir, config.publisher, index.selection)
+      ).filter(
+        (band) =>
+          range === undefined || (band.from >= range[0] && band.to <= range[1]),
+      );
+      const due = planL2Derive(bands, index);
+      if (due.length === 0) return;
+      await assertSameFilesystem(workDir, index.publishDir);
+      entry.derived ??= [];
+      for (const band of due) {
+        entry.derived.push(
+          await runL2Derive(band, index, {
+            workDir,
+            dryRun,
+            log,
+            ...(this.lock !== undefined
+              ? { stillHeld: async () => this.lock?.held() ?? false }
+              : {}),
+            ...(config.l2Duck !== undefined ? { limits: config.l2Duck } : {}),
+          }),
+        );
+      }
+    } catch (error) {
+      log.error('L2 key lookup and stats not derived', {
+        index: index.name,
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 

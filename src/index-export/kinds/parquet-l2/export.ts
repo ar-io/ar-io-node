@@ -61,6 +61,7 @@ import type { TableSpec } from '../../../lib/parquet-l1/layout.js';
 import {
   BAND_FILE,
   orderByClause,
+  canonicalTagNames,
   PARQUET_L2_SCHEMA,
   PARQUET_L2_TABLES,
   ParquetL2Band,
@@ -415,6 +416,8 @@ export async function exportL2Band({
   workDir,
   limits = DEFAULT_L2_DUCK_LIMITS,
   random = Math.random,
+  keyTags = [],
+  statTags = [],
 }: {
   selection: ParquetL2Selection;
   from: number;
@@ -430,6 +433,10 @@ export async function exportL2Band({
   limits?: L2DuckLimits;
   /** Random source for the header-check sample, in [0, 1). */
   random?: () => number;
+  /** The tag names the band's key lookup is derived for (`l2-2`). */
+  keyTags?: readonly string[];
+  /** The tag names its stats count by (`l2-2`). */
+  statTags?: readonly string[];
 }): Promise<L2ExportResult> {
   const started = Date.now();
   await fs.mkdir(workDir, { recursive: true });
@@ -452,6 +459,8 @@ export async function exportL2Band({
         scratchDir,
         bandDir,
         random,
+        keyTags: canonicalTagNames(keyTags),
+        statTags: canonicalTagNames(statTags),
       });
       stagingBytes = await treeBytes(staging);
       return built;
@@ -493,7 +502,11 @@ async function build(
     scratchDir,
     bandDir,
     random,
+    keyTags,
+    statTags,
   }: {
+    keyTags: string[];
+    statTags: string[];
     selection: ParquetL2Selection;
     from: number;
     to: number;
@@ -985,8 +998,12 @@ async function build(
     // Derived from the tables just written, and checked against them before
     // anything publishes: a lookup that disagrees is this build's fault,
     // not the rows'.
-    const lookups = await writeBandLookups(duck, bandDir);
-    const lookupProblems = await verifyBandLookups(duck, bandDir, { lookups });
+    const layout = { schema: PARQUET_L2_SCHEMA, keyTags, statTags };
+    const lookups = await writeBandLookups(duck, bandDir, { layout });
+    const lookupProblems = await verifyBandLookups(duck, bandDir, {
+      ...layout,
+      lookups,
+    });
     if (lookupProblems.length > 0) {
       throw new Error(
         `The band's lookups don't match its tables: ${lookupProblems.join('; ')}`,
@@ -997,6 +1014,8 @@ async function build(
       schema: PARQUET_L2_SCHEMA,
       heightRange: [from, to],
       selection,
+      keyTags,
+      statTags,
       tables: tables.tables,
       lookups,
       checks: {

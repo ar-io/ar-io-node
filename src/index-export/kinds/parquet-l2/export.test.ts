@@ -242,6 +242,42 @@ describe('exportL2Band', () => {
     } as never);
   });
 
+  it('derives the key lookup and stats for the tag names given, sorted, under the same id', async () => {
+    const plain = await exportBand(new MemoryL2Source(rows(), ancestors()));
+    const result = await exportBand(new MemoryL2Source(rows(), ancestors()), {
+      keyTags: ['Content-Type', 'App-Name', 'App-Name'],
+      statTags: ['App-Name'],
+    });
+    try {
+      const { band } = result;
+      assert.deepEqual(band.keyTags, ['App-Name', 'Content-Type']);
+      assert.deepEqual(band.statTags, ['App-Name']);
+      // Seven selected items at two heights, every one with an App-Name;
+      // the stats hold the totals row of each bucket and one per App-Name
+      // value there.
+      assert.ok(band.lookups.key.rows >= 2, String(band.lookups.key.rows));
+      assert.ok(band.lookups.stats.rows > 1, String(band.lookups.stats.rows));
+      assert.equal(
+        l2BandId(band, bandPublisherTag(PUBLISHER)),
+        l2BandId(plain.band, bandPublisherTag(PUBLISHER)),
+      );
+      const read = parseBandFile(
+        await fs.readFile(path.join(result.dir, 'band.json'), 'utf8'),
+      );
+      assert.deepEqual(read.keyTags, ['App-Name', 'Content-Type']);
+      await withBandWriter(path.join(dir, 'read'), async (duck) => {
+        assert.deepEqual(await verifyBandLookups(duck, result.dir, band), []);
+        const [row] = (await duck.all(
+          `SELECT count(*)::INTEGER AS n FROM read_parquet('${path.join(result.dir, 'stats.parquet')}') WHERE name = ''::BLOB`,
+        )) as Array<{ n: number }>;
+        assert.ok(row.n >= 1);
+      });
+    } finally {
+      await fs.rm(result.staging, { recursive: true, force: true });
+      await fs.rm(plain.staging, { recursive: true, force: true });
+    }
+  });
+
   it('writes lookups its tables give, checked, and left out of its id', async () => {
     const result = await exportBand(new MemoryL2Source(rows(), ancestors()));
     try {
@@ -251,11 +287,19 @@ describe('exportL2Band', () => {
       assert.equal(band.lookups.id.rows, 7);
       assert.ok(band.lookups.wallet.rows >= 7);
       assert.ok(band.lookups.tag.rows > 0);
+      // Written as l2-2, for no key or stat tags unless given.
+      assert.equal(band.schema, 'l2-2');
+      assert.deepEqual(band.keyTags, []);
+      assert.deepEqual(band.statTags, []);
+      assert.equal(band.lookups.key.rows, 0);
+      assert.equal(band.lookups.stats.rows, 1);
       const files = await fs.readdir(result.dir);
       for (const file of [
         'lookup_id.parquet',
         'lookup_wallet.parquet',
         'lookup_tag.parquet',
+        'lookup_key.parquet',
+        'stats.parquet',
       ]) {
         assert.ok(files.includes(file), file);
       }

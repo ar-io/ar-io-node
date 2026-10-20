@@ -13,7 +13,9 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 
 import {
+  canonicalTagNames,
   parseSelection,
+  parseTagNames,
   ParquetL2Selection,
 } from '../../../lib/parquet-l2/layout.js';
 import {
@@ -36,6 +38,14 @@ export interface L2IndexConfig {
   /** Its name in the publication, and its directory under `published/`. */
   name: string;
   selection: ParquetL2Selection;
+  /**
+   * The tag names each band's `lookup_key.parquet` is derived for, each
+   * once, in UTF-8 byte order; empty for none. A published band derived
+   * for other names is derived again, in place.
+   */
+  keyTags: string[];
+  /** The tag names each band's `stats.parquet` counts by, as `keyTags`. */
+  statTags: string[];
   /** `data/indexes/published/<name>`. */
   publishDir: string;
 }
@@ -50,9 +60,11 @@ const isObject = (value: unknown): value is Record<string, unknown> =>
 
 /**
  * Reads `INDEX_EXPORT_L2_INDEXES`: a non-empty JSON list of
- * `{ "name": …, "selection": … }`. Refused: anything else in an entry, a
- * name that isn't `[a-z0-9-]{1,64}` or is another index's, a name twice, or
- * a selection the layout refuses.
+ * `{ "name": …, "selection": …, "keyTags": […], "statTags": […] }`, the
+ * tag lists optional (none when absent). Refused: anything else in an
+ * entry, a name that isn't `[a-z0-9-]{1,64}` or is another index's, a name
+ * twice, a selection the layout refuses, or a tag list it refuses (its
+ * names are sorted here, so the order given doesn't matter).
  */
 export function parseL2Indexes(
   json: string | undefined,
@@ -79,7 +91,7 @@ export function parseL2Indexes(
     const at = `INDEX_EXPORT_L2_INDEXES[${i}]`;
     if (!isObject(entry)) throw new Error(`${at} must be an object`);
     for (const key of Object.keys(entry)) {
-      if (key !== 'name' && key !== 'selection') {
+      if (!['name', 'selection', 'keyTags', 'statTags'].includes(key)) {
         throw new Error(`${at}: unknown key ${JSON.stringify(key)}`);
       }
     }
@@ -100,7 +112,24 @@ export function parseL2Indexes(
     } catch (error) {
       throw new Error((error as Error).message);
     }
-    return { name, selection, publishDir: path.join(publishedDir, name) };
+    const tagNames = (field: 'keyTags' | 'statTags'): string[] => {
+      const raw = entry[field];
+      if (raw === undefined) return [];
+      if (!Array.isArray(raw)) {
+        throw new Error(`${at}.${field} must be a list of tag names`);
+      }
+      if (!raw.every((n) => typeof n === 'string')) {
+        throw new Error(`${at}.${field} must be a list of tag names`);
+      }
+      return parseTagNames(canonicalTagNames(raw), `${at}.${field}`);
+    };
+    return {
+      name,
+      selection,
+      keyTags: tagNames('keyTags'),
+      statTags: tagNames('statTags'),
+      publishDir: path.join(publishedDir, name),
+    };
   });
 }
 
