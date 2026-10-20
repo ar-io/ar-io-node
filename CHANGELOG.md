@@ -103,6 +103,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `parents` defect (28 in the h1.3M band of `ardrive-l2`). Such a child is
   now left unlocated as `no_parent`, and a resettle locates it once the
   bundle's row is repaired.
+  A re-settle that unlocates such an item is not refused for it
+  (`unlocated_rows`): a location under a parent the replaced band's
+  `parents` does not describe is one no reader could check, so losing it
+  is reported as `corrected`, not as a loss. The pre-publish comparison
+  also no longer uses correlated `EXISTS` subqueries, which DuckDB 1.4.2
+  plans as a delim join over a parallel hash aggregate that failed to
+  combine its thread states on the h1.3M band of `ardrive-l2` (an internal
+  error, "Attempting to combine TupleDataCollection with mismatching
+  types"); semi and anti joins give the same rows.
 - An index-swarm subscriber can now install a Parquet band whose files have
   large footers. The footer limit was 2 MiB, and turbo-gateway.com's
   `ardrive-l2` band for heights 1,800,000–1,899,999 has a 3.7 GB

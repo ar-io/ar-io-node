@@ -880,7 +880,10 @@ re-settled band), it must:
 - **lose nothing**: every id of the bands it replaces is in it
   (`dropped_items`, with a sample);
 - **unlocate nothing**: every (id, root) they located it locates
-  (`unlocated_rows`);
+  (`unlocated_rows`), except one they located only under a parent their
+  `parents` doesn't describe at that place (a location no reader can
+  check: the parent's own row was inconsistent, #937), which it may leave
+  unlocated as `no_parent`; such pairs are reported as `corrected`;
 - **drop no key**: every owner they hold a key for it holds one for
   (`dropped_wallets`);
 - an item located now and not before (say, a root that answered 404 then
