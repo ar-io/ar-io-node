@@ -1,0 +1,26 @@
+{
+  "id": "audit-b-format1-injected",
+  "description": "A format-1 header given a data_root after signing",
+  "tampered": "format-1 root",
+  "kind": "onchain",
+  "roots": {
+    "V": {
+      "format1Injected": true
+    }
+  },
+  "nodes": {
+    "h1:1984": {},
+    "h2:1984": {},
+    "h3:1984": {}
+  },
+  "entries": [
+    {
+      "root": "V",
+      "repeat": 2
+    }
+  ],
+  "expect": {
+    "verdict": "refuted",
+    "check": "onchain"
+  }
+}

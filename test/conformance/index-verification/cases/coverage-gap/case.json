@@ -1,0 +1,20 @@
+{
+  "id": "coverage-gap",
+  "description": "Heights asked for that no band covers",
+  "tampered": "--to 250 over a band ending at 199",
+  "kind": "bands",
+  "bands": [
+    {
+      "from": 100,
+      "to": 199
+    }
+  ],
+  "options": {
+    "from": 100,
+    "to": 250
+  },
+  "expect": {
+    "verdict": "refuted",
+    "check": "coverage"
+  }
+}

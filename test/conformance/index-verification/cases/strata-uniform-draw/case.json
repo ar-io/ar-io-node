@@ -1,0 +1,36 @@
+{
+  "id": "strata-uniform-draw",
+  "description": "N items are drawn uniformly over every located item, nested ones topped up",
+  "tampered": "200 direct items beside one nested; every read a stranger's header",
+  "kind": "bands",
+  "bands": [
+    {
+      "from": 100,
+      "to": 199,
+      "rows": [
+        {
+          "op": "moreDirect",
+          "count": 200
+        }
+      ]
+    }
+  ],
+  "options": {
+    "lookups": false,
+    "onchain": {
+      "perBand": 20,
+      "source": "stranger",
+      "seed": 3
+    }
+  },
+  "expect": {
+    "verdict": "refuted",
+    "check": "onchain",
+    "draw": {
+      "drawnUniform": 20,
+      "readsInclude": [
+        3500
+      ]
+    }
+  }
+}

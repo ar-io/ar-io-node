@@ -1,0 +1,31 @@
+{
+  "id": "t1-seed-repeat",
+  "description": "The same seed draws the same items",
+  "tampered": "nothing (every read a stranger's header)",
+  "kind": "bands",
+  "bands": [
+    {
+      "from": 100,
+      "to": 199,
+      "rows": [
+        {
+          "op": "moreDirect",
+          "count": 200
+        }
+      ]
+    }
+  ],
+  "options": {
+    "lookups": false,
+    "onchain": {
+      "perBand": 4,
+      "source": "stranger",
+      "seed": 7
+    }
+  },
+  "expect": {
+    "verdict": "refuted",
+    "check": "onchain",
+    "repeatable": true
+  }
+}

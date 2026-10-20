@@ -1,0 +1,42 @@
+{
+  "id": "e1-unlocatable-root",
+  "description": "Fabricated items under a mined root whose /offset every node 404s",
+  "tampered": "4 of 20 fabricated",
+  "kind": "onchain",
+  "roots": {
+    "G": {},
+    "R": {}
+  },
+  "nodes": {
+    "n1:1984": {
+      "offset": {
+        "R": "404"
+      }
+    },
+    "n2:1984": {
+      "offset": {
+        "R": "404"
+      }
+    },
+    "n3:1984": {
+      "offset": {
+        "R": "404"
+      }
+    }
+  },
+  "entries": [
+    {
+      "root": "G",
+      "repeat": 16
+    },
+    {
+      "root": "R",
+      "fabricated": true,
+      "repeat": 4
+    }
+  ],
+  "expect": {
+    "verdict": "unknown",
+    "check": "onchain"
+  }
+}

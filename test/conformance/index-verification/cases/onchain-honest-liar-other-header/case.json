@@ -1,0 +1,27 @@
+{
+  "id": "onchain-honest-liar-other-header",
+  "description": "One node serves another transaction's header",
+  "tampered": "liar header",
+  "kind": "onchain",
+  "roots": {
+    "G": {}
+  },
+  "nodes": {
+    "bad:1984": {
+      "header": {
+        "*": "otherHeader"
+      }
+    },
+    "h1:1984": {},
+    "h2:1984": {}
+  },
+  "entries": [
+    {
+      "root": "G",
+      "repeat": 20
+    }
+  ],
+  "expect": {
+    "verdict": "verified"
+  }
+}

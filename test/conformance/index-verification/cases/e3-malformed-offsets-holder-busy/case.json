@@ -1,0 +1,36 @@
+{
+  "id": "e3-malformed-offsets-holder-busy",
+  "description": "Two nodes answer /offset malformed; the holder 503s",
+  "tampered": "malformed bodies",
+  "kind": "onchain",
+  "roots": {
+    "G": {}
+  },
+  "nodes": {
+    "tip1:1984": {
+      "offset": {
+        "*": "malformed"
+      }
+    },
+    "tip2:1984": {
+      "offset": {
+        "*": "malformed"
+      }
+    },
+    "data1:1984": {
+      "offset": {
+        "*": "503"
+      }
+    }
+  },
+  "entries": [
+    {
+      "root": "G",
+      "repeat": 20
+    }
+  ],
+  "expect": {
+    "verdict": "unknown",
+    "check": "onchain"
+  }
+}

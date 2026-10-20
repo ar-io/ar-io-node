@@ -1,0 +1,34 @@
+{
+  "id": "l1-moved",
+  "description": "The L1 index holds the root at another position in its block",
+  "tampered": "L1 block_transaction_index 1, items say 0",
+  "kind": "bands",
+  "bands": [
+    {
+      "from": 100,
+      "to": 199
+    }
+  ],
+  "options": {
+    "l1": {
+      "required": true,
+      "bands": [
+        {
+          "from": 100,
+          "to": 199,
+          "roots": [
+            {
+              "band": 0,
+              "height": 101,
+              "bti": 1
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "expect": {
+    "verdict": "refuted",
+    "check": "mined"
+  }
+}

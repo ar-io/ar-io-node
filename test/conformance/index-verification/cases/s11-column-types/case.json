@@ -1,0 +1,24 @@
+{
+  "id": "s11-column-types",
+  "description": "A table with a column of another type and an extra column",
+  "tampered": "tag_count VARCHAR, block_transaction_index BIGINT, extra column",
+  "kind": "bands",
+  "bands": [
+    {
+      "from": 100,
+      "to": 199
+    }
+  ],
+  "files": [
+    {
+      "op": "sql",
+      "band": 0,
+      "file": "data_items.parquet",
+      "select": "* REPLACE (CAST(tag_count AS VARCHAR) AS tag_count, CAST(block_transaction_index AS BIGINT) AS block_transaction_index), 'junk' AS extra"
+    }
+  ],
+  "expect": {
+    "verdict": "refuted",
+    "check": "schema"
+  }
+}

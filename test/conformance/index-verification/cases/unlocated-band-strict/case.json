@@ -1,0 +1,38 @@
+{
+  "id": "unlocated-band-strict",
+  "description": "A band whose items are all unlocated, not allowed",
+  "tampered": "all locations removed (declared)",
+  "kind": "bands",
+  "bands": [
+    {
+      "from": 100,
+      "to": 199,
+      "rows": [
+        {
+          "op": "unlocate",
+          "row": "all"
+        }
+      ],
+      "band": [
+        {
+          "op": "setChecks",
+          "value": {
+            "unlocated": {
+              "no_offsets": 2
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "options": {
+    "onchain": {
+      "perBand": 2,
+      "source": "stranger"
+    }
+  },
+  "expect": {
+    "verdict": "refuted",
+    "check": "located"
+  }
+}

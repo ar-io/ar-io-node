@@ -1,0 +1,50 @@
+{
+  "id": "audit-a-unmined-one-node",
+  "description": "A self-signed root no block holds, served by one node",
+  "tampered": "unmined root",
+  "kind": "onchain",
+  "roots": {
+    "F": {}
+  },
+  "nodes": {
+    "h1:1984": {
+      "header": {
+        "*": "404"
+      },
+      "status": {
+        "*": "404"
+      },
+      "offset": {
+        "*": "404"
+      },
+      "chunk": {
+        "*": "404"
+      }
+    },
+    "h2:1984": {
+      "header": {
+        "*": "404"
+      },
+      "status": {
+        "*": "404"
+      },
+      "offset": {
+        "*": "404"
+      },
+      "chunk": {
+        "*": "404"
+      }
+    },
+    "evil:1984": {}
+  },
+  "entries": [
+    {
+      "root": "F",
+      "repeat": 2
+    }
+  ],
+  "expect": {
+    "verdict": "refuted",
+    "check": "onchain"
+  }
+}

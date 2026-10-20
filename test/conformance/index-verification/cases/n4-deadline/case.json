@@ -1,0 +1,35 @@
+{
+  "id": "n4-deadline",
+  "description": "A node hangs on every chunk past the band's deadline",
+  "tampered": "chunks hang",
+  "kind": "onchain",
+  "roots": {
+    "G": {}
+  },
+  "nodes": {
+    "n1:1984": {
+      "chunk": {
+        "*": "hang"
+      }
+    },
+    "n2:1984": {
+      "chunk": {
+        "*": "hang"
+      }
+    }
+  },
+  "entries": [
+    {
+      "root": "G",
+      "repeat": 20
+    }
+  ],
+  "options": {
+    "deadlineMs": 300,
+    "timeoutMs": 2000
+  },
+  "expect": {
+    "verdict": "unknown",
+    "check": "onchain"
+  }
+}

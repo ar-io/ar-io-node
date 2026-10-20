@@ -1,0 +1,20 @@
+{
+  "id": "pub-wrong-key",
+  "description": "A publication checked against a key that didn't sign it",
+  "tampered": "another key given",
+  "kind": "bands",
+  "bands": [
+    {
+      "from": 100,
+      "to": 199,
+      "publisher": "wallet"
+    }
+  ],
+  "publication": {
+    "key": "other"
+  },
+  "expect": {
+    "verdict": "refuted",
+    "check": "refused"
+  }
+}

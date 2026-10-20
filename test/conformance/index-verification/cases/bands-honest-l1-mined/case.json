@@ -1,0 +1,33 @@
+{
+  "id": "bands-honest-l1-mined",
+  "description": "A sound band whose root the L1 index holds where its items say",
+  "tampered": "nothing",
+  "kind": "bands",
+  "bands": [
+    {
+      "from": 100,
+      "to": 199
+    }
+  ],
+  "options": {
+    "l1": {
+      "required": true,
+      "bands": [
+        {
+          "from": 100,
+          "to": 199,
+          "roots": [
+            {
+              "band": 0,
+              "height": 101,
+              "bti": 0
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "expect": {
+    "verdict": "verified"
+  }
+}

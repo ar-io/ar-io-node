@@ -1,0 +1,33 @@
+{
+  "id": "s10-symlinked-corrupt-band",
+  "description": "A corrupt band reached through a symlink",
+  "tampered": "tip band.json rows changed, directory moved and symlinked",
+  "kind": "bands",
+  "bands": [
+    {
+      "from": 100,
+      "to": 199
+    },
+    {
+      "from": 200,
+      "to": 299,
+      "band": [
+        {
+          "op": "addRows",
+          "table": "data_items",
+          "delta": 5
+        }
+      ]
+    }
+  ],
+  "files": [
+    {
+      "op": "symlinkElsewhere",
+      "band": 1
+    }
+  ],
+  "expect": {
+    "verdict": "refuted",
+    "check": "identity"
+  }
+}

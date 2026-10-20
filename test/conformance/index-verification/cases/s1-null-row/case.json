@@ -1,0 +1,22 @@
+{
+  "id": "s1-null-row",
+  "description": "A data_items row with every value NULL",
+  "tampered": "pushed an all-NULL row",
+  "kind": "bands",
+  "bands": [
+    {
+      "from": 100,
+      "to": 199,
+      "rows": [
+        {
+          "op": "pushNull",
+          "table": "data_items"
+        }
+      ]
+    }
+  ],
+  "expect": {
+    "verdict": "refuted",
+    "check": "required"
+  }
+}

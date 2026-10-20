@@ -1,0 +1,29 @@
+{
+  "id": "d2-wrong-height-one-liar",
+  "description": "Items give a height one liar names; two machines place the root elsewhere",
+  "tampered": "items at 999, root at 1000",
+  "kind": "onchain",
+  "roots": {
+    "G": {}
+  },
+  "nodes": {
+    "h0:1984": {},
+    "liar:1984": {
+      "status": {
+        "*": "status:height=999"
+      }
+    },
+    "h2:1984": {}
+  },
+  "entries": [
+    {
+      "root": "G",
+      "height": 999,
+      "repeat": 20
+    }
+  ],
+  "expect": {
+    "verdict": "refuted",
+    "check": "onchain"
+  }
+}

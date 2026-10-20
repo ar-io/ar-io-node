@@ -1,0 +1,42 @@
+{
+  "id": "d3-holder-busy",
+  "description": "Nodes without data 404 /offset; the holder stays busy",
+  "tampered": "holder 503",
+  "kind": "onchain",
+  "roots": {
+    "G": {}
+  },
+  "nodes": {
+    "tip1:1984": {
+      "offset": {
+        "*": "404"
+      },
+      "chunk": {
+        "*": "404"
+      }
+    },
+    "tip2:1984": {
+      "offset": {
+        "*": "404"
+      },
+      "chunk": {
+        "*": "404"
+      }
+    },
+    "data1:1984": {
+      "offset": {
+        "*": "503"
+      }
+    }
+  },
+  "entries": [
+    {
+      "root": "G",
+      "repeat": 20
+    }
+  ],
+  "expect": {
+    "verdict": "unknown",
+    "check": "onchain"
+  }
+}

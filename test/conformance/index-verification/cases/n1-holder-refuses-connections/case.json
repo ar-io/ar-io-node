@@ -1,0 +1,34 @@
+{
+  "id": "n1-holder-refuses-connections",
+  "description": "Two nodes lack the header; the holder refuses every connection",
+  "tampered": "holder resets",
+  "kind": "onchain",
+  "roots": {
+    "G": {}
+  },
+  "nodes": {
+    "tip1:1984": {
+      "header": {
+        "*": "404"
+      }
+    },
+    "tip2:1984": {
+      "header": {
+        "*": "404"
+      }
+    },
+    "data1:1984": {
+      "default": "reset"
+    }
+  },
+  "entries": [
+    {
+      "root": "G",
+      "repeat": 20
+    }
+  ],
+  "expect": {
+    "verdict": "unknown",
+    "check": "onchain"
+  }
+}

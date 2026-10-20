@@ -1,0 +1,21 @@
+{
+  "id": "pub-expired",
+  "description": "An expired publication",
+  "tampered": "expiresAt in 2020",
+  "kind": "bands",
+  "bands": [
+    {
+      "from": 100,
+      "to": 199,
+      "publisher": "wallet"
+    }
+  ],
+  "publication": {
+    "expiresAt": "2020-01-01T00:00:00Z",
+    "issuedAt": "2019-12-31T00:00:00Z"
+  },
+  "expect": {
+    "verdict": "refuted",
+    "check": "refused"
+  }
+}

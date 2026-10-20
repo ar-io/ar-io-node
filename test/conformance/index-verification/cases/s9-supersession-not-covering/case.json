@@ -1,0 +1,34 @@
+{
+  "id": "s9-supersession-not-covering",
+  "description": "A lower band claims to supersede a corrupt tip band it doesn't cover",
+  "tampered": "tip band.json rows changed; .publisher.json claim",
+  "kind": "bands",
+  "bands": [
+    {
+      "from": 100,
+      "to": 199
+    },
+    {
+      "from": 200,
+      "to": 299,
+      "band": [
+        {
+          "op": "addRows",
+          "table": "data_items",
+          "delta": 5
+        }
+      ]
+    }
+  ],
+  "files": [
+    {
+      "op": "supersedes",
+      "band": 0,
+      "target": 1
+    }
+  ],
+  "expect": {
+    "verdict": "refuted",
+    "check": "identity"
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "id": "n5-nothing-drawn",
+  "description": "No entries drawn",
+  "tampered": "empty draw",
+  "kind": "onchain",
+  "roots": {
+    "G": {}
+  },
+  "nodes": {
+    "h1:1984": {},
+    "h2:1984": {},
+    "h3:1984": {}
+  },
+  "entries": [],
+  "expect": {
+    "verdict": "unknown",
+    "check": "onchain"
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "id": "bands-honest-unlocated-allowed",
+  "description": "A band whose items are all unlocated, as its band.json declares, allowed",
+  "tampered": "nothing (all unlocated, declared)",
+  "kind": "bands",
+  "bands": [
+    {
+      "from": 100,
+      "to": 199,
+      "rows": [
+        {
+          "op": "unlocate",
+          "row": "all"
+        }
+      ],
+      "band": [
+        {
+          "op": "setChecks",
+          "value": {
+            "unlocated": {
+              "no_offsets": 2
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "options": {
+    "allowUnlocated": true,
+    "onchain": {
+      "perBand": 2,
+      "source": "stranger"
+    }
+  },
+  "expect": {
+    "verdict": "verified"
+  }
+}

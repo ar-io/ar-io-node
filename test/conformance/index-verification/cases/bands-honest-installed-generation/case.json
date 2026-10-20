@@ -1,0 +1,25 @@
+{
+  "id": "bands-honest-installed-generation",
+  "description": "A sound band in a directory named <id>~<generation>, as a subscriber installs it",
+  "tampered": "nothing",
+  "kind": "bands",
+  "bands": [
+    {
+      "from": 100,
+      "to": 199
+    }
+  ],
+  "files": [
+    {
+      "op": "renameGeneration",
+      "band": 0,
+      "generation": "abc123def456"
+    }
+  ],
+  "options": {
+    "publisher": true
+  },
+  "expect": {
+    "verdict": "verified"
+  }
+}

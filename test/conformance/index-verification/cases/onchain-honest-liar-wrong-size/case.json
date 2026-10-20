@@ -1,0 +1,27 @@
+{
+  "id": "onchain-honest-liar-wrong-size",
+  "description": "One node gives another size for the root's place",
+  "tampered": "liar offset",
+  "kind": "onchain",
+  "roots": {
+    "G": {}
+  },
+  "nodes": {
+    "bad:1984": {
+      "offset": {
+        "*": "wrongSize"
+      }
+    },
+    "h1:1984": {},
+    "h2:1984": {}
+  },
+  "entries": [
+    {
+      "root": "G",
+      "repeat": 20
+    }
+  ],
+  "expect": {
+    "verdict": "verified"
+  }
+}

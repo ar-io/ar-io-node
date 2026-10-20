@@ -1,0 +1,39 @@
+{
+  "id": "n2-everything-allowed-unchecked",
+  "description": "Every chunk unseeded with every item allowed unchecked: nothing verified",
+  "tampered": "chunks 404, maxUnchecked 20",
+  "kind": "onchain",
+  "roots": {
+    "G": {}
+  },
+  "nodes": {
+    "n1:1984": {
+      "chunk": {
+        "*": "404"
+      }
+    },
+    "n2:1984": {
+      "chunk": {
+        "*": "404"
+      }
+    },
+    "n3:1984": {
+      "chunk": {
+        "*": "404"
+      }
+    }
+  },
+  "entries": [
+    {
+      "root": "G",
+      "repeat": 20
+    }
+  ],
+  "options": {
+    "maxUnchecked": 20
+  },
+  "expect": {
+    "verdict": "unknown",
+    "check": "onchain"
+  }
+}

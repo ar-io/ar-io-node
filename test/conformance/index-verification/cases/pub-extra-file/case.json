@@ -1,0 +1,26 @@
+{
+  "id": "pub-extra-file",
+  "description": "A file in a band that the publication doesn't list",
+  "tampered": "extra.parquet written",
+  "kind": "bands",
+  "bands": [
+    {
+      "from": 100,
+      "to": 199,
+      "publisher": "wallet"
+    }
+  ],
+  "files": [
+    {
+      "op": "writeFile",
+      "band": 0,
+      "file": "extra.parquet",
+      "text": "x"
+    }
+  ],
+  "publication": {},
+  "expect": {
+    "verdict": "refuted",
+    "check": "publication"
+  }
+}

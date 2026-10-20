@@ -1,0 +1,27 @@
+{
+  "id": "onchain-honest-liar-bad-proof",
+  "description": "One node serves chunks whose proofs fail",
+  "tampered": "liar chunks",
+  "kind": "onchain",
+  "roots": {
+    "G": {}
+  },
+  "nodes": {
+    "bad:1984": {
+      "chunk": {
+        "*": "badproof"
+      }
+    },
+    "h1:1984": {},
+    "h2:1984": {}
+  },
+  "entries": [
+    {
+      "root": "G",
+      "repeat": 20
+    }
+  ],
+  "expect": {
+    "verdict": "verified"
+  }
+}

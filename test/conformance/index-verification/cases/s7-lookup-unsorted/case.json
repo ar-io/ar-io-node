@@ -1,0 +1,34 @@
+{
+  "id": "s7-lookup-unsorted",
+  "description": "Lookup files whose rows are out of their key's order",
+  "tampered": "lookup_id and lookup_tag rewritten in reverse",
+  "kind": "bands",
+  "bands": [
+    {
+      "from": 100,
+      "to": 199,
+      "rows": [
+        {
+          "op": "moreDirect",
+          "count": 5
+        }
+      ]
+    }
+  ],
+  "files": [
+    {
+      "op": "reverseFile",
+      "band": 0,
+      "file": "lookup_id.parquet"
+    },
+    {
+      "op": "reverseFile",
+      "band": 0,
+      "file": "lookup_tag.parquet"
+    }
+  ],
+  "expect": {
+    "verdict": "refuted",
+    "check": "lookups"
+  }
+}

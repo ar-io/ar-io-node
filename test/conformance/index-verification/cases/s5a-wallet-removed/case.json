@@ -1,0 +1,22 @@
+{
+  "id": "s5a-wallet-removed",
+  "description": "An owner's key removed from wallets, the band declaring none missing",
+  "tampered": "wallets emptied",
+  "kind": "bands",
+  "bands": [
+    {
+      "from": 100,
+      "to": 199,
+      "rows": [
+        {
+          "op": "clear",
+          "table": "wallets"
+        }
+      ]
+    }
+  ],
+  "expect": {
+    "verdict": "refuted",
+    "check": "consistency"
+  }
+}

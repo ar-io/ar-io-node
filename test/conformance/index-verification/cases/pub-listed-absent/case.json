@@ -1,0 +1,29 @@
+{
+  "id": "pub-listed-absent",
+  "description": "A band the publication lists is not in the directory",
+  "tampered": "tip band removed",
+  "kind": "bands",
+  "bands": [
+    {
+      "from": 100,
+      "to": 199,
+      "publisher": "wallet"
+    },
+    {
+      "from": 200,
+      "to": 299,
+      "publisher": "wallet"
+    }
+  ],
+  "files": [
+    {
+      "op": "removeDir",
+      "band": 1
+    }
+  ],
+  "publication": {},
+  "expect": {
+    "verdict": "refuted",
+    "check": "publication"
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "id": "onchain-honest-liar-height",
+  "description": "One node names the right block at another height (D1)",
+  "tampered": "liar status height",
+  "kind": "onchain",
+  "roots": {
+    "G": {}
+  },
+  "nodes": {
+    "h0:1984": {},
+    "liar:1984": {
+      "status": {
+        "*": "status:height=999"
+      }
+    },
+    "h2:1984": {}
+  },
+  "entries": [
+    {
+      "root": "G",
+      "repeat": 20
+    }
+  ],
+  "expect": {
+    "verdict": "verified"
+  }
+}

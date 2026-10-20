@@ -1,0 +1,27 @@
+{
+  "id": "pub-band-json-edit",
+  "description": "band.json edited after signing (checks only, outside the id)",
+  "tampered": "checks.ownersWithoutKey raised",
+  "kind": "bands",
+  "bands": [
+    {
+      "from": 100,
+      "to": 199,
+      "publisher": "wallet"
+    }
+  ],
+  "files": [
+    {
+      "op": "editBandJson",
+      "band": 0,
+      "checks": {
+        "ownersWithoutKey": 5
+      }
+    }
+  ],
+  "publication": {},
+  "expect": {
+    "verdict": "refuted",
+    "check": "publication"
+  }
+}

@@ -1,0 +1,42 @@
+{
+  "id": "n6-machine-chain",
+  "description": "Three names whose addresses chain into one machine serve a fake root",
+  "tampered": "a fake root served by one machine under three names",
+  "kind": "onchain",
+  "roots": {
+    "F": {}
+  },
+  "nodes": {
+    "a:1984": {},
+    "c:1984": {},
+    "b:1984": {},
+    "h:1984": {
+      "default": "404"
+    }
+  },
+  "entries": [
+    {
+      "root": "F",
+      "repeat": 2
+    }
+  ],
+  "addresses": {
+    "a": [
+      "10.0.0.1"
+    ],
+    "c": [
+      "10.0.0.2"
+    ],
+    "b": [
+      "10.0.0.1",
+      "10.0.0.2"
+    ],
+    "h": [
+      "10.0.0.9"
+    ]
+  },
+  "expect": {
+    "verdict": "unknown",
+    "check": "onchain"
+  }
+}

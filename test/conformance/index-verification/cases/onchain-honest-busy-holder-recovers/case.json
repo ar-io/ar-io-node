@@ -1,0 +1,35 @@
+{
+  "id": "onchain-honest-busy-holder-recovers",
+  "description": "Two nodes lack the header; the holder is busy for its first two asks (E2b)",
+  "tampered": "holder 503 twice",
+  "kind": "onchain",
+  "roots": {
+    "G": {}
+  },
+  "nodes": {
+    "tip1:1984": {
+      "header": {
+        "*": "404"
+      }
+    },
+    "tip2:1984": {
+      "header": {
+        "*": "404"
+      }
+    },
+    "data1:1984": {
+      "header": {
+        "*": "503Twice"
+      }
+    }
+  },
+  "entries": [
+    {
+      "root": "G",
+      "repeat": 20
+    }
+  ],
+  "expect": {
+    "verdict": "verified"
+  }
+}

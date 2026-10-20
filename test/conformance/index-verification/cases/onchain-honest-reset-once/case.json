@@ -1,0 +1,35 @@
+{
+  "id": "onchain-honest-reset-once",
+  "description": "Two nodes lack the header; the holder resets its first connection (N1b)",
+  "tampered": "one connection reset",
+  "kind": "onchain",
+  "roots": {
+    "G": {}
+  },
+  "nodes": {
+    "tip1:1984": {
+      "header": {
+        "*": "404"
+      }
+    },
+    "tip2:1984": {
+      "header": {
+        "*": "404"
+      }
+    },
+    "data1:1984": {
+      "header": {
+        "*": "resetOnce"
+      }
+    }
+  },
+  "entries": [
+    {
+      "root": "G",
+      "repeat": 20
+    }
+  ],
+  "expect": {
+    "verdict": "verified"
+  }
+}

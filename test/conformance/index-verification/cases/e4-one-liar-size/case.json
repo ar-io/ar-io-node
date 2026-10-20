@@ -1,0 +1,36 @@
+{
+  "id": "e4-one-liar-size",
+  "description": "One node gives another size, one 404s, the holder 503s",
+  "tampered": "liar offset",
+  "kind": "onchain",
+  "roots": {
+    "G": {}
+  },
+  "nodes": {
+    "liar:1984": {
+      "offset": {
+        "*": "wrongSize"
+      }
+    },
+    "tip2:1984": {
+      "offset": {
+        "*": "404"
+      }
+    },
+    "data1:1984": {
+      "offset": {
+        "*": "503"
+      }
+    }
+  },
+  "entries": [
+    {
+      "root": "G",
+      "repeat": 20
+    }
+  ],
+  "expect": {
+    "verdict": "unknown",
+    "check": "onchain"
+  }
+}

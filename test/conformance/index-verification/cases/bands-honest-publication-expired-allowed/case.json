@@ -1,0 +1,24 @@
+{
+  "id": "bands-honest-publication-expired-allowed",
+  "description": "Sound bands bound to an expired publication, expiry allowed",
+  "tampered": "publication expired",
+  "kind": "bands",
+  "bands": [
+    {
+      "from": 100,
+      "to": 199,
+      "publisher": "wallet"
+    }
+  ],
+  "publication": {
+    "expiresAt": "2020-01-01T00:00:00Z",
+    "issuedAt": "2019-12-31T00:00:00Z"
+  },
+  "options": {
+    "allowExpired": true
+  },
+  "expect": {
+    "verdict": "verified",
+    "publisherBound": true
+  }
+}

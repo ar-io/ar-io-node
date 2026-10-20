@@ -1,0 +1,27 @@
+{
+  "id": "s8b-low-band-json-missing",
+  "description": "The low band's band.json removed",
+  "tampered": "band.json deleted",
+  "kind": "bands",
+  "bands": [
+    {
+      "from": 100,
+      "to": 199
+    },
+    {
+      "from": 200,
+      "to": 299
+    }
+  ],
+  "files": [
+    {
+      "op": "removeFile",
+      "band": 0,
+      "file": "band.json"
+    }
+  ],
+  "expect": {
+    "verdict": "refuted",
+    "check": "files"
+  }
+}
