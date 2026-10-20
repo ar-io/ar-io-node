@@ -112,6 +112,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     `data/tmp/index-verify`, not the container layer on `/`; the spill is
     capped at 80% of the free space, a run that could not fit is refused
     before it starts, and an interrupted run removes its spill.
+  - The on-chain sample drew only from about the first 82,000 rows of each
+    band (DuckDB's `USING SAMPLE reservoir … REPEATABLE`); it now draws the
+    N located rows with the smallest hash of their position and a per-band
+    seed (sha256 of the run's seed, the band's id and the stratum), uniform
+    over the whole band, with nested items topped up to half the draw. The
+    stated bound uses the uniform draw only.
+  - A node that only failed to connect, or a machine without the
+    transaction at all, no longer counts against a root: before any
+    verdict of absence every silent node is asked again, any still unheard
+    leaves the item unchecked, and a status 404 denies a root only from a
+    machine that serves its header.
+  - A band with nothing verified on chain is inconclusive, whatever
+    `--max-unchecked` allows.
   - The on-chain check draws its sample up front and never replaces an
     item: each ends `ok`, `wrong` or `unchecked`; any wrong fails the band,
     any unchecked (after a second try) leaves it inconclusive unless

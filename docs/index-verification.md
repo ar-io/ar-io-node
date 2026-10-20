@@ -47,9 +47,12 @@ gateway, this one included:
    the height the band gives its items. The status says nothing of where in
    the block the root is: that position is not checked this way, and the
    result says so (`roots.checks`, `assurance`). Every node that names a
-   block must name the same one (`minedByNodes`). Too few machines placing
-   it while others say it is in no block **refutes** the root; nodes naming
-   different blocks is an error; every node saying it is in no block makes
+   block must name the same one (`minedByNodes`). A 404 for the status is a
+   denial only from a machine that serves the root's header (a machine
+   without the transaction at all just doesn't have it). Two such machines
+   saying it is in no block, with every node heard, **refute** the root;
+   fewer leave it unchecked; nodes naming different blocks is an error;
+   every node saying it is in no block makes
    it `missing`. `index-l2-verify` can instead find **every** root of a
    band in an L1 index, height and position both (`--l1-bands-dir`, below).
 3. **Its place in the weave** comes from `/tx/{id}/offset`, whose size must be
@@ -75,11 +78,13 @@ node's fault: it is passed over, other nodes are asked, and it is listed in
 root itself from at least two machines: no node binds it and two machines
 said something definite against it (404s for its header, or headers of this
 id that can't bind it); two machines agree on its block, hash and height,
-at a height other than the band gives; two machines say it is in no block.
+at a height other than the band gives; two machines that serve its header
+say it is in no block.
 A block is its hash and its height together: a node naming the agreed hash
 at another height is that node's fault. Fewer than two machines saying
 anything definite leaves the item unchecked: never a refutation, and never
-a pass (see below). Before any verdict of absence, busy and resting nodes are asked
+a pass (see below). Before any verdict of absence, busy, unreachable and
+resting nodes are asked
 once more.
 
 **A bound root is never missing.** Once a root is bound (a format-2 header
@@ -107,8 +112,14 @@ its root or in a nested bundle, so a stratified draw would let it put
 fabricated items where fewer draws fall). It then draws nested items on top
 until `ceil(N/2)` drawn items are nested, where the band has them, so the
 nested path is always read; those count like the rest, but the bound below
-uses only the uniform N. Each band's draw is seeded by sha256 of the run's
-seed and the band's id. The seed is random per run and reported; `--seed`
+uses only the uniform N. The draw is the n located rows with the smallest
+`hash(row position, s)`, where `s` is the band's seed: the first 31 bits of
+`sha256("<run seed>|<band id>|<stratum>")` (stratum 0 for the uniform draw,
+1 for the nested top-up). It MUST be salted by the band's id, so two bands
+of the same layout never draw the same positions (`hash` is DuckDB's; an
+implementation without it gives the same verdicts with any hash of the row
+position and seed the publisher can't predict, since the seed is unknown
+to it). The seed is random per run and reported; `--seed`
 is for reproducing a run only (a publisher that knew the seed before
 publishing could grind its band against it).
 
@@ -217,7 +228,7 @@ ran passed; read it with `skipped`, `publisherBound` and `assurance`**
 | `selected`    | an item has no tag the band's selection takes (the name byte for byte, the value starting with `valuePrefix` and not `excludeValuePrefix`, as the exporter selects)                                                                                                                                                                                                                  |
 | `lookups`     | a lookup file, read in the order it holds its rows, is out of its key's order (a reader's search over its row groups would miss keys), or doesn't digest to what `band.json` says, or doesn't hold exactly the rows its tables give (`--skip-lookups` leaves this out)                                                                                                            |
 | `mined`       | with an L1 index: a root isn't in the index's `block_transactions` at the height its items give, or is there at another `block_transaction_index`. Every root of every band, not a sample. A root at another index is listed in `mined.moved` with both positions: two indexes disagreeing on a block's order may be the L1 index's fault (`tx_root` doesn't bind the order), so check it with `index-l1-verify` and compare with the publisher's own L1 index. It fails all the same |
-| `onchain`     | a drawn item is `wrong`, or more than `--max-unchecked` (0) drawn items are `unchecked` (the band is then inconclusive), or the band has items but none located, so nothing of it can be read on chain (`--allow-unlocated` passes such a band). See [one denominator, no substitution](#index-l2-verify-one-denominator-no-substitution). `--onchain <n>` items per band, default 20; `0` leaves it out. The seed is random per run and reported; `--seed` repeats a run's draw exactly, for reproducing a run only |
+| `onchain`     | a drawn item is `wrong`, or more than `--max-unchecked` (0) drawn items are `unchecked`, or no drawn item is `ok` (the band is then inconclusive), or the band has items but none located, so nothing of it can be read on chain (`--allow-unlocated` passes such a band). See [one denominator, no substitution](#index-l2-verify-one-denominator-no-substitution). `--onchain <n>` items per band, default 20; `0` leaves it out. The seed is random per run and reported; `--seed` repeats a run's draw exactly, for reproducing a run only |
 | `complete`    | a band could not be read to the end of its checks: a file vanished mid-run, an I/O or DuckDB error. That band fails and the run goes on to the next; the full result is always written                                                                                                                                                                                             |
 
 **Bound to a publisher: `--publication`.** Without it, `publisherBound` is
