@@ -34,8 +34,15 @@ import { verifyBands } from '../../lib/parquet-l1/verify-bands.js';
 import type { IndexL1VerifyCLIOptions, JsonSerializable } from '../types.js';
 import { requiredStringFromOptions } from '../utils.js';
 
-/** The most a check may spill, the cap `index-l1-import` uses too. */
-export const BANDS_SPILL_MAX = '16GB';
+/**
+ * The most a check may spill unless `--spill-max` says otherwise. The lookup
+ * check of a 69-million-item band (h1.8M of `ardrive-l2`) peaks at about
+ * 65 GB (measured 2026-10-20); 128 GB leaves room for a band twice that.
+ */
+export const BANDS_SPILL_MAX = '128GB';
+/** A DuckDB size: digits and a unit (`16GB`, `512MB`, `1TB`). */
+export const SPILL_MAX_PATTERN =
+  /^\d+(\.\d+)?\s*(KB|MB|GB|TB|KiB|MiB|GiB|TiB)$/i;
 
 /**
  * A DuckDB session for checking bands: bounded memory, two threads, no
@@ -50,10 +57,19 @@ export const BANDS_SPILL_MAX = '16GB';
  * fill the disk under it (through the wrapper, the container layer on `/`).
  */
 export async function openBandsDuck(
-  options: { tmpRoot?: string } = {},
+  options: { tmpRoot?: string; prefix?: string; spillMax?: string } = {},
 ): Promise<{ duck: Database; spill: string; close(): Promise<void> }> {
+  const spillMax = options.spillMax ?? BANDS_SPILL_MAX;
+  if (!SPILL_MAX_PATTERN.test(spillMax)) {
+    throw new Error(
+      `--spill-max must be a size such as 16GB or 512MB, not ${spillMax}`,
+    );
+  }
   const spill = await fsp.mkdtemp(
-    path.join(options.tmpRoot ?? os.tmpdir(), 'ar-io-node-l1-verify-'),
+    path.join(
+      options.tmpRoot ?? os.tmpdir(),
+      options.prefix ?? 'ar-io-node-l1-verify-',
+    ),
   );
   const removeSpill = () => fsp.rm(spill, { recursive: true, force: true });
   let duck: Database | undefined;
@@ -61,7 +77,7 @@ export async function openBandsDuck(
     const { Database } = await import('duckdb-async');
     duck = await Database.create(':memory:');
     await duck.exec(
-      `SET memory_limit = '2GB'; SET threads = 2; SET temp_directory = '${spill.replace(/'/g, "''")}'; SET max_temp_directory_size = '${BANDS_SPILL_MAX}'; SET autoinstall_known_extensions = false; SET autoload_known_extensions = false;`,
+      `SET memory_limit = '2GB'; SET threads = 2; SET temp_directory = '${spill.replace(/'/g, "''")}'; SET max_temp_directory_size = '${spillMax.replace(/'/g, "''")}'; SET autoinstall_known_extensions = false; SET autoload_known_extensions = false;`,
     );
   } catch (error) {
     await duck?.close().catch(() => undefined);
@@ -96,7 +112,9 @@ async function verifyBandsCLI(
     }
     return n;
   };
-  const session = await openBandsDuck();
+  const session = await openBandsDuck({
+    ...(options.spillMax !== undefined ? { spillMax: options.spillMax } : {}),
+  });
   const { duck } = session;
   try {
     log.info('Checking bands', { bandsDir, spill: session.spill });

@@ -6,6 +6,48 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **`index-l2-verify`: check an L2 index (a directory of `parquet-l2`
+  bands, such as `ardrive-l2`) as anyone holding it can.** It needs no
+  gateway and no database. Each band:
+  - its id is checked against its contents, and the set for overlaps and
+    holes;
+  - every table is read row by row, in order, against `band.json`, and every
+    owner key against its address;
+  - every item's location must be laid out as ANS-104 requires, with its
+    `data_size` the payload it gives;
+  - every nested item must name a parent bundle that `parents` describes
+    where its payload starts, and every `parents` row's payload must start
+    inside it;
+  - the lookups are checked against the tables;
+  - a sample of items per band (`--onchain <n>`, 20 when not given) is read
+    at their recorded locations from Arweave nodes and checked against their
+    ids. Items directly in their roots and items in nested bundles are
+    sampled apart, so rare nested items are always read; `--seed` repeats a
+    run.
+  `--spill-max` sets how much the lookup check may spill (128 GB unless
+  set; the 69-million-item h1.8M band of `ardrive-l2` peaks at about 65 GB,
+  past the 16 GB `index-l1-verify` allowed before, which it now shares).
+  A band that its own publisher's newer band supersedes is left out. For L1
+  bands, `index-l1-verify` checks the chain's own commitments instead. See
+  [docs/index-verification.md](docs/index-verification.md), new, which
+  covers every index kind: what each check proves, how to reproduce a band
+  and how to repair one.
+- **Reading roots from Arweave nodes, every byte proven**
+  (`index-band-verify --arweave-nodes`, and `index-l2-verify` by default),
+  so a header check trusts no gateway:
+  - a root's signature must hash to its id and verify, binding its
+    `data_root` (two nodes must agree where arweave-js can't verify);
+  - every chunk's proof is validated against that `data_root` under the
+    consensus rules for its weave offset, and the chunk must hash to the
+    proof;
+  - a node serving a chunk that fails is passed over;
+  - a root or chunk counts as gone (`unreadable`) only when every node that
+    answered said 404. Busy nodes (429, 5xx) and chunks no node could prove
+    are errors, never missing data, and a missing chunk is only that item's,
+    not its root's.
+
 ### Changed
 
 - The `CHUNK_METADATA_ANCHOR_*` settings now pass through
