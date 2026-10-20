@@ -663,6 +663,11 @@ export async function runL1Derive(
     const rows = Object.fromEntries(
       Object.entries(lookups).map(([name, l]) => [name, l.rows]),
     );
+    // Subscribers refuse a footer over the limit: check before publishing,
+    // and in a dry run, so it reports a lookup that couldn't be published.
+    for (const spec of lookupsOf(PARQUET_L1_SCHEMA)) {
+      await checkParquetStructure(path.join(staging, spec.file));
+    }
     if (dryRun) {
       outcome = {
         ...base,
@@ -681,10 +686,6 @@ export async function runL1Derive(
         seconds: 0,
       };
     } else {
-      // Subscribers refuse a footer over the limit: check before publishing.
-      for (const spec of lookupsOf(PARQUET_L1_SCHEMA)) {
-        await checkParquetStructure(path.join(staging, spec.file));
-      }
       for (const spec of lookupsOf(PARQUET_L1_SCHEMA)) {
         await fs.rename(
           path.join(staging, spec.file),
