@@ -73,29 +73,49 @@ one, a block other nodes don't agree on, a chunk whose proof fails) is that
 node's fault: it is passed over, other nodes are asked, and it is listed in
 `roots.nodeFaults` (and logged). A root is refuted only on evidence about the
 root itself from at least two machines: no node binds it and two machines
-said something definite against it (404s, or headers of this id that can't
-bind it); two machines place it in a block at another height; two machines
-say it is in no block. Fewer than two machines saying anything definite is
-an error, tolerated within the pass ratio and the band's floor of verified
-items, never a refutation and never a pass by silence. A busy or resting node
-is asked once more only while fewer than two machines have answered.
+said something definite against it (404s for its header, or headers of this
+id that can't bind it); two machines agree on its block, hash and height,
+at a height other than the band gives; two machines say it is in no block.
+A block is its hash and its height together: a node naming the agreed hash
+at another height is that node's fault. Fewer than two machines saying
+anything definite is an error, tolerated within the pass ratio and the
+band's floor of verified items, never a refutation and never a pass by
+silence. Before any verdict of absence, busy and resting nodes are asked
+once more.
+
+**A bound root is never missing.** Once a root is bound (a format-2 header
+whose signature hashes to its id and verifies) and two machines place it in
+a block, nothing about its data can make it `missing`: a node answering 404
+to `/tx/{id}/offset` or to a chunk holds no data for it, which says nothing
+against it. In the default pool the `tip` nodes and some `data` nodes answer
+404 to `/offset` for mined transactions while serving their headers. Such a
+root with no node giving its place, or with a holder busy, is an error.
+`missing` is only for a root no node binds and two machines answer 404 for;
+a verdict of `missing` reached while some node stayed busy is not remembered
+for the run, so the root is asked again for its next item.
 
 What a header read comes to, as every header check sorts it:
 
 | Outcome      | Means                                                                                             | Counts                                            |
 | ------------ | ------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
 | `ok`         | the bytes at the recorded location are a data item header whose signature hashes to the item's id | for the band                                      |
-| `wrong`      | something else is there, or the range runs past the root; or the chain **refutes** the root: no `data_root`, format 1, another transaction's header, a signature that doesn't verify (without `--allow-agreement`), not mined, or in a block at another height than the band says | **against** the band: one fails it |
-| `missing`    | `index-l2-verify` only: every node that answered said 404 for the root itself (its header, its place, its block): a root id made up, or never mined. Two machines must say so; while fewer have, a busy or resting node is asked once more | **against** the band: one fails it |
+| `wrong`      | something else is there, or the range runs past the root; or the chain **refutes** the root, on two machines' word: no `data_root`, format 1, a signature that doesn't verify (without `--allow-agreement`), in no block, in a block at another height than the band says, or a size other than its header signs | **against** the band: one fails it |
+| `missing`    | `index-l2-verify` only: no node binds the root and two machines or more answered 404 for its header (busy and resting nodes asked once more first): a root id made up. Never a bound root: its offset or chunks unavailable are errors | **against** the band: one fails it |
 | `unreadable` | every node that answered said 404 for the chunk holding the header: data gone network-wide (unseeded or purged). For `index-band-verify`, a root gone this way too | neither way, and another sample is taken in its place; `index-l2-verify` fails a band where more than `--max-unreadable-share` (20%) of the items tried are unreadable |
 | `errors`     | a failure to check, never a refutation: nodes busy or failing (429, 5xx) and nothing else said, a chunk no node could prove, no node reachable, nodes naming different blocks, a read still pending at the band's deadline | against the pass ratio; rerun. `onchain.bands[].errorSample` shows a few per band |
 
-A 404 counts only when **every** node that answered said 404 (a node that has a
-chunk only packed counts as not having it). One busy node (429, 5xx) among
-them, or one whose chunk failed its proof, makes it an error instead: that node
-may hold the data, and an unprovable chunk is the node's fault, not an absence.
-A missing chunk is that item's alone; a missing root (header or offset) is
-every item's under it.
+A chunk counts as `unreadable` only when **every** node that answered said
+404, a busy one asked again first (a node that has a chunk only packed counts
+as not having it). One still busy (429, 5xx) among them, or one whose chunk
+failed its proof, makes it an error instead: that node may hold the data, and
+an unprovable chunk is the node's fault, not an absence. A missing chunk is
+that item's alone; a missing root is every item's under it.
+
+A machine is the set of addresses a node's name resolves to (A and AAAA);
+two nodes whose sets meet are one machine, every loopback address and
+`localhost` are one, and IPv6 literals (`http://[::1]:1984`) work. A name
+that doesn't resolve counts as a machine of its own and is listed in
+`roots.unresolvedNodes`.
 
 The default pool is the `tip` and `data` nodes ar-io-node reads chunks from
 (`PREFERRED_CHUNK_GET_NODE_URLS`'s default). `data` nodes each hold a partition
@@ -144,7 +164,7 @@ ran passed; read it with `skipped`, `publisherBound` and `assurance`**
 | `located`     | a band's unlocated items (no location, so nothing to read on chain) are not exactly the number its `band.json` declares (`checks.unlocated`, summed over its reasons), or are more than `--max-unlocated-share` of its items (0.001; the most measured in a real `ardrive-l2` band is 0.00035). `--allow-unlocated` passes a band whose items are all unlocated, as declared. Each band's counts are under `located` |
 | `selected`    | an item has no tag the band's selection takes (the name byte for byte, the value starting with `valuePrefix` and not `excludeValuePrefix`, as the exporter selects)                                                                                                                                                                                                                  |
 | `lookups`     | a lookup file, read in the order it holds its rows, is out of its key's order (a reader's search over its row groups would miss keys), or doesn't digest to what `band.json` says, or doesn't hold exactly the rows its tables give (`--skip-lookups` leaves this out)                                                                                                            |
-| `mined`       | with an L1 index: a root isn't in the index's `block_transactions` at the height its items give, or is there at another `block_transaction_index`. Every root of every band, not a sample                                                                                                                                                                                          |
+| `mined`       | with an L1 index: a root isn't in the index's `block_transactions` at the height its items give, or is there at another `block_transaction_index`. Every root of every band, not a sample. A root at another index is listed in `mined.moved` with both positions: two indexes disagreeing on a block's order may be the L1 index's fault (`tx_root` doesn't bind the order), so check it with `index-l1-verify` and compare with the publisher's own L1 index. It fails all the same |
 | `onchain`     | a sampled item's header, read at its recorded location, is not that item; a sampled root is `missing`; more than `--max-unreadable-share` of the items tried are unreadable; too few could be verified; the band's deadline passed; or the band has items but none located, so nothing of it can be read on chain (`--allow-unlocated` passes such a band). `--onchain <n>` items per band, default 20; `0` leaves it out. Items directly in their roots and items in nested bundles are sampled apart, half each, so rare nested items are always read. `--seed` repeats a run exactly (the sample, and the order it is read in, both seeded per band by its id); the result reports the seed it drew |
 | `complete`    | a band could not be read to the end of its checks: a file vanished mid-run, an I/O or DuckDB error. That band fails and the run goes on to the next; the full result is always written                                                                                                                                                                                             |
 
@@ -168,7 +188,8 @@ checking its own bands can pass `data/indexes/published/publication.json`.
 in that `parquet-l1` index (`mined`); every band must be covered. Without it,
 the node's own `data/indexes/installed/parquet-l1`, else
 `data/indexes/published/parquet-l1`, is used where it exists, and a band it
-does not cover is listed in `mined.uncovered`; `--l1-bands-dir none` uses
+does not cover is listed in `mined.uncovered` and in `skipped` as
+`mined:partial:<band ids>`; `--l1-bands-dir none` uses
 none. This trusts the L1 index, so check it first with `index-l1-verify`.
 With neither an L1 index nor Arweave nodes, `mined` is in `skipped`: through
 `--gateway-url`, the gateway is trusted for the bytes and nobody says the
@@ -190,10 +211,13 @@ are read in their own order too, and only the rows derived from the tables
 are sorted. The consistency check groups `tags` and `data_items` by item. Both
 spill to a folder of their own under the system temp directory, capped at
 `--spill-max` (128 GB unless set) and at 80% of the space free there when the
-run starts; and never into the last 100 GB free there; a run whose largest band is
-expected to need more than that cap is refused before it starts. Spill
-folders of the same kind a killed run left a day or more ago are removed when
-a run starts, and logged. Through `tools/ar-io-node` that folder is
+run starts; and never into the last 100 GB free there, so with less than about 100 GB
+free the lookup check is refused (`--skip-lookups` runs the rest); a run
+whose largest band is expected to need more than that cap is refused before
+it starts. Each run touches a `.heartbeat` file in its spill folder every
+minute; a folder of the same kind whose heartbeat stopped a day or more ago
+(a run killed outright) is removed when a run starts, and logged, and a
+folder still beating is left alone. Through `tools/ar-io-node` that folder is
 `data/tmp/index-verify` beside the node's `data/indexes`, never the container
 layer on `/`. Measured on one host (2 cores, 10 GB, publication seq
 157, before the checks above were added): the whole `ardrive-l2` index, 23
@@ -231,7 +255,7 @@ or diff the two bands' rows, not just their ids.
 | the same in a **published** band                                 | rebuild it (`--range`, above), check the rebuild, and publish it in its place (`index-export --once --resettle --range <from>-<to>` for a frozen band) |
 | `schema`, `required`, `consistency` or `selected` failure        | the builder wrote rows its layout doesn't allow, or the band was altered: as `identity` above for an installed band; rebuild a published one |
 | `publication` failure                                            | the bytes are not the ones the publisher signed: remove an installed copy and let the sidecar fetch it again; for a published band, republish |
-| `mined` failure                                                  | the L2 band and the L1 index disagree on where a root is: check the L1 index (`index-l1-verify`); if it holds, the L2 band's positions are wrong, so report it upstream |
+| `mined` failure                                                  | the L2 band and the L1 index disagree on where a root is. For `moved` roots (same block, another position), the L1 index may be the one wrong: two publishers' L1 indexes have been seen to order a few blocks differently, which `tx_root` doesn't catch. Check the L1 index (`index-l1-verify`) and compare `mined.moved` with the publisher's own L1 index; if yours holds, the L2 band's positions are wrong, so report it upstream |
 | `locations`, `parents` or `onchain` `wrong` or `missing`         | the builder placed items wrongly, or its source holds a wrong row: report it upstream with the band id and the failures; the publisher repairs the source, then rebuilds and re-settles the band |
 | many `unreadable`                                                | not a fault of the index: every node said 404, so the data is gone network-wide. Seeding the missing chunks again (where the data still exists) makes them readable |
 | many `errors`                                                    | rerun (nodes were busy); if a chunk keeps failing its proof, the nodes serving it are at fault, not the index                                       |

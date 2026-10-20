@@ -120,7 +120,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - No single node can fail an honest band, any more than pass a bad one:
     an answer of one node that doesn't hold up is its fault, passed over
     for others and listed in `roots.nodeFaults`; a root is refuted only on
-    evidence from two machines.
+    evidence from two machines. A block is its hash and height together, a
+    bound root is never `missing` (nodes holding no data answer 404 to
+    `/offset`), machines are compared by all their addresses, and moved
+    roots in the L1 check are listed with both positions.
   - The publication is refused once expired (`--allow-expired`), a band it
     lists in the range that the directory lacks fails, and `assurance` says
     when its key came from a registry.

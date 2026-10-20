@@ -866,10 +866,14 @@ proves, and how to reproduce or repair a band that fails, is in
 It reads every row of every table in file order, so memory stays flat; the
 large lookups spill to a folder of their own under the system temp directory
 (`TMPDIR`; through `tools/ar-io-node`, `data/tmp/index-verify` beside the
-node's `data/indexes`), capped at `--spill-max` and at 80% of the space free
-there, and removed when the run ends or is interrupted. A run whose largest
-band is expected to spill more than the cap is refused before it starts. A run
-killed outright (SIGKILL) can leave `ar-io-node-l2-verify-*` behind; delete it.
+node's `data/indexes`), capped at `--spill-max`, at 80% of the space free
+there and at that space less 100 GB, and removed when the run ends or is
+interrupted. With less than about 100 GB free the lookup check is refused;
+a run whose largest band is expected to spill more than the cap is refused
+before it starts. A run killed outright (SIGKILL) leaves its
+`ar-io-node-l2-verify-*` folder behind; the next run removes it once its
+`.heartbeat` file is a day old, and leaves alone a folder another run is still
+beating.
 
 ### `index-l2-verify` result
 
