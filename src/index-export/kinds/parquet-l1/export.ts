@@ -579,7 +579,9 @@ export async function exportL1Band({
       createdAt: bandTime(topTimestamp),
     };
     // Refuse to publish a band whose files every subscriber would refuse.
-    await checkParquetDir(bandDir);
+    await checkParquetDir(bandDir).catch((error: Error) => {
+      throw new L1CheckError(error.message, 'footer');
+    });
     await fs.writeFile(path.join(bandDir, BAND_FILE), serializeBandFile(band));
     await writePublisherFacts(bandDir, {
       ...(supersedes.length > 0 ? { supersedes } : {}),
@@ -608,7 +610,15 @@ export async function exportL1Band({
 }
 
 /** Rows that fail the chain checks: a band is refused, not retried. */
-export class L1CheckError extends Error {}
+export class L1CheckError extends Error {
+  constructor(
+    message: string,
+    /** What failed, as the run's `reason`: the chain unless said. */
+    readonly reason: string = 'chain',
+  ) {
+    super(message);
+  }
+}
 
 /**
  * A read of `core.db` that failed for a reason that passes: the gateway

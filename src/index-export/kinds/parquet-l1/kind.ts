@@ -56,6 +56,7 @@ import {
   tablesCurrent,
   writePublisherFacts,
 } from '../../../lib/parquet-l1/layout.js';
+import { checkParquetStructure } from '../../../lib/parquet/check.js';
 import { writeBandLookups } from '../../../lib/parquet-l1/lookups.js';
 import * as metrics from '../../metrics.js';
 import {
@@ -397,7 +398,7 @@ export async function runL1Step(
         ? {
             ...base,
             result: 'rejected',
-            reason: 'chain',
+            reason: error.reason,
             details: [message],
             seconds: 0,
           }
@@ -680,6 +681,10 @@ export async function runL1Derive(
         seconds: 0,
       };
     } else {
+      // Subscribers refuse a footer over the limit: check before publishing.
+      for (const spec of lookupsOf(PARQUET_L1_SCHEMA)) {
+        await checkParquetStructure(path.join(staging, spec.file));
+      }
       for (const spec of lookupsOf(PARQUET_L1_SCHEMA)) {
         await fs.rename(
           path.join(staging, spec.file),

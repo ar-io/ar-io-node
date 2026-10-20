@@ -1013,7 +1013,9 @@ async function build(
       createdAt,
     };
     // Refuse to publish a band whose files every subscriber would refuse.
-    await checkParquetDir(bandDir);
+    await checkParquetDir(bandDir).catch((error: Error) => {
+      throw new L2CheckError('footer', error.message);
+    });
     await fs.writeFile(path.join(bandDir, BAND_FILE), serializeBandFile(band));
     const sampled = [
       ...new Map(

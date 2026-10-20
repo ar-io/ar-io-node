@@ -36,8 +36,13 @@ const MAGIC = Buffer.from('PAR1');
  * A footer grows with its file's row groups (about 120k rows each, DuckDB's
  * default, at roughly 600 bytes per group). The largest real one so far is
  * 2.43 MB: `ardrive-l2` band h1800000's 3.7 GB `tags.parquet`, 518M rows in
- * 4,204 groups. 8 MiB leaves about 3.4 times that, around 1.8 billion rows a
- * file, and costs at most about 170 MB to decode.
+ * 4,204 groups. 8 MiB leaves about 3.4 times that, and costs at most about
+ * 170 MB to decode. For a table at the default row-group size that is around
+ * 1.8 billion rows a file; lookups use 16,384-row groups, so a lookup reaches
+ * it far sooner (`lookup_tag` at about 210 million rows).
+ *
+ * A subscriber validates one band at a time per publisher, one file at a
+ * time, so that bound applies once per subscribed publisher.
  */
 export const MAX_FOOTER_BYTES = 8 * 1024 * 1024;
 
