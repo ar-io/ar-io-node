@@ -569,12 +569,12 @@ export function onchainAssurance(
   /** The fewest located items drawn uniformly in any band (min(N, located)). */
   fewestDrawn: number = perBand,
 ): string {
-  const effective = Math.min(perBand, fewestDrawn) - maxUnchecked;
-  if (effective <= 0) {
+  const n = Math.min(perBand, fewestDrawn);
+  if (n - maxUnchecked <= 0) {
     return `on chain, ${perBand} located items drawn per band (as few as ${fewestDrawn} in a band) with up to ${maxUnchecked} allowed unchecked: nothing can be said of how many items are fabricated`;
   }
-  const p = Math.ceil(detectableFraction(effective) * 100);
-  return `on chain, ${perBand} located items drawn uniformly per band${fewestDrawn < perBand ? ` (${fewestDrawn} in the band with fewest)` : ''}, none replaced${maxUnchecked > 0 ? `, up to ${maxUnchecked} allowed unchecked and counted as the attacker's` : ''} (${effective} effective): a band in which ${p}% or more of the located items are fabricated would have been caught with 95% probability; smaller fractions may not be (unlocated items are not checked on chain at all)`;
+  const p = Math.ceil(detectableFraction(n, 0.95, maxUnchecked) * 100);
+  return `on chain, ${perBand} located items drawn uniformly per band${fewestDrawn < perBand ? ` (${fewestDrawn} in the band with fewest)` : ''}, none replaced${maxUnchecked > 0 ? `, up to ${maxUnchecked} allowed unchecked, which are treated as possibly fabricated (a fabricated item behind data nobody can read comes back unchecked)` : ''}: a band in which ${p}% or more of the located items are fabricated would have been caught with 95% probability; smaller fractions may not be (unlocated items are not checked on chain at all)`;
 }
 
 /**
@@ -595,12 +595,40 @@ export function drawSeed(
 }
 
 /**
- * The smallest share of fabricated located items a band could hold and still
- * pass `n` drawn entries with none wrong, at most `1 - confidence` of the
- * time: (1 - p)^n = 1 - confidence. 20 drawn: 14%.
+ * The smallest share p of fabricated located items at which a band of `n`
+ * drawn entries, up to `k` of them allowed unchecked, passes at most
+ * `1 - confidence` of the time. A fabricated item behind data nobody can
+ * read comes back unchecked, not wrong, so the band passes when at most k
+ * drawn items are fabricated: P(Bin(n, p) <= k) = sum over i <= k of
+ * C(n, i) p^i (1 - p)^(n - i). For k = 0 that is (1 - p)^n, so
+ * p = 1 - (1 - confidence)^(1/n): 20 drawn, 14%. Otherwise found by
+ * bisection (the probability falls as p rises). 1 when nothing is bounded
+ * (k >= n).
  */
-export function detectableFraction(n: number, confidence = 0.95): number {
-  return n <= 0 ? 1 : 1 - (1 - confidence) ** (1 / n);
+export function detectableFraction(
+  n: number,
+  confidence = 0.95,
+  k = 0,
+): number {
+  if (n <= 0 || k >= n) return 1;
+  if (k <= 0) return 1 - (1 - confidence) ** (1 / n);
+  const passes = (p: number) => {
+    let term = (1 - p) ** n; // i = 0
+    let sum = term;
+    for (let i = 1; i <= k; i += 1) {
+      term *= ((n - i + 1) / i) * (p / (1 - p));
+      sum += term;
+    }
+    return sum;
+  };
+  let lo = 0;
+  let hi = 1;
+  for (let step = 0; step < 60; step += 1) {
+    const mid = (lo + hi) / 2;
+    if (passes(mid) <= 1 - confidence) hi = mid;
+    else lo = mid;
+  }
+  return hi;
 }
 
 /** A seeded PRNG (mulberry32) giving numbers in [0, 1). */

@@ -1371,13 +1371,13 @@ describe('verifyL2Bands fails closed', () => {
     );
   });
 
-  it('states the on-chain bound for the items a band really drew, less those allowed unchecked', () => {
+  it('states the on-chain bound for the items a band really drew', () => {
     assert.match(onchainAssurance(20, 0), /14% or more/);
     // 20 asked for, 5 located in the smallest band, 2 allowed unchecked:
-    // the bound is for 3 draws.
+    // the bound is for 5 draws with 2 possibly fabricated.
     assert.match(
       onchainAssurance(20, 2, 5),
-      new RegExp(`${Math.ceil(detectableFraction(3) * 100)}% or more`),
+      new RegExp(`${Math.ceil(detectableFraction(5, 0.95, 2) * 100)}% or more`),
     );
     assert.match(onchainAssurance(20, 5, 5), /nothing can be said/);
   });
@@ -1462,5 +1462,42 @@ describe('verifyL2Bands fails closed', () => {
       drawn.map((r) => Number(r.file_row_number)),
       expected,
     );
+  });
+
+  it('states the bound with k allowed unchecked as P(at most k fabricated drawn) <= 5%, not as N - k draws (review 9)', () => {
+    // Independently: the smallest p (to 0.1%) at which a band with a share
+    // p of fabricated items passes, P(Bin(n, p) <= k), at most 5% of the time.
+    const choose = (n: number, i: number) => {
+      let c = 1;
+      for (let j = 1; j <= i; j += 1) c = (c * (n - i + j)) / j;
+      return c;
+    };
+    const passes = (n: number, k: number, p: number) => {
+      let sum = 0;
+      for (let i = 0; i <= k; i += 1) {
+        sum += choose(n, i) * p ** i * (1 - p) ** (n - i);
+      }
+      return sum;
+    };
+    const bound = (n: number, k: number) => {
+      for (let m = 1; m <= 1000; m += 1) {
+        if (passes(n, k, m / 1000) <= 0.05) return m / 10;
+      }
+      return 100;
+    };
+    const percent = (text: string) =>
+      Number(/a band in which (\d+)% or more/.exec(text)?.[1] ?? 'NaN');
+    for (const k of [0, 1, 4, 5]) {
+      // Within a percentage point of the independent figure, rounded up.
+      const want = bound(20, k);
+      const got = percent(onchainAssurance(20, k));
+      assert.ok(
+        got >= want && got - want <= 1,
+        `k=${k}: stated ${got}%, independently ${want}%`,
+      );
+    }
+    assert.equal(percent(onchainAssurance(20, 0)), 14);
+    // Unchecked items are said to count as possibly fabricated.
+    assert.match(onchainAssurance(20, 4), /possibly fabricated/);
   });
 });
