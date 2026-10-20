@@ -176,7 +176,7 @@ export const optionMap = {
   spillMax: {
     alias: '--spill-max <size>',
     description:
-      'The most the lookup check may spill to the temp directory, as a DuckDB size (default 64GB); the 69-million-item h1.8M band of ardrive-l2 needs more than 16GB',
+      'The most the lookup check may spill to the temp directory, as a DuckDB size (default 128GB); the 69-million-item h1.8M band of ardrive-l2 needs about 65GB',
   },
   l2SkipLookups: {
     alias: '--skip-lookups',

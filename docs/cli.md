@@ -845,11 +845,11 @@ proves, and how to reproduce or repair a band that fails, is in
 | `--read-timeout <ms>` | How long each node or gateway request may take (default 30000) |
 | `--from <height>`, `--to <height>` | Check only the bands inside these heights |
 | `--skip-lookups` | Leave out the lookup check, the slowest on large bands |
-| `--spill-max <size>` | The most the lookup check may spill to the temp directory (default `64GB`); the h1.8M band of `ardrive-l2` needs more than 16 GB |
+| `--spill-max <size>` | The most the lookup check may spill to the temp directory (default `128GB`); the 69-million-item h1.8M band of `ardrive-l2` peaks at about 65 GB |
 
 It reads every row of every table in file order, so memory stays flat; the
 large lookups spill to a folder of their own under the system temp directory
-(`TMPDIR`), at most `--spill-max` (64 GB), removed when the run ends. A run killed outright can
+(`TMPDIR`), at most `--spill-max` (128 GB), removed when the run ends. A run killed outright can
 leave `ar-io-node-l2-verify-*` behind; delete it.
 
 ### `index-l2-verify` result

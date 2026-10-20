@@ -26,9 +26,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     ids. Items directly in their roots and items in nested bundles are
     sampled apart, so rare nested items are always read; `--seed` repeats a
     run.
-  `--spill-max` sets how much the lookup check may spill (64 GB unless set;
-  the 69-million-item h1.8M band of `ardrive-l2` needs more than the 16 GB
-  `index-l1-verify` allowed before, which it now shares).
+  `--spill-max` sets how much the lookup check may spill (128 GB unless
+  set; the 69-million-item h1.8M band of `ardrive-l2` peaks at about 65 GB,
+  past the 16 GB `index-l1-verify` allowed before, which it now shares).
   A band that its own publisher's newer band supersedes is left out. For L1
   bands, `index-l1-verify` checks the chain's own commitments instead. See
   [docs/index-verification.md](docs/index-verification.md), new, which

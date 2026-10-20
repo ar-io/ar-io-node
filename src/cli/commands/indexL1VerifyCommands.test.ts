@@ -293,10 +293,10 @@ describe('openBandsDuck', () => {
     const [cap] = (await session.duck.all(
       "SELECT current_setting('max_temp_directory_size') AS max",
     )) as Array<{ max: string }>;
-    // 64 GB, which DuckDB reports in GiB (59.6), not 90% of the disk.
+    // 128 GB, which DuckDB reports in GiB (119.2), not 90% of the disk.
     assert.match(
       cap.max,
-      /^(59\.[0-9]|6[0-4][0-9.]*) ?Gi?B$/,
+      /^(119\.[0-9]|12[0-8][0-9.]*) ?Gi?B$/,
       'capped, not 90% of the disk',
     );
     assert.equal(path.dirname(session.spill), root);

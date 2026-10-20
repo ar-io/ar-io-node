@@ -98,11 +98,11 @@ it out, and listed under `superseded`.
 
 **Cost.** Every row is read, in file order, so memory stays flat; the lookup
 check sorts and joins, and spills to the system temp directory (`--spill-max`,
-64 GB unless set). Measured on one host (2 cores, 10 GB, publication seq 157):
-the whole `ardrive-l2` index, 23 settled bands and 127.7 million items, with
-50 items per band read from Arweave nodes, took 1 hour 51 minutes; the
-69-million-item h1.8M band alone took 56 minutes and its lookup check needs
-more than 16 GB of spill. The on-chain sample is seconds per band: 800
+128 GB unless set). Measured on one host (2 cores, 10 GB, publication seq
+157): the whole `ardrive-l2` index, 23 settled bands and 127.7 million items,
+with 50 items per band read from Arweave nodes, took 1 hour 51 minutes; the
+69-million-item h1.8M band alone takes 66 minutes and its lookup check peaks
+at about 65 GB of spill. The on-chain sample is seconds per band: 800
 headers over 699 roots, 801 chunks proven.
 
 ## Reproducing a band
