@@ -85,11 +85,11 @@ describe('index-verification conformance', () => {
           assert.ok(result.reads.includes(offset), `${offset} not read`);
         }
         if (c.expect.draw.bandsDiffer === true) {
-          const sets = [...result.readsByRoot.values()].map((r) =>
-            [...r].sort((x, y) => x - y).join(','),
-          );
-          assert.equal(sets.length, 2, 'two bands read');
-          assert.notEqual(sets[0], sets[1], 'two bands drew the same items');
+          // The same layout, one seed: the draws sit at different places in
+          // the two files, since each band's draw is salted by its id.
+          const [one, two] = result.positionsByBand;
+          assert.ok(one.length > 0 && two.length > 0, 'both bands drawn');
+          assert.notDeepEqual(one, two, 'two bands drew the same positions');
         }
       }
       if (c.expect.repeatable === true) {

@@ -135,8 +135,9 @@ band's `root` at `height` and `block_transaction_index` `bti`; `required`);
 
 `expect.repeatable`: the same seed reads the same offsets twice.
 `expect.draw`: `drawnUniform` of the (first) band; `readsInclude` offsets
-that must be read; `bandsDiffer`: two bands of one layout read different
-offsets under one seed.
+that must be read; `bandsDiffer`: two bands of one layout (same number of
+rows) draw different positions for their direct items in their
+`data_items` files under one seed.
 
 ### `kind: "onchain"`: replaying nodes
 

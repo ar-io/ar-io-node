@@ -402,6 +402,8 @@ interface BuiltBands {
     publisherBound?: boolean;
     reads: number[];
     readsByRoot: Map<string, number[]>;
+    /** The file positions (row numbers in data_items) each band's reads drew. */
+    positionsByBand: number[][];
     drawnUniform?: number;
   }>;
 }
@@ -700,6 +702,28 @@ export async function buildBandsCase(
           failing[0] === 'onchain' &&
           (result.onchain?.inconclusiveBands.length ?? 0) > 0 &&
           (result.onchain?.wrong ?? 0) === 0;
+        // Where in each band's file the direct items read sit (a read at
+        // offset o of a band's root is the row whose offset is o); nested
+        // top-ups are left out.
+        const positionsByBand: number[][] = [];
+        for (const [i, spec] of specs.entries()) {
+          const rootId = sha(`band-${spec.from}-root`).toString('base64url');
+          const offsets = readsByRoot.get(rootId) ?? [];
+          const at = (await duck
+            .all(
+              `SELECT file_row_number AS n, CAST(root_parent_offset + "offset" AS BIGINT) AS o
+               FROM read_parquet('${path.join(bands[i].dir, 'data_items.parquet')}', file_row_number = true)
+               WHERE "offset" IS NOT NULL AND root_parent_offset = 0`,
+            )
+            .catch(() => [])) as Array<{ n: unknown; o: unknown }>;
+          const byOffset = new Map(at.map((r) => [Number(r.o), Number(r.n)]));
+          positionsByBand.push(
+            offsets
+              .filter((o) => byOffset.has(o))
+              .map((o) => byOffset.get(o)!)
+              .sort((x, y) => x - y),
+          );
+        }
         return {
           verdict: result.ok
             ? 'verified'
@@ -710,6 +734,7 @@ export async function buildBandsCase(
           publisherBound: result.publisherBound,
           reads,
           readsByRoot,
+          positionsByBand,
           ...(result.onchain !== undefined && result.onchain.bands.length > 0
             ? { drawnUniform: result.onchain.bands[0].drawnUniform }
             : {}),
@@ -721,6 +746,7 @@ export async function buildBandsCase(
             failing: ['refused'],
             reads,
             readsByRoot,
+            positionsByBand: [],
           };
         }
         throw error;
