@@ -522,6 +522,31 @@ export function l2Coverage(bands: ReadonlyArray<L2BandOnDisk>): {
 }
 
 /**
+ * Draws `size` located rows of a band's `data_items` (`itemsFile`, a
+ * `read_parquet(...)` expression), repeatably from `seed`: the rows with the
+ * smallest `hash(file_row_number, seed)`, with each row's position in the
+ * file. Every located row is equally likely, wherever it sits in the file.
+ * (DuckDB's `USING SAMPLE reservoir(n) REPEATABLE` is not: it drew only from
+ * about the first 82,000 rows of a band.) The seed is random per run, so a
+ * publisher can't arrange its rows against the hash.
+ */
+export async function drawLocated(
+  duck: Database,
+  itemsFile: string,
+  { where, size, seed }: { where: string; size: number; seed: number },
+): Promise<Array<Record<string, unknown>>> {
+  if (size <= 0) return [];
+  if (!Number.isSafeInteger(seed) || seed < 0) {
+    throw new Error(`a draw's seed must be a whole number, not ${seed}`);
+  }
+  return (await duck.all(`SELECT id, height, root_transaction_id, root_parent_offset, "offset", data_offset, file_row_number
+      FROM ${itemsFile.replace(/\)$/, ', file_row_number = true)')}
+      WHERE "offset" IS NOT NULL${where}
+      ORDER BY hash(file_row_number, ${seed}::BIGINT), file_row_number
+      LIMIT ${size}`)) as Array<Record<string, unknown>>;
+}
+
+/**
  * What a pass of `perBand` uniformly drawn items means, in plain words. Up
  * to `maxUnchecked` of them may be left unchecked and the band still pass:
  * those are treated as the attacker's, so the bound is for the rest.
@@ -529,13 +554,15 @@ export function l2Coverage(bands: ReadonlyArray<L2BandOnDisk>): {
 export function onchainAssurance(
   perBand: number,
   maxUnchecked: number,
+  /** The fewest located items drawn uniformly in any band (min(N, located)). */
+  fewestDrawn: number = perBand,
 ): string {
-  const effective = perBand - maxUnchecked;
+  const effective = Math.min(perBand, fewestDrawn) - maxUnchecked;
   if (effective <= 0) {
-    return `on chain, ${perBand} located items drawn per band with up to ${maxUnchecked} allowed unchecked: no bound on fabricated items can be stated`;
+    return `on chain, ${perBand} located items drawn per band (as few as ${fewestDrawn} in a band) with up to ${maxUnchecked} allowed unchecked: nothing can be said of how many items are fabricated`;
   }
   const p = Math.ceil(detectableFraction(effective) * 100);
-  return `on chain, ${perBand} located items drawn uniformly per band, none replaced${maxUnchecked > 0 ? `, up to ${maxUnchecked} allowed unchecked and counted as the attacker's (${effective} effective)` : ''}: a band in which ${p}% or more of the located items are fabricated would have been caught with 95% probability; smaller fractions may not be (unlocated items are not checked on chain at all)`;
+  return `on chain, ${perBand} located items drawn uniformly per band${fewestDrawn < perBand ? ` (${fewestDrawn} in the band with fewest)` : ''}, none replaced${maxUnchecked > 0 ? `, up to ${maxUnchecked} allowed unchecked and counted as the attacker's` : ''} (${effective} effective): a band in which ${p}% or more of the located items are fabricated would have been caught with 95% probability; smaller fractions may not be (unlocated items are not checked on chain at all)`;
 }
 
 /**
@@ -1391,16 +1418,14 @@ export async function verifyL2Bands(
       // an item's stratum, so a stratified draw would weaken it), then
       // nested items on top until ceil(N/2) are nested, where the band has
       // them, so the nested path is always read. Seeded per band by
-      // sha256(seed | band id).
-      const sample = async (where: string, size: number, stratum: number) =>
-        size <= 0
-          ? []
-          : ((await duck.all(`SELECT * FROM (
-            SELECT id, height, root_transaction_id, root_parent_offset, "offset", data_offset
-            FROM ${itemsFile} WHERE "offset" IS NOT NULL${where})
-          USING SAMPLE reservoir(${size} ROWS) REPEATABLE (${drawSeed(onchainSummary.seed, id, stratum)})`)) as Array<
-              Record<string, unknown>
-            >);
+      // sha256(seed | band id | stratum): the rows with the smallest
+      // hash(row position, that seed).
+      const sample = (where: string, size: number, stratum: number) =>
+        drawLocated(duck, itemsFile, {
+          where,
+          size,
+          seed: drawSeed(onchainSummary.seed, id, stratum),
+        });
       const rowKey = (r: Record<string, unknown>) =>
         `${Buffer.from(r.id as Buffer).toString('hex')}:${Buffer.from(r.root_transaction_id as Buffer).toString('hex')}:${String(r.root_parent_offset)}:${String(r.offset)}`;
       const uniform = await sample('', Math.min(perBand, located), 0);
@@ -1591,6 +1616,9 @@ export async function verifyL2Bands(
           onchainAssurance(
             options.onchain.perBand,
             options.onchain.maxUnchecked ?? 0,
+            onchainSummary.bands.length > 0
+              ? Math.min(...onchainSummary.bands.map((b) => b.drawnUniform))
+              : options.onchain.perBand,
           ),
         ]
       : []),

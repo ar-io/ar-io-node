@@ -35,7 +35,9 @@ import { writeL1Band } from '../../../test/parquet-l2-fixture.js';
 import { writeBandLookups } from './lookups.js';
 import {
   detectableFraction,
+  drawLocated,
   drawSeed,
+  onchainAssurance,
   L2BandsRefused,
   verifyL2Bands,
 } from './verify-bands.js';
@@ -1322,5 +1324,60 @@ describe('verifyL2Bands fails closed', () => {
         .digest()
         .readUInt32BE(0) & 0x7fffffff;
     assert.equal(a, expected);
+  });
+
+  it('draws uniformly over the whole file, not its first rows (review 7, B1)', async () => {
+    // 250,000 located rows, as the sampler reads them, in file order.
+    const file = path.join(root, 'uniform-data-items.parquet');
+    await db.exec(
+      `COPY (SELECT sha256(range::VARCHAR)::BLOB AS id, 101::UBIGINT AS height,
+                    sha256('root')::BLOB AS root_transaction_id,
+                    0::UBIGINT AS root_parent_offset, (range * 10)::UBIGINT AS "offset",
+                    (range * 10 + 5)::UBIGINT AS data_offset
+             FROM range(250000) ORDER BY range) TO '${file}' (FORMAT PARQUET)`,
+    );
+    const positions: number[] = [];
+    for (let seed = 1; seed <= 30; seed += 1) {
+      const rows = await drawLocated(db, `read_parquet('${file}')`, {
+        where: '',
+        size: 20,
+        seed: drawSeed(seed, 'l2-h100-199-aaaaaaaa-000000000000', 0),
+      });
+      assert.equal(rows.length, 20);
+      positions.push(...rows.map((r) => Number(r.file_row_number)));
+    }
+    const quarter = 250_000 / 4;
+    for (let q = 0; q < 4; q += 1) {
+      assert.ok(
+        positions.some((p) => p >= q * quarter && p < (q + 1) * quarter),
+        `no draw in quarter ${q + 1}; max position ${Math.max(...positions)}`,
+      );
+    }
+    const mean = positions.reduce((a, b) => a + b, 0) / positions.length;
+    assert.ok(
+      Math.abs(mean - 125_000) < 0.15 * 125_000,
+      `mean position ${Math.round(mean)}`,
+    );
+    // Repeatable from the seed.
+    const again = await drawLocated(db, `read_parquet('${file}')`, {
+      where: '',
+      size: 20,
+      seed: drawSeed(1, 'l2-h100-199-aaaaaaaa-000000000000', 0),
+    });
+    assert.deepEqual(
+      again.map((r) => Number(r.file_row_number)),
+      positions.slice(0, 20),
+    );
+  });
+
+  it('states the on-chain bound for the items a band really drew, less those allowed unchecked', () => {
+    assert.match(onchainAssurance(20, 0), /14% or more/);
+    // 20 asked for, 5 located in the smallest band, 2 allowed unchecked:
+    // the bound is for 3 draws.
+    assert.match(
+      onchainAssurance(20, 2, 5),
+      new RegExp(`${Math.ceil(detectableFraction(3) * 100)}% or more`),
+    );
+    assert.match(onchainAssurance(20, 5, 5), /nothing can be said/);
   });
 });

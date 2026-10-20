@@ -216,34 +216,32 @@ export function onChainRootSource({
       verified: boolean;
       problem?: string;
     };
-    const headers = await pool.survey<Header>(
-      `/tx/${id}`,
-      async (body) => {
-        if (body === null || typeof body !== 'object' || Array.isArray(body)) {
-          throw new Error('not a transaction header');
-        }
-        const header = body as Record<string, unknown>;
-        const hashed = signatureId(header);
-        if (hashed !== id) {
-          throw new Error(`served another transaction's header (${hashed})`);
-        }
-        const dataSize = Number(header.data_size);
-        const problem = !isFormat2(header)
-          ? `not a format-2 transaction (format ${JSON.stringify(header.format)}): its signature does not cover a data_root`
-          : typeof header.data_root !== 'string' ||
-              header.data_root.length === 0
-            ? 'no data_root: no data whose chunks can be proven'
-            : !Number.isSafeInteger(dataSize) || dataSize <= 0
-              ? 'no data to read'
-              : undefined;
-        return {
-          header,
-          verified: problem === undefined && (await verifyHeader(header)),
-          ...(problem !== undefined ? { problem } : {}),
-        };
-      },
-      { enough: (sv) => sv.answers.some((a) => a.value.verified) },
-    );
+    const judgeHeader = async (body: unknown): Promise<Header> => {
+      if (body === null || typeof body !== 'object' || Array.isArray(body)) {
+        throw new Error('not a transaction header');
+      }
+      const header = body as Record<string, unknown>;
+      const hashed = signatureId(header);
+      if (hashed !== id) {
+        throw new Error(`served another transaction's header (${hashed})`);
+      }
+      const dataSize = Number(header.data_size);
+      const problem = !isFormat2(header)
+        ? `not a format-2 transaction (format ${JSON.stringify(header.format)}): its signature does not cover a data_root`
+        : typeof header.data_root !== 'string' || header.data_root.length === 0
+          ? 'no data_root: no data whose chunks can be proven'
+          : !Number.isSafeInteger(dataSize) || dataSize <= 0
+            ? 'no data to read'
+            : undefined;
+      return {
+        header,
+        verified: problem === undefined && (await verifyHeader(header)),
+        ...(problem !== undefined ? { problem } : {}),
+      };
+    };
+    const headers = await pool.survey<Header>(`/tx/${id}`, judgeHeader, {
+      enough: (sv) => sv.answers.some((a) => a.value.verified),
+    });
     let chosen: Record<string, unknown> | undefined;
     let binding: RootBinding = 'signature';
     const verified = headers.answers.find((a) => a.value.verified);
@@ -398,8 +396,18 @@ export function onChainRootSource({
         }
         for (const f of status.faults) fault(f.node, id, f.reason);
       } else {
-        const absentMachines = new Set(status.absent.map((a) => a.machine))
-          .size;
+        // A 404 for the status is a denial only from a machine that served
+        // this root's header: one without the transaction at all just
+        // doesn't have it. Machines not yet known to serve it are asked.
+        const servedBy = new Set(headers.answers.map((a) => a.machine));
+        const deniers = new Set(status.absent.map((a) => a.machine));
+        if ([...deniers].some((m) => !servedBy.has(m))) {
+          const all = await pool.survey<Header>(`/tx/${id}`, judgeHeader);
+          for (const a of all.answers) servedBy.add(a.machine);
+        }
+        const absentMachines = [...deniers].filter((m) =>
+          servedBy.has(m),
+        ).length;
         if (absentMachines >= 2 && status.unheard.length === 0) {
           // In no block, as two machines say and no node unheard: a claim
           // otherwise is its node's fault.
@@ -411,11 +419,11 @@ export function onChainRootSource({
             );
           }
           throw new RootUnboundError(
-            `${id} is not mined: ${absentMachines} machines say it is in no block`,
+            `${id} is not mined: ${absentMachines} machines that serve its header say it is in no block`,
           );
         }
         throw new NodesRefusedError(
-          `${id}: fewer than ${minAgreement} machines place it in one block, and fewer than two say it is in none with every node heard (${status.answers.length} placed it, ${absentMachines} denied, ${status.unheard.length} unheard)`,
+          `${id}: fewer than ${minAgreement} machines place it in one block, and fewer than two that serve its header say it is in none with every node heard (${status.answers.length} placed it, ${absentMachines} denied, ${deniers.size - absentMachines} without it, ${status.unheard.length} unheard)`,
           status.absent.length,
           status.busy.length,
           status.faults.length,

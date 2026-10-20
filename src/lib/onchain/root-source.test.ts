@@ -1147,7 +1147,7 @@ describe('the on-chain check counts a refuted root against its band', () => {
     assert.ok(r.wrong.length > 0);
   });
 
-  it('fails a band 4 of 20 of whose sampled items sit under a root only one node calls mined (P1b)', async () => {
+  it('never passes a band 4 of 20 of whose sampled items sit under a root only one node calls mined (P1b)', async () => {
     const good = await signedRoot();
     const fake = await signedRoot();
     const gm = new Map([[good.f.id, good.served]]);
@@ -1166,7 +1166,10 @@ describe('the on-chain check counts a refuted root against its band', () => {
       random: random(1),
     });
     assert.equal(r.passed, false, r.reasons.join('; '));
-    assert.ok(r.wrong.length > 0);
+    // The others lack the root altogether: their 404s deny nothing, so
+    // those items are unchecked and the band inconclusive (review 7, M1).
+    assert.equal(r.wrong.length, 0);
+    assert.equal(r.inconclusive, true);
   });
 
   it('fails a band 4 of 20 of whose roots are made up, though a node times out (P4)', async () => {
