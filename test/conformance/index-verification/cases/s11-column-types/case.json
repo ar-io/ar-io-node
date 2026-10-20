@@ -11,10 +11,18 @@
   ],
   "files": [
     {
-      "op": "sql",
+      "op": "recast",
       "band": 0,
-      "file": "data_items.parquet",
-      "select": "* REPLACE (CAST(tag_count AS VARCHAR) AS tag_count, CAST(block_transaction_index AS BIGINT) AS block_transaction_index), 'junk' AS extra"
+      "table": "data_items",
+      "columns": {
+        "tag_count": "VARCHAR",
+        "block_transaction_index": "BIGINT"
+      },
+      "add": {
+        "name": "extra",
+        "type": "VARCHAR",
+        "value": "junk"
+      }
     }
   ],
   "expect": {

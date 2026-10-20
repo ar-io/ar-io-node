@@ -1,0 +1,30 @@
+{
+  "id": "real-nested-top-up",
+  "description": "Nested items are topped up until half the draw is nested, whatever the uniform draw holds",
+  "tampered": "60 direct, 10 nested",
+  "kind": "bands",
+  "bands": [
+    {
+      "from": 100,
+      "to": 199,
+      "real": {
+        "direct": 60,
+        "nested": 10
+      }
+    }
+  ],
+  "options": {
+    "onchain": {
+      "perBand": 20,
+      "source": "honest",
+      "seed": 13
+    }
+  },
+  "expect": {
+    "verdict": "verified",
+    "draw": {
+      "drawnUniform": 20,
+      "nestedAtLeast": 10
+    }
+  }
+}

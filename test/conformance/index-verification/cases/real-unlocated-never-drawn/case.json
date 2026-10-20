@@ -1,0 +1,62 @@
+{
+  "id": "real-unlocated-never-drawn",
+  "description": "Unlocated items, declared, are never drawn: only located items are",
+  "tampered": "5 of 40 items unlocated (declared)",
+  "kind": "bands",
+  "bands": [
+    {
+      "from": 100,
+      "to": 199,
+      "real": {
+        "direct": 30,
+        "nested": 10
+      },
+      "rows": [
+        {
+          "op": "unlocate",
+          "row": 0
+        },
+        {
+          "op": "unlocate",
+          "row": 1
+        },
+        {
+          "op": "unlocate",
+          "row": 2
+        },
+        {
+          "op": "unlocate",
+          "row": 3
+        },
+        {
+          "op": "unlocate",
+          "row": 4
+        }
+      ],
+      "band": [
+        {
+          "op": "setChecks",
+          "value": {
+            "unlocated": {
+              "no_offsets": 5
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "options": {
+    "maxUnlocatedShare": 0.5,
+    "onchain": {
+      "perBand": 20,
+      "source": "honest",
+      "seed": 11
+    }
+  },
+  "expect": {
+    "verdict": "verified",
+    "draw": {
+      "drawnUniform": 20
+    }
+  }
+}

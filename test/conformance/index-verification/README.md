@@ -67,14 +67,64 @@ with the `l2-1` layout of `src/lib/parquet-l2/layout.ts`. Writing `F` for
 - `parents` (`id, root_transaction_id, root_parent_offset, offset, size,
   data_offset`): `nested, root, 0, 2400, 4000, 3500`.
 
-Each table is written in its layout order, digested into `band.json` as the
-layout says, with the lookups derived from the tables. `band.json`:
-`version 1`, `schema "l2-1"`, the heights, selection
-`{"kind":"ans104-data-items","tag":{"name":"App-Name","valuePrefix":"ArDrive"}}`,
-`createdAt "2026-10-20T00:00:00.000Z"`, no `checks` unless an op sets them.
-The band's directory is its id (`l2BandId`) for the publisher
-`conformance-publisher-wallet-0000000000000`, or, with
-`publisher: "wallet"`, for the publication's publisher.
+A band with `real: { direct, nested }` holds real items instead: `direct`
+signed ANS-104 items (Arweave signature type 1, one RSA key per run) each
+tagged `App-Name: ArDrive-App` with payload `direct-F-i`, directly in a root
+whose data is their bundle, plus, when `nested > 0`, one more item in that
+bundle whose payload is a bundle of `nested` such items (payload
+`nested-F-i`) and whose tags are `Bundle-Format: binary`,
+`Bundle-Version: 2.0.0`. The root's id is `H("band-F-real-root")`; its bytes
+are what the `honest` source serves. Rows: one `data_items` row per leaf
+item, with `height F+1`, `block_transaction_index 0`, `parent_id` the root or
+the nested bundle, `owner_address` SHA-256 of the key's modulus,
+`signature_type 1`, `data_size` its payload size, `tag_count 1`, and its
+location: for an item at byte `s` of the root with payload at `d` and size
+`z`, inside a parent whose payload starts at `P` (0 for the root),
+`P, s−P, z, d−P, s−P+514, 512, s−P+2, 512`. One `tags` row each, one
+`wallets` row (the key), one `parents` row for the nested bundle
+(`id, root, 0, its start, its size, its payload start`). `rows` ops apply to
+these rows in that order (direct items first, as the bundle holds them).
+
+**Writing a band.** Each table is written as Parquet with the layout's
+columns and DuckDB types (`src/lib/parquet-l2/layout.ts`,
+`PARQUET_L2_TABLES`), rows sorted by the table's `orderBy`, ascending, nulls
+last. Its `band.json` entry is `{rows, rowDigest}`, `rowDigest` being the
+lowercase hex SHA-256 of every row in that order, each value encoded by its
+column's type: `0x00` for NULL; else `0x01`, a 4-byte big-endian length and
+the bytes (a BLOB as is, a VARCHAR as UTF-8, an integer as its decimal
+digits). The lookups (`lookup_id`, `lookup_wallet`, `lookup_tag`) are
+derived from the tables:
+
+- `lookup_id`: for each distinct `(id, height)` of `data_items`,
+  `(prefix64(id), height)`;
+- `lookup_wallet`: for each distinct `(id, height, owner_address, target,
+  data_size)`, `(prefix64(owner_address), 0, height, data_size)`, and, where
+  `target` is set and not empty, `(prefix64(target), 1, height,
+  data_size)`;
+- `lookup_tag`: for each distinct `(tag_name, tag_value)` of `tags`,
+  `(sha256_64(name), sha256_64(value), name, value, txs, first_height,
+  last_height)`, `txs` the number of distinct ids carrying it and the
+  heights its least and greatest;
+
+where `prefix64(b)` is the first 8 bytes of `b` (zero-padded on the right)
+as a big-endian unsigned integer and `sha256_64(b)` is `prefix64` of its
+SHA-256. Each is written sorted by its key columns (`id8, height`;
+`addr8, height, role, data_size`; `name8, val8, name, value`) and described
+`{rows, rowDigest}` the same way, digested in that order.
+
+`band.json` is `{"version":1,"schema":"l2-1","heightRange":[F,T],
+"selection":{"kind":"ans104-data-items","tag":{"name":"App-Name",
+"valuePrefix":"ArDrive"}},"tables":{…},"lookups":{…},"createdAt":
+"2026-10-20T00:00:00.000Z"}` (plus `checks` when an op sets them), tables and
+lookups in the layout's order, written as two-space-indented JSON. The
+band's id, and its directory's name, is
+`l2-h<F>-<T>-<tag>-<digest>`: `tag` the first 8 hex digits of SHA-256 of the
+publisher's wallet (`conformance-publisher-wallet-0000000000000`, or the
+publication's publisher with `publisher: "wallet"`), and `digest` the first
+12 hex digits of SHA-256 over `JSON("[F,T]") + "\n" +` the selection's
+one-line JSON (keys `kind`, `tag`; `name`, `valuePrefix`[,
+`excludeValuePrefix`]) `+ "\n" +` the lines `<table>:<rows>:<rowDigest>`
+for every table, sorted by table name, joined with `"\n"`.
 
 `rows` changes the rows before they are written, in order:
 
@@ -95,7 +145,11 @@ Values: `null`, numbers, `"hash:<x>"` (`H(x)`), `"utf8:<x>"` (its bytes),
 (adds to the table's declared row count), `setChecks {value}` (sets
 `checks`).
 
-`publication` (when present): a publication signed with a fresh Ed25519 key,
+`publication` (when present), in the format and signing scheme of
+[docs/index-publication.md](../../../docs/index-publication.md) (RFC 8785
+canonical JSON, the `ar-io-index-publication/v1\n` prefix, Ed25519): a
+publication signed with a fresh Ed25519 key, the signature's `keyId` its
+base58 address,
 publisher a fresh base58 wallet, sequence 3, `issuedAt` (default
 `2026-10-20T00:00:00Z`), `expiresAt` (default `2099-01-01T00:00:00Z`), one
 `parquet-l2` index `ardrive-l2` listing every band with every non-dot file's
@@ -110,7 +164,7 @@ that key, or, with `key: "other"`, against another fresh key.
 | `writeFile {band, file, text}` | writes the file |
 | `appendByte {band, file}` | appends one `0x00` byte |
 | `reverseFile {band, file}` | rewrites the Parquet file with its rows sorted descending on every column |
-| `sql {band, file, select}` | rewrites the Parquet file as DuckDB `SELECT <select> FROM read_parquet(file)` |
+| `recast {band, table, columns, add}` | rewrites the table's Parquet file with each column named in `columns` cast to the given type (e.g. `tag_count` as VARCHAR text, `block_transaction_index` as BIGINT), and, with `add`, one more column at the end of type `add.type` holding `add.value` in every row |
 | `supersedes {band, target}` | writes `.publisher.json` `{"supersedes":["<target's id>"]}` |
 | `renameId {band, from, to}` | renames the band's directory, replacing `from` with `to` in its name |
 | `renameGeneration {band, generation}` | renames it `<id>~<generation>` |
@@ -132,9 +186,12 @@ band's `root` at `height` and `block_transaction_index` `bti`; `required`);
   Arweave-signed header whose id is no item's, so every drawn item is
   `not-the-item` (wrong).
 - `source: "busy"`: every read fails as a transport error (HTTP 503).
+- `source: "honest"`: every read of a real band's root returns its bytes
+  at that range (a range past the end is a short read).
 
 `expect.repeatable`: the same seed reads the same offsets twice.
-`expect.draw`: `drawnUniform` of the (first) band; `readsInclude` offsets
+`expect.draw`: `drawnUniform` of the (first) band; `nestedAtLeast`, the
+fewest drawn items that must be in nested bundles; `readsInclude` offsets
 that must be read; `bandsDiffer`: two bands of one layout (same number of
 rows) draw different positions for their direct items in their
 `data_items` files under one seed.

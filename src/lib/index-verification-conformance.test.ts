@@ -81,6 +81,12 @@ describe('index-verification conformance', () => {
       }
       if (c.expect.draw !== undefined) {
         assert.equal(result.drawnUniform, c.expect.draw.drawnUniform);
+        if (c.expect.draw.nestedAtLeast !== undefined) {
+          assert.ok(
+            (result.drawnNested ?? 0) >= c.expect.draw.nestedAtLeast,
+            `${result.drawnNested} nested drawn`,
+          );
+        }
         for (const offset of c.expect.draw.readsInclude ?? []) {
           assert.ok(result.reads.includes(offset), `${offset} not read`);
         }

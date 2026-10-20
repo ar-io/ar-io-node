@@ -83,6 +83,8 @@ export interface CaseExpect {
   /** For a draw case: how the band's sample was drawn. */
   draw?: {
     drawnUniform: number;
+    /** At least this many drawn items in nested bundles. */
+    nestedAtLeast?: number;
     readsInclude?: number[];
     /** Two bands of one layout draw different positions under one seed. */
     bandsDiffer?: boolean;
@@ -309,6 +311,13 @@ function literal(v: unknown, type: string): string {
 interface BandSpec {
   from: number;
   to: number;
+  /**
+   * Real items instead of the base rows: `direct` signed ANS-104 items
+   * directly in one root, `nested` in a nested bundle in it, every one
+   * tagged App-Name: ArDrive-App; the root's bytes are served by the
+   * `honest` source.
+   */
+  real?: { direct: number; nested: number };
   /** `wallet`: tagged for the case's registered publisher wallet. */
   publisher?: 'default' | 'wallet';
   rows?: RowOp[];
@@ -322,13 +331,118 @@ interface BandSpec {
 /** The publisher the bands are tagged for, unless a case names the wallet. */
 export const PUBLISHER = 'conformance-publisher-wallet-0000000000000';
 
+/** Roots of real bands, by id (base64url), for the honest source. */
+const realRoots = new Map<string, Buffer>();
+
+/** Rows of a band of real, signed items (see {@link BandSpec.real}). */
+async function realRows(
+  from: number,
+  spec: { direct: number; nested: number },
+): Promise<Record<string, unknown[][]>> {
+  const jwk = await runWallet();
+  const signer = new ArweaveSigner(jwk as never);
+  const tags = [{ name: 'App-Name', value: 'ArDrive-App' }];
+  const leaves = (n: number, label: string) =>
+    Array.from({ length: n }, (_, i) =>
+      createData(`${label}-${from}-${i}`, signer, { tags }),
+    );
+  const outer = [...leaves(spec.direct, 'direct')];
+  if (spec.nested > 0) {
+    const inner = await bundleAndSignData(
+      leaves(spec.nested, 'nested'),
+      signer,
+    );
+    outer.push(
+      createData(Buffer.from(inner.getRaw()), signer, {
+        tags: [
+          { name: 'Bundle-Format', value: 'binary' },
+          { name: 'Bundle-Version', value: '2.0.0' },
+        ],
+      }),
+    );
+  }
+  const data = Buffer.from((await bundleAndSignData(outer, signer)).getRaw());
+  const root = sha(`band-${from}-real-root`);
+  const rootId = root.toString('base64url');
+  realRoots.set(rootId, data);
+  const modulus = Buffer.from((jwk as { n: string }).n, 'base64url');
+  const owner = crypto.createHash('sha256').update(modulus).digest();
+  const scanned = [];
+  for await (const item of scanBundle({
+    source: new BufferByteRangeSource(data),
+    rootTxId: rootId,
+    bundleSize: data.length,
+  })) {
+    scanned.push(item);
+  }
+  const containers = new Map(
+    scanned.filter((x) => x.isBundle).map((x) => [x.id, x]),
+  );
+  const rows: Record<string, unknown[][]> = {
+    data_items: [],
+    tags: [],
+    wallets: [[owner, modulus]],
+    parents: [...containers.values()].map((c) => [
+      Buffer.from(c.id, 'base64url'),
+      root,
+      0,
+      c.rootDataItemOffset,
+      c.dataItemSize,
+      c.rootDataOffset,
+    ]),
+  };
+  for (const item of scanned) {
+    if (item.isBundle) continue;
+    const parentId = item.path[item.path.length - 1];
+    const parent =
+      parentId !== undefined ? containers.get(parentId) : undefined;
+    const rpo = parent?.rootDataOffset ?? 0;
+    const offset = item.rootDataItemOffset - rpo;
+    const id = Buffer.from(item.id, 'base64url');
+    rows.data_items.push([
+      id,
+      from + 1,
+      0,
+      root,
+      parent !== undefined ? Buffer.from(parent.id, 'base64url') : root,
+      owner,
+      null,
+      null,
+      1,
+      item.dataItemSize - (item.rootDataOffset - item.rootDataItemOffset),
+      null,
+      null,
+      1,
+      rpo,
+      offset,
+      item.dataItemSize,
+      item.rootDataOffset - rpo,
+      offset + 514,
+      512,
+      offset + 2,
+      512,
+    ]);
+    rows.tags.push([
+      from + 1,
+      id,
+      0,
+      Buffer.from('App-Name'),
+      Buffer.from('ArDrive-App'),
+    ]);
+  }
+  return rows;
+}
+
 async function writeBand(
   duck: Database,
   parent: string,
   spec: BandSpec,
   wallet: string,
 ): Promise<{ dir: string; id: string }> {
-  const rows = baseRows(spec.from, `band-${spec.from}`);
+  const rows =
+    spec.real !== undefined
+      ? await realRows(spec.from, spec.real)
+      : baseRows(spec.from, `band-${spec.from}`);
   for (const op of spec.rows ?? []) applyRowOp(rows, op, spec.from);
   const staging = await fs.mkdtemp(path.join(parent, '.staging-'));
   const tables: ParquetL2Band['tables'] = {};
@@ -384,7 +498,15 @@ type FileOp =
   | { op: 'writeFile'; band: number; file: string; text: string }
   | { op: 'appendByte'; band: number; file: string }
   | { op: 'reverseFile'; band: number; file: string }
-  | { op: 'sql'; band: number; file: string; select: string }
+  | {
+      op: 'recast';
+      band: number;
+      table: string;
+      /** Columns rewritten as another type, each value cast. */
+      columns: Record<string, string>;
+      /** A column added at the end, every row holding `value`. */
+      add?: { name: string; type: string; value: string };
+    }
   | { op: 'supersedes'; band: number; target: number }
   | { op: 'renameId'; band: number; from: string; to: string }
   | { op: 'renameGeneration'; band: number; generation: string }
@@ -405,19 +527,33 @@ interface BuiltBands {
     /** The file positions (row numbers in data_items) each band's reads drew. */
     positionsByBand: number[][];
     drawnUniform?: number;
+    drawnNested?: number;
   }>;
 }
 
-/** A source answering every read with a header of no item here. */
+/**
+ * A root source: `stranger` answers every read with a header of no item
+ * here, `busy` fails every read in transport, `honest` serves a real band's
+ * root bytes.
+ */
 function strangerSource(
   reads: number[],
-  answer: 'stranger' | 'busy',
+  answer: 'stranger' | 'busy' | 'honest',
   byRoot: Map<string, number[]> = new Map(),
 ): RootSourceFactory {
   return (root) => ({
     read: async (offset: number, size: number) => {
       reads.push(offset);
       byRoot.set(root, [...(byRoot.get(root) ?? []), offset]);
+      if (answer === 'honest') {
+        const bytes = realRoots.get(root);
+        if (bytes === undefined) {
+          throw Object.assign(new Error('no such root'), {
+            response: { status: 404 },
+          });
+        }
+        return new BufferByteRangeSource(bytes).read(offset, size);
+      }
       if (answer === 'busy') {
         throw Object.assign(new Error('busy'), { response: { status: 503 } });
       }
@@ -523,10 +659,18 @@ export async function buildBandsCase(
         await fs.rename(`${p}.x`, p);
         break;
       }
-      case 'sql': {
-        const p = path.join(band.dir, op.file);
+      case 'recast': {
+        const spec = PARQUET_L2_TABLES.find((t) => t.name === op.table)!;
+        const p = path.join(band.dir, spec.file);
+        const replaced = Object.entries(op.columns)
+          .map(([name, type]) => `CAST("${name}" AS ${type}) AS "${name}"`)
+          .join(', ');
+        const added =
+          op.add !== undefined
+            ? `, CAST('${op.add.value}' AS ${op.add.type}) AS "${op.add.name}"`
+            : '';
         await duck.exec(
-          `COPY (SELECT ${op.select} FROM read_parquet('${p}')) TO '${p}.x' (FORMAT PARQUET)`,
+          `COPY (SELECT * REPLACE (${replaced})${added} FROM read_parquet('${p}')) TO '${p}.x' (FORMAT PARQUET)`,
         );
         await fs.rename(`${p}.x`, p);
         break;
@@ -591,7 +735,7 @@ export async function buildBandsCase(
     allowExpired?: boolean;
     onchain?: {
       perBand: number;
-      source: 'stranger' | 'busy';
+      source: 'stranger' | 'busy' | 'honest';
       seed?: number;
       maxUnchecked?: number;
     };
@@ -736,7 +880,10 @@ export async function buildBandsCase(
           readsByRoot,
           positionsByBand,
           ...(result.onchain !== undefined && result.onchain.bands.length > 0
-            ? { drawnUniform: result.onchain.bands[0].drawnUniform }
+            ? {
+                drawnUniform: result.onchain.bands[0].drawnUniform,
+                drawnNested: result.onchain.bands[0].drawnNested,
+              }
             : {}),
         };
       } catch (error) {
