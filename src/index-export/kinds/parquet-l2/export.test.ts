@@ -742,6 +742,23 @@ describe('exportL2Band, locations', () => {
     }
   });
 
+  it('leaves items unlocated when their parent bundle cannot be placed, even where their own row places them', async () => {
+    // The parent's only row is inconsistent (the #937 class: here a payload
+    // that ends past the row's own end), so it has no place in `parents`.
+    // The children carry absolute offsets that would place them on their
+    // own; the band must not locate them under a parent it does not
+    // describe.
+    const broken = { ...n1()[0], size: 1 };
+    const result = await exportBand(absolute(), [broken]);
+    try {
+      assert.equal(result.band.checks?.located, 0);
+      assert.deepEqual(result.band.checks?.unlocated, { no_parent: 3 });
+      assert.equal(result.band.tables.parents.rows, 0);
+    } finally {
+      await done(result);
+    }
+  });
+
   it('leaves the items of a bundle held in two places, or not held, unlocated', async () => {
     const other = sourceRow(r3, 'n1');
     const twice = await exportBand(right(), [

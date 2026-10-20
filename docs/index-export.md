@@ -657,7 +657,10 @@ all set, or all null. The rules, in order:
    (`repaired`) or absolute ones; deeper only on an unbroken chain (else
    `deep`). `inconsistent` and `no_parent` as for root-TX bands. An item
    whose bundle the index holds at two places in the root is left
-   unlocated (`parent_two_places`).
+   unlocated (`parent_two_places`); one whose bundle it holds at none
+   (every row of the bundle inconsistent) is left unlocated (`no_parent`)
+   even where the item's own row, an absolute offset, would place it: a
+   band never locates an item under a parent `parents` does not describe.
 5. **Ambiguous items** (one level down, `root_parent_offset` 0, both
    readings possible) are settled by their bytes: the header is read from
    the root at both candidate starts and decoded, and the reading whose

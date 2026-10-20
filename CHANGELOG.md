@@ -73,6 +73,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **`parquet-l2`: a nested item is no longer located under a parent bundle
+  that `parents` does not describe.** Where every row of a bundle is
+  inconsistent (offsets taken from another copy of it, ar-io-node #937),
+  the bundle has no place in `parents`, yet a child held with an absolute
+  offset was placed from its own row; `index-l2-verify` reported each as a
+  `parents` defect (28 in the h1.3M band of `ardrive-l2`). Such a child is
+  now left unlocated as `no_parent`, and a resettle locates it once the
+  bundle's row is repaired.
 - An index-swarm subscriber can now install a Parquet band whose files have
   large footers. The footer limit was 2 MiB, and turbo-gateway.com's
   `ardrive-l2` band for heights 1,800,000–1,899,999 has a 3.7 GB
