@@ -845,33 +845,35 @@ proves, and how to reproduce or repair a band that fails, is in
 | `--read-timeout <ms>` | How long each node or gateway request may take (default 30000) |
 | `--from <height>`, `--to <height>` | Check only the bands inside these heights |
 | `--skip-lookups` | Leave out the lookup check, the slowest on large bands |
+| `--spill-max <size>` | The most the lookup check may spill to the temp directory (default `64GB`); the h1.8M band of `ardrive-l2` needs more than 16 GB |
 
 It reads every row of every table in file order, so memory stays flat; the
 large lookups spill to a folder of their own under the system temp directory
-(`TMPDIR`), at most 16 GB, removed when the run ends. A run killed outright can
+(`TMPDIR`), at most `--spill-max` (64 GB), removed when the run ends. A run killed outright can
 leave `ar-io-node-l2-verify-*` behind; delete it.
 
 ### `index-l2-verify` result
 
 ```json
 {
-  "bandsDir": "data/indexes/installed/ardrive-l2",
-  "selection": "{\"kind\":\"ans104-data-items\",\"tag\":{...}}",
+  "bandsDir": "data/indexes/published/ardrive-l2",
+  "selection": "{\"kind\":\"ans104-data-items\",\"tag\":{\"name\":\"App-Name\",\"valuePrefix\":\"ArDrive\",\"excludeValuePrefix\":\"ArDriver\"}}",
   "bands": 23,
   "heightRange": [0, 2014999],
-  "items": 127829930,
-  "ok": true,
+  "items": 127729745,
+  "ok": false,
   "checks": [
-    { "name": "identity", "ok": true, "detail": "..." },
-    { "name": "parents", "ok": false, "detail": "...",
-      "failures": [{ "height": 1300000, "found": "l2-h1300000-...: 28 items in a nested bundle that parents does not describe there", "expected": "0" }] }
+    { "name": "identity", "ok": true, "detail": "each band's id names its heights and the digest of its heights, selection and rows" },
+    { "name": "parents", "ok": false, "detail": "items directly in a root sit at offset 0; items in a nested bundle name one described in parents, whose payload starts where the item says",
+      "failures": [{ "height": 1300000, "found": "l2-h1300000-1399999-3078e8b8-3f379144c94a: 28 items in a nested bundle that parents does not describe there", "expected": "0" }] }
   ],
+  "superseded": [],
   "onchain": {
-    "perBand": 20, "checked": 460, "ok": 460, "wrong": 0, "unreadable": 12, "errors": 0,
-    "failedBands": [],
-    "roots": { "from": "arweave-nodes", "proven": true, "roots": 440, "bySignature": 440, "byAgreement": 0, "chunksProven": 460, "reachableNodes": 21 }
+    "perBand": 50, "checked": 800, "ok": 800, "wrong": 0, "unreadable": 12, "errors": 0,
+    "failedBands": [], "unlocatedBands": [], "seed": 408427327,
+    "roots": { "from": "arweave-nodes", "proven": true, "roots": 699, "bySignature": 699, "byAgreement": 0, "chunksProven": 801, "reachableNodes": 21 }
   },
-  "seconds": 8820
+  "seconds": 6670
 }
 ```
 

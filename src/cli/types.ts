@@ -63,6 +63,7 @@ export interface IndexL1ImportCLIOptions extends GlobalCLIOptions {
 }
 
 export interface IndexL1VerifyCLIOptions extends GlobalCLIOptions {
+  spillMax?: string;
   coreDb?: string;
   bandsDir?: string;
   skipTxRoot?: boolean;
@@ -78,6 +79,7 @@ export interface IndexL2VerifyCLIOptions extends GlobalCLIOptions {
   publisher?: string;
   onchain?: string;
   seed?: string;
+  spillMax?: string;
   arweaveNodes?: string;
   gatewayUrl?: string;
   readTimeout?: string;

@@ -124,7 +124,18 @@ export async function indexL2VerifyCLICommand(
     }
   }
 
-  const session = await openBandsDuck({ prefix: 'ar-io-node-l2-verify-' });
+  let session;
+  try {
+    session = await openBandsDuck({
+      prefix: 'ar-io-node-l2-verify-',
+      ...(options.spillMax !== undefined ? { spillMax: options.spillMax } : {}),
+    });
+  } catch (error) {
+    if (/--spill-max/.test((error as Error).message)) {
+      throw new L2VerifyRefused((error as Error).message);
+    }
+    throw error;
+  }
   try {
     log.info('Checking L2 bands', {
       bandsDir,

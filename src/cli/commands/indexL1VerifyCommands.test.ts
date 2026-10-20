@@ -293,11 +293,27 @@ describe('openBandsDuck', () => {
     const [cap] = (await session.duck.all(
       "SELECT current_setting('max_temp_directory_size') AS max",
     )) as Array<{ max: string }>;
-    assert.match(cap.max, /^1[0-9.]+ ?Gi?B$/, 'capped, not 90% of the disk');
+    // 64 GB, which DuckDB reports in GiB (59.6), not 90% of the disk.
+    assert.match(
+      cap.max,
+      /^(59\.[0-9]|6[0-4][0-9.]*) ?Gi?B$/,
+      'capped, not 90% of the disk',
+    );
     assert.equal(path.dirname(session.spill), root);
     assert.ok((await fsp.stat(session.spill)).isDirectory());
 
     await session.close();
+    // The cap is the caller's to set, and a size that is not one is refused.
+    const small = await openBandsDuck({ tmpRoot: root, spillMax: '1GB' });
+    const [capSmall] = (await small.duck.all(
+      "SELECT current_setting('max_temp_directory_size') AS max",
+    )) as Array<{ max: string }>;
+    assert.match(capSmall.max, /^(953\.[0-9] ?MiB|1(\.0)? ?GB)$/);
+    await small.close();
+    await assert.rejects(
+      openBandsDuck({ tmpRoot: root, spillMax: 'lots' }),
+      /--spill-max must be a size/,
+    );
     await assert.rejects(fsp.stat(session.spill), { code: 'ENOENT' });
   });
 

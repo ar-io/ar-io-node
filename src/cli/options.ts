@@ -173,6 +173,11 @@ export const optionMap = {
     description:
       "Seeds --onchain's sample, to repeat a run (the result reports the seed it drew when none is given)",
   },
+  spillMax: {
+    alias: '--spill-max <size>',
+    description:
+      'The most the lookup check may spill to the temp directory, as a DuckDB size (default 64GB); the 69-million-item h1.8M band of ardrive-l2 needs more than 16GB',
+  },
   l2SkipLookups: {
     alias: '--skip-lookups',
     description:
@@ -270,6 +275,7 @@ export const indexL1VerifyOptions: CommanderOption[] = [
   optionMap.verifyBandsDir,
   optionMap.skipTxRoot,
   optionMap.skipLookups,
+  optionMap.spillMax,
   optionMap.fromHeight,
   optionMap.toHeight,
   optionMap.anchorFrom,
@@ -287,6 +293,7 @@ export const indexL2VerifyOptions: CommanderOption[] = [
   optionMap.fromHeight,
   optionMap.toHeight,
   optionMap.l2SkipLookups,
+  optionMap.spillMax,
 ];
 
 export const indexL1AuditOptions: CommanderOption[] = [
