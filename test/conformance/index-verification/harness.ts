@@ -66,6 +66,7 @@ import {
 import { writeBandLookups } from '../../../src/lib/parquet-l2/lookups.js';
 import {
   L2BandsRefused,
+  onchainAssurance,
   verifyL2Bands,
 } from '../../../src/lib/parquet-l2/verify-bands.js';
 import { BufferByteRangeSource } from '../../buffer-byte-range-source.js';
@@ -97,6 +98,11 @@ export interface CaseExpect {
    * `unchecked`, `nothing-verified`, `nothing-drawn`.
    */
   reason?: string[];
+  /**
+   * On-chain cases: the fabricated share a pass of this draw is stated to
+   * catch with 95% probability, in whole percent.
+   */
+  assurancePercent?: number;
 }
 
 export interface Case {
@@ -1138,6 +1144,8 @@ interface EntrySpec {
   madeUp?: boolean;
   /** A header range that runs past the root's end. */
   pastEnd?: boolean;
+  /** Offsets that give a header this many bytes longer than the item's. */
+  headerExtra?: number;
   height?: number;
   repeat?: number;
 }
@@ -1146,6 +1154,8 @@ export async function runOnchainCase(c: Case): Promise<{
   verdict: Verdict;
   failing: string[];
   reason: string[];
+  /** What a pass of this draw means, as `assurance` states it. */
+  assurance: string;
 }> {
   const rootSpecs = (c.roots ?? {}) as Record<
     string,
@@ -1184,6 +1194,9 @@ export async function runOnchainCase(c: Case): Promise<{
         ...item,
         ...(spec.fabricated === true || root.items.length === 0
           ? { id: crypto.randomBytes(32).toString('base64url') }
+          : {}),
+        ...(spec.headerExtra !== undefined
+          ? { rootDataOffset: item.rootDataOffset + spec.headerExtra }
           : {}),
         ...(spec.pastEnd === true
           ? {
@@ -1253,6 +1266,7 @@ export async function runOnchainCase(c: Case): Promise<{
       : 'unknown';
   return {
     verdict,
+    assurance: onchainAssurance(result.drawn, options.maxUnchecked ?? 0),
     failing: result.passed ? [] : ['onchain'],
     reason:
       verdict === 'refuted'

@@ -66,6 +66,13 @@ describe('index-verification conformance', () => {
         assert.equal(result.verdict, c.expect.verdict, c.description);
         expectFailing(result.failing);
         assert.deepEqual(result.reason, c.expect.reason ?? [], c.description);
+        if (c.expect.assurancePercent !== undefined) {
+          assert.match(
+            result.assurance,
+            new RegExp(`a band in which ${c.expect.assurancePercent}% or more`),
+            result.assurance,
+          );
+        }
         return;
       }
       const built = await buildBandsCase(duck, root, c);

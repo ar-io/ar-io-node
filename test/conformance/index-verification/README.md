@@ -15,7 +15,10 @@ including honest data seen through faulty nodes.
 | `unknown`  | nothing was proven wrong, but not enough could be checked: an on-chain check that did not pass with no entry wrong (too many unchecked, nothing verified, or nothing drawn) |
 
 `expect.failing` is the exact set of checks that fail: no more, no fewer.
-For on-chain cases `expect.reason` says exactly why: for `refuted`, the kinds
+On-chain cases may pin what a pass is stated to mean:
+`expect.assurancePercent`, the fabricated share (whole percent, rounded up)
+caught with 95% probability by the draw, with `maxUnchecked` items treated
+as possibly fabricated. For on-chain cases `expect.reason` says exactly why: for `refuted`, the kinds
 of wrong entries (`not-the-item`: another item or no item at the location;
 `past-end`: the range runs past the root's end; `refuted`: the chain refutes
 the root; `missing`: no node has the root, as two machines say with every
@@ -71,12 +74,13 @@ A band with `real: { direct, nested }` holds real items instead: `direct`
 signed ANS-104 items (Arweave signature type 1, one RSA key per run) each
 tagged `App-Name: ArDrive-App` with payload `direct-F-i`, directly in a root
 whose data is their bundle, plus, when `nested > 0`, one more item in that
-bundle whose payload is a bundle of `nested` such items (payload
-`nested-F-i`) and whose tags are `Bundle-Format: binary`,
+bundle, last in it, whose payload is a bundle of `nested` such items
+(payload `nested-F-i`) and whose tags are `Bundle-Format: binary`,
 `Bundle-Version: 2.0.0`. The root's id is `H("band-F-real-root")`; its bytes
 are what the `honest` source serves. Rows: one `data_items` row per leaf
 item, with `height F+1`, `block_transaction_index 0`, `parent_id` the root or
 the nested bundle, `owner_address` SHA-256 of the key's modulus,
+`target`, `anchor`, `content_type` and `content_encoding` null,
 `signature_type 1`, `data_size` its payload size, `tag_count 1`, and its
 location: for an item at byte `s` of the root with payload at `d` and size
 `z`, inside a parent whose payload starts at `P` (0 for the root),
@@ -85,10 +89,23 @@ location: for an item at byte `s` of the root with payload at `d` and size
 (`id, root, 0, its start, its size, its payload start`). `rows` ops apply to
 these rows in that order (direct items first, as the bundle holds them).
 
-**Writing a band.** Each table is written as Parquet with the layout's
-columns and DuckDB types (`src/lib/parquet-l2/layout.ts`,
-`PARQUET_L2_TABLES`), rows sorted by the table's `orderBy`, ascending, nulls
-last. Its `band.json` entry is `{rows, rowDigest}`, `rowDigest` being the
+**Writing a band.** Each file is Parquet with exactly these columns, in
+this order, of these types (DuckDB's names: `BLOB` bytes, `VARCHAR` UTF-8
+text, `UBIGINT`/`USMALLINT`/`UTINYINT` unsigned 64/16/8-bit, `INTEGER`
+signed 32-bit), rows sorted ascending by the order columns, nulls last
+(`l2-1` layout):
+
+| File | Columns | Order |
+| --- | --- | --- |
+| `data_items.parquet` | `id BLOB, height UBIGINT, block_transaction_index USMALLINT, root_transaction_id BLOB, parent_id BLOB, owner_address BLOB, target BLOB, anchor BLOB, signature_type UTINYINT, data_size UBIGINT, content_type VARCHAR, content_encoding VARCHAR, tag_count INTEGER, root_parent_offset UBIGINT, offset UBIGINT, size UBIGINT, data_offset UBIGINT, owner_offset UBIGINT, owner_size UBIGINT, signature_offset UBIGINT, signature_size UBIGINT` | `height, block_transaction_index, id, root_parent_offset, offset` |
+| `tags.parquet` | `height UBIGINT, id BLOB, tag_index USMALLINT, tag_name BLOB, tag_value BLOB` | `height, id, tag_index` |
+| `wallets.parquet` | `address BLOB, public_modulus BLOB` | `address` |
+| `parents.parquet` | `id BLOB, root_transaction_id BLOB, root_parent_offset UBIGINT, offset UBIGINT, size UBIGINT, data_offset UBIGINT` | `id, root_transaction_id, root_parent_offset, offset` |
+| `lookup_id.parquet` | `id8 UBIGINT, height UBIGINT` | `id8, height` |
+| `lookup_wallet.parquet` | `addr8 UBIGINT, role UTINYINT, height UBIGINT, data_size UBIGINT` | `addr8, height, role, data_size` |
+| `lookup_tag.parquet` | `name8 UBIGINT, val8 UBIGINT, name BLOB, value BLOB, txs UBIGINT, first_height UBIGINT, last_height UBIGINT` | `name8, val8, name, value` |
+
+BLOBs compare byte by byte (unsigned, a prefix first). Its `band.json` entry is `{rows, rowDigest}`, `rowDigest` being the
 lowercase hex SHA-256 of every row in that order, each value encoded by its
 column's type: `0x00` for NULL; else `0x01`, a 4-byte big-endian length and
 the bytes (a BLOB as is, a VARCHAR as UTF-8, an integer as its decimal
@@ -149,11 +166,12 @@ Values: `null`, numbers, `"hash:<x>"` (`H(x)`), `"utf8:<x>"` (its bytes),
 [docs/index-publication.md](../../../docs/index-publication.md) (RFC 8785
 canonical JSON, the `ar-io-index-publication/v1\n` prefix, Ed25519): a
 publication signed with a fresh Ed25519 key, the signature's `keyId` its
-base58 address,
-publisher a fresh base58 wallet, sequence 3, `issuedAt` (default
+base58 address: `version 1`, `publisher` a fresh base58 wallet,
+`sequence 3`, `previousManifestSha256 null`, `issuedAt` (default
 `2026-10-20T00:00:00Z`), `expiresAt` (default `2099-01-01T00:00:00Z`), one
-`parquet-l2` index `ardrive-l2` listing every band with every non-dot file's
-name, size and SHA-256, as written before `files` runs. It is checked against
+`parquet-l2` index `ardrive-l2` whose `bands` are `{id, files}`, one per
+band in listing order, `files` every non-dot file's `{name, size, sha256}`
+(SHA-256 in lowercase hex) sorted by name, as written before `files` runs. It is checked against
 that key, or, with `key: "other"`, against another fresh key.
 
 `files` runs after writing and signing, in order:
@@ -179,7 +197,9 @@ that key, or, with `key: "other"`, against another fresh key.
 publisher's tag); `lookups: false`; `maxUnlocatedShare`; `allowUnlocated`;
 `allowExpired`; `l1` (an L1 index of the given bands, each holding the given
 band's `root` at `height` and `block_transaction_index` `bti`; `required`);
-`onchain` (`perBand`, `seed`, `maxUnchecked`, and `source`):
+`onchain` (`perBand`, `seed`, `maxUnchecked`, and `source`); `seed` is the
+run seed, written in decimal in the draw key string
+(`sha256("<seed>|<band id>|<stratum>")`, docs/index-verification.md):
 
 - `source: "stranger"`: every read of `size` bytes at `offset` of any root
   returns `0x01 0x00`, 512 random bytes, then zeros to `size`: an
@@ -187,7 +207,9 @@ band's `root` at `height` and `block_transaction_index` `bti`; `required`);
   `not-the-item` (wrong).
 - `source: "busy"`: every read fails as a transport error (HTTP 503).
 - `source: "honest"`: every read of a real band's root returns its bytes
-  at that range (a range past the end is a short read).
+  at that range (a range past the end is a short read). It stands for a
+  root already bound and mined: no header, status, offset or chunk proof is
+  checked, only that the bytes at each drawn location are the item.
 
 `expect.repeatable`: the same seed reads the same offsets twice.
 `expect.draw`: `drawnUniform` of the (first) band; `nestedAtLeast`, the
@@ -202,8 +224,10 @@ rows) draw different positions for their direct items in their
 transaction whose data is a signed ANS-104 bundle of two items. `transfer`
 is a signed transaction with no data. `format1Injected` is a signed
 format-1 transaction whose header is given another transaction's
-`data_root` and `data_size` after signing. The roots sit in the weave from
-offset 40,000,000,000,000, 10,000,000 bytes apart in listing order, in
+`data_root` and `data_size` after signing. The first root's data starts at
+weave offset 40,000,000,000,000 and each next one 10,000,000 bytes further,
+in listing order; `/tx/{id}/offset` answers the root's last byte (its start
+plus its size minus 1), and its size. They sit in
 block `"B" × 64` at height 1000 unless `height` is given.
 
 `nodes` maps each node (host:port) to a script of what it answers, per
@@ -231,7 +255,8 @@ honestly unless its script says otherwise; any id that isn't a root's is
 `entries` are the drawn items, in order, each `repeat` times: a real item of
 `root` (cycling over its two items); `fabricated: true`, a random id at the
 item's real offsets; `madeUp: true`, a random root id with offsets 0 and
-1100; `pastEnd: true`, offsets `size − 100` and `size + 1000` of the root;
+1100; `headerExtra: x`, the item's offsets with its payload start x bytes
+later; `pastEnd: true`, offsets `size − 100` and `size + 1000` of the root;
 `height`, the height the band gives (default the root's). `addresses` (when
 present) maps host names to the addresses they resolve to (a name not listed
 doesn't resolve; IP literals are themselves) and turns on machine dedupe.

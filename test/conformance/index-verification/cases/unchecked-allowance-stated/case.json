@@ -1,0 +1,46 @@
+{
+  "id": "unchecked-allowance-stated",
+  "description": "Fabricated items behind unseeded chunks pass when that many are allowed unchecked; the stated bound counts them as possibly fabricated: P(Bin(20,p) <= 4) <= 5% at p = 41%",
+  "tampered": "4 of 20 fabricated, chunks unseeded, maxUnchecked 4",
+  "kind": "onchain",
+  "roots": {
+    "G": {},
+    "R": {}
+  },
+  "nodes": {
+    "n1:1984": {
+      "chunk": {
+        "R": "404"
+      }
+    },
+    "n2:1984": {
+      "chunk": {
+        "R": "404"
+      }
+    },
+    "n3:1984": {
+      "chunk": {
+        "R": "404"
+      }
+    }
+  },
+  "entries": [
+    {
+      "root": "G",
+      "repeat": 16
+    },
+    {
+      "root": "R",
+      "fabricated": true,
+      "repeat": 4
+    }
+  ],
+  "options": {
+    "maxUnchecked": 4
+  },
+  "expect": {
+    "verdict": "verified",
+    "reason": [],
+    "assurancePercent": 41
+  }
+}
