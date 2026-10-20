@@ -216,6 +216,8 @@ export async function runL2Step(
     try {
       result = await exportL2Band({
         selection: ctx.index.selection,
+        keyTags: ctx.index.keyTags,
+        statTags: ctx.index.statTags,
         from: step.heightRange[0],
         to: step.heightRange[1],
         source: ctx.source,

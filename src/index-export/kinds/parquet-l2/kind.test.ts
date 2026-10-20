@@ -88,6 +88,8 @@ describe('runL2Step', () => {
             kind: 'ans104-data-items',
             tag: { name: 'T0', valuePrefix: '0' },
           }),
+          keyTags: [],
+          statTags: [],
           publishDir,
         },
         publisher: PUBLISHER,
@@ -167,6 +169,8 @@ describe('runL2Step, band.json', () => {
             index: {
               name: 'ardrive-l2',
               selection: ARDRIVE,
+              keyTags: [],
+              statTags: [],
               publishDir: path.join(dir, 'published', 'ardrive-l2'),
             },
             publisher: PUBLISHER,

@@ -8,6 +8,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **`parquet-l2` layout `l2-2`: a key lookup and stats per band, derived
+  for tag names the publisher chooses.** `lookup_key.parquet` holds, for
+  each value of the index's `keyTags` (an ArDrive `Drive-Id`,
+  `Parent-Folder-Id`), the heights at which items carry it and how many, so
+  a reader finds a value spread over a band in a row group or two and then
+  reads only the `tags` row groups at those heights, where `lookup_tag`
+  gave only the first and last height and a wide drive cost the whole band.
+  `stats.parquet` holds items and bytes per 1,000 heights, in all and by
+  each value of the index's `statTags` (`App-Name`, `Content-Type`,
+  `Entity-Type`), so a question over the whole index is answered from the
+  small files alone. Both are configured per index in
+  `INDEX_EXPORT_L2_INDEXES` (`keyTags`, `statTags`, none unless given) and
+  recorded in `band.json`; neither enters a band's id. Every band built is
+  `l2-2`, and a published `l2-1` band, or an `l2-2` band derived for other
+  tag names, is upgraded in place under its id: the two files derived from
+  its own tables, checked, moved in, and `band.json` replaced, before any
+  build and outside the time budget (`derived` in the report,
+  `index_export_runs_total{kind="derive"}`). A subscriber that does not
+  know `l2-2` refuses the band and keeps its copy: upgrade subscribers
+  first. `index-l2-verify` checks the two files as it checks the other
+  lookups. See
+  [docs/index-publication.md](docs/index-publication.md#l2-key-lookup-and-stats).
 - **`index-l2-verify`: check an L2 index (a directory of `parquet-l2`
   bands, such as `ardrive-l2`) as anyone holding it can.** It needs no
   gateway and no database. Each band:

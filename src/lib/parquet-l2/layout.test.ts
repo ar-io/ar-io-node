@@ -13,19 +13,25 @@ import {
   BAND_FILE,
   bandFiles,
   bandTablesDigest,
+  canonicalTagNames,
   DATA_ITEM_LOCATION_COLUMNS,
   idHeightRange,
-  l2BandId,
+  keyLookup,
   L2_BAND_ID_PATTERN,
+  l2BandId,
+  lookupsOf,
   MAX_BAND_FILE_BYTES,
   orderByClause,
   PARQUET_L2_LOOKUPS,
   PARQUET_L2_SCHEMA,
+  PARQUET_L2_SCHEMAS,
   PARQUET_L2_TABLES,
   parseBandFile,
   parseSelection,
+  parseTagNames,
   serializeBandFile,
   serializeSelection,
+  statsLookup,
 } from './layout.js';
 
 const digest = 'a'.repeat(64);
@@ -33,20 +39,39 @@ const selection = () => ({
   kind: 'ans104-data-items',
   tag: { name: 'App-Name', valuePrefix: 'ArDrive' },
 });
-/** A valid description of a band. */
+const KEY_TAGS = ['Drive-Id', 'Parent-Folder-Id'];
+const STAT_TAGS = ['Content-Type', 'Entity-Type'];
+/** A valid description of a band, of the layout written. */
 const valid = (): any => ({
   version: 1,
   schema: PARQUET_L2_SCHEMA,
   heightRange: [0, 99_999],
   selection: selection(),
+  keyTags: KEY_TAGS,
+  statTags: STAT_TAGS,
   tables: Object.fromEntries(
     PARQUET_L2_TABLES.map((t) => [t.name, { rows: 5, rowDigest: digest }]),
   ),
   lookups: Object.fromEntries(
-    PARQUET_L2_LOOKUPS.map((l) => [l.name, { rows: 4, rowDigest: digest }]),
+    lookupsOf({
+      schema: PARQUET_L2_SCHEMA,
+      keyTags: KEY_TAGS,
+      statTags: STAT_TAGS,
+    }).map((l) => [l.name, { rows: 4, rowDigest: digest }]),
   ),
   createdAt: '2026-10-02T00:00:00.000Z',
 });
+/** The same band under `l2-1`: no key or stat tags, three lookups. */
+const validL21 = (): any => {
+  const { keyTags: _k, statTags: _s, ...band } = valid();
+  return {
+    ...band,
+    schema: 'l2-1',
+    lookups: Object.fromEntries(
+      PARQUET_L2_LOOKUPS.map((l) => [l.name, { rows: 4, rowDigest: digest }]),
+    ),
+  };
+};
 const TAG = 'f5b1208c';
 
 describe('parquet-l2 layout', () => {
@@ -69,6 +94,112 @@ describe('parquet-l2 layout', () => {
       'tags.parquet',
       'wallets.parquet',
     ]);
+    assert.deepEqual(bandFiles('l2-2'), [
+      BAND_FILE,
+      'data_items.parquet',
+      'lookup_id.parquet',
+      'lookup_key.parquet',
+      'lookup_tag.parquet',
+      'lookup_wallet.parquet',
+      'parents.parquet',
+      'stats.parquet',
+      'tags.parquet',
+      'wallets.parquet',
+    ]);
+    assert.equal(PARQUET_L2_SCHEMA, 'l2-2');
+    assert.deepEqual(PARQUET_L2_SCHEMAS, ['l2-1', 'l2-2']);
+  });
+
+  it('carries the key lookup and stats under l2-2 only, for the tag names a band gives', () => {
+    assert.deepEqual(
+      lookupsOf({ schema: 'l2-1' }).map((l) => l.name),
+      ['id', 'wallet', 'tag'],
+    );
+    const specs = lookupsOf({
+      schema: 'l2-2',
+      keyTags: ['Drive-Id'],
+      statTags: ['Content-Type'],
+    });
+    assert.deepEqual(
+      specs.map((l) => [l.name, l.file]),
+      [
+        ['id', 'lookup_id.parquet'],
+        ['wallet', 'lookup_wallet.parquet'],
+        ['tag', 'lookup_tag.parquet'],
+        ['key', 'lookup_key.parquet'],
+        ['stats', 'stats.parquet'],
+      ],
+    );
+    const key = specs.find((s) => s.name === 'key')!;
+    assert.deepEqual(
+      key.columns.map((c) => [c.name, c.type]),
+      [
+        ['name8', 'UBIGINT'],
+        ['val8', 'UBIGINT'],
+        ['height', 'UBIGINT'],
+        ['items', 'UBIGINT'],
+      ],
+    );
+    assert.deepEqual(key.orderBy, ['name8', 'val8', 'height']);
+    const stats = specs.find((s) => s.name === 'stats')!;
+    assert.deepEqual(
+      stats.columns.map((c) => [c.name, c.type]),
+      [
+        ['bucket', 'UBIGINT'],
+        ['name', 'BLOB'],
+        ['value', 'BLOB'],
+        ['items', 'UBIGINT'],
+        ['bytes', 'UBIGINT'],
+      ],
+    );
+    assert.deepEqual(stats.orderBy, ['bucket', 'name', 'value']);
+    // The tag names reach the SQL as hex, never as text to escape.
+    const tables = { data_items: ['/d.parquet'], tags: ['/t.parquet'] };
+    assert.ok(
+      key
+        .derive(tables)
+        .includes(`from_hex('${Buffer.from('Drive-Id').toString('hex')}')`),
+    );
+    assert.doesNotMatch(key.derive(tables), /Drive-Id/);
+    // No names: no rows, and SQL that still parses.
+    assert.match(keyLookup([]).derive(tables), /WHERE false/);
+    assert.match(statsLookup([]).derive(tables), /WHERE false/);
+  });
+
+  it('keeps tag names each once, in UTF-8 byte order, bounded as a selection’s strings', () => {
+    assert.deepEqual(canonicalTagNames(['b', 'a', 'Drive-Id', 'a', 'é']), [
+      'Drive-Id',
+      'a',
+      'b',
+      'é',
+    ]);
+    assert.deepEqual(parseTagNames([], 'x'), []);
+    assert.deepEqual(parseTagNames(['Drive-Id'], 'x'), ['Drive-Id']);
+    assert.throws(() => parseTagNames('Drive-Id', 'x'), /x must be a list/);
+    assert.throws(
+      () => parseTagNames(['b', 'a'], 'x'),
+      /x must be in UTF-8 byte order/,
+    );
+    assert.throws(() => parseTagNames(['a', 'a'], 'x'), /x names "a" twice/);
+    assert.throws(
+      () => parseTagNames([''], 'x'),
+      /x\[0\] must be a non-empty string/,
+    );
+    assert.throws(
+      () => parseTagNames([5], 'x'),
+      /x\[0\] must be a non-empty string/,
+    );
+    assert.throws(
+      () =>
+        parseTagNames(
+          Array.from(
+            { length: 17 },
+            (_, i) => `t${String(i).padStart(2, '0')}`,
+          ),
+          'x',
+        ),
+      /x lists more than 16 tag names/,
+    );
   });
 
   it("keys its lookups as an l1-3 band's, and takes L1's tag lookup unchanged", () => {
@@ -204,8 +335,47 @@ describe('parseBandFile', () => {
     );
     assert.deepEqual(band.heightRange, [0, 99_999]);
     assert.deepEqual(band.selection, selection());
+    assert.deepEqual(band.keyTags, KEY_TAGS);
+    assert.deepEqual(band.statTags, STAT_TAGS);
     assert.equal(band.tables.data_items.rows, 5);
+    assert.equal(band.lookups.key.rows, 4);
+    assert.equal(band.lookups.stats.rows, 4);
     assert.deepEqual(band.checks, { signatures: 5 });
+  });
+
+  it('reads an l2-1 band file: no key or stat tags, three lookups', () => {
+    const band = parseBandFile(JSON.stringify(validL21()));
+    assert.equal(band.schema, 'l2-1');
+    assert.equal(band.keyTags, undefined);
+    assert.equal(band.statTags, undefined);
+    assert.deepEqual(Object.keys(band.lookups), ['id', 'wallet', 'tag']);
+  });
+
+  it('ties the key and stat tags to the layout', () => {
+    const refuse = (band: any, pattern: RegExp) =>
+      assert.throws(() => parseBandFile(JSON.stringify(band)), pattern);
+    refuse({ ...validL21(), keyTags: [] }, /a l2-1 band has no keyTags/);
+    refuse({ ...validL21(), statTags: [] }, /a l2-1 band has no statTags/);
+    const { keyTags: _k, ...noKeys } = valid();
+    refuse(noKeys, /a l2-2 band names its keyTags/);
+    const { statTags: _s, ...noStats } = valid();
+    refuse(noStats, /a l2-2 band names its statTags/);
+    refuse(
+      { ...valid(), keyTags: ['b', 'a'] },
+      /keyTags must be in UTF-8 byte order/,
+    );
+    refuse({ ...valid(), statTags: [''] }, /statTags\[0\]/);
+    // An l2-1 band describes no key lookup; an l2-2 band describes both.
+    refuse(
+      {
+        ...validL21(),
+        lookups: { ...validL21().lookups, key: { rows: 1, rowDigest: digest } },
+      },
+      /unknown lookup "key"/,
+    );
+    const missing = valid();
+    delete missing.lookups.stats;
+    refuse(missing, /lookup stats needs/);
   });
 
   it('refuses anything malformed, naming what', () => {
@@ -299,21 +469,43 @@ describe('serializeBandFile', () => {
       'schema',
       'heightRange',
       'selection',
+      'keyTags',
+      'statTags',
       'tables',
       'lookups',
       'checks',
       'createdAt',
     ]);
+    assert.deepEqual(json.keyTags, KEY_TAGS);
+    assert.deepEqual(
+      Object.keys(
+        JSON.parse(
+          serializeBandFile(parseBandFile(JSON.stringify(validL21()))),
+        ),
+      ),
+      [
+        'version',
+        'schema',
+        'heightRange',
+        'selection',
+        'tables',
+        'lookups',
+        'createdAt',
+      ],
+    );
     assert.deepEqual(Object.keys(json.selection), ['kind', 'tag']);
     assert.deepEqual(Object.keys(json.selection.tag), ['name', 'valuePrefix']);
     assert.deepEqual(
       Object.keys(json.tables),
       PARQUET_L2_TABLES.map((t) => t.name),
     );
-    assert.deepEqual(
-      Object.keys(json.lookups),
-      PARQUET_L2_LOOKUPS.map((l) => l.name),
-    );
+    assert.deepEqual(Object.keys(json.lookups), [
+      'id',
+      'wallet',
+      'tag',
+      'key',
+      'stats',
+    ]);
     assert.deepEqual(Object.keys(json.checks), ['a', 'b']);
   });
 
@@ -354,7 +546,7 @@ describe('bandTablesDigest and the band id', () => {
     assert.notEqual(l2BandId(a, TAG), l2BandId(b, TAG));
   });
 
-  it('leaves out lookups, checks and createdAt', () => {
+  it('leaves out lookups, key and stat tags, checks and createdAt', () => {
     const a = band();
     const b = {
       ...band(),
@@ -363,6 +555,13 @@ describe('bandTablesDigest and the band id', () => {
       createdAt: '2027-01-01T00:00:00.000Z',
     };
     assert.deepEqual(bandTablesDigest(a), bandTablesDigest(b));
+    // So an l2-1 band keeps its id when it gains them.
+    const older = parseBandFile(JSON.stringify(validL21()));
+    assert.deepEqual(bandTablesDigest(a), bandTablesDigest(older));
+    assert.deepEqual(
+      bandTablesDigest(a),
+      bandTablesDigest({ ...a, keyTags: ['Other'], statTags: [] }),
+    );
   });
 
   it('names a band by its heights, publisher and digest', () => {
