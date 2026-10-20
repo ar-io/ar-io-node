@@ -213,10 +213,10 @@ export const optionMap = {
     description:
       'Pass a band whose items all have no locations (as its band.json declares), so nothing of it can be read on chain (default: such a band fails the located and onchain checks)',
   },
-  maxUnreadableShare: {
-    alias: '--max-unreadable-share <fraction>',
+  maxUnchecked: {
+    alias: '--max-unchecked <n>',
     description:
-      'The largest share of the items tried in a band that may sit in chunks no node holds (default 0.2)',
+      'Drawn on-chain entries per band that may be left unchecked (nodes busy, data unseeded, a root no node locates) and the band still pass (default 0). Past it, a band with none wrong is inconclusive: ok false, listed in onchain.inconclusiveBands. Every drawn entry counts: none is replaced by another draw',
   },
   maxUnlocatedShare: {
     alias: '--max-unlocated-share <fraction>',
@@ -357,7 +357,7 @@ export const indexL2VerifyOptions: CommanderOption[] = [
   optionMap.l1BandsDir,
   optionMap.allowAgreement,
   optionMap.allowUnlocated,
-  optionMap.maxUnreadableShare,
+  optionMap.maxUnchecked,
   optionMap.maxUnlocatedShare,
   optionMap.allowExpired,
   optionMap.bandDeadline,

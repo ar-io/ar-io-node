@@ -192,10 +192,7 @@ export async function indexL2VerifyCLICommand(
     whole(options.onchain, '--onchain') ?? DEFAULT_ONCHAIN_PER_BAND;
   const timeoutMs = whole(options.readTimeout, '--read-timeout') ?? 30000;
   const seed = whole(options.seed, '--seed');
-  const maxUnreadableShare = fraction(
-    options.maxUnreadableShare,
-    '--max-unreadable-share',
-  );
+  const maxUnchecked = whole(options.maxUnchecked, '--max-unchecked');
   const maxUnlocatedShare = fraction(
     options.maxUnlocatedShare,
     '--max-unlocated-share',
@@ -409,9 +406,7 @@ export async function indexL2VerifyCLICommand(
               perBand,
               openRoot: source.openRoot,
               deadlineMs: deadlineSeconds * 1000,
-              ...(maxUnreadableShare !== undefined
-                ? { maxUnreadableShare }
-                : {}),
+              ...(maxUnchecked !== undefined ? { maxUnchecked } : {}),
               ...(seed !== undefined ? { seed } : {}),
             },
           }

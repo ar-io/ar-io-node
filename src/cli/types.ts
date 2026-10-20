@@ -94,7 +94,7 @@ export interface IndexL2VerifyCLIOptions extends GlobalCLIOptions {
   l1BandsDir?: string;
   allowAgreement?: boolean;
   allowUnlocated?: boolean;
-  maxUnreadableShare?: string;
+  maxUnchecked?: string;
   maxUnlocatedShare?: string;
   allowExpired?: boolean;
   bandDeadline?: string;

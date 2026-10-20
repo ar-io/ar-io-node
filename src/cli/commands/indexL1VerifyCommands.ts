@@ -141,17 +141,13 @@ export async function openBandsDuck(
     removedStale.push(dir);
   }
   const spill = await fsp.mkdtemp(path.join(tmpRoot, prefix));
-  const heartbeat = path.join(spill, SPILL_HEARTBEAT_FILE);
-  await fsp.writeFile(heartbeat, '');
-  const beating = setInterval(() => {
-    const now = new Date();
-    fsp.utimes(heartbeat, now, now).catch(() => undefined);
-  }, HEARTBEAT_MS);
-  beating.unref();
   const removeSpill = () => fsp.rm(spill, { recursive: true, force: true });
   // An interrupted run leaves no spill behind: removed, then the signal's
-  // usual end (exit 130 for Ctrl-C) follows.
+  // usual end (exit 130 for Ctrl-C) follows. Set before anything is
+  // written into the folder.
+  const beat: { timer?: NodeJS.Timeout } = {};
   const onSignal = (signal: NodeJS.Signals) => {
+    clearInterval(beat.timer);
     rmSync(spill, { recursive: true, force: true });
     process.removeListener('SIGINT', onSignal);
     process.removeListener('SIGTERM', onSignal);
@@ -160,10 +156,23 @@ export async function openBandsDuck(
   process.once('SIGINT', onSignal);
   process.once('SIGTERM', onSignal);
   const forget = () => {
-    clearInterval(beating);
+    clearInterval(beat.timer);
     process.removeListener('SIGINT', onSignal);
     process.removeListener('SIGTERM', onSignal);
   };
+  const heartbeat = path.join(spill, SPILL_HEARTBEAT_FILE);
+  try {
+    await fsp.writeFile(heartbeat, '');
+  } catch (error) {
+    forget();
+    await removeSpill();
+    throw error;
+  }
+  beat.timer = setInterval(() => {
+    const now = new Date();
+    fsp.utimes(heartbeat, now, now).catch(() => undefined);
+  }, HEARTBEAT_MS);
+  beat.timer.unref();
   let duck: Database | undefined;
   try {
     const { Database } = await import('duckdb-async');
