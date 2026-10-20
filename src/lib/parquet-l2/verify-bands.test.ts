@@ -1026,6 +1026,20 @@ describe('verifyL2Bands fails closed', () => {
     });
     assert.equal(moved.ok, false);
     assert.ok(failing(moved).includes('mined'));
+    // Both indexes' positions, and that the L1 index may be the one wrong.
+    assert.deepEqual(moved.mined?.moved, [
+      {
+        band: id,
+        root: root.toString('base64url'),
+        height: 101,
+        l2Index: 0,
+        l1Index: 1,
+      },
+    ]);
+    assert.match(
+      moved.checks.find((c) => c.name === 'mined')!.failures![0].expected,
+      /index-l1-verify/,
+    );
 
     // Not covered: a failure when the index was named, else unchecked.
     const short = await fresh();
@@ -1039,7 +1053,8 @@ describe('verifyL2Bands fails closed', () => {
     });
     assert.equal(unchecked.ok, true);
     assert.deepEqual(unchecked.mined?.uncovered, [id]);
-    assert.ok(unchecked.skipped.includes('mined'));
+    assert.ok(!unchecked.skipped.includes('mined'));
+    assert.ok(unchecked.skipped.includes(`mined:partial:${id}`));
   });
 
   it('fails a band the publication lists in the range checked that the directory lacks (review 4)', async () => {

@@ -106,6 +106,9 @@ import { verifyBandLookups } from './lookups.js';
 import { selectionDuckDb } from './selection.js';
 import { digestL2Table, L2TableError } from './tables.js';
 
+/** Moved roots listed in a result; the rest are counted in the failure. */
+export const MAX_MOVED_REPORTED = 20;
+
 /** A set of bands that can't be checked as one index. */
 export class L2BandsRefused extends Error {}
 
@@ -295,6 +298,17 @@ export interface L2BandsVerifyResult {
     checked: number;
     /** Bands the L1 index doesn't cover. */
     uncovered: string[];
+    /**
+     * Roots the L1 index holds at another position in their block than the
+     * L2 band gives (at most {@link MAX_MOVED_REPORTED}).
+     */
+    moved: Array<{
+      band: string;
+      root: string;
+      height: number;
+      l2Index: number;
+      l1Index: number;
+    }>;
   };
   /** Bands left out because a band of the same publisher replaces them. */
   superseded: string[];
@@ -837,6 +851,13 @@ export async function verifyL2Bands(
           checks: { height: true as const, position: true as const },
           checked: 0,
           uncovered: [] as string[],
+          moved: [] as Array<{
+            band: string;
+            root: string;
+            height: number;
+            l2Index: number;
+            l1Index: number;
+          }>,
         }
       : undefined;
   if (options.l1 !== undefined) {
@@ -1258,11 +1279,39 @@ export async function verifyL2Bands(
             'absent',
             'roots not in the L1 index at the height their items give',
           ],
-          [
-            'moved',
-            'roots the L1 index holds at another block_transaction_index than their items give',
-          ],
         ]);
+        if (num(roots.moved) > 0) {
+          // Two indexes disagreeing on a block's order: tx_root does not
+          // bind it, so the L1 index may be the one wrong. Named, both
+          // positions given, and failed all the same.
+          const rows =
+            (await duck.all(`SELECT d.root_transaction_id AS root, d.height,
+              d.block_transaction_index AS l2_index, l.block_transaction_index AS l1_index
+            FROM (SELECT DISTINCT root_transaction_id, height, block_transaction_index FROM ${itemsFile}) d
+            JOIN (
+              SELECT transaction_id, height, block_transaction_index
+              FROM read_parquet([${l1Files.map(sqlString).join(', ')}]) WHERE height BETWEEN ${from} AND ${to}) l
+            ON l.transaction_id = d.root_transaction_id AND l.height = d.height
+            WHERE NOT ${holds('l.block_transaction_index = d.block_transaction_index')}
+            ORDER BY d.height, d.block_transaction_index LIMIT ${MAX_MOVED_REPORTED}`)) as Array<
+              Record<string, unknown>
+            >;
+          for (const r of rows) {
+            if (minedSummary.moved.length >= MAX_MOVED_REPORTED) break;
+            minedSummary.moved.push({
+              band: id,
+              root: Buffer.from(r.root as Buffer).toString('base64url'),
+              height: num(r.height),
+              l2Index: num(r.l2_index),
+              l1Index: num(r.l1_index),
+            });
+          }
+          fail(
+            mined,
+            `${num(roots.moved)} roots the L1 index at ${options.l1?.bandsDir} holds at another block_transaction_index than their items give (see mined.moved)`,
+            "the same position in both: the two indexes disagree on the order of a block, and either may be wrong (tx_root does not bind the order); check the L1 index with index-l1-verify, and compare it with the publisher's own L1 index",
+          );
+        }
         if (num(roots.absent) === 0 && num(roots.moved) === 0) {
           minedSummary.checked += 1;
         }
@@ -1452,11 +1501,11 @@ export async function verifyL2Bands(
   if (options.publication === undefined) skipped.push('publication');
   // Roots are found in blocks by the L1 index (every root of a covered band)
   // or by the root source (each sampled root); neither, and it is unchecked.
-  if (
-    options.l1 === undefined ||
-    (minedSummary !== undefined && minedSummary.uncovered.length > 0)
-  ) {
+  if (options.l1 === undefined) {
     skipped.push('mined');
+  } else if (minedSummary !== undefined && minedSummary.uncovered.length > 0) {
+    // Checked for some bands only: which were not, named.
+    skipped.push(`mined:partial:${minedSummary.uncovered.join(',')}`);
   }
 
   const keyFrom = options.publication?.keyFrom ?? 'operator';

@@ -18,6 +18,7 @@ import { VerifyRefused } from '../../lib/parquet-l1/verify.js';
 import {
   indexL1VerifyCLICommand,
   openBandsDuck,
+  SPILL_HEARTBEAT_FILE,
   spillBytes,
 } from './indexL1VerifyCommands.js';
 
@@ -360,17 +361,23 @@ describe('openBandsDuck', () => {
     await none.close();
   });
 
-  it('removes spill folders of its own kind left a day ago, and no others', async () => {
+  it('removes spill folders of its own kind whose heartbeat stopped a day ago, and no others', async () => {
     const old = path.join(root, 'ar-io-node-l2-verify-stale');
     const recent = path.join(root, 'ar-io-node-l2-verify-recent');
     const other = path.join(root, 'something-else');
-    for (const dir of [old, recent, other]) {
+    // A long run: its folder untouched for a day, its heartbeat fresh.
+    const running = path.join(root, 'ar-io-node-l2-verify-running');
+    for (const dir of [old, recent, other, running]) {
       await fsp.mkdir(dir);
       await fsp.writeFile(path.join(dir, 'x.block'), 'spill');
     }
     const dayAgo = new Date(Date.now() - 25 * 3600 * 1000);
-    await fsp.utimes(old, dayAgo, dayAgo);
-    await fsp.utimes(other, dayAgo, dayAgo);
+    await fsp.writeFile(path.join(old, SPILL_HEARTBEAT_FILE), '');
+    await fsp.utimes(path.join(old, SPILL_HEARTBEAT_FILE), dayAgo, dayAgo);
+    await fsp.writeFile(path.join(running, SPILL_HEARTBEAT_FILE), '');
+    for (const dir of [old, other, running]) {
+      await fsp.utimes(dir, dayAgo, dayAgo);
+    }
     const session = await openBandsDuck({
       tmpRoot: root,
       prefix: 'ar-io-node-l2-verify-',
@@ -381,6 +388,13 @@ describe('openBandsDuck', () => {
       await assert.rejects(fsp.stat(old), { code: 'ENOENT' });
       assert.ok((await fsp.stat(recent)).isDirectory());
       assert.ok((await fsp.stat(other)).isDirectory());
+      assert.ok((await fsp.stat(running)).isDirectory());
+      // This run beats too.
+      assert.ok(
+        (
+          await fsp.stat(path.join(session.spill, SPILL_HEARTBEAT_FILE))
+        ).isFile(),
+      );
     } finally {
       await session.close();
     }

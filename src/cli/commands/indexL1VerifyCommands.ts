@@ -58,8 +58,14 @@ export function spillBytes(size: string): number {
 export const SPILL_FREE_SHARE = 0.8;
 /** Space a run always leaves free under its spill, whatever else it may take. */
 export const SPILL_RESERVE_BYTES = 100e9;
-/** A spill folder older than this was left by a killed run. */
+/** A spill folder whose heartbeat is older than this was left by a killed run. */
 export const STALE_SPILL_MS = 24 * 3600 * 1000;
+/**
+ * A file in each spill folder its run touches every minute: another run
+ * removes the folder only once it has stopped beating for a day.
+ */
+export const SPILL_HEARTBEAT_FILE = '.heartbeat';
+const HEARTBEAT_MS = 60_000;
 
 /**
  * A DuckDB session for checking bands: bounded memory, two threads, no
@@ -125,17 +131,23 @@ export async function openBandsDuck(
     if (!name.startsWith(prefix)) continue;
     const dir = path.join(tmpRoot, name);
     const stat = await fsp.lstat(dir).catch(() => undefined);
-    if (
-      stat === undefined ||
-      !stat.isDirectory() ||
-      Date.now() - stat.mtimeMs < STALE_SPILL_MS
-    ) {
-      continue;
-    }
+    if (stat === undefined || !stat.isDirectory()) continue;
+    // The heartbeat's age, or the folder's where a run kept none.
+    const beat = await fsp
+      .stat(path.join(dir, SPILL_HEARTBEAT_FILE))
+      .catch(() => undefined);
+    if (Date.now() - (beat ?? stat).mtimeMs < STALE_SPILL_MS) continue;
     await fsp.rm(dir, { recursive: true, force: true });
     removedStale.push(dir);
   }
   const spill = await fsp.mkdtemp(path.join(tmpRoot, prefix));
+  const heartbeat = path.join(spill, SPILL_HEARTBEAT_FILE);
+  await fsp.writeFile(heartbeat, '');
+  const beating = setInterval(() => {
+    const now = new Date();
+    fsp.utimes(heartbeat, now, now).catch(() => undefined);
+  }, HEARTBEAT_MS);
+  beating.unref();
   const removeSpill = () => fsp.rm(spill, { recursive: true, force: true });
   // An interrupted run leaves no spill behind: removed, then the signal's
   // usual end (exit 130 for Ctrl-C) follows.
@@ -148,6 +160,7 @@ export async function openBandsDuck(
   process.once('SIGINT', onSignal);
   process.once('SIGTERM', onSignal);
   const forget = () => {
+    clearInterval(beating);
     process.removeListener('SIGINT', onSignal);
     process.removeListener('SIGTERM', onSignal);
   };

@@ -314,8 +314,9 @@ export async function indexL2VerifyCLICommand(
       };
     } else {
       const urls = urlList(options.arweaveNodes) ?? DEFAULT_ARWEAVE_NODE_URLS;
+      const pool = new ArweaveNodePool({ urls, timeoutMs });
       const onchain = onChainRootSource({
-        pool: new ArweaveNodePool({ urls, timeoutMs }),
+        pool,
         allowAgreement: options.allowAgreement === true,
       });
       source = {
@@ -325,6 +326,8 @@ export async function indexL2VerifyCLICommand(
           proven: true,
           allowAgreement: options.allowAgreement === true,
           ...onchain.stats(),
+          // Names that didn't resolve: each counted a machine of its own.
+          unresolvedNodes: [...pool.unresolved],
           // Answers single nodes gave that didn't hold up: their faults,
           // passed over for other nodes, never held against a band.
           nodeFaultCount: onchain.nodeFaultCount(),
