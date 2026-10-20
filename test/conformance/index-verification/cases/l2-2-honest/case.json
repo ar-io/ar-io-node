@@ -1,0 +1,40 @@
+{
+  "id": "l2-2-honest",
+  "description": "Two sound l2-2 bands: key lookup and stats derived for App-Name",
+  "tampered": "nothing",
+  "kind": "bands",
+  "bands": [
+    {
+      "from": 100,
+      "to": 199,
+      "layout": {
+        "schema": "l2-2",
+        "keyTags": [
+          "App-Name"
+        ],
+        "statTags": [
+          "App-Name"
+        ]
+      }
+    },
+    {
+      "from": 200,
+      "to": 299,
+      "layout": {
+        "schema": "l2-2",
+        "keyTags": [
+          "App-Name"
+        ],
+        "statTags": [
+          "App-Name"
+        ]
+      }
+    }
+  ],
+  "options": {
+    "publisher": true
+  },
+  "expect": {
+    "verdict": "verified"
+  }
+}

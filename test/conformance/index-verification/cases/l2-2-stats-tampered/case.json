@@ -1,0 +1,43 @@
+{
+  "id": "l2-2-stats-tampered",
+  "description": "A stats row changed, band.json describing the file as it is: the stats are recomputed from the rows, not trusted",
+  "tampered": "bytes of one stats row set to 999",
+  "kind": "bands",
+  "bands": [
+    {
+      "from": 100,
+      "to": 199,
+      "layout": {
+        "schema": "l2-2",
+        "keyTags": [
+          "App-Name"
+        ],
+        "statTags": [
+          "App-Name"
+        ]
+      }
+    }
+  ],
+  "files": [
+    {
+      "op": "editParquet",
+      "band": 0,
+      "file": "stats.parquet",
+      "row": 0,
+      "column": "bytes",
+      "value": 999
+    },
+    {
+      "op": "redescribeLookup",
+      "band": 0,
+      "lookup": "stats"
+    }
+  ],
+  "expect": {
+    "verdict": "refuted",
+    "check": "lookups",
+    "failing": [
+      "lookups"
+    ]
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "id": "unlocated-child-of-unplaced-parent",
+  "description": "A nested item whose parent bundle has no place in parents is left unlocated, declared as no_parent (#1067, #1069)",
+  "tampered": "nothing (child unlocated, parents empty, declared)",
+  "kind": "bands",
+  "bands": [
+    {
+      "from": 100,
+      "to": 199,
+      "rows": [
+        {
+          "op": "unlocate",
+          "row": 1
+        },
+        {
+          "op": "clear",
+          "table": "parents"
+        }
+      ],
+      "band": [
+        {
+          "op": "setChecks",
+          "value": {
+            "unlocated": {
+              "no_parent": 1
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "options": {
+    "maxUnlocatedShare": 0.6
+  },
+  "expect": {
+    "verdict": "verified"
+  }
+}

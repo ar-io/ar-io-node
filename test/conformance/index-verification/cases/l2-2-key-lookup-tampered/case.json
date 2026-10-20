@@ -1,0 +1,43 @@
+{
+  "id": "l2-2-key-lookup-tampered",
+  "description": "A key lookup row changed, band.json describing the file as it is: its rows aren't the ones the tags give",
+  "tampered": "one row's items set to 999",
+  "kind": "bands",
+  "bands": [
+    {
+      "from": 100,
+      "to": 199,
+      "layout": {
+        "schema": "l2-2",
+        "keyTags": [
+          "App-Name"
+        ],
+        "statTags": [
+          "App-Name"
+        ]
+      }
+    }
+  ],
+  "files": [
+    {
+      "op": "editParquet",
+      "band": 0,
+      "file": "lookup_key.parquet",
+      "row": 0,
+      "column": "items",
+      "value": 999
+    },
+    {
+      "op": "redescribeLookup",
+      "band": 0,
+      "lookup": "key"
+    }
+  ],
+  "expect": {
+    "verdict": "refuted",
+    "check": "lookups",
+    "failing": [
+      "lookups"
+    ]
+  }
+}

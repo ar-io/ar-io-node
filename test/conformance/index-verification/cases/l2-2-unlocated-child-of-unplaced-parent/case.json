@@ -1,0 +1,47 @@
+{
+  "id": "l2-2-unlocated-child-of-unplaced-parent",
+  "description": "As unlocated-child-of-unplaced-parent, under l2-2",
+  "tampered": "nothing (child unlocated, parents empty, declared)",
+  "kind": "bands",
+  "bands": [
+    {
+      "from": 100,
+      "to": 199,
+      "layout": {
+        "schema": "l2-2",
+        "keyTags": [
+          "App-Name"
+        ],
+        "statTags": [
+          "App-Name"
+        ]
+      },
+      "rows": [
+        {
+          "op": "unlocate",
+          "row": 1
+        },
+        {
+          "op": "clear",
+          "table": "parents"
+        }
+      ],
+      "band": [
+        {
+          "op": "setChecks",
+          "value": {
+            "unlocated": {
+              "no_parent": 1
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "options": {
+    "maxUnlocatedShare": 0.6
+  },
+  "expect": {
+    "verdict": "verified"
+  }
+}

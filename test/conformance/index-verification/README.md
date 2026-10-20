@@ -104,6 +104,8 @@ signed 32-bit), rows sorted ascending by the order columns, nulls last
 | `lookup_id.parquet` | `id8 UBIGINT, height UBIGINT` | `id8, height` |
 | `lookup_wallet.parquet` | `addr8 UBIGINT, role UTINYINT, height UBIGINT, data_size UBIGINT` | `addr8, height, role, data_size` |
 | `lookup_tag.parquet` | `name8 UBIGINT, val8 UBIGINT, name BLOB, value BLOB, txs UBIGINT, first_height UBIGINT, last_height UBIGINT` | `name8, val8, name, value` |
+| `lookup_key.parquet` (`l2-2` only) | `name8 UBIGINT, val8 UBIGINT, height UBIGINT, items UBIGINT` | `name8, val8, height` |
+| `stats.parquet` (`l2-2` only) | `bucket UBIGINT, name BLOB, value BLOB, items UBIGINT, bytes UBIGINT` | `bucket, name, value` |
 
 BLOBs compare byte by byte (unsigned, a prefix first). Its `band.json` entry is `{rows, rowDigest}`, `rowDigest` being the
 lowercase hex SHA-256 of every row in that order, each value encoded by its
@@ -123,11 +125,27 @@ derived from the tables:
   last_height)`, `txs` the number of distinct ids carrying it and the
   heights its least and greatest;
 
+- `lookup_key` (`l2-2`): for each distinct `(name, value, height, id)` of
+  `tags` whose name is one of the band's `keyTags`,
+  `(sha256_64(name), sha256_64(value), height, items)`, `items` the number
+  of distinct ids at that height;
+- `stats` (`l2-2`): with `bucket = floor(height / 1000) · 1000`, over the
+  distinct `(id, height, data_size)` of `data_items`: one row per bucket
+  with empty `name` and `value`, `items` the count and `bytes` the sum of
+  `data_size` (0 for none); and, for each of the band's `statTags`, one row
+  per bucket and value, counting the items carrying that tag name (each
+  item under the value of its lowest `tag_index` for that name);
+
 where `prefix64(b)` is the first 8 bytes of `b` (zero-padded on the right)
 as a big-endian unsigned integer and `sha256_64(b)` is `prefix64` of its
 SHA-256. Each is written sorted by its key columns (`id8, height`;
 `addr8, height, role, data_size`; `name8, val8, name, value`) and described
 `{rows, rowDigest}` the same way, digested in that order.
+
+A band spec with `layout: {schema: "l2-2", keyTags, statTags}` is written
+under `l2-2`: the two more files above, derived for those tag names, and
+`keyTags`, `statTags` (each once, in UTF-8 byte order) in `band.json`
+after `selection`. Otherwise it is `l2-1`.
 
 `band.json` is `{"version":1,"schema":"l2-1","heightRange":[F,T],
 "selection":{"kind":"ans104-data-items","tag":{"name":"App-Name",
@@ -190,6 +208,9 @@ that key, or, with `key: "other"`, against another fresh key.
 | `removeDir {band}` | deletes the band |
 | `rebuild {band, spec}` | deletes the band and writes `spec` (a band spec) in its place |
 | `editBandJson {band, checks}` | rewrites `band.json` with `checks` set |
+| `emptyFile {band, file}` | rewrites the Parquet file with the same columns and no rows |
+| `editParquet {band, file, row, column, value}` | rewrites the Parquet file with one cell changed (the row by its position in the file, from 0), rows in their order |
+| `redescribeLookup {band, lookup}` | rewrites the lookup's `{rows, rowDigest}` in `band.json` to describe the file as it now is, digested in the lookup's order (a lying publisher) |
 | `deleteDuringRun {band}` | deletes the band once the verifier has finished the band before it |
 | `deleteFileDuringRun {band, file}` | deletes the file as the verifier starts reading it |
 
