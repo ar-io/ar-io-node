@@ -287,9 +287,9 @@ export function onChainRootSource({
       if (machines >= 2 && against === 0) {
         // Missing only when every node was heard: an unheard node may be
         // the one holder, so the root is then unchecked, not missing.
-        if (headers.busy.length > 0) {
+        if (headers.unheard.length > 0) {
           throw new NodesRefusedError(
-            `${machines} machines have no header for ${id}, and ${headers.busy.length} stayed busy (asked twice): unchecked`,
+            `${machines} machines have no header for ${id}, and ${headers.unheard.length} stayed unheard (asked twice: busy, or its connection failed): unchecked`,
             headers.absent.length,
             headers.busy.length,
             0,
@@ -400,9 +400,9 @@ export function onChainRootSource({
       } else {
         const absentMachines = new Set(status.absent.map((a) => a.machine))
           .size;
-        if (absentMachines >= 2) {
-          // In no block, as two machines say: a claim otherwise is its
-          // node's fault.
+        if (absentMachines >= 2 && status.unheard.length === 0) {
+          // In no block, as two machines say and no node unheard: a claim
+          // otherwise is its node's fault.
           for (const a of status.answers) {
             fault(
               a.node,
@@ -415,7 +415,7 @@ export function onChainRootSource({
           );
         }
         throw new NodesRefusedError(
-          `${id}: fewer than ${minAgreement} machines place it in one block, and fewer than two say it is in none (${status.answers.length} placed it, ${absentMachines} denied, ${status.busy.length} busy)`,
+          `${id}: fewer than ${minAgreement} machines place it in one block, and fewer than two say it is in none with every node heard (${status.answers.length} placed it, ${absentMachines} denied, ${status.unheard.length} unheard)`,
           status.absent.length,
           status.busy.length,
           status.faults.length,
@@ -493,7 +493,7 @@ export function onChainRootSource({
         );
       }
       throw new NodesRefusedError(
-        `${id}: no node gave its place in the weave (${offsets.absent.length} said 404, ${offsets.busy.length} busy, ${offsets.faults.length} gave another size): unchecked`,
+        `${id}: no node gave its place in the weave (${offsets.absent.length} said 404, ${offsets.unheard.length} unheard, ${otherSize.size} gave another size, ${offsets.faults.length - otherSize.size} malformed): unchecked`,
         offsets.absent.length,
         offsets.busy.length,
         offsets.faults.length,

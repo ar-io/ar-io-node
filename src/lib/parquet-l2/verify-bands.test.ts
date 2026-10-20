@@ -35,6 +35,7 @@ import { writeL1Band } from '../../../test/parquet-l2-fixture.js';
 import { writeBandLookups } from './lookups.js';
 import {
   detectableFraction,
+  drawSeed,
   L2BandsRefused,
   verifyL2Bands,
 } from './verify-bands.js';
@@ -1239,11 +1240,13 @@ describe('verifyL2Bands fails closed', () => {
       inconclusive.checks.find((c) => c.name === 'onchain')!.failures![0].found,
       /inconclusive: 2 of 2 sampled entries could not be checked/,
     );
-    // Allowed to leave them unchecked, it passes.
+    // Allowed to leave every one unchecked, it still does not pass: a pass
+    // needs something verified (review 6, M3).
     const allowed = await verifyL2Bands(db, dir, {
       onchain: { perBand: 2, openRoot: busyAll, maxUnchecked: 2 },
     });
-    assert.equal(allowed.ok, true, JSON.stringify(allowed.checks));
+    assert.equal(allowed.ok, false);
+    assert.equal(allowed.onchain?.inconclusiveBands.length, 1);
     // What a pass of N drawn items means, in plain words: with 20 drawn,
     // a band 14% fabricated is caught 95% of the time.
     assert.ok(
@@ -1254,5 +1257,70 @@ describe('verifyL2Bands fails closed', () => {
     // the time.
     assert.equal(Math.round(detectableFraction(20) * 1000), 139);
     assert.ok((1 - detectableFraction(20)) ** 20 - 0.05 < 1e-9);
+  });
+
+  it('draws its N items uniformly over every located item, then tops up nested ones (review 6, M1)', async () => {
+    const dir = await fresh();
+    await writeBand(db, dir, 100, 199, {
+      rows: (r) => {
+        // 200 more items directly in their root beside the one nested item.
+        const direct = r.data_items[0];
+        for (let i = 0; i < 200; i += 1) {
+          const copy = [...direct];
+          copy[0] = hash(`uniform-${i}`);
+          const off = 10_000 * (i + 1);
+          copy.splice(
+            LOC('root_parent_offset'),
+            8,
+            0,
+            off,
+            1200,
+            off + 1100,
+            off + 514,
+            512,
+            off + 2,
+            512,
+          );
+          r.data_items.push(copy);
+          r.tags.push([
+            101,
+            copy[0],
+            0,
+            Buffer.from('App-Name'),
+            Buffer.from('ArDrive-App'),
+          ]);
+        }
+      },
+    });
+    const reads: number[] = [];
+    const result = await verifyL2Bands(db, dir, {
+      lookups: false,
+      onchain: { perBand: 20, openRoot: strangerHeaders(reads), seed: 3 },
+    });
+    const band = result.onchain!.bands[0];
+    // 20 drawn uniformly over the 202 located items; the nested one on top
+    // when the uniform draw missed it.
+    assert.equal(band.drawnUniform, 20);
+    assert.ok(band.drawn === 20 || band.drawn === 21, String(band.drawn));
+    assert.ok(reads.includes(3500), 'the nested item is read');
+    // The stated bound is the uniform draw's: 20 items, 14%.
+    assert.ok(
+      result.assurance.some((a) => / 14% /.test(a)),
+      result.assurance.join(' | '),
+    );
+  });
+
+  it('draws the same items for one seed, and salts each band by its id with sha256', async () => {
+    const a = drawSeed(7, 'l2-h100-199-aaaaaaaa-000000000000', 0);
+    assert.equal(a, drawSeed(7, 'l2-h100-199-aaaaaaaa-000000000000', 0));
+    assert.notEqual(a, drawSeed(7, 'l2-h200-299-aaaaaaaa-000000000000', 0));
+    assert.notEqual(a, drawSeed(8, 'l2-h100-199-aaaaaaaa-000000000000', 0));
+    const expected =
+      crypto
+        .createHash('sha256')
+        .update('7|l2-h100-199-aaaaaaaa-000000000000|0')
+        .digest()
+        .readUInt32BE(0) & 0x7fffffff;
+    assert.equal(a, expected);
   });
 });

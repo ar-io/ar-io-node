@@ -193,6 +193,11 @@ export async function indexL2VerifyCLICommand(
   const timeoutMs = whole(options.readTimeout, '--read-timeout') ?? 30000;
   const seed = whole(options.seed, '--seed');
   const maxUnchecked = whole(options.maxUnchecked, '--max-unchecked');
+  if (maxUnchecked !== undefined && perBand > 0 && maxUnchecked >= perBand) {
+    throw new L2VerifyRefused(
+      `--max-unchecked must be below --onchain (${perBand}): a band must have items verified to pass`,
+    );
+  }
   const maxUnlocatedShare = fraction(
     options.maxUnlocatedShare,
     '--max-unlocated-share',

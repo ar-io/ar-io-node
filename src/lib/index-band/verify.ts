@@ -580,8 +580,8 @@ export interface DrawnCheckResult {
  * item hide behind a root or chunk nobody can read. After a first pass,
  * every unchecked entry is read once more, after the others.
  *
- * It passes with no entry wrong and at most `maxUnchecked` unchecked; with
- * none wrong and more unchecked, it is inconclusive.
+ * It passes with no entry wrong, at most `maxUnchecked` unchecked and at
+ * least one ok; with none wrong and more unchecked, it is inconclusive.
  */
 export async function checkDrawnHeaders({
   entries,
@@ -592,6 +592,11 @@ export async function checkDrawnHeaders({
   retryDelayMs = 2000,
   deadlineMs,
 }: DrawnCheckOptions): Promise<DrawnCheckResult> {
+  if (!Number.isSafeInteger(maxUnchecked) || maxUnchecked < 0) {
+    throw new Error(
+      `maxUnchecked must be a whole number, 0 or above, not ${maxUnchecked}`,
+    );
+  }
   const deadline =
     deadlineMs !== undefined ? Date.now() + deadlineMs : undefined;
   type Outcome =
@@ -777,10 +782,15 @@ export async function checkDrawnHeaders({
       `${wrong.length} of ${entries.length} sampled entries are wrong`,
     );
   }
-  const inconclusive = wrong.length === 0 && unchecked.length > maxUnchecked;
-  if (inconclusive) {
+  // None wrong, but too much unchecked, or nothing verified at all (however
+  // many may stay unchecked): neither a pass nor a refutation.
+  const tooMany = unchecked.length > maxUnchecked;
+  const inconclusive = wrong.length === 0 && (tooMany || ok === 0);
+  if (inconclusive && entries.length > 0) {
     reasons.push(
-      `inconclusive: ${unchecked.length} of ${entries.length} sampled entries could not be checked — rerun, or allow with --max-unchecked`,
+      tooMany
+        ? `inconclusive: ${unchecked.length} of ${entries.length} sampled entries could not be checked — rerun, or allow with --max-unchecked`
+        : `inconclusive: none of the ${entries.length} sampled entries could be verified`,
     );
   }
   if (entries.length === 0) reasons.push('no entries drawn to check');

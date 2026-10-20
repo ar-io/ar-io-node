@@ -65,6 +65,11 @@ export interface Survey<T> {
   absent: Array<{ node: string; machine: string }>;
   /** Nodes that timed out or answered 429, 5xx or the like. */
   busy: string[];
+  /**
+   * Nodes that said nothing definite even when asked again (busy, or their
+   * connection failed): a verdict of absence needs none.
+   */
+  unheard: string[];
 }
 
 /** Machines that said something definite in a survey. */
@@ -345,6 +350,7 @@ export class ArweaveNodePool {
     nodes: string[];
     resting: number;
     restingBusy: string[];
+    restingAll: string[];
   } {
     const start = this.turn % this.urls.length;
     this.turn += 1;
@@ -357,12 +363,17 @@ export class ArweaveNodePool {
     const asleep = (u: string) => (this.resting.get(u)?.until ?? 0) > now;
     const awake = ordered.filter((u) => !asleep(u));
     if (awake.length === 0) {
-      return { nodes: ordered, resting: 0, restingBusy: [] };
+      return { nodes: ordered, resting: 0, restingBusy: [], restingAll: [] };
     }
     const restingBusy = ordered.filter(
       (u) => asleep(u) && this.resting.get(u)!.busy,
     );
-    return { nodes: awake, resting: restingBusy.length, restingBusy };
+    return {
+      nodes: awake,
+      resting: restingBusy.length,
+      restingBusy,
+      restingAll: ordered.filter(asleep),
+    };
   }
 
   /** Rests a node that timed out (busy) or could not be reached. */
@@ -502,13 +513,15 @@ export class ArweaveNodePool {
     } = {},
   ): Promise<Survey<T>> {
     await this.prepare();
-    const { nodes, restingBusy } = this.order();
+    const { nodes, restingAll } = this.order();
     const survey: Survey<T> = {
       answers: [],
       faults: [],
       absent: [],
       busy: [],
+      unheard: [],
     };
+    const unreachable: string[] = [];
     const machine = (node: string) => this.addressOf(node);
     const askOne = async (node: string) => {
       let response;
@@ -521,6 +534,8 @@ export class ArweaveNodePool {
         const name = (error as { name?: unknown }).name;
         if (name === 'TimeoutError' || name === 'AbortError') {
           survey.busy.push(node);
+        } else {
+          unreachable.push(node);
         }
         this.rest(node, error);
         return;
@@ -553,17 +568,19 @@ export class ArweaveNodePool {
       await askOne(node);
       if (enough(survey)) return survey;
     }
-    survey.busy.push(...restingBusy);
-    // Before any verdict of absence, the busy and resting are heard once
-    // more.
-    if (survey.busy.length > 0) {
-      const again = [...new Set(survey.busy)];
-      survey.busy = [];
-      for (const node of again) {
-        await askOne(node);
-        if (enough(survey)) return survey;
-      }
+    // Before any verdict of absence, every node not yet heard (busy, its
+    // connection failed, or resting) is asked once more. Those still
+    // silent are `unheard`: any of them may hold what the others lack.
+    const silent = [
+      ...new Set([...survey.busy, ...unreachable, ...restingAll]),
+    ];
+    survey.busy = [];
+    unreachable.length = 0;
+    for (const node of silent) {
+      await askOne(node);
+      if (enough(survey)) break;
     }
+    survey.unheard = [...new Set([...survey.busy, ...unreachable])];
     return survey;
   }
 

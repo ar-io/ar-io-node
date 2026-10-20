@@ -216,7 +216,7 @@ export const optionMap = {
   maxUnchecked: {
     alias: '--max-unchecked <n>',
     description:
-      'Drawn on-chain entries per band that may be left unchecked (nodes busy, data unseeded, a root no node locates) and the band still pass (default 0). Past it, a band with none wrong is inconclusive: ok false, listed in onchain.inconclusiveBands. Every drawn entry counts: none is replaced by another draw',
+      'Drawn on-chain entries per band (fewer than --onchain) that may be left unchecked (nodes busy, data unseeded, a root no node locates) and the band still pass (default 0). Past it, a band with none wrong is inconclusive: ok false, listed in onchain.inconclusiveBands. Every drawn entry counts: none is replaced by another draw',
   },
   maxUnlocatedShare: {
     alias: '--max-unlocated-share <fraction>',
@@ -231,7 +231,7 @@ export const optionMap = {
   bandDeadline: {
     alias: '--band-deadline <seconds>',
     description:
-      "How long one band's on-chain reads may take (default 1200); reads still pending then are errors, and the band fails",
+      "How long one band's on-chain reads may take (default 1200); items not read by then are unchecked, so the band is inconclusive unless --max-unchecked allows them",
   },
   l2SkipLookups: {
     alias: '--skip-lookups',

@@ -77,6 +77,8 @@ describe('index-l2-verify', () => {
   it('refuses a share that is not a fraction, and an L1 directory that is not one', async () => {
     for (const bad of [
       { maxUnchecked: '1.5' },
+      { maxUnchecked: '20', onchain: '20' },
+      { maxUnchecked: '30', onchain: '20' },
       { maxUnchecked: '-1' },
       { maxUnlocatedShare: '' },
       { bandDeadline: '-3' },

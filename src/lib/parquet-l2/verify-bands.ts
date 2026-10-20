@@ -148,8 +148,8 @@ export interface L2OnChainOptions {
    */
   maxUnchecked?: number;
   /**
-   * Milliseconds one band's reads may take (default: no limit). Reads still
-   * pending then are errors, and the band fails.
+   * Milliseconds one band's reads may take (default: no limit). Items not
+   * read by then are unchecked.
    */
   deadlineMs?: number;
 }
@@ -215,6 +215,11 @@ export interface L2OnChainBand {
   locatedShare: number;
   /** Entries drawn; each is ok, wrong or unchecked. */
   drawn: number;
+  /**
+   * Of them, those drawn uniformly over every located item: the sample
+   * the stated bound is about. The rest are nested items drawn on top.
+   */
+  drawnUniform: number;
   ok: number;
   /** Proven contrary, `missing` roots among them. */
   wrong: number;
@@ -516,14 +521,40 @@ export function l2Coverage(bands: ReadonlyArray<L2BandOnDisk>): {
   };
 }
 
-/** A 32-bit hash of a string (FNV-1a), to salt a seed per band. */
-function hash32(text: string): number {
-  let h = 0x811c9dc5;
-  for (const byte of Buffer.from(text, 'utf8')) {
-    h ^= byte;
-    h = Math.imul(h, 0x01000193) >>> 0;
+/**
+ * What a pass of `perBand` uniformly drawn items means, in plain words. Up
+ * to `maxUnchecked` of them may be left unchecked and the band still pass:
+ * those are treated as the attacker's, so the bound is for the rest.
+ */
+export function onchainAssurance(
+  perBand: number,
+  maxUnchecked: number,
+): string {
+  const effective = perBand - maxUnchecked;
+  if (effective <= 0) {
+    return `on chain, ${perBand} located items drawn per band with up to ${maxUnchecked} allowed unchecked: no bound on fabricated items can be stated`;
   }
-  return h >>> 0;
+  const p = Math.ceil(detectableFraction(effective) * 100);
+  return `on chain, ${perBand} located items drawn uniformly per band, none replaced${maxUnchecked > 0 ? `, up to ${maxUnchecked} allowed unchecked and counted as the attacker's (${effective} effective)` : ''}: a band in which ${p}% or more of the located items are fabricated would have been caught with 95% probability; smaller fractions may not be (unlocated items are not checked on chain at all)`;
+}
+
+/**
+ * The seed of one band's draw (a stratum of it): the first 31 bits of
+ * sha256(`seed|bandId|stratum`), so every band's draw is its own and no
+ * band's can be steered by choosing its place or its neighbours.
+ */
+export function drawSeed(
+  seed: number,
+  bandId: string,
+  stratum: number,
+): number {
+  return (
+    crypto
+      .createHash('sha256')
+      .update(`${seed}|${bandId}|${stratum}`)
+      .digest()
+      .readUInt32BE(0) & 0x7fffffff
+  );
 }
 
 /**
@@ -1355,31 +1386,46 @@ export async function verifyL2Bands(
       )) as Array<Record<string, unknown>>;
       const located = num(counted.located);
       const locatedShare = num(counted.n) > 0 ? located / num(counted.n) : 0;
-      // The draw, up front: half directly in their roots, half in nested
-      // bundles (one stratum filling for the other where it runs short),
-      // so rare nested items are always drawn. The seed, salted by the
-      // band's id, makes it repeatable.
-      const directWant = Math.ceil(perBand / 2);
-      const directTake = Math.min(
-        num(counted.direct),
-        Math.max(directWant, perBand - num(counted.nested)),
-      );
-      const nestedTake = Math.min(num(counted.nested), perBand - directTake);
-      const salt = hash32(id);
-      const stratumSample = async (
-        where: string,
-        size: number,
-        stratum: number,
-      ) =>
+      // The draw, up front: N items uniformly over every located item of
+      // the band (the sample the stated bound is about; a publisher chooses
+      // an item's stratum, so a stratified draw would weaken it), then
+      // nested items on top until ceil(N/2) are nested, where the band has
+      // them, so the nested path is always read. Seeded per band by
+      // sha256(seed | band id).
+      const sample = async (where: string, size: number, stratum: number) =>
         size <= 0
           ? []
           : ((await duck.all(`SELECT * FROM (
             SELECT id, height, root_transaction_id, root_parent_offset, "offset", data_offset
-            FROM ${itemsFile} WHERE "offset" IS NOT NULL AND ${where})
-          USING SAMPLE reservoir(${size} ROWS) REPEATABLE (${(onchainSummary.seed + salt + stratum) % 2 ** 31})`)) as Array<
+            FROM ${itemsFile} WHERE "offset" IS NOT NULL${where})
+          USING SAMPLE reservoir(${size} ROWS) REPEATABLE (${drawSeed(onchainSummary.seed, id, stratum)})`)) as Array<
               Record<string, unknown>
             >);
-      const toEntries = (rows: Array<Record<string, unknown>>, label: string) =>
+      const rowKey = (r: Record<string, unknown>) =>
+        `${Buffer.from(r.id as Buffer).toString('hex')}:${Buffer.from(r.root_transaction_id as Buffer).toString('hex')}:${String(r.root_parent_offset)}:${String(r.offset)}`;
+      const uniform = await sample('', Math.min(perBand, located), 0);
+      const nestedWant = Math.ceil(perBand / 2);
+      const isNested = (r: Record<string, unknown>) =>
+        num(r.root_parent_offset) !== 0;
+      const nestedInUniform = uniform.filter(isNested).length;
+      const drawnKeys = new Set(uniform.map(rowKey));
+      const extra: Array<Record<string, unknown>> = [];
+      if (
+        nestedInUniform < nestedWant &&
+        num(counted.nested) > nestedInUniform
+      ) {
+        for (const r of await sample(
+          ' AND root_parent_offset <> 0',
+          Math.min(nestedWant, num(counted.nested)),
+          1,
+        )) {
+          if (nestedInUniform + extra.length >= nestedWant) break;
+          if (drawnKeys.has(rowKey(r))) continue;
+          drawnKeys.add(rowKey(r));
+          extra.push(r);
+        }
+      }
+      const toEntries = (rows: Array<Record<string, unknown>>) =>
         rows.map(
           (r): BandSampleEntry => ({
             id: Buffer.from(r.id as Buffer).toString('base64url'),
@@ -1388,25 +1434,17 @@ export async function verifyL2Bands(
             ),
             rootOffset: num(r.root_parent_offset) + num(r.offset),
             rootDataOffset: num(r.root_parent_offset) + num(r.data_offset),
-            tag: label,
+            tag: isNested(r) ? 'nested' : 'direct',
             height: num(r.height),
           }),
         );
-      const entries = [
-        ...toEntries(
-          await stratumSample('root_parent_offset = 0', directTake, 0),
-          'direct',
-        ),
-        ...toEntries(
-          await stratumSample('root_parent_offset <> 0', nestedTake, 1),
-          'nested',
-        ),
-      ];
+      const entries = [...toEntries(uniform), ...toEntries(extra)];
       const empty = {
         id,
         located,
         locatedShare,
         drawn: 0,
+        drawnUniform: 0,
         ok: 0,
         wrong: 0,
         missing: 0,
@@ -1449,6 +1487,7 @@ export async function verifyL2Bands(
       onchainSummary.bands.push({
         ...empty,
         drawn: result.drawn,
+        drawnUniform: uniform.length,
         ok: result.ok,
         wrong: result.wrong.length,
         missing,
@@ -1549,7 +1588,10 @@ export async function verifyL2Bands(
       : []),
     ...(options.onchain !== undefined
       ? [
-          `on chain, ${options.onchain.perBand} located items drawn per band, none replaced: a band in which ${Math.ceil(detectableFraction(options.onchain.perBand) * 100)}% or more of the located items are fabricated would have been caught with 95% probability; smaller fractions may not be (unlocated items are not checked on chain at all)`,
+          onchainAssurance(
+            options.onchain.perBand,
+            options.onchain.maxUnchecked ?? 0,
+          ),
         ]
       : []),
   ];

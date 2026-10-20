@@ -1967,3 +1967,113 @@ describe('the drawn sample: ok, wrong or unchecked, never replaced', () => {
     assert.equal(res.drawn, 24);
   });
 });
+
+/**
+ * Review round 6 (N1, N1b, N2): a holder whose connection failed is
+ * unheard, never evidence that a root is missing; a band never passes
+ * with nothing verified, whatever is allowed unchecked.
+ */
+describe('unheard holders and the allowance for unchecked items', () => {
+  const json = (code: number, body: unknown) =>
+    Promise.resolve({ status: code, ok: code === 200, json: async () => body });
+  let f: Fixture;
+  let entries: BandSampleEntry[];
+  before(async () => {
+    const signer = new ArweaveSigner(await arweave.wallets.generate());
+    const bundle = await bundleAndSignData(
+      [createData('one', signer), createData('two', signer)],
+      signer,
+    );
+    f = await signedFixture(Buffer.from(bundle.getRaw()));
+    const scanned: BandSampleEntry[] = [];
+    for await (const item of scanBundle({
+      source: new BufferByteRangeSource(f.data),
+      rootTxId: f.id,
+      bundleSize: f.data.length,
+    })) {
+      scanned.push({
+        id: item.id,
+        rootTxId: f.id,
+        rootOffset: item.rootDataItemOffset,
+        rootDataOffset: item.rootDataOffset,
+        height: 1500000,
+      });
+    }
+    entries = Array.from({ length: 20 }, (_, i) => scanned[i % 2]);
+  });
+  const reset = () =>
+    Promise.reject(
+      Object.assign(new TypeError('fetch failed'), {
+        cause: { code: 'ECONNRESET' },
+      }),
+    );
+  const pool3 = (fetch: FetchLike) =>
+    new ArweaveNodePool({
+      urls: ['http://tip1:1984', 'http://tip2:1984', 'http://data1:1984'],
+      fetch,
+      dedupeByAddress: false,
+    });
+  const run = (fetch: FetchLike, extra: { maxUnchecked?: number } = {}) =>
+    checkDrawnHeaders({
+      entries,
+      openRoot: onChainRootSource({ pool: pool3(fetch) }).openRoot,
+      concurrency: 1,
+      retries: 0,
+      retryDelayMs: 1,
+      ...extra,
+    });
+
+  it('never calls an honest root missing when its holder refuses connections (N1)', async () => {
+    const r = await run(async (url, init) => {
+      const u = new URL(url);
+      if (u.host.startsWith('tip') && /^\/tx\/[^/]+$/.test(u.pathname)) {
+        return json(404, {});
+      }
+      if (u.host === 'data1:1984') return reset();
+      return nodes(f, {})(url, init);
+    });
+    assert.equal(r.wrong.length, 0, r.wrong[0]?.reason);
+    assert.equal(r.inconclusive, true);
+  });
+
+  it('passes an honest band whose holder reset only its first connection (N1b)', async () => {
+    let n = 0;
+    const r = await run(async (url, init) => {
+      const u = new URL(url);
+      if (u.host.startsWith('tip') && /^\/tx\/[^/]+$/.test(u.pathname)) {
+        return json(404, {});
+      }
+      if (u.host === 'data1:1984' && n++ === 0) return reset();
+      return nodes(f, {})(url, init);
+    });
+    assert.equal(r.passed, true, r.reasons.join('; '));
+    assert.equal(r.ok, 20);
+  });
+
+  it('never passes a band with nothing verified, however many are allowed unchecked (N2)', async () => {
+    const r = await run(
+      async (url, init) =>
+        new URL(url).pathname.startsWith('/chunk/')
+          ? json(404, {})
+          : nodes(f, {})(url, init),
+      { maxUnchecked: 20 },
+    );
+    assert.equal(r.ok, 0);
+    assert.equal(r.passed, false);
+  });
+
+  it('refuses an allowance that is not a whole number', async () => {
+    for (const bad of [Number.NaN, -1, 1.5, Number.POSITIVE_INFINITY]) {
+      await assert.rejects(
+        checkDrawnHeaders({
+          entries,
+          openRoot: () => {
+            throw new Error('not read');
+          },
+          maxUnchecked: bad,
+        }),
+        /maxUnchecked/,
+      );
+    }
+  });
+});
