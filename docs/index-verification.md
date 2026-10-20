@@ -66,13 +66,27 @@ gateway, this one included:
    next. A wrong `/tx/{id}/offset` can't pass wrong bytes: the chunks it
    leads to would not prove against the root's `data_root`.
 
+**One node can neither pass nor fail a root.** An answer from one node that
+doesn't hold up (another transaction's header, a format-1 copy, a signature
+that won't verify where another node's does, a size other than the signed
+one, a block other nodes don't agree on, a chunk whose proof fails) is that
+node's fault: it is passed over, other nodes are asked, and it is listed in
+`roots.nodeFaults` (and logged). A root is refuted only on evidence about the
+root itself from at least two machines: no node binds it and two machines
+said something definite against it (404s, or headers of this id that can't
+bind it); two machines place it in a block at another height; two machines
+say it is in no block. Fewer than two machines saying anything definite is
+an error, tolerated within the pass ratio and the band's floor of verified
+items, never a refutation and never a pass by silence. A busy or resting node
+is asked once more only while fewer than two machines have answered.
+
 What a header read comes to, as every header check sorts it:
 
 | Outcome      | Means                                                                                             | Counts                                            |
 | ------------ | ------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
 | `ok`         | the bytes at the recorded location are a data item header whose signature hashes to the item's id | for the band                                      |
 | `wrong`      | something else is there, or the range runs past the root; or the chain **refutes** the root: no `data_root`, format 1, another transaction's header, a signature that doesn't verify (without `--allow-agreement`), not mined, or in a block at another height than the band says | **against** the band: one fails it |
-| `missing`    | `index-l2-verify` only: every node that answered said 404 for the root itself (its header, its place, its block): a root id made up, or never mined. A node that timed out or was busy is asked once more; still busy, it is left out, so a slow node never turns a missing root into a tolerated error | **against** the band: one fails it |
+| `missing`    | `index-l2-verify` only: every node that answered said 404 for the root itself (its header, its place, its block): a root id made up, or never mined. Two machines must say so; while fewer have, a busy or resting node is asked once more | **against** the band: one fails it |
 | `unreadable` | every node that answered said 404 for the chunk holding the header: data gone network-wide (unseeded or purged). For `index-band-verify`, a root gone this way too | neither way, and another sample is taken in its place; `index-l2-verify` fails a band where more than `--max-unreadable-share` (20%) of the items tried are unreadable |
 | `errors`     | a failure to check, never a refutation: nodes busy or failing (429, 5xx) and nothing else said, a chunk no node could prove, no node reachable, nodes naming different blocks, a read still pending at the band's deadline | against the pass ratio; rerun. `onchain.bands[].errorSample` shows a few per band |
 

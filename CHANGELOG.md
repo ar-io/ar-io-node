@@ -115,8 +115,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - A sampled root the chain refutes (no `data_root`, format 1, a signature
     that doesn't verify, not mined, in a block at another height than its
     items) counted only as an error, tolerated up to 20%; it now fails the
-    band. A node that times out no longer keeps a made-up root from being
-    `missing`; two ports of one address are one machine.
+    band. A node that times out no longer keeps a made-up root two machines
+    deny from being `missing`; two ports of one address are one machine.
+  - No single node can fail an honest band, any more than pass a bad one:
+    an answer of one node that doesn't hold up is its fault, passed over
+    for others and listed in `roots.nodeFaults`; a root is refuted only on
+    evidence from two machines.
   - The publication is refused once expired (`--allow-expired`), a band it
     lists in the range that the directory lacks fails, and `assurance` says
     when its key came from a registry.
