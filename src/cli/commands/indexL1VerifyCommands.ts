@@ -11,6 +11,7 @@
  *
  * Read-only, so it is safe to run while the gateway is up.
  */
+import { rmSync } from 'node:fs';
 import * as fsp from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -44,6 +45,18 @@ export const BANDS_SPILL_MAX = '128GB';
 export const SPILL_MAX_PATTERN =
   /^\d+(\.\d+)?\s*(KB|MB|GB|TB|KiB|MiB|GiB|TiB)$/i;
 
+/** Bytes in a DuckDB size such as `16GB` (10^9) or `16GiB` (2^30). */
+export function spillBytes(size: string): number {
+  const m = /^(\d+(?:\.\d+)?)\s*(K|M|G|T)(i?)B$/i.exec(size.trim());
+  if (m === null) throw new Error(`not a size: ${size}`);
+  const power = 'KMGT'.indexOf(m[2].toUpperCase()) + 1;
+  const base = m[3] !== '' ? 1024 : 1000;
+  return Math.floor(Number(m[1]) * base ** power);
+}
+
+/** The share of the spill directory's free space a run may spill into. */
+export const SPILL_FREE_SHARE = 0.8;
+
 /**
  * A DuckDB session for checking bands: bounded memory, two threads, no
  * extensions, and somewhere it can always spill.
@@ -54,45 +67,90 @@ export const SPILL_MAX_PATTERN =
  * so checking the lookups of a large band failed on the directory, not the
  * band. The spill goes in a folder of its own under the system temp
  * directory (`TMPDIR`), which `close` removes, and is capped so a run cannot
- * fill the disk under it (through the wrapper, the container layer on `/`).
+ * fill the disk under it: at `spillMax`, and at most
+ * {@link SPILL_FREE_SHARE} of the space free there when the run starts
+ * (`tools/ar-io-node` mounts a folder under the node's data directory
+ * there, so the container layer on `/` is never the one filled). An
+ * interrupt (SIGINT, SIGTERM) removes the folder before the process ends.
  */
 export async function openBandsDuck(
-  options: { tmpRoot?: string; prefix?: string; spillMax?: string } = {},
-): Promise<{ duck: Database; spill: string; close(): Promise<void> }> {
+  options: {
+    tmpRoot?: string;
+    prefix?: string;
+    spillMax?: string;
+    /** Injected in tests: the bytes free under the temp root. */
+    freeBytes?: (dir: string) => Promise<number>;
+  } = {},
+): Promise<{
+  duck: Database;
+  spill: string;
+  /** What the spill is capped at, in bytes, and the bytes free when it opened. */
+  spillCapBytes: number;
+  freeBytes: number;
+  close(): Promise<void>;
+}> {
   const spillMax = options.spillMax ?? BANDS_SPILL_MAX;
   if (!SPILL_MAX_PATTERN.test(spillMax)) {
     throw new Error(
       `--spill-max must be a size such as 16GB or 512MB, not ${spillMax}`,
     );
   }
+  const tmpRoot = options.tmpRoot ?? os.tmpdir();
+  const freeBytes = await (
+    options.freeBytes ??
+    (async (dir: string) => {
+      const stats = await fsp.statfs(dir);
+      return Number(stats.bavail) * Number(stats.bsize);
+    })
+  )(tmpRoot);
+  const spillCapBytes = Math.min(
+    spillBytes(spillMax),
+    Math.floor(freeBytes * SPILL_FREE_SHARE),
+  );
   const spill = await fsp.mkdtemp(
-    path.join(
-      options.tmpRoot ?? os.tmpdir(),
-      options.prefix ?? 'ar-io-node-l1-verify-',
-    ),
+    path.join(tmpRoot, options.prefix ?? 'ar-io-node-l1-verify-'),
   );
   const removeSpill = () => fsp.rm(spill, { recursive: true, force: true });
+  // An interrupted run leaves no spill behind: removed, then the signal's
+  // usual end (exit 130 for Ctrl-C) follows.
+  const onSignal = (signal: NodeJS.Signals) => {
+    rmSync(spill, { recursive: true, force: true });
+    process.removeListener('SIGINT', onSignal);
+    process.removeListener('SIGTERM', onSignal);
+    process.kill(process.pid, signal);
+  };
+  process.once('SIGINT', onSignal);
+  process.once('SIGTERM', onSignal);
+  const forget = () => {
+    process.removeListener('SIGINT', onSignal);
+    process.removeListener('SIGTERM', onSignal);
+  };
   let duck: Database | undefined;
   try {
     const { Database } = await import('duckdb-async');
     duck = await Database.create(':memory:');
+    const cap = `${Math.max(1, Math.floor(spillCapBytes / 2 ** 20))}MiB`;
     await duck.exec(
-      `SET memory_limit = '2GB'; SET threads = 2; SET temp_directory = '${spill.replace(/'/g, "''")}'; SET max_temp_directory_size = '${spillMax.replace(/'/g, "''")}'; SET autoinstall_known_extensions = false; SET autoload_known_extensions = false;`,
+      `SET memory_limit = '2GB'; SET threads = 2; SET temp_directory = '${spill.replace(/'/g, "''")}'; SET max_temp_directory_size = '${cap}'; SET autoinstall_known_extensions = false; SET autoload_known_extensions = false;`,
     );
   } catch (error) {
     await duck?.close().catch(() => undefined);
     await removeSpill();
+    forget();
     throw error;
   }
   const opened = duck;
   return {
     duck: opened,
     spill,
+    spillCapBytes,
+    freeBytes,
     close: async () => {
       try {
         await opened.close();
       } finally {
         await removeSpill();
+        forget();
       }
     },
   };

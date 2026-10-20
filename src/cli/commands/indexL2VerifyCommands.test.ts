@@ -54,6 +54,44 @@ describe('index-l2-verify', () => {
     }
   });
 
+  it('refuses publication options without --publication, and --publication without exactly one key source', async () => {
+    for (const bad of [
+      { publisherKey: 'x' },
+      { registryUrl: 'http://core:4000' },
+      { index: 'ardrive-l2' },
+      { publication: '/nowhere/publication.json' },
+      {
+        publication: '/nowhere/publication.json',
+        publisherKey: 'x',
+        registryUrl: 'http://core:4000',
+      },
+    ]) {
+      await assert.rejects(
+        indexL2VerifyCLICommand({ bandsDir: '/nowhere', ...bad }, { log }),
+        L2VerifyRefused,
+        JSON.stringify(bad),
+      );
+    }
+  });
+
+  it('refuses a share that is not a fraction, and an L1 directory that is not one', async () => {
+    for (const bad of [
+      { maxUnreadableShare: '1.5' },
+      { maxUnreadableShare: '' },
+      { bandDeadline: '-3' },
+      { l1BandsDir: '/nowhere/parquet-l1' },
+    ]) {
+      await assert.rejects(
+        indexL2VerifyCLICommand(
+          { bandsDir: '/nowhere', onchain: '0', ...bad },
+          { log },
+        ),
+        L2VerifyRefused,
+        JSON.stringify(bad),
+      );
+    }
+  });
+
   it('refuses a directory that holds no l2 band', async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'l2-verify-cli-'));
     try {

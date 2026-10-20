@@ -18,6 +18,7 @@ import { VerifyRefused } from '../../lib/parquet-l1/verify.js';
 import {
   indexL1VerifyCLICommand,
   openBandsDuck,
+  spillBytes,
 } from './indexL1VerifyCommands.js';
 
 const log = createTestLogger({ suite: 'index-l1-verify' });
@@ -282,8 +283,11 @@ describe('openBandsDuck', () => {
     await fsp.rm(root, { recursive: true, force: true });
   });
 
+  // Plenty free, so the cap is --spill-max's.
+  const roomy = async () => 10 * 2 ** 40;
+
   it('spills to a folder of its own under the temp root, and removes it on close', async () => {
-    const session = await openBandsDuck({ tmpRoot: root });
+    const session = await openBandsDuck({ tmpRoot: root, freeBytes: roomy });
     // Not `.tmp` under the working directory, which the CLI wrapper's /app,
     // run as the caller's user, does not let DuckDB create.
     const [setting] = (await session.duck.all(
@@ -304,7 +308,11 @@ describe('openBandsDuck', () => {
 
     await session.close();
     // The cap is the caller's to set, and a size that is not one is refused.
-    const small = await openBandsDuck({ tmpRoot: root, spillMax: '1GB' });
+    const small = await openBandsDuck({
+      tmpRoot: root,
+      spillMax: '1GB',
+      freeBytes: roomy,
+    });
     const [capSmall] = (await small.duck.all(
       "SELECT current_setting('max_temp_directory_size') AS max",
     )) as Array<{ max: string }>;
@@ -315,6 +323,29 @@ describe('openBandsDuck', () => {
       /--spill-max must be a size/,
     );
     await assert.rejects(fsp.stat(session.spill), { code: 'ENOENT' });
+  });
+
+  it('caps the spill at 80% of the space free under the temp root', async () => {
+    const session = await openBandsDuck({
+      tmpRoot: root,
+      freeBytes: async () => 10 * 2 ** 30,
+    });
+    try {
+      assert.equal(session.spillCapBytes, Math.floor(8 * 2 ** 30));
+      const [cap] = (await session.duck.all(
+        "SELECT current_setting('max_temp_directory_size') AS max",
+      )) as Array<{ max: string }>;
+      assert.match(cap.max, /^8(\.0)? ?GiB$/);
+    } finally {
+      await session.close();
+    }
+  });
+
+  it('reads a DuckDB size as bytes', () => {
+    assert.equal(spillBytes('128GB'), 128e9);
+    assert.equal(spillBytes('1GiB'), 2 ** 30);
+    assert.equal(spillBytes('512 MB'), 512e6);
+    assert.throws(() => spillBytes('lots'));
   });
 
   it('removes its folder even when the temp root is shared', async () => {

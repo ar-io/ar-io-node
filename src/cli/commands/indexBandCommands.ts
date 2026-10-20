@@ -294,6 +294,7 @@ export async function indexBandVerifyCLICommand(
               urls: parseNodeUrls(options.arweaveNodes),
               ...(readTimeout !== undefined ? { timeoutMs: readTimeout } : {}),
             }),
+            allowAgreement: options.allowAgreement === true,
           }).openRoot,
           close: () => undefined,
         }

@@ -48,6 +48,7 @@ export interface IndexBandVerifyCLIOptions extends GlobalCLIOptions {
   bandDir?: string;
   gatewayUrl?: string;
   arweaveNodes?: string;
+  allowAgreement?: boolean;
   readTimeout?: string;
   sampleSize?: string;
 }
@@ -86,6 +87,15 @@ export interface IndexL2VerifyCLIOptions extends GlobalCLIOptions {
   from?: string;
   to?: string;
   skipLookups?: boolean;
+  publication?: string;
+  publisherKey?: string;
+  registryUrl?: string;
+  index?: string;
+  l1BandsDir?: string;
+  allowAgreement?: boolean;
+  allowUnlocated?: boolean;
+  maxUnreadableShare?: string;
+  bandDeadline?: string;
 }
 
 export interface IndexL1AuditCLIOptions extends GlobalCLIOptions {
