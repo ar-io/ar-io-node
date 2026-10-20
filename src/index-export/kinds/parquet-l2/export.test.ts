@@ -274,9 +274,10 @@ describe('exportL2Band', () => {
         // A lookup another row longer is refused, against its band and
         // against its tables.
         const file = path.join(result.dir, 'lookup_id.parquet');
+        const original = await fs.readFile(file);
         await duck.exec(
           `COPY (SELECT * FROM read_parquet(${sqlPath(file)})
-                 UNION ALL SELECT 1::UBIGINT, 100000::UBIGINT)
+                 UNION ALL SELECT 18446744073709551615::UBIGINT, 100000::UBIGINT)
            TO ${sqlPath(`${file}.tampered`)} (FORMAT PARQUET)`,
         );
         await fs.rename(`${file}.tampered`, file);
@@ -284,6 +285,18 @@ describe('exportL2Band', () => {
         assert.equal(problems.length, 2, problems.join('\n'));
         assert.match(problems[0], /holds 8 rows .* its band says 7 rows/);
         assert.match(problems[1], /1 rows that its tables do not give/);
+        // A row out of the file's order is refused as that, read as the
+        // file holds it.
+        await fs.writeFile(file, original);
+        await duck.exec(
+          `COPY (SELECT * FROM read_parquet(${sqlPath(file)})
+                 UNION ALL SELECT 1::UBIGINT, 100000::UBIGINT)
+           TO ${sqlPath(`${file}.tampered`)} (FORMAT PARQUET)`,
+        );
+        await fs.rename(`${file}.tampered`, file);
+        const unordered = await verifyBandLookups(duck, result.dir, band);
+        assert.equal(unordered.length, 1, unordered.join('\n'));
+        assert.match(unordered[0], /before the row ahead of it/);
       });
     } finally {
       await fs.rm(result.staging, { recursive: true, force: true });

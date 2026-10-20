@@ -15,6 +15,8 @@ import { RowDigest } from './digest.js';
 import { prefix64Sql } from './keys.js';
 import {
   digestLookup,
+  digestLookupInFileOrder,
+  LookupOrderError,
   LookupSpec,
   sqlPath,
   sqlPaths,
@@ -244,5 +246,55 @@ describe('lookup engine', () => {
         .length,
       1,
     );
+  });
+
+  it('digests a numeric lookup in file order as its sorted digest, and refuses rows out of order', async () => {
+    // A key ordered on one column, a payload column after it.
+    const keyed: LookupSpec = {
+      name: 'kv',
+      file: 'lookup_kv.parquet',
+      columns: [
+        { name: 'k', type: 'UBIGINT' },
+        { name: 'v', type: 'UBIGINT' },
+      ],
+      orderBy: ['k'],
+      derive: () => 'SELECT 1',
+    };
+    const write = async (name: string, rows: Array<[string, number]>) => {
+      const file = path.join(dir, name);
+      await duck.exec(
+        `COPY (SELECT * FROM (VALUES ${rows.map(([k, v]) => `(${k}::UBIGINT, ${v}::UBIGINT)`).join(', ')}) t(k, v))
+         TO ${sqlPath(file)} (FORMAT PARQUET)`,
+      );
+      return file;
+    };
+    // 9 < 10 < 2^64-1 by value, not as text; an identical row may repeat.
+    const sorted = await write('kv-sorted.parquet', [
+      ['9', 1],
+      ['10', 1],
+      ['10', 1],
+      ['18446744073709551615', 0],
+    ]);
+    assert.deepEqual(
+      await digestLookupInFileOrder(duck, keyed, sorted),
+      await digestLookup(duck, keyed, sorted, ORDER),
+    );
+    for (const rows of [
+      [
+        ['10', 1],
+        ['9', 1],
+      ],
+      // A tie on the key that differs elsewhere: the order is not total.
+      [
+        ['10', 1],
+        ['10', 2],
+      ],
+    ] as Array<Array<[string, number]>>) {
+      const file = await write(`kv-${rows.length}-${rows[1][1]}.parquet`, rows);
+      await assert.rejects(
+        digestLookupInFileOrder(duck, keyed, file),
+        LookupOrderError,
+      );
+    }
   });
 });

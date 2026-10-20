@@ -629,11 +629,17 @@ export function bandTablesDigest(band: ParquetL2Band): Buffer {
 
 /**
  * A band id: `l2-h<from>-<to>-<publisher tag>-<digest>`, the shape of an L1
- * band's. `h` for every band size, the publisher's 8-hex tag, and the first
- * 12 hex digits of {@link bandTablesDigest}.
+ * band's. `h` for every band size, heights in canonical decimals (no
+ * leading zero: one band, one id), the publisher's 8-hex tag, and the
+ * first 12 hex digits of {@link bandTablesDigest}. Groups: from, to, tag,
+ * digest.
+ *
+ * The digest is 48 bits: enough to name a band, not to bind one. What binds
+ * a band to its publisher is the publication's signature over every file's
+ * SHA-256.
  */
 export const L2_BAND_ID_PATTERN =
-  /^l2-h(\d{1,15})-(\d{1,15})-[0-9a-f]{8}-([0-9a-f]{12})$/;
+  /^l2-h(0|[1-9]\d{0,14})-(0|[1-9]\d{0,14})-([0-9a-f]{8})-([0-9a-f]{12})$/;
 
 /**
  * A band's id: its heights, its publisher, and a digest of its heights,

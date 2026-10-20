@@ -388,6 +388,10 @@ describe('bandTablesDigest and the band id', () => {
       'l2-h0-99999-F5B1208C-0123456789ab',
       'l2-0-99999-f5b1208c-0123456789ab',
       'l2-h0-99999-f5b1208c-0123456789ab~aaaaaaaaaaaa',
+      // Heights in canonical decimals only: one band, one id.
+      'l2-h0100-199-f5b1208c-0123456789ab',
+      'l2-h100-0199-f5b1208c-0123456789ab',
+      'l2-h00-99999-f5b1208c-0123456789ab',
     ]) {
       assert.equal(idHeightRange(id), undefined, id);
     }
