@@ -7,14 +7,16 @@
 
 /**
  * A `parquet-l2` selection applied: in JavaScript, to the rows a source
- * gives, and as SQL a ClickHouse source pushes down. Both follow the
+ * gives, as SQL a ClickHouse source pushes down, and as SQL DuckDB runs over
+ * a band's `tags` to check every item is one the selection takes
+ * (`index-l2-verify`). All follow the
  * layout's rule (`src/lib/parquet-l2/layout.ts`): an item is selected when
  * ONE of its tags is named `tag.name`, byte for byte, and has a value that
  * starts with `tag.valuePrefix` and not with `tag.excludeValuePrefix`, all
  * compared as UTF-8 bytes. Names and values are never decoded, so a value
  * that is not UTF-8 is compared as the bytes it is.
  */
-import type { ParquetL2Selection } from '../../../lib/parquet-l2/layout.js';
+import type { ParquetL2Selection } from './layout.js';
 
 /** One tag of an item, as bytes. */
 export interface ItemTag {
@@ -97,4 +99,24 @@ export function selectionClickHouse(selection: ParquetL2Selection): {
         : {}),
     },
   };
+}
+
+/**
+ * The selection as a DuckDB condition on one `tags` row (`tag_name`,
+ * `tag_value`, both BLOB): the row's name is `tag.name` and its value starts
+ * with the prefix and not the excluded one, as bytes. Prefixes are compared
+ * on the values' hex, which starts with a prefix's hex exactly when the
+ * bytes start with the prefix's bytes. The strings are inlined as hex, so
+ * nothing in them is SQL. NULL for a NULL name or value: callers wrap it in
+ * `coalesce(…, false)`.
+ */
+export function selectionDuckDb(selection: ParquetL2Selection): string {
+  const { name, valuePrefix, excludeValuePrefix } = selectionBytes(selection);
+  const hex = (b: Buffer) => b.toString('hex').toUpperCase();
+  return (
+    `(tag_name = from_hex('${hex(name)}') AND starts_with(hex(tag_value), '${hex(valuePrefix)}')` +
+    (excludeValuePrefix !== undefined
+      ? ` AND NOT starts_with(hex(tag_value), '${hex(excludeValuePrefix)}'))`
+      : ')')
+  );
 }

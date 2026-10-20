@@ -16,7 +16,7 @@
  * `wallets`; it is a follow-up (see docs/index-export.md).
  */
 import type { ParquetL2Selection } from '../../../lib/parquet-l2/layout.js';
-import type { ItemTag } from './selection.js';
+import type { ItemTag } from '../../../lib/parquet-l2/selection.js';
 
 /**
  * One data item row as the index holds it. Offsets and sizes the index

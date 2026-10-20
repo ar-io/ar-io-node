@@ -24,7 +24,7 @@ import {
   ClickHouseQuerier,
 } from '../root-tx/sources/clickhouse.js';
 import type { ParquetL2Selection } from '../../../lib/parquet-l2/layout.js';
-import { selectionClickHouse } from './selection.js';
+import { selectionClickHouse } from '../../../lib/parquet-l2/selection.js';
 import type {
   L2ItemSource,
   L2SourceRow,
