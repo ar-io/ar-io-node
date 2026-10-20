@@ -16,6 +16,7 @@
  * report the columns, their types and the row count. No row data is read.
  */
 import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
 import type { Database } from 'duckdb-async';
 
 /** A column a Parquet file must have, as DuckDB reads it. */
@@ -26,12 +27,31 @@ export interface ColumnSpec {
 }
 
 const MAGIC = Buffer.from('PAR1');
+
 /**
- * A footer longer than this is not a footer we will parse: DuckDB decodes
- * it in this process, so a publisher's file mustn't hand it much. A band's
- * real footers are tens of kilobytes (a few dozen row groups).
+ * A file that isn't Parquet of the shape a reader will parse. Thrown for
+ * what the file holds, never for failing to read it, so a caller can tell a
+ * file to refuse from an I/O error to retry.
  */
-export const MAX_FOOTER_BYTES = 2 * 1024 * 1024;
+export class ParquetStructureError extends Error {}
+/**
+ * A footer longer than this is not a footer we will parse. DuckDB decodes it
+ * in this process, and its `memory_limit` does not bound that: decoding takes
+ * about 20 bytes of memory per footer byte (a 21 MB footer cost 424 MB), so
+ * this cap is what bounds a publisher's file.
+ *
+ * A footer grows with its file's row groups (about 120k rows each, DuckDB's
+ * default, at roughly 600 bytes per group). The largest real one so far is
+ * 2.43 MB: `ardrive-l2` band h1800000's 3.7 GB `tags.parquet`, 518M rows in
+ * 4,204 groups. 8 MiB leaves about 3.4 times that, and costs at most about
+ * 170 MB to decode. For a table at the default row-group size that is around
+ * 1.8 billion rows a file; lookups use 16,384-row groups, so a lookup reaches
+ * it far sooner (`lookup_tag` at about 210 million rows).
+ *
+ * A subscriber validates one band at a time per publisher, one file at a
+ * time, so that bound applies once per subscribed publisher.
+ */
+export const MAX_FOOTER_BYTES = 8 * 1024 * 1024;
 
 export interface ParquetFileReport {
   rows: number;
@@ -48,20 +68,46 @@ export async function checkParquetStructure(file: string): Promise<void> {
   try {
     const { size } = await handle.stat();
     if (size < 12)
-      throw new Error(`${file}: too short for Parquet (${size} bytes)`);
+      throw new ParquetStructureError(
+        `${file}: too short for Parquet (${size} bytes)`,
+      );
     const head = Buffer.alloc(4);
     await handle.read(head, 0, 4, 0);
     const tail = Buffer.alloc(8);
     await handle.read(tail, 0, 8, size - 8);
     if (!head.equals(MAGIC) || !tail.subarray(4).equals(MAGIC)) {
-      throw new Error(`${file}: not a Parquet file (no PAR1 magic)`);
+      throw new ParquetStructureError(
+        `${file}: not a Parquet file (no PAR1 magic)`,
+      );
     }
     const footer = tail.readUInt32LE(0);
-    if (footer === 0 || footer > size - 12 || footer > MAX_FOOTER_BYTES) {
-      throw new Error(`${file}: footer length ${footer} doesn't fit the file`);
+    if (footer === 0 || footer > size - 12) {
+      throw new ParquetStructureError(
+        `${file}: footer length ${footer} doesn't fit the file`,
+      );
+    }
+    if (footer > MAX_FOOTER_BYTES) {
+      throw new ParquetStructureError(
+        `${file}: footer length ${footer} is over the ${MAX_FOOTER_BYTES}-byte limit`,
+      );
     }
   } finally {
     await handle.close();
+  }
+}
+
+/**
+ * Runs {@link checkParquetStructure} on every `.parquet` file in a band
+ * directory. A publisher runs it before writing `band.json`, so a band its
+ * subscribers would refuse is never published.
+ *
+ * @throws {ParquetStructureError} on the first file that fails, naming it;
+ * an error reading the directory or a file propagates as it is.
+ */
+export async function checkParquetDir(dir: string): Promise<void> {
+  const names = (await fs.readdir(dir)).filter((n) => n.endsWith('.parquet'));
+  for (const name of names.sort()) {
+    await checkParquetStructure(path.join(dir, name));
   }
 }
 

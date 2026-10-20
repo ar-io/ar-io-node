@@ -56,6 +56,7 @@ import {
   tablesCurrent,
   writePublisherFacts,
 } from '../../../lib/parquet-l1/layout.js';
+import { checkParquetStructure } from '../../../lib/parquet/check.js';
 import { writeBandLookups } from '../../../lib/parquet-l1/lookups.js';
 import * as metrics from '../../metrics.js';
 import {
@@ -397,7 +398,7 @@ export async function runL1Step(
         ? {
             ...base,
             result: 'rejected',
-            reason: 'chain',
+            reason: error.reason,
             details: [message],
             seconds: 0,
           }
@@ -662,6 +663,11 @@ export async function runL1Derive(
     const rows = Object.fromEntries(
       Object.entries(lookups).map(([name, l]) => [name, l.rows]),
     );
+    // Subscribers refuse a footer over the limit: check before publishing,
+    // and in a dry run, so it reports a lookup that couldn't be published.
+    for (const spec of lookupsOf(PARQUET_L1_SCHEMA)) {
+      await checkParquetStructure(path.join(staging, spec.file));
+    }
     if (dryRun) {
       outcome = {
         ...base,
