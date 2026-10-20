@@ -409,7 +409,9 @@ export class ArweaveNodePool {
     settle = false,
   ): Promise<T> {
     await this.prepare();
-    const { nodes: order, restingBusy } = this.order(prefer);
+    const { nodes: order, restingBusy, restingAll } = this.order(prefer);
+    // Nodes whose connection failed: silent, and asked again by `settle`.
+    const unreachable: string[] = [];
     let notFound = 0;
     let refused = 0;
     // A resting node may well hold it: it counts as busy, so its silence is
@@ -431,6 +433,8 @@ export class ArweaveNodePool {
         const name = (error as { name?: unknown }).name;
         if (name === 'TimeoutError' || name === 'AbortError') {
           busyNodes.push(node);
+        } else {
+          unreachable.push(node);
         }
         lastProblem = `${node}: ${(error as Error).message}`;
         this.rest(node, error);
@@ -456,13 +460,18 @@ export class ArweaveNodePool {
       await tryNode(node);
       if (found.done) return found.value as T;
     }
-    if (settle && notFound > 0 && refused === 0 && busyNodes.length > 0) {
-      const again = [...new Set(busyNodes)];
+    // Before any verdict of absence, every silent node (busy, its
+    // connection failed, or resting) is asked once more; any still silent
+    // counts as busy, so the 404s never stand for the data.
+    const silent = [...new Set([...busyNodes, ...unreachable, ...restingAll])];
+    if (settle && notFound > 0 && refused === 0 && silent.length > 0) {
       busyNodes.length = 0;
-      for (const node of again) {
+      unreachable.length = 0;
+      for (const node of silent) {
         await tryNode(node);
         if (found.done) return found.value as T;
       }
+      busyNodes.push(...unreachable);
     }
     const busy = busyNodes.length;
     const answered = notFound + busy + refused;
