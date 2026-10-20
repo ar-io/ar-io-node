@@ -31,6 +31,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- An index-swarm subscriber can now install a Parquet band whose files have
+  large footers. The footer limit was 2 MiB, and turbo-gateway.com's
+  `ardrive-l2` band for heights 1,800,000–1,899,999 has a 3.7 GB
+  `tags.parquet` (518M rows) with a 2.43 MB footer. Every subscriber
+  downloaded the band, matched its digests, then discarded it and downloaded
+  it again, about 7 GB each time. The limit is now 8 MiB. index-export also
+  checks its own Parquet files against that limit before writing
+  `band.json`, so a publisher can no longer publish a band its subscribers
+  refuse. An over-limit footer now says so, instead of reporting that it
+  "doesn't fit the file".
+
 - **`tools/index-swarm-setup --restart` brought back a torrent engine that
   had been turned off.** It named `index-swarm-engine-init` and
   `index-swarm-engine` on the `docker compose up` command line, and Compose
