@@ -599,6 +599,11 @@ export async function checkDrawnHeaders({
   }
   const deadline =
     deadlineMs !== undefined ? Date.now() + deadlineMs : undefined;
+  // Set when the deadline's timer fires, so no read starts after it however
+  // the clock and the timer disagree by a millisecond.
+  let deadlinePassed = false;
+  const pastDeadline = () =>
+    deadlinePassed || (deadline !== undefined && Date.now() >= deadline);
   type Outcome =
     | { kind: 'ok'; malformed?: string }
     | { kind: 'wrong'; reason: string; missing?: boolean }
@@ -612,7 +617,7 @@ export async function checkDrawnHeaders({
         reason: `offsets give a ${headerBytes}-byte header`,
       };
     }
-    if (deadline !== undefined && Date.now() >= deadline) {
+    if (pastDeadline()) {
       return {
         kind: 'unchecked',
         reason: 'deadline',
@@ -640,7 +645,10 @@ export async function checkDrawnHeaders({
             reading,
             new Promise<never>((_, reject) => {
               timer = setTimeout(
-                () => reject(new DeadlinePassedError()),
+                () => {
+                  deadlinePassed = true;
+                  reject(new DeadlinePassedError());
+                },
                 Math.max(0, deadline - Date.now()),
               );
             }),

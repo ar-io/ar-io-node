@@ -882,8 +882,9 @@ describe('checkDrawnHeaders: every drawn entry ok, wrong or unchecked', () => {
     const openRoot: RootSourceFactory = () => ({
       read: async (offset: number, size: number) => {
         started += 1;
-        // The third read never answers.
-        if (started === 3) await new Promise(() => undefined);
+        // From the third read on, none answers: whenever the deadline
+        // falls, exactly two were read.
+        if (started >= 3) await new Promise(() => undefined);
         return new BufferByteRangeSource(rootBytes).read(offset, size);
       },
       close: async () => undefined,
