@@ -1317,13 +1317,14 @@ describe('verifyL2Bands fails closed', () => {
     assert.equal(a, drawSeed(7, 'l2-h100-199-aaaaaaaa-000000000000', 0));
     assert.notEqual(a, drawSeed(7, 'l2-h200-299-aaaaaaaa-000000000000', 0));
     assert.notEqual(a, drawSeed(8, 'l2-h100-199-aaaaaaaa-000000000000', 0));
-    const expected =
+    assert.notEqual(a, drawSeed(7, 'l2-h100-199-aaaaaaaa-000000000000', 1));
+    assert.equal(
+      a,
       crypto
         .createHash('sha256')
         .update('7|l2-h100-199-aaaaaaaa-000000000000|0')
-        .digest()
-        .readUInt32BE(0) & 0x7fffffff;
-    assert.equal(a, expected);
+        .digest('hex'),
+    );
   });
 
   it('draws uniformly over the whole file, not its first rows (review 7, B1)', async () => {
@@ -1379,5 +1380,87 @@ describe('verifyL2Bands fails closed', () => {
       new RegExp(`${Math.ceil(detectableFraction(3) * 100)}% or more`),
     );
     assert.match(onchainAssurance(20, 5, 5), /nothing can be said/);
+  });
+
+  it('draws independently of any public ordering of the rows: an XOR-clustered fabrication is caught as the bound says (review 8, N1)', async () => {
+    // A publisher fabricates the 12.5% of rows whose hash(row, 0) starts
+    // with three zero bits. A draw ordered by a non-cryptographic
+    // hash(row, seed) = g(row) XOR k(seed) picks rows by XOR distance of
+    // the public g(row) to one random k, so such a cluster is almost never
+    // touched; a keyed cryptographic order catches it as (1 - p)^N says.
+    const file = path.join(root, 'xor-cluster.parquet');
+    await db.exec(
+      `COPY (SELECT sha256(range::VARCHAR)::BLOB AS id, 101::UBIGINT AS height,
+                    sha256('root')::BLOB AS root_transaction_id,
+                    0::UBIGINT AS root_parent_offset, (range * 10)::UBIGINT AS "offset",
+                    (range * 10 + 5)::UBIGINT AS data_offset,
+                    (hash(range::BIGINT, 0::BIGINT) >> 61) = 0 AS fab
+             FROM range(80000) ORDER BY range) TO '${file}' (FORMAT PARQUET)`,
+    );
+    const fabricated = new Set(
+      (
+        (await db.all(
+          `SELECT file_row_number AS n FROM read_parquet('${file}', file_row_number = true) WHERE fab`,
+        )) as Array<{ n: unknown }>
+      ).map((r) => Number(r.n)),
+    );
+    const share = fabricated.size / 80000;
+    assert.ok(share > 0.1 && share < 0.15, String(share));
+    let caught = 0;
+    const runs = 200;
+    for (let t = 0; t < runs; t += 1) {
+      const rows = await drawLocated(db, `read_parquet('${file}')`, {
+        where: '',
+        size: 20,
+        seed: drawSeed(
+          crypto.randomInt(2 ** 31 - 1),
+          'l2-h100-199-aaaaaaaa-000000000000',
+          0,
+        ),
+      });
+      if (rows.some((r) => fabricated.has(Number(r.file_row_number)))) {
+        caught += 1;
+      }
+    }
+    // The bound: 1 - (1 - share)^20, about 93% at 12.5%.
+    assert.ok(caught / runs >= 0.85, `caught in ${caught} of ${runs} runs`);
+  });
+
+  it('draws the rows a reader can compute from the documented key and string format', async () => {
+    const file = path.join(root, 'pinned.parquet');
+    await db.exec(
+      `COPY (SELECT sha256(range::VARCHAR)::BLOB AS id, 101::UBIGINT AS height,
+                    sha256('root')::BLOB AS root_transaction_id,
+                    0::UBIGINT AS root_parent_offset, (range * 10)::UBIGINT AS "offset",
+                    (range * 10 + 5)::UBIGINT AS data_offset
+             FROM range(5000) ORDER BY range) TO '${file}' (FORMAT PARQUET)`,
+    );
+    const key = drawSeed(42, 'l2-h100-199-aaaaaaaa-000000000000', 0);
+    // The key: the full sha256("<seed>|<band id>|<stratum>"), lowercase hex.
+    assert.equal(
+      key,
+      crypto
+        .createHash('sha256')
+        .update('42|l2-h100-199-aaaaaaaa-000000000000|0')
+        .digest('hex'),
+    );
+    // The order: ascending sha256 hex of "<key>:<row number in decimal>",
+    // ties by row number.
+    const expected = Array.from({ length: 5000 }, (_, n) => ({
+      n,
+      h: crypto.createHash('sha256').update(`${key}:${n}`).digest('hex'),
+    }))
+      .sort((a, b) => (a.h < b.h ? -1 : a.h > b.h ? 1 : a.n - b.n))
+      .slice(0, 20)
+      .map((x) => x.n);
+    const drawn = await drawLocated(db, `read_parquet('${file}')`, {
+      where: '',
+      size: 20,
+      seed: key,
+    });
+    assert.deepEqual(
+      drawn.map((r) => Number(r.file_row_number)),
+      expected,
+    );
   });
 });

@@ -220,6 +220,8 @@ export interface L2OnChainBand {
    * the stated bound is about. The rest are nested items drawn on top.
    */
   drawnUniform: number;
+  /** Of the drawn, those in nested bundles (uniform and topped up). */
+  drawnNested: number;
   ok: number;
   /** Proven contrary, `missing` roots among them. */
   wrong: number;
@@ -523,26 +525,36 @@ export function l2Coverage(bands: ReadonlyArray<L2BandOnDisk>): {
 
 /**
  * Draws `size` located rows of a band's `data_items` (`itemsFile`, a
- * `read_parquet(...)` expression), repeatably from `seed`: the rows with the
- * smallest `hash(file_row_number, seed)`, with each row's position in the
- * file. Every located row is equally likely, wherever it sits in the file.
- * (DuckDB's `USING SAMPLE reservoir(n) REPEATABLE` is not: it drew only from
- * about the first 82,000 rows of a band.) The seed is random per run, so a
- * publisher can't arrange its rows against the hash.
+ * `read_parquet(...)` expression), repeatably from `key` (a band's
+ * {@link drawSeed}): the rows whose `sha256("<key>:<row number>")` (lowercase
+ * hex, the row number in decimal, its position in the file from 0) is
+ * smallest, ties by row number, with each row's position.
+ *
+ * The order must be a keyed cryptographic hash. With DuckDB's
+ * `hash(row, seed)`, which is `g(row) XOR k(seed)`, rows were picked by
+ * their XOR distance from one random value to a public function of the
+ * row: a publisher that fabricated the rows whose `g` starts with three
+ * zero bits (12.5%) was caught in about 11% of runs, not the 93% the bound
+ * claims. (DuckDB's `USING SAMPLE reservoir(n) REPEATABLE`, before that,
+ * drew only from about the first 82,000 rows of a band.) Under SHA-256 of a
+ * key the publisher can't know, every located row is equally likely and
+ * the draws are independent of anything about the rows.
  */
 export async function drawLocated(
   duck: Database,
   itemsFile: string,
-  { where, size, seed }: { where: string; size: number; seed: number },
+  { where, size, seed }: { where: string; size: number; seed: string },
 ): Promise<Array<Record<string, unknown>>> {
   if (size <= 0) return [];
-  if (!Number.isSafeInteger(seed) || seed < 0) {
-    throw new Error(`a draw's seed must be a whole number, not ${seed}`);
+  if (!/^[0-9a-f]{64}$/.test(seed)) {
+    throw new Error(
+      `a draw's key must be 64 lowercase hex digits, not ${seed}`,
+    );
   }
   return (await duck.all(`SELECT id, height, root_transaction_id, root_parent_offset, "offset", data_offset, file_row_number
       FROM ${itemsFile.replace(/\)$/, ', file_row_number = true)')}
       WHERE "offset" IS NOT NULL${where}
-      ORDER BY hash(file_row_number, ${seed}::BIGINT), file_row_number
+      ORDER BY sha256(concat('${seed}', ':', file_row_number::VARCHAR)), file_row_number
       LIMIT ${size}`)) as Array<Record<string, unknown>>;
 }
 
@@ -566,22 +578,20 @@ export function onchainAssurance(
 }
 
 /**
- * The seed of one band's draw (a stratum of it): the first 31 bits of
- * sha256(`seed|bandId|stratum`), so every band's draw is its own and no
- * band's can be steered by choosing its place or its neighbours.
+ * The key of one band's draw (a stratum of it: 0 for the uniform draw, 1 for
+ * the nested top-up): sha256(`<run seed>|<band id>|<stratum>`) as 64
+ * lowercase hex digits, so every band's draw is its own and no band's can be
+ * steered by choosing its place or its neighbours.
  */
 export function drawSeed(
   seed: number,
   bandId: string,
   stratum: number,
-): number {
-  return (
-    crypto
-      .createHash('sha256')
-      .update(`${seed}|${bandId}|${stratum}`)
-      .digest()
-      .readUInt32BE(0) & 0x7fffffff
-  );
+): string {
+  return crypto
+    .createHash('sha256')
+    .update(`${seed}|${bandId}|${stratum}`)
+    .digest('hex');
 }
 
 /**
@@ -1419,7 +1429,7 @@ export async function verifyL2Bands(
       // nested items on top until ceil(N/2) are nested, where the band has
       // them, so the nested path is always read. Seeded per band by
       // sha256(seed | band id | stratum): the rows with the smallest
-      // hash(row position, that seed).
+      // sha256("<that key>:<row position>").
       const sample = (where: string, size: number, stratum: number) =>
         drawLocated(duck, itemsFile, {
           where,
@@ -1470,6 +1480,7 @@ export async function verifyL2Bands(
         locatedShare,
         drawn: 0,
         drawnUniform: 0,
+        drawnNested: 0,
         ok: 0,
         wrong: 0,
         missing: 0,
@@ -1513,6 +1524,7 @@ export async function verifyL2Bands(
         ...empty,
         drawn: result.drawn,
         drawnUniform: uniform.length,
+        drawnNested: entries.filter((e) => e.tag === 'nested').length,
         ok: result.ok,
         wrong: result.wrong.length,
         missing,
