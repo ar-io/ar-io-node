@@ -51,9 +51,9 @@ gateway, this one included:
    denial only from a machine that serves the root's header (a machine
    without the transaction at all just doesn't have it). Two such machines
    saying it is in no block, with every node heard, **refute** the root;
-   fewer leave it unchecked; nodes naming different blocks is an error;
-   every node saying it is in no block makes
-   it `missing`. `index-l2-verify` can instead find **every** root of a
+   fewer leave it unchecked; nodes naming different blocks is an error.
+   A root is `missing` only when no node binds its header (below).
+   `index-l2-verify` can instead find **every** root of a
    band in an L1 index, height and position both (`--l1-bands-dir`, below).
 3. **Its place in the weave** comes from `/tx/{id}/offset`, whose size must be
    the signed `data_size`.
@@ -348,8 +348,11 @@ replaces frozen bands whose sources changed (see
 
 Run the command, read stdout (or stderr on exit 1) as JSON, and act on `ok` and
 each check's `failures`. Each failure names the band (`found` starts with its
-id) and the height it starts at. `onchain` adds counts (`checked`, `ok`,
-`wrong`, `unreadable`, `errors`) and, under `roots`, how the roots were read and
-bound. `unreadable` is never a fault of the index; `errors` are never a verdict
-on it either way, so rerun before acting on them. Never treat a passing sample
-as proof of every row: the row-by-row checks are what cover every row.
+id) and the height it starts at. `onchain` adds counts (`drawn`, `ok`,
+`wrong`, `missing`, `unchecked`) and, under `roots`, how the roots were read and
+bound. `wrong` and `missing` fail the band. A band in
+`onchain.inconclusiveBands` is neither verified nor refuted: rerun before
+acting on it, and read `uncheckedReasons` for why. Read `ok` together with
+`skipped`, `publisherBound` and `assurance`, which say what was not checked
+and what a pass of the sample means. Never treat a passing sample as proof of
+every row: the row-by-row checks are what cover every row.
