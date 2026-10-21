@@ -96,6 +96,7 @@ import { positionsByRoot, RootResolver, rootResolver } from './roots.js';
 import { selectionMatcher } from './selection.js';
 import type { L2ItemSource, RootPosition } from './source.js';
 import {
+  loadReplacedWallets,
   openWalletsDb,
   OWNER_NOTE_COLUMNS,
   OwnerKeyStats,
@@ -419,6 +420,7 @@ export async function exportL2Band({
   random = Math.random,
   keyTags = [],
   statTags = [],
+  replacedBandDirs = [],
 }: {
   selection: ParquetL2Selection;
   from: number;
@@ -438,6 +440,11 @@ export async function exportL2Band({
   keyTags?: readonly string[];
   /** The tag names its stats count by (`l2-2`). */
   statTags?: readonly string[];
+  /**
+   * The bands this one replaces: their `wallets` tables give owners' keys
+   * the source and the roots can't, so a re-settle keeps every key.
+   */
+  replacedBandDirs?: readonly string[];
 }): Promise<L2ExportResult> {
   const started = Date.now();
   await fs.mkdir(workDir, { recursive: true });
@@ -462,6 +469,7 @@ export async function exportL2Band({
         random,
         keyTags: canonicalTagNames(keyTags),
         statTags: canonicalTagNames(statTags),
+        replacedBandDirs: [...replacedBandDirs],
       });
       stagingBytes = await treeBytes(staging);
       return built;
@@ -505,9 +513,11 @@ async function build(
     random,
     keyTags,
     statTags,
+    replacedBandDirs,
   }: {
     keyTags: string[];
     statTags: string[];
+    replacedBandDirs: string[];
     selection: ParquetL2Selection;
     from: number;
     to: number;
@@ -967,9 +977,21 @@ async function build(
       );
     }
 
-    // Owners' keys, from the notes in the database.
+    // Owners' keys, from the notes in the database; the bands this one
+    // replaces are a source too, so no key they hold is lost to a root the
+    // gateway can't serve today.
+    const replaced = await loadReplacedWallets(
+      duck,
+      replacedBandDirs.map((dir) =>
+        path.join(
+          dir,
+          PARQUET_L2_TABLES.find((table) => table.name === 'wallets')!.file,
+        ),
+      ),
+    );
     const keyStats = await resolveOwnerKeys(duck, 'owner_notes', {
       ...(walletsDb !== undefined ? { walletsDb } : {}),
+      replaced,
       reads,
       write: async (found) => {
         for (const row of found) scratch.wallets.add(row);

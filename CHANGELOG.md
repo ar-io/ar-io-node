@@ -95,6 +95,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **`parquet-l2`: a re-settle keeps every owner's key the bands it
+  replaces hold.** Their `wallets` tables are a key source, tried after
+  `bundles.db` and before the roots (a key verifies itself: its SHA-256 is
+  the address), so a root the gateway can't serve on the day no longer
+  refuses the band for a dropped key (`dropped_wallets`), as it did the
+  h1.3M re-settle of `ardrive-l2`. Counted as `stats.owners.fromReplaced`.
 - **`parquet-l2`: a nested item is no longer located under a parent bundle
   that `parents` does not describe.** Where every row of a bundle is
   inconsistent (offsets taken from another copy of it, ar-io-node #937),
