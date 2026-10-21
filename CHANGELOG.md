@@ -107,10 +107,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     of lookup files (which were sorted before digesting). The new
     `consistency`, `selected` and `schema` checks do, and lookups are read
     in file order and must be in their key's order.
-  - A directory entry without a readable `band.json`, a band reached
-    through a symlink, or a malformed `.publisher.json` was skipped
-    silently, and a `.publisher.json` could retire any band of its
-    publisher. These now fail `files`, and a claim counts only when the
+  - A directory entry without a readable `band.json`, or a malformed
+    `.publisher.json`, was skipped silently; a band reached through a
+    symlink was skipped too; and a `.publisher.json` could retire any band
+    of its publisher. The first two now fail `files`, a symlinked band is
+    followed and checked like any other, and a claim counts only when the
     claiming band covers the other's heights.
   - A band that vanished mid-run, or a file deleted mid-run, crashed the run
     or passed. That band now fails `complete` and the run goes on.

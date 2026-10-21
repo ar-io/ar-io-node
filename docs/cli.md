@@ -855,7 +855,7 @@ proves, and how to reproduce or repair a band that fails, is in
 | `--allow-unlocated` | Pass a band whose items all have no locations, as its `band.json` declares, so nothing of it can be read on chain (default: it fails `located` and `onchain`) |
 | `--max-unlocated-share <fraction>` | The largest share of a band's items that may be unlocated (default `0.001`); its unlocated items must also be exactly what its `band.json` declares |
 | `--allow-expired` | Bind to a `--publication` past its `expiresAt` (default: refused) |
-| `--max-unchecked <n>` | Drawn items per band that may stay unchecked (nodes busy, chunks unseeded, a root no node places) and the band still pass (default 0); past it, with none wrong, the band is inconclusive. Must be below `--onchain`; a band never passes with nothing verified, and `assurance` treats the allowed unchecked as possibly fabricated: with k allowed, the stated bound is the share p at which P(at most k of N drawn are fabricated) is 5% (N = 20: 14% for k = 0, 41% for k = 4). No drawn item is ever replaced by another draw |
+| `--max-unchecked <n>` | Drawn items per band, nested additions included, that may stay unchecked (nodes busy, chunks unseeded, a root no node places) and the band still pass (default 0); past it, with none wrong, the band is inconclusive. When `--onchain` is above 0 it must be below `--onchain`; a band never passes with nothing verified, and `assurance` treats the allowed unchecked as possibly fabricated: with k allowed, the stated bound is the share p at which P(at most k of the N uniformly drawn items are fabricated) is 5% (N = 20: 14% for k = 0, 41% for k = 4). No drawn item is ever replaced by another draw |
 | `--band-deadline <seconds>` | How long one band's on-chain reads may take (default 1200); items not read by then are unchecked |
 | `--gateway-url <url>` | Read through this gateway instead: faster, but trusted, and nobody then says the roots are mined. Exclusive with `--arweave-nodes` |
 | `--read-timeout <ms>` | How long each node, gateway or publication request may take (default 30000) |
@@ -892,7 +892,7 @@ beating.
     "bound to publication https://turbo-gateway.com/ar-io/indexes/publication.json (sequence 157), signed by <observer address>",
     "roots found in the L1 index at data/indexes/installed/parquet-l1, which index-l1-verify must have checked for this to trust nothing",
     "sampled roots placed in a block at their items' height by two or more machines (by address); their position in the block is not checked",
-    "on chain, 20 located items drawn per band, none replaced: a band in which 14% or more of the located items are fabricated would have been caught with 95% probability; smaller fractions may not be (unlocated items are not checked on chain at all)"
+    "on chain, 20 located items drawn uniformly per band, none replaced: a band in which 14% or more of the located items are fabricated would have been caught with 95% probability; smaller fractions may not be (unlocated items are not checked on chain at all)"
   ],
   "checks": [
     { "name": "identity", "ok": true, "detail": "each band's id names its heights, its publisher's tag and the digest of its heights, selection and rows: internal consistency, not a signature" },
