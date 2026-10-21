@@ -1143,6 +1143,125 @@ describe('verifyL2Bands fails closed', () => {
     assert.deepEqual(unchecked.minedPartial, { bands: [id], count: 1 });
   });
 
+  /**
+   * Hooks every database's `method`: `before(sql)` runs before each query
+   * (and may throw, as the query would). Returns the undo.
+   */
+  const hook = (
+    ducks: Database[],
+    method: 'all' | 'stream',
+    before: (sql: string) => void,
+  ) => {
+    const originals = ducks.map((d) => d[method].bind(d));
+    ducks.forEach((d, i) => {
+      (d as unknown as Record<string, unknown>)[method] = (
+        sql: string,
+        ...rest: unknown[]
+      ) => {
+        before(sql);
+        return (originals[i] as (...a: unknown[]) => unknown)(sql, ...rest);
+      };
+    });
+    return () =>
+      ducks.forEach((d, i) => {
+        (d as unknown as Record<string, unknown>)[method] = originals[i];
+      });
+  };
+
+  it('keeps an SQL check that failed before its section stopped (review R2)', async () => {
+    const dir = await fresh();
+    // A required value missing (required), then the section's next query
+    // fails (complete).
+    await writeBand(db, dir, 100, 199, {
+      rows: (r) => {
+        r.data_items[0][12] = null; // tag_count
+      },
+    });
+    const more = await Promise.all(
+      [1, 2, 3].map(() => Database.create(':memory:')),
+    );
+    const undo = hook([db, ...more], 'all', (sql) => {
+      if (sql.includes('part_location')) {
+        throw new Error('the locations query could not be read');
+      }
+    });
+    try {
+      for (const moreDucks of [[], more]) {
+        const result = await verifyL2Bands(db, dir, { moreDucks });
+        assert.deepEqual(failing(result).sort(), ['complete', 'required']);
+        assert.match(
+          result.checks.find((c) => c.name === 'required')!.failures![0].found,
+          /data_items rows with no tag_count/,
+        );
+        assert.match(
+          result.checks.find((c) => c.name === 'complete')!.failures![0].found,
+          /stopped: the locations query could not be read/,
+        );
+      }
+    } finally {
+      undo();
+      for (const d of more) await d.close();
+    }
+  });
+
+  it('fails only the band whose file is deleted as it is read, the same on one database and four', async () => {
+    const run = async (moreDucks: Database[]) => {
+      const dir = await fresh();
+      await writeBand(db, dir, 100, 199);
+      await writeBand(db, dir, 200, 299, { unsorted: 'tags' });
+      const tip = await writeBand(db, dir, 300, 399);
+      // Deleted when its first read starts, on whichever database.
+      const undo = hook([db, ...moreDucks], 'stream', (sql) => {
+        if (sql.includes(tip.dir) && sql.includes('tags.parquet')) {
+          rmSync(path.join(tip.dir, 'tags.parquet'), { force: true });
+        }
+      });
+      try {
+        const {
+          seconds: _,
+          bandsDir: __,
+          ...result
+        } = await verifyL2Bands(db, dir, { publisher: PUBLISHER, moreDucks });
+        // Each run has a directory of its own: named apart, as `<dir>`.
+        return {
+          result: JSON.parse(
+            JSON.stringify(result).split(dir).join('<dir>'),
+          ) as typeof result,
+          tip: tip.id,
+        };
+      } finally {
+        undo();
+      }
+    };
+    const more = await Promise.all(
+      [1, 2, 3].map(() => Database.create(':memory:')),
+    );
+    try {
+      const alone = await run([]);
+      assert.deepEqual(failing(alone.result as never).sort(), [
+        'complete',
+        'tables',
+      ]);
+      const complete = alone.result.checks.find((c) => c.name === 'complete')!;
+      assert.equal(complete.failures!.length, 1);
+      assert.match(complete.failures![0].found, new RegExp(`^${alone.tip}: `));
+      // The other bands' findings: the unsorted tags of the middle band.
+      const tables = alone.result.checks.find((c) => c.name === 'tables')!;
+      assert.deepEqual(
+        tables.failures!.map((f) => f.height),
+        [200],
+      );
+      assert.deepEqual(
+        alone.result.located.map((l) => l.id),
+        alone.result.located.map((l) => l.id).filter((id) => id !== alone.tip),
+      );
+      const side = await run(more);
+      assert.deepEqual(side.result, alone.result);
+    } finally {
+      for (const d of more) await d.close();
+    }
+  });
+
   it('keeps what a band found before a read that stopped it (review, partial sections)', async () => {
     const dir = await fresh();
     // data_items out of order (tables), then a key that is NULL: reading
