@@ -25,6 +25,7 @@ import {
   bundleAndSignData,
   createData,
 } from '@dha-team/arbundles';
+import { strict as assert } from 'node:assert';
 import crypto from 'node:crypto';
 import { rmSync } from 'node:fs';
 import * as fs from 'node:fs/promises';
@@ -561,7 +562,18 @@ type FileOp =
 /** What a case's directory and run are made of, built. */
 interface BuiltBands {
   dir: string;
-  run: (seedOverride?: number) => Promise<{
+  /** Files are deleted while it runs: its verdict depends on timing. */
+  timed: boolean;
+  /**
+   * Runs the check; `side` adds databases to read on side by side, and the
+   * spill budget they share.
+   */
+  run: (
+    seedOverride?: number,
+    side?: { moreDucks: Database[]; spillBytes?: number },
+  ) => Promise<{
+    /** The whole result, but for its time. */
+    report?: unknown;
     verdict: Verdict;
     failing: string[];
     publisherBound?: boolean;
@@ -875,24 +887,36 @@ export async function buildBandsCase(
 
   return {
     dir,
-    run: async (seedOverride) => {
+    timed: during.length > 0,
+    run: async (seedOverride, side) => {
       const reads: number[] = [];
       const readsByRoot = new Map<string, number[]>();
-      const stream = duck.stream.bind(duck);
+      const ducks = [duck, ...(side?.moreDucks ?? [])];
+      const streams = ducks.map((d) => d.stream.bind(d));
       for (const d of during.filter((x) => x.when === 'onTable')) {
         const target = bands[d.band];
-        (duck as unknown as { stream: typeof duck.stream }).stream = (
-          sql: string,
-          ...rest: unknown[]
-        ) => {
-          if (sql.includes(target.dir) && sql.includes(d.file!)) {
-            rmSync(path.join(target.dir, d.file!), { force: true });
-          }
-          return stream(sql, ...rest);
-        };
+        ducks.forEach((each, i) => {
+          (each as unknown as { stream: typeof duck.stream }).stream = (
+            sql: string,
+            ...rest: unknown[]
+          ) => {
+            if (sql.includes(target.dir) && sql.includes(d.file!)) {
+              rmSync(path.join(target.dir, d.file!), { force: true });
+            }
+            return streams[i](sql, ...rest);
+          };
+        });
       }
       try {
         const result = await verifyL2Bands(duck, dir, {
+          ...(side !== undefined
+            ? {
+                moreDucks: side.moreDucks,
+                ...(side.spillBytes !== undefined
+                  ? { spillBytes: side.spillBytes }
+                  : {}),
+              }
+            : {}),
           ...(options.from !== undefined ? { from: options.from } : {}),
           ...(options.to !== undefined ? { to: options.to } : {}),
           ...(options.publisher === true ? { publisher: PUBLISHER } : {}),
@@ -976,7 +1000,9 @@ export async function buildBandsCase(
               .sort((x, y) => x - y),
           );
         }
+        const { seconds: _seconds, ...report } = result;
         return {
+          report,
           verdict: result.ok
             ? 'verified'
             : onlyInconclusive
@@ -1006,7 +1032,14 @@ export async function buildBandsCase(
         }
         throw error;
       } finally {
-        (duck as unknown as { stream: typeof duck.stream }).stream = stream;
+        // Put back only what was hooked: a database reached through a
+        // proxy would otherwise get the proxy's method as its own.
+        if (during.some((x) => x.when === 'onTable')) {
+          ducks.forEach((each, i) => {
+            (each as unknown as { stream: typeof duck.stream }).stream =
+              streams[i];
+          });
+        }
       }
     },
   };
@@ -1389,3 +1422,71 @@ export async function runOnchainCase(c: Case): Promise<{
 /** A scratch directory for a run of the suite. */
 export const scratch = () =>
   fs.mkdtemp(path.join(os.tmpdir(), 'index-verification-conformance-'));
+
+/**
+ * A database whose second query under a spill share smaller than
+ * `budgetMiB` fails as a full spill does: every read that reserves less
+ * than the budget runs out once, part way, and must run again with all of
+ * it. `injected` counts the failures.
+ */
+export function overflowing(
+  target: Database,
+  budgetMiB: number,
+  injected: { count: number },
+): Database {
+  let armed = 0;
+  return new Proxy(target, {
+    get(on, prop) {
+      const value = (on as unknown as Record<string | symbol, unknown>)[prop];
+      if (prop === 'exec' || prop === 'all' || prop === 'stream') {
+        const method = value as (sql: string, ...rest: unknown[]) => unknown;
+        return (sql: string, ...rest: unknown[]) => {
+          const set = /SET max_temp_directory_size = '(\d+)MiB'/.exec(sql);
+          if (set !== null) {
+            armed = Number(set[1]) < budgetMiB ? 2 : 0;
+          } else if (armed > 0) {
+            armed -= 1;
+            if (armed === 0) {
+              injected.count += 1;
+              throw new Error(
+                "Out of Memory Error: failed to offload data block of size 256.0 KiB (1.0 MiB/1.0 MiB used). This limit was set by the 'max_temp_directory_size' setting.",
+              );
+            }
+          }
+          return method.call(on, sql, ...rest);
+        };
+      }
+      return typeof value === 'function' ? value.bind(on) : value;
+    },
+  });
+}
+
+/**
+ * Runs every `bands` case one database at a time and then with `side`
+ * (more databases, a spill budget), and asserts the same verdict, failing
+ * checks and report (every check, failure and reason, but the time) and
+ * the same on-chain reads. A case that deletes files mid-run is left out:
+ * its verdict is timing. A seed drawn at random is the first run's.
+ */
+export async function assertSameSideBySide(
+  duck: Database,
+  root: string,
+  c: Case,
+  side: { moreDucks: Database[]; spillBytes?: number },
+): Promise<void> {
+  const built = await buildBandsCase(duck, root, c);
+  if (built.timed) return;
+  const alone = await built.run();
+  const seed = (alone.report as { onchain?: { seed: number } } | undefined)
+    ?.onchain?.seed;
+  const other = await built.run(seed, side);
+  const failures = JSON.stringify(
+    (
+      other.report as { checks?: Array<{ ok: boolean }> } | undefined
+    )?.checks?.filter((x) => !x.ok),
+  );
+  assert.equal(other.verdict, alone.verdict, failures);
+  assert.deepEqual(other.failing, alone.failing, failures);
+  assert.deepEqual(other.report, alone.report);
+  assert.deepEqual(other.reads, alone.reads);
+}
