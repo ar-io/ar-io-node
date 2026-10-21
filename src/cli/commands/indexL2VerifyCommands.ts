@@ -270,14 +270,29 @@ export async function indexL2VerifyCLICommand(
           `--publication is not a publication: ${(error as Error).message}`,
         );
       }
-      const registry =
-        injectedRegistry ??
-        new CoreGatewayRegistry({
+      let registry: GatewayRegistry;
+      if (injectedRegistry !== undefined) {
+        registry = injectedRegistry;
+      } else {
+        const core = new CoreGatewayRegistry({
           log,
           coreUrl: options.registryUrl as string,
-          ttlMs: 0,
+          // Long enough that the lookup below reuses the read made here.
+          ttlMs: 10 * 60_000,
           timeoutMs,
         });
+        // lookup() answers undefined both when the publisher is not
+        // registered and when the registry could not be read; read it
+        // first so a registry that is down is named as the cause.
+        try {
+          await core.list();
+        } catch (error) {
+          throw new L2VerifyRefused(
+            `could not read the registry at ${options.registryUrl as string} (/ar-io/peers): ${(error as Error).message}`,
+          );
+        }
+        registry = core;
+      }
       const record = await registry.lookup(wallet);
       if (record === undefined) {
         throw new L2VerifyRefused(

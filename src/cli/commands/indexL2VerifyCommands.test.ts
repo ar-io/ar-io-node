@@ -6,6 +6,7 @@
  */
 import { strict as assert } from 'node:assert';
 import * as fs from 'node:fs/promises';
+import * as http from 'node:http';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { describe, it } from 'node:test';
@@ -103,6 +104,66 @@ describe('index-l2-verify', () => {
         L2BandsRefused,
       );
     } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('tells a registry it could not read from one without the publisher (review 14)', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'l2-verify-cli-'));
+    const wallet = 'ErEgD7dq1yR9W1CnVG3pEywi3qST7jqWA9nfWtxSGeBc';
+    const publication = path.join(dir, 'publication.json');
+    await fs.writeFile(
+      publication,
+      JSON.stringify({
+        version: 1,
+        publisher: wallet,
+        sequence: 1,
+        previousManifestSha256: null,
+        issuedAt: '2026-09-22T12:00:00Z',
+        expiresAt: '2026-09-23T12:00:00Z',
+        indexes: [],
+      }),
+    );
+    let failing = true;
+    const server = http.createServer((_req, res) => {
+      if (failing) {
+        res.writeHead(502).end();
+      } else {
+        res
+          .writeHead(200, { 'content-type': 'application/json' })
+          .end(JSON.stringify({ gateways: {} }));
+      }
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, '127.0.0.1', resolve),
+    );
+    const { port } = server.address() as { port: number };
+    const run = () =>
+      indexL2VerifyCLICommand(
+        {
+          bandsDir: dir,
+          onchain: '0',
+          publication,
+          registryUrl: `http://127.0.0.1:${port}`,
+        },
+        { log },
+      );
+    try {
+      await assert.rejects(run(), (error: Error) => {
+        assert.ok(error instanceof L2VerifyRefused, error.message);
+        assert.match(error.message, /could not read the registry/);
+        assert.match(error.message, /502/);
+        assert.doesNotMatch(error.message, /has no gateway/);
+        return true;
+      });
+      failing = false;
+      await assert.rejects(run(), (error: Error) => {
+        assert.ok(error instanceof L2VerifyRefused, error.message);
+        assert.match(error.message, /has no gateway/);
+        return true;
+      });
+    } finally {
+      server.close();
       await fs.rm(dir, { recursive: true, force: true });
     }
   });
