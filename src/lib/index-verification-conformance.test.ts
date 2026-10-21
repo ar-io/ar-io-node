@@ -39,6 +39,11 @@ describe('index-verification conformance', () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
+  it('has each id once across the case files', () => {
+    const ids = cases.map((c) => c.id);
+    assert.equal(new Set(ids).size, ids.length, 'an id is repeated');
+  });
+
   it('has cases of every verdict', () => {
     for (const verdict of ['verified', 'refuted', 'unknown']) {
       assert.ok(

@@ -39,7 +39,10 @@ salted), and cases name them by symbol.
 
 ## Running it against another implementation
 
-Read every `cases/<id>/case.json`, build what it describes as specified
+Each kind's cases are an array in `cases/<kind>.json` (`bands.json`,
+`publication.json` for bands cases with a publication, `onchain.json`),
+sorted by id; ids are unique across the files. Read every case object,
+build what it describes as specified
 below, run your verifier, and compare your verdict, failing checks and
 reason with `expect`. A conforming implementation gives the same for every
 case. Common fields: `id`, `description`, `tampered` (what was changed from

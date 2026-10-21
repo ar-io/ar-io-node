@@ -7,7 +7,7 @@
 
 /**
  * The index-verification conformance suite's generator and runner, for this
- * implementation. Each case (`cases/<id>/case.json`) declares what is built
+ * implementation. Each case (an object in `cases/<kind>.json`) declares what is built
  * and how it is tampered with; this module builds it into a temporary
  * directory at test time (nothing large is committed), runs it through
  * `verifyL2Bands` or `checkDrawnHeaders`, and gives the verdict:
@@ -125,14 +125,16 @@ export async function loadCases(): Promise<Case[]> {
   const dir = path.join(HERE, 'cases');
   const cases: Case[] = [];
   for (const name of (await fs.readdir(dir)).sort()) {
-    const text = await fs.readFile(path.join(dir, name, 'case.json'), 'utf8');
-    const parsed = JSON.parse(text) as Case;
-    if (parsed.id !== name) {
-      throw new Error(`cases/${name}/case.json has id ${parsed.id}`);
+    if (!name.endsWith('.json')) continue;
+    const parsed = JSON.parse(
+      await fs.readFile(path.join(dir, name), 'utf8'),
+    ) as Case[];
+    if (!Array.isArray(parsed)) {
+      throw new Error(`cases/${name} is not an array of cases`);
     }
-    cases.push(parsed);
+    cases.push(...parsed);
   }
-  return cases;
+  return cases.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 }
 
 // ---------------------------------------------------------------- bands --
