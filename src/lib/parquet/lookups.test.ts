@@ -15,6 +15,8 @@ import { RowDigest } from './digest.js';
 import { prefix64Sql } from './keys.js';
 import {
   digestLookup,
+  digestLookupInFileOrder,
+  LookupOrderError,
   LookupSpec,
   sqlPath,
   sqlPaths,
@@ -194,6 +196,51 @@ describe('lookup engine', () => {
     );
   });
 
+  it('passes a spill-limit error from the sorted scan up to the runner, without sorting again (CodeRabbit, #1074)', async () => {
+    const one: LookupSpec = {
+      name: 'v',
+      file: 'lookup_spill.parquet',
+      columns: [{ name: 'v', type: 'UBIGINT' }],
+      orderBy: ['v'],
+      derive: () =>
+        'SELECT v::UBIGINT AS v FROM (VALUES (100), (9), (10)) t(v)',
+    };
+    const out = path.join(dir, 'spill');
+    await fs.mkdir(out);
+    await writeLookup(duck, one, {}, out, { order: 'numeric' });
+    let streamed = 0;
+    // The sort runs out of its share; the old reader must not start.
+    const spilling = new Proxy(duck, {
+      get(target, key, receiver) {
+        if (key === 'exec') {
+          return async (sql: string) => {
+            if (/CREATE TEMP TABLE/.test(sql)) {
+              throw new Error(
+                'Out of Memory Error: failed to offload data block: could not write: max_temp_directory_size is 1.0 MiB',
+              );
+            }
+            return target.exec(sql);
+          };
+        }
+        if (key === 'stream') {
+          return (...args: Parameters<Database['stream']>) => {
+            streamed += 1;
+            return target.stream(...args);
+          };
+        }
+        const value = Reflect.get(target, key, receiver);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    await assert.rejects(
+      digestLookup(spilling, one, path.join(out, one.file), {
+        order: 'numeric',
+      }),
+      /max_temp_directory_size/,
+    );
+    assert.equal(streamed, 0);
+  });
+
   it('digests in numeric order, or in the text order l1-3 used', async () => {
     // One UBIGINT column, 9, 10 and 100: as text, 10 < 100 < 9. Under
     // `legacy-text` the digest query's text alias "v" shadowed the column
@@ -244,5 +291,55 @@ describe('lookup engine', () => {
         .length,
       1,
     );
+  });
+
+  it('digests a numeric lookup in file order as its sorted digest, and refuses rows out of order', async () => {
+    // A key ordered on one column, a payload column after it.
+    const keyed: LookupSpec = {
+      name: 'kv',
+      file: 'lookup_kv.parquet',
+      columns: [
+        { name: 'k', type: 'UBIGINT' },
+        { name: 'v', type: 'UBIGINT' },
+      ],
+      orderBy: ['k'],
+      derive: () => 'SELECT 1',
+    };
+    const write = async (name: string, rows: Array<[string, number]>) => {
+      const file = path.join(dir, name);
+      await duck.exec(
+        `COPY (SELECT * FROM (VALUES ${rows.map(([k, v]) => `(${k}::UBIGINT, ${v}::UBIGINT)`).join(', ')}) t(k, v))
+         TO ${sqlPath(file)} (FORMAT PARQUET)`,
+      );
+      return file;
+    };
+    // 9 < 10 < 2^64-1 by value, not as text; an identical row may repeat.
+    const sorted = await write('kv-sorted.parquet', [
+      ['9', 1],
+      ['10', 1],
+      ['10', 1],
+      ['18446744073709551615', 0],
+    ]);
+    assert.deepEqual(
+      await digestLookupInFileOrder(duck, keyed, sorted),
+      await digestLookup(duck, keyed, sorted, ORDER),
+    );
+    for (const rows of [
+      [
+        ['10', 1],
+        ['9', 1],
+      ],
+      // A tie on the key that differs elsewhere: the order is not total.
+      [
+        ['10', 1],
+        ['10', 2],
+      ],
+    ] as Array<Array<[string, number]>>) {
+      const file = await write(`kv-${rows.length}-${rows[1][1]}.parquet`, rows);
+      await assert.rejects(
+        digestLookupInFileOrder(duck, keyed, file),
+        LookupOrderError,
+      );
+    }
   });
 });

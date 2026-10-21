@@ -32,9 +32,9 @@ import {
   BandFile,
   IndexEntry,
   IndexPublication,
-  INDEX_PUBLICATION_MAX_BYTES,
   manifestSha256,
   parseIndexPublicationDocument,
+  readPublicationBody,
   verifyIndexPublication,
   WEBSEED_PATH,
 } from '../lib/index-publication.js';
@@ -581,32 +581,7 @@ export class Subscriber {
       throw new Error(`HTTP ${response.status} ${response.statusText}`);
     }
 
-    const declared = Number(response.headers.get('content-length') ?? '0');
-    if (Number.isFinite(declared) && declared > INDEX_PUBLICATION_MAX_BYTES) {
-      throw new Error(
-        `Publication declares ${declared} bytes, over the ${INDEX_PUBLICATION_MAX_BYTES} byte limit`,
-      );
-    }
-    if (response.body === null) {
-      throw new Error('Publication response had no body');
-    }
-
-    const chunks: Buffer[] = [];
-    let total = 0;
-    const reader = response.body.getReader();
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done === true) break;
-      total += value.length;
-      if (total > INDEX_PUBLICATION_MAX_BYTES) {
-        await reader.cancel();
-        throw new Error(
-          `Publication exceeded the ${INDEX_PUBLICATION_MAX_BYTES} byte limit`,
-        );
-      }
-      chunks.push(Buffer.from(value));
-    }
-    return Buffer.concat(chunks);
+    return readPublicationBody(response);
   }
 
   /** Resolve where to fetch from and which key must have signed. */

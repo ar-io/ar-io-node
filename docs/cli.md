@@ -34,6 +34,7 @@ The wrapper mounts only what a command needs:
 | `index-band-*` | `INDEX_SWARM_DATA_PATH` (default `./data/indexes`) at `data/indexes`, and the gateway's Docker network (`DOCKER_NETWORK_NAME`, default `ar-io-network`), so `--gateway-url http://core:4000` reaches the gateway |
 | `index-band-export` | Also `SQLITE_DATA_PATH` (default `./data/sqlite`) read-only at `data/sqlite`; `CLICKHOUSE_URL`, `CLICKHOUSE_USER` and `CLICKHOUSE_PASSWORD`, passed by name, so not on the command line (`docker inspect` of the running container shows them); and `INDEX_EXPORT_SECRETS_DIR`, if set, read-only at `/run/secrets/index-export` for peers' password files |
 | `index-l1-*` | `INDEX_SWARM_DATA_PATH` read-only at `data/indexes`; `SQLITE_DATA_PATH` at `data/sqlite`, read-write for `index-l1-import` and read-only for `index-l1-verify` and `index-l1-audit`; and the gateway's Docker network, so `--data-from` or `--anchor-from` can name `http://core:4000` |
+| `index-l2-*` | `INDEX_SWARM_DATA_PATH` read-only at `data/indexes`, and the gateway's Docker network, so `--gateway-url` can name `http://core:4000` |
 | any `ar.io` command | Nothing, except the file a `--wallet-file` (`-w`) names, read-only. A relative path is taken from where you ran the wrapper |
 
 It runs as your user, so what it writes is yours, and
@@ -161,7 +162,9 @@ Runs the header check on a built or installed band:
 | Option | Meaning |
 | --- | --- |
 | `--band-dir <path>` | The band's directory (it holds `manifest.json`). Required |
-| `--gateway-url <url>` | As for `index-band-build`. Required |
+| `--gateway-url <url>` | As for `index-band-build`. This or `--arweave-nodes` is required |
+| `--arweave-nodes <urls>` | Read the roots from these Arweave nodes instead (comma-separated, or `default`), proving every byte against the chain and finding each root in a block on two machines: see [Reading from the chain](index-verification.md#reading-from-the-chain---arweave-nodes). Exclusive with `--gateway-url` |
+| `--allow-agreement` | With `--arweave-nodes`: accept a root whose signature arweave-js won't verify when two other machines serve the same signed header (default: such a root is an error) |
 | `--read-timeout <ms>` | As for `index-band-build` (default 30000) |
 | `--sample-size <n>` | Entries to read (default 150), from a pool ten times that |
 
@@ -814,6 +817,126 @@ rule of three, `3/n`, and says how little a clean sample rules out.
 mismatch, and also when nothing could be audited, because a run that
 checked nothing proves no more than not running it.
 
+## `index-l2-verify`
+
+Checks a directory of `parquet-l2` bands, one L2 index such as `ardrive-l2`,
+as anyone holding them can: no gateway and no database, and, with the
+on-chain sample, nothing trusted but the chain. Read-only. What each check
+proves, and how to reproduce or repair a band that fails, is in
+[index-verification.md](index-verification.md).
+
+```bash
+# a subscriber's installed copy, every check, bound to the publisher's signed
+# publication (its key from the registry), 20 items per band from Arweave nodes
+./tools/ar-io-node index-l2-verify --bands-dir data/indexes/installed/ardrive-l2 \
+  --publication https://turbo-gateway.com/ar-io/indexes/publication.json \
+  --registry-url http://core:4000
+
+# a publisher's settled bands, bound to its own publication, read through its
+# own gateway for speed (trusted)
+./tools/ar-io-node index-l2-verify --bands-dir data/indexes/published/ardrive-l2 \
+  --publication data/indexes/published/publication.json \
+  --publisher-key <observer address> --to 2014999 --gateway-url http://core:4000
+```
+
+| Option | Meaning |
+| --- | --- |
+| `--bands-dir <path>` | The index's bands: `data/indexes/installed/<index>` or `data/indexes/published/<index>`, as the node sees them (through `tools/ar-io-node`, under the node's own `data/indexes`, wherever that lives on the host). Required |
+| `--publisher <wallet>` | The publisher's wallet: ids are then checked whole, its tag included |
+| `--publication <path\|url>` | The publisher's signed publication: every band must be listed in it, with every file's size and SHA-256 as signed (`publication` check, `publisherBound: true`). Without it the bands are checked only for internal consistency |
+| `--publisher-key <address>` | The key `--publication` must be signed with: the publisher's registered observer address (base58) |
+| `--registry-url <url>` | Instead of `--publisher-key`, the gateway whose view of the registry (`/ar-io/peers`) gives the key, e.g. `http://core:4000`; that gateway is trusted for it. A registry that can't be read is refused as such ("could not read the registry"), apart from one that has no such publisher |
+| `--index <name>` | The index to bind to, when the publication lists more than one `parquet-l2` index |
+| `--l1-bands-dir <path>` | A `parquet-l1` index to find every root in (`mined`); every band must be covered. Without it, the node's own `installed/parquet-l1`, then `published/parquet-l1`, where they exist; `none` for none |
+| `--onchain <n>` | Items per band read at their recorded locations and checked against their ids: drawn uniformly over every located item, then nested items added until half the draw is nested (20 when not given; `0` leaves the check out). The stated bound uses only the uniform draw |
+| `--seed <n>` | Seeds that sample and the order it is read in, to repeat a run; the result reports the seed drawn when none is given |
+| `--arweave-nodes <urls>` | The Arweave nodes those reads go to (comma-separated, or `default`, the default: the `tip` and `data` nodes) |
+| `--allow-agreement` | Accept a root whose signature arweave-js won't verify when two other machines serve the same signed header (default: an error) |
+| `--allow-unlocated` | Pass a band whose items all have no locations, as its `band.json` declares, so nothing of it can be read on chain (default: it fails `located` and `onchain`) |
+| `--max-unlocated-share <fraction>` | The largest share of a band's items that may be unlocated (default `0.001`); its unlocated items must also be exactly what its `band.json` declares |
+| `--allow-expired` | Bind to a `--publication` past its `expiresAt` (default: refused) |
+| `--max-unchecked <n>` | Drawn items per band, nested additions included, that may stay unchecked (nodes busy, chunks unseeded, a root no node places) and the band still pass (default 0); past it, with none wrong, the band is inconclusive. When `--onchain` is above 0 it must be below `--onchain`; a band never passes with nothing verified, and `assurance` treats the allowed unchecked as possibly fabricated: with k allowed, the stated bound is the share p at which P(at most k of the N uniformly drawn items are fabricated) is 5% (N = 20: 14% for k = 0, 41% for k = 4). No drawn item is ever replaced by another draw |
+| `--band-deadline <seconds>` | How long one band's on-chain reads may take (default 1200); items not read by then are unchecked |
+| `--gateway-url <url>` | Read through this gateway instead: faster, but trusted, and nobody then says the roots are mined. Exclusive with `--arweave-nodes` |
+| `--read-timeout <ms>` | How long each node, gateway or publication request may take (default 30000) |
+| `--from <height>`, `--to <height>` | Check only the bands inside these heights; a band only partly inside is listed under `partial` |
+| `--skip-lookups` | Leave out the lookup check, the slowest on large bands |
+| `--spill-max <size>` | The most the lookup and consistency checks may spill (default `128GB`; never more than 80% of the space free under the temp directory, nor into its last 100 GB) |
+| `--concurrency <n>` | How many DuckDB databases (two threads and 2 GB of memory each) check side by side: bands, and a band's tables and lookups, are read on them at once (default: a quarter of the CPUs, at most 4, at least 1; at most 16, and never more than `UV_THREADPOOL_SIZE` less 2, since each database holds a libuv thread while it reads and the on-chain reads' DNS lookups need threads too: an explicit value above that is refused. `tools/ar-io-node` sets `UV_THREADPOOL_SIZE=16` unless the shell sets it). Bands are started largest first. The databases share the spill cap: a read that derives a lookup reserves 20 bytes per byte of the tables it reads, the SQL checks 3 per byte of `data_items` and `tags`, before they start, and wait while that much isn't free; a read that runs out of its share runs again with all of it. The result is the same at any value, 1 included; at 1 the checks still run through the same pool and DuckDB digests, one database at a time, not the reader before `--concurrency` existed |
+
+It reads every row of every table in file order, so memory stays flat (DuckDB
+encodes and joins each range of rows as the row digest takes them, and the
+ranges are hashed in order, so no row becomes a JavaScript object); the
+large lookups spill to a folder of their own under the system temp directory
+(`TMPDIR`; through `tools/ar-io-node`, `data/tmp/index-verify` beside the
+node's `data/indexes`), capped at `--spill-max`, at 80% of the space free
+there and at that space less 100 GB, and removed when the run ends or is
+interrupted. A run whose largest band is expected to spill more than the cap
+is refused before it starts, `--skip-lookups` or not (the table checks spill
+too), so with less than about 100 GB free every run is refused; point
+`TMPDIR` at a disk with room. A run killed outright (SIGKILL) leaves its
+`ar-io-node-l2-verify-*` folder behind; the next run removes it once its
+`.heartbeat` file is a day old, and leaves alone a folder another run is still
+beating.
+
+### `index-l2-verify` result
+
+```json
+{
+  "bandsDir": "data/indexes/installed/ardrive-l2",
+  "selection": "{\"kind\":\"ans104-data-items\",\"tag\":{\"name\":\"App-Name\",\"valuePrefix\":\"ArDrive\",\"excludeValuePrefix\":\"ArDriver\"}}",
+  "bands": 23,
+  "heightRange": [0, 2014999],
+  "items": 127729745,
+  "ok": false,
+  "publisherBound": true,
+  "skipped": [],
+  "assurance": [
+    "bound to publication https://turbo-gateway.com/ar-io/indexes/publication.json (sequence 157), signed by <observer address>",
+    "roots found in the L1 index at data/indexes/installed/parquet-l1, which index-l1-verify must have checked for this to trust nothing",
+    "sampled roots placed in a block at their items' height by two or more machines (by address); their position in the block is not checked",
+    "on chain, 20 located items drawn uniformly per band, none replaced: a band in which 14% or more of the located items are fabricated would have been caught with 95% probability; smaller fractions may not be (unlocated items are not checked on chain at all)"
+  ],
+  "checks": [
+    { "name": "identity", "ok": true, "detail": "each band's id names its heights, its publisher's tag and the digest of its heights, selection and rows: internal consistency, not a signature" },
+    { "name": "parents", "ok": false, "detail": "items directly in a root sit at offset 0; items in a nested bundle name one described in parents, whose payload starts where the item says",
+      "failures": [{ "height": 1300000, "found": "l2-h1300000-1399999-3078e8b8-3f379144c94a: 28 items in a nested bundle that parents does not describe there", "expected": "0" }] }
+  ],
+  "publication": { "publisher": "<wallet>", "keyId": "<observer address>", "keyFrom": "the registry at http://core:4000", "sequence": 157, "issuedAt": "2026-10-20T00:00:00.000Z", "expiresAt": "2026-10-21T00:00:00.000Z", "expired": false, "index": "ardrive-l2", "bound": true, "absent": [], "source": "https://turbo-gateway.com/ar-io/indexes/publication.json" },
+  "located": [{ "id": "l2-h1300000-1399999-3078e8b8-3f379144c94a", "items": 6760000, "unlocated": 2396, "declared": 2396, "share": 0.00035 }],
+  "mined": { "l1BandsDir": "data/indexes/installed/parquet-l1", "checks": { "height": true, "position": true }, "checked": 23, "uncovered": [] },
+  "superseded": [],
+  "partial": [],
+  "vanished": [],
+  "onchain": {
+    "perBand": 20, "drawn": 460, "ok": 460, "wrong": 0, "missing": 0, "unchecked": 0,
+    "failedBands": [], "inconclusiveBands": [], "unlocatedBands": [], "seed": 408427327,
+    "bands": [{ "id": "l2-h0-99999-3078e8b8-2af284ed33de", "located": 1200, "locatedShare": 0.98, "drawn": 20, "ok": 20, "wrong": 0, "missing": 0, "unchecked": 0, "uncheckedReasons": {}, "errorSample": [], "inconclusive": false, "passed": true, "reasons": [] }],
+    "roots": { "from": "arweave-nodes", "proven": true, "allowAgreement": false, "roots": 420, "bySignature": 420, "byAgreement": 0, "minedByNodes": 420, "minedVia": "node-status", "checks": { "height": true, "position": false }, "chunksProven": 461, "reachableNodes": 21 }
+  },
+  "spill": { "capBytes": 128000000000, "freeBytes": 900000000000 },
+  "seconds": 6670
+}
+```
+
+Checks are `identity`, `publication` (with `--publication`), `coverage`,
+`selection`, `files`, `schema`, `tables`, `required`, `locations`,
+`parents`, `consistency`, `selected`, `located`, `lookups` (unless skipped), `mined` (with an L1
+index), `onchain` (unless `--onchain 0`) and `complete`. Each failure names
+the band it was found in and the height that band starts at; at most 20 are
+listed per check, the rest counted in `more`. `ok` is true when every check
+that ran passed; `skipped` names those that did not run (`lookups`,
+`onchain`, `publication`, `mined`), so a script must read both:
+`ok: true` with `publisherBound: false` says the bands agree with themselves,
+not who published them. When an L1 index covers only some bands, `skipped` still
+lists `mined` and `minedPartial` names the bands it left out
+(`{ "bands": [...], "count": n }`, at most 50 listed). A band with none wrong
+but more unchecked items than `--max-unchecked` is listed in
+`onchain.inconclusiveBands` and fails `onchain` with its own reason, as is
+one with nothing verified at all. `onchain.bands` gives each band's located
+share, how many items were drawn (`drawn`, of them `drawnUniform` over
+every located item, the rest nested items on top), and how each ended.
+
 ## For scripts and agents
 
 Every `ar-io-node` command is non-interactive and answers in one shape, so a
@@ -825,7 +948,7 @@ script or an agent can drive it without parsing prose.
 | --- | --- | --- |
 | Exit code | `0` | `1` (`130` when interrupted with Ctrl-C) |
 | stdout | Exactly one JSON value, the command's result, written in full before the process exits | Empty |
-| stderr | Log lines (`info:`, `warn:`) only | Log lines, then either one line of error text, or the result as JSON: for a band refused by the header check, a band or range `index-l1-import` refused, a failed `index-l1-verify` or a failed `index-l1-audit` |
+| stderr | Log lines (`info:`, `warn:`) only | Log lines, then either one line of error text, or the result as JSON: for a band refused by the header check, a band or range `index-l1-import` refused, a failed `index-l1-verify`, `index-l2-verify` or `index-l1-audit` |
 
 - **Read stdout, branch on the exit code.** Never parse stderr for success;
   log lines may change.
@@ -842,10 +965,16 @@ script or an agent can drive it without parsing prose.
 - **Paths:** pass the `dir` a build reports straight back as `--band-dir`;
   see [Paths](#paths).
 - **No network** except range reads of root transactions from
-  `--gateway-url` during the header check, `index-band-export`'s reads
-  from the ClickHouse it is given, `index-l1-verify --anchor-from`'s block
-  hash fetches (`/block/height/<n>`), and `index-l1-audit --data-from`'s
-  transaction data fetches. Band commands make no Solana RPC calls.
+  `--gateway-url` during the header check, `index-band-verify
+  --arweave-nodes` and `index-l2-verify`'s reads of root transactions from
+  Arweave nodes (`/tx`, `/tx/<id>/status`, `/tx/<id>/offset`,
+  `/chunk/<offset>`; through a gateway's `/raw` with `--gateway-url`
+  instead; none with `--onchain 0`), `index-l2-verify --publication <url>`'s
+  fetch of the publication and `--registry-url`'s read of `/ar-io/peers`,
+  `index-band-export`'s reads from the ClickHouse it is given,
+  `index-l1-verify --anchor-from`'s block hash fetches
+  (`/block/height/<n>`), and `index-l1-audit --data-from`'s transaction data
+  fetches. Band commands make no Solana RPC calls.
 
 ### `index-band-build` result
 

@@ -26,6 +26,11 @@ import {
   RootSourceFactory,
   sampleBandEntries,
 } from '../../lib/index-band/verify.js';
+import {
+  ArweaveNodePool,
+  parseNodeUrls,
+} from '../../lib/onchain/arweave-nodes.js';
+import { onChainRootSource } from '../../lib/onchain/root-source.js';
 import type {
   IndexBandBuildCLIOptions,
   IndexBandVerifyCLIOptions,
@@ -253,8 +258,15 @@ export async function indexBandVerifyCLICommand(
   const sampleSize =
     positiveIntegerFromOptions(options, 'sampleSize') ?? DEFAULT_SAMPLE_SIZE;
   const readTimeout = positiveIntegerFromOptions(options, 'readTimeout');
-  if (options.gatewayUrl === undefined && deps.roots === undefined) {
-    throw new Error('--gateway-url is required');
+  if (
+    options.gatewayUrl === undefined &&
+    options.arweaveNodes === undefined &&
+    deps.roots === undefined
+  ) {
+    throw new Error('--gateway-url or --arweave-nodes is required');
+  }
+  if (options.gatewayUrl !== undefined && options.arweaveNodes !== undefined) {
+    throw new Error('--gateway-url and --arweave-nodes are exclusive');
   }
   await fs.access(path.join(bandDir, 'manifest.json')).catch(() => {
     throw new Error(
@@ -268,10 +280,25 @@ export async function indexBandVerifyCLICommand(
   );
   deps.log.info('Checking sampled headers against their roots', {
     entries: sample.entries.length,
-    gateway: options.gatewayUrl,
+    ...(options.gatewayUrl !== undefined
+      ? { gateway: options.gatewayUrl }
+      : { arweaveNodes: options.arweaveNodes }),
   });
+  // Arweave nodes, every byte proven against the chain, or a gateway, trusted.
   const roots =
-    deps.roots ?? gatewayRootSource(options.gatewayUrl as string, readTimeout);
+    deps.roots ??
+    (options.arweaveNodes !== undefined
+      ? {
+          openRoot: onChainRootSource({
+            pool: new ArweaveNodePool({
+              urls: parseNodeUrls(options.arweaveNodes),
+              ...(readTimeout !== undefined ? { timeoutMs: readTimeout } : {}),
+            }),
+            allowAgreement: options.allowAgreement === true,
+          }).openRoot,
+          close: () => undefined,
+        }
+      : gatewayRootSource(options.gatewayUrl as string, readTimeout));
   let result: HeaderCheckResult;
   try {
     result = await checkBandHeaders({

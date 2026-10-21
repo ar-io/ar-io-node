@@ -11,11 +11,8 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { describe, it } from 'node:test';
 
-import {
-  orderByClause,
-  PARQUET_L2_TABLES,
-} from '../../../lib/parquet-l2/layout.js';
-import { withBandWriter } from '../parquet-l1/export.js';
+import { orderByClause, PARQUET_L2_TABLES } from './layout.js';
+import { withBandWriter } from '../../index-export/kinds/parquet-l1/export.js';
 import { rowComparator, rowIdentity } from './order.js';
 
 const DATA_ITEMS = PARQUET_L2_TABLES.find((t) => t.name === 'data_items')!;

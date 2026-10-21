@@ -18,6 +18,8 @@ import { VerifyRefused } from '../../lib/parquet-l1/verify.js';
 import {
   indexL1VerifyCLICommand,
   openBandsDuck,
+  SPILL_HEARTBEAT_FILE,
+  spillBytes,
 } from './indexL1VerifyCommands.js';
 
 const log = createTestLogger({ suite: 'index-l1-verify' });
@@ -282,8 +284,11 @@ describe('openBandsDuck', () => {
     await fsp.rm(root, { recursive: true, force: true });
   });
 
+  // Plenty free, so the cap is --spill-max's.
+  const roomy = async () => 10 * 2 ** 40;
+
   it('spills to a folder of its own under the temp root, and removes it on close', async () => {
-    const session = await openBandsDuck({ tmpRoot: root });
+    const session = await openBandsDuck({ tmpRoot: root, freeBytes: roomy });
     // Not `.tmp` under the working directory, which the CLI wrapper's /app,
     // run as the caller's user, does not let DuckDB create.
     const [setting] = (await session.duck.all(
@@ -293,12 +298,113 @@ describe('openBandsDuck', () => {
     const [cap] = (await session.duck.all(
       "SELECT current_setting('max_temp_directory_size') AS max",
     )) as Array<{ max: string }>;
-    assert.match(cap.max, /^1[0-9.]+ ?Gi?B$/, 'capped, not 90% of the disk');
+    // 128 GB, which DuckDB reports in GiB (119.2), not 90% of the disk.
+    assert.match(
+      cap.max,
+      /^(119\.[0-9]|12[0-8](\.[0-9]+)?) ?Gi?B$/,
+      'capped, not 90% of the disk',
+    );
     assert.equal(path.dirname(session.spill), root);
     assert.ok((await fsp.stat(session.spill)).isDirectory());
 
     await session.close();
+    // The cap is the caller's to set, and a size that is not one is refused.
+    const small = await openBandsDuck({
+      tmpRoot: root,
+      spillMax: '1GB',
+      freeBytes: roomy,
+    });
+    const [capSmall] = (await small.duck.all(
+      "SELECT current_setting('max_temp_directory_size') AS max",
+    )) as Array<{ max: string }>;
+    assert.match(capSmall.max, /^(953\.[0-9] ?MiB|1(\.0)? ?GB)$/);
+    await small.close();
+    await assert.rejects(
+      openBandsDuck({ tmpRoot: root, spillMax: 'lots' }),
+      /--spill-max must be a size/,
+    );
     await assert.rejects(fsp.stat(session.spill), { code: 'ENOENT' });
+  });
+
+  it('caps the spill at 80% of the space free under the temp root, and leaves 100 GB of it', async () => {
+    const session = await openBandsDuck({
+      tmpRoot: root,
+      spillMax: '10TB',
+      freeBytes: async () => 1000e9,
+    });
+    try {
+      assert.equal(session.spillCapBytes, 800e9);
+    } finally {
+      await session.close();
+    }
+    // 150 GB free: 80% would leave 30 GB, under the 100 GB reserve.
+    const tight = await openBandsDuck({
+      tmpRoot: root,
+      spillMax: '10TB',
+      freeBytes: async () => 150e9,
+    });
+    try {
+      assert.equal(tight.spillCapBytes, 50e9);
+      const [cap] = (await tight.duck.all(
+        "SELECT current_setting('max_temp_directory_size') AS max",
+      )) as Array<{ max: string }>;
+      assert.match(cap.max, /^46\.[0-9] ?GiB$/);
+    } finally {
+      await tight.close();
+    }
+    // Under the reserve: nothing to spill into.
+    const none = await openBandsDuck({
+      tmpRoot: root,
+      freeBytes: async () => 50e9,
+    });
+    assert.equal(none.spillCapBytes, 0);
+    await none.close();
+  });
+
+  it('removes spill folders of its own kind whose heartbeat stopped a day ago, and no others', async () => {
+    const old = path.join(root, 'ar-io-node-l2-verify-stale');
+    const recent = path.join(root, 'ar-io-node-l2-verify-recent');
+    const other = path.join(root, 'something-else');
+    // A long run: its folder untouched for a day, its heartbeat fresh.
+    const running = path.join(root, 'ar-io-node-l2-verify-running');
+    for (const dir of [old, recent, other, running]) {
+      await fsp.mkdir(dir);
+      await fsp.writeFile(path.join(dir, 'x.block'), 'spill');
+    }
+    const dayAgo = new Date(Date.now() - 25 * 3600 * 1000);
+    await fsp.writeFile(path.join(old, SPILL_HEARTBEAT_FILE), '');
+    await fsp.utimes(path.join(old, SPILL_HEARTBEAT_FILE), dayAgo, dayAgo);
+    await fsp.writeFile(path.join(running, SPILL_HEARTBEAT_FILE), '');
+    for (const dir of [old, other, running]) {
+      await fsp.utimes(dir, dayAgo, dayAgo);
+    }
+    const session = await openBandsDuck({
+      tmpRoot: root,
+      prefix: 'ar-io-node-l2-verify-',
+      freeBytes: roomy,
+    });
+    try {
+      assert.deepEqual(session.removedStale, [old]);
+      await assert.rejects(fsp.stat(old), { code: 'ENOENT' });
+      assert.ok((await fsp.stat(recent)).isDirectory());
+      assert.ok((await fsp.stat(other)).isDirectory());
+      assert.ok((await fsp.stat(running)).isDirectory());
+      // This run beats too.
+      assert.ok(
+        (
+          await fsp.stat(path.join(session.spill, SPILL_HEARTBEAT_FILE))
+        ).isFile(),
+      );
+    } finally {
+      await session.close();
+    }
+  });
+
+  it('reads a DuckDB size as bytes', () => {
+    assert.equal(spillBytes('128GB'), 128e9);
+    assert.equal(spillBytes('1GiB'), 2 ** 30);
+    assert.equal(spillBytes('512 MB'), 512e6);
+    assert.throws(() => spillBytes('lots'));
   });
 
   it('removes its folder even when the temp root is shared', async () => {
@@ -309,5 +415,31 @@ describe('openBandsDuck', () => {
     assert.ok((await fsp.stat(b.spill)).isDirectory(), 'b keeps its own');
     await b.close();
     assert.deepEqual(await fsp.readdir(root), []);
+  });
+});
+
+describe('index-l1-verify --bands-dir with no room to spill (review 13)', () => {
+  it('refuses before it starts when the spill would be capped at nothing, unless lookups are skipped', async () => {
+    const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'l1-verify-nospill-'));
+    try {
+      // 50 GB free: under the 100 GB reserve, so the spill is capped at 0.
+      const tight = { log, freeBytes: async () => 50e9 };
+      await assert.rejects(
+        indexL1VerifyCLICommand({ bandsDir: dir }, tight),
+        (e: unknown) =>
+          e instanceof VerifyRefused &&
+          /no room to spill/.test(e.message) &&
+          /TMPDIR/.test(e.message) &&
+          /--skip-lookups/.test(e.message),
+      );
+      // Without the lookup check nothing spills: it runs (and refuses the
+      // empty directory for what it is, not for room).
+      await assert.rejects(
+        indexL1VerifyCLICommand({ bandsDir: dir, skipLookups: true }, tight),
+        (e: unknown) => !/no room to spill/.test((e as Error).message),
+      );
+    } finally {
+      await fsp.rm(dir, { recursive: true, force: true });
+    }
   });
 });

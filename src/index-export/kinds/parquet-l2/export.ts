@@ -44,7 +44,6 @@
  *   in order, to the digest written; and every lookup read back to its
  *   digest and found to hold exactly the rows its tables give.
  */
-import crypto from 'node:crypto';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { setImmediate } from 'node:timers/promises';
@@ -53,12 +52,18 @@ import type { Database } from 'duckdb-async';
 import { BandSampleEntry, Reservoir } from '../../../lib/index-band/build.js';
 import { HEADER_CHECK_POOL_FACTOR } from '../../../lib/index-band/verify.js';
 import { toB64Url } from '../../../lib/encoding.js';
+import {
+  checkParquetDir,
+  ParquetStructureError,
+} from '../../../lib/parquet/check.js';
 import { RowDigest } from '../../../lib/parquet/digest.js';
 import type { TableSpec } from '../../../lib/parquet-l1/layout.js';
 import {
   BAND_FILE,
   orderByClause,
+  canonicalTagNames,
   PARQUET_L2_SCHEMA,
+  ParquetL2LookupLayout,
   PARQUET_L2_TABLES,
   ParquetL2Band,
   ParquetL2Selection,
@@ -85,11 +90,13 @@ import {
   ReadBudgetError,
   ReadUnavailableError,
 } from './gateway-reads.js';
-import { rowComparator, rowIdentity } from './order.js';
+import { rowComparator, rowIdentity } from '../../../lib/parquet-l2/order.js';
+import { digestL2Table, L2TableError } from '../../../lib/parquet-l2/tables.js';
 import { positionsByRoot, RootResolver, rootResolver } from './roots.js';
-import { selectionMatcher } from './selection.js';
+import { selectionMatcher } from '../../../lib/parquet-l2/selection.js';
 import type { L2ItemSource, RootPosition } from './source.js';
 import {
+  loadReplacedWallets,
   openWalletsDb,
   OWNER_NOTE_COLUMNS,
   OwnerKeyStats,
@@ -411,6 +418,9 @@ export async function exportL2Band({
   workDir,
   limits = DEFAULT_L2_DUCK_LIMITS,
   random = Math.random,
+  keyTags = [],
+  statTags = [],
+  replacedBandDirs = [],
 }: {
   selection: ParquetL2Selection;
   from: number;
@@ -426,6 +436,15 @@ export async function exportL2Band({
   limits?: L2DuckLimits;
   /** Random source for the header-check sample, in [0, 1). */
   random?: () => number;
+  /** The tag names the band's key lookup is derived for (`l2-2`). */
+  keyTags?: readonly string[];
+  /** The tag names its stats count by (`l2-2`). */
+  statTags?: readonly string[];
+  /**
+   * The bands this one replaces: their `wallets` tables give owners' keys
+   * the source and the roots can't, so a re-settle keeps every key.
+   */
+  replacedBandDirs?: readonly string[];
 }): Promise<L2ExportResult> {
   const started = Date.now();
   await fs.mkdir(workDir, { recursive: true });
@@ -448,6 +467,9 @@ export async function exportL2Band({
         scratchDir,
         bandDir,
         random,
+        keyTags: canonicalTagNames(keyTags),
+        statTags: canonicalTagNames(statTags),
+        replacedBandDirs: [...replacedBandDirs],
       });
       stagingBytes = await treeBytes(staging);
       return built;
@@ -489,7 +511,13 @@ async function build(
     scratchDir,
     bandDir,
     random,
+    keyTags,
+    statTags,
+    replacedBandDirs,
   }: {
+    keyTags: string[];
+    statTags: string[];
+    replacedBandDirs: string[];
     selection: ParquetL2Selection;
     from: number;
     to: number;
@@ -949,9 +977,21 @@ async function build(
       );
     }
 
-    // Owners' keys, from the notes in the database.
+    // Owners' keys, from the notes in the database; the bands this one
+    // replaces are a source too, so no key they hold is lost to a root the
+    // gateway can't serve today.
+    const replaced = await loadReplacedWallets(
+      duck,
+      replacedBandDirs.map((dir) =>
+        path.join(
+          dir,
+          PARQUET_L2_TABLES.find((table) => table.name === 'wallets')!.file,
+        ),
+      ),
+    );
     const keyStats = await resolveOwnerKeys(duck, 'owner_notes', {
       ...(walletsDb !== undefined ? { walletsDb } : {}),
+      replaced,
       reads,
       write: async (found) => {
         for (const row of found) scratch.wallets.add(row);
@@ -981,8 +1021,16 @@ async function build(
     // Derived from the tables just written, and checked against them before
     // anything publishes: a lookup that disagrees is this build's fault,
     // not the rows'.
-    const lookups = await writeBandLookups(duck, bandDir);
-    const lookupProblems = await verifyBandLookups(duck, bandDir, { lookups });
+    const layout: ParquetL2LookupLayout = {
+      schema: PARQUET_L2_SCHEMA,
+      keyTags,
+      statTags,
+    };
+    const lookups = await writeBandLookups(duck, bandDir, { layout });
+    const lookupProblems = await verifyBandLookups(duck, bandDir, {
+      ...layout,
+      lookups,
+    });
     if (lookupProblems.length > 0) {
       throw new Error(
         `The band's lookups don't match its tables: ${lookupProblems.join('; ')}`,
@@ -993,6 +1041,8 @@ async function build(
       schema: PARQUET_L2_SCHEMA,
       heightRange: [from, to],
       selection,
+      keyTags,
+      statTags,
       tables: tables.tables,
       lookups,
       checks: {
@@ -1011,6 +1061,14 @@ async function build(
       },
       createdAt,
     };
+    // Refuse to publish a band whose files every subscriber would refuse.
+    await checkParquetDir(bandDir).catch((error: unknown) => {
+      // A footer subscribers refuse rejects the band; an I/O error is retried.
+      if (error instanceof ParquetStructureError) {
+        throw new L2CheckError('footer', error.message);
+      }
+      throw error;
+    });
     await fs.writeFile(path.join(bandDir, BAND_FILE), serializeBandFile(band));
     const sampled = [
       ...new Map(
@@ -1183,44 +1241,16 @@ export async function digestTable(
   duck: Database,
   bandDir: string,
   spec: TableSpec,
-  { inFileOrder = false }: { inFileOrder?: boolean } = {},
+  options: { inFileOrder?: boolean } = {},
 ): Promise<{ rows: number; rowDigest: string }> {
-  const file = sqlString(path.join(bandDir, spec.file));
-  const digest = new RowDigest(spec.columns);
-  const names = spec.columns.map((c) => c.name);
-  const compare = rowComparator(spec);
-  let previous: unknown[] | undefined;
-  const stream = await duck.stream(
-    `SELECT ${quoted(spec.columns)} FROM read_parquet(${file})${inFileOrder ? '' : ` ORDER BY ${orderByClause(spec)}`}`,
-  );
-  for await (const row of stream) {
-    const values = names.map((n) => (row as Record<string, unknown>)[n]);
-    if (previous !== undefined && compare(previous, values) >= 0) {
-      throw new L2CheckError(
-        'order',
-        `${spec.file} holds two rows out of order or of one key`,
-      );
+  try {
+    return await digestL2Table(duck, bandDir, spec, options);
+  } catch (error) {
+    if (error instanceof L2TableError) {
+      throw new L2CheckError(error.reason, error.message, error.details);
     }
-    if (spec.name === 'wallets') {
-      const [address, key] = values as [Buffer, Buffer];
-      if (
-        !crypto
-          .createHash('sha256')
-          .update(Buffer.from(key))
-          .digest()
-          .equals(Buffer.from(address))
-      ) {
-        throw new L2CheckError(
-          'wallet_hash',
-          "an owner's key doesn't hash to its address",
-          [toB64Url(Buffer.from(address))],
-        );
-      }
-    }
-    digest.add(values);
-    previous = values;
+    throw error;
   }
-  return { rows: digest.rows, rowDigest: digest.hex() };
 }
 
 /** Unlocated counts with `unproven` counted as `ambiguous`. */

@@ -144,6 +144,7 @@ describe('OwnerNotes and resolveOwnerKeys', () => {
         owners: 5,
         fromSource: 1,
         fromWalletsDb: 1,
+        fromReplaced: 0,
         fromGateway: 1,
         withoutKey: 2,
         withoutKeyBy: { unreadable: 0, wrong: 1, nowhere: 1 },

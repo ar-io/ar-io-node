@@ -25,7 +25,14 @@ import {
 } from '../../test/parquet-l2-fixture.js';
 import { toB64Url } from '../lib/encoding.js';
 import { createTestLogger } from '../../test/test-logger.js';
-import { readPublisherFacts } from '../lib/parquet-l1/layout.js';
+import { BAND_FILE, readPublisherFacts } from '../lib/parquet-l1/layout.js';
+import {
+  bandFiles,
+  parseBandFile,
+  serializeBandFile,
+} from '../lib/parquet-l2/layout.js';
+import { verifyBandLookups } from '../lib/parquet-l2/lookups.js';
+import { withBandWriter } from './kinds/parquet-l1/export.js';
 import type { ExportConfig } from './config.js';
 import { deriveL2Bands, L2LiveBand } from './kinds/parquet-l2/bands.js';
 import type { L2SourceRow } from './kinds/parquet-l2/source.js';
@@ -119,7 +126,13 @@ describe('ExportService, parquet-l2', () => {
     publishDir: path.join(dir, 'published', 'root-tx-index'),
     workDir: path.join(dir, 'export'),
     l2Indexes: [
-      { name: 'ardrive-l2', selection: ARDRIVE, publishDir: indexDir() },
+      {
+        name: 'ardrive-l2',
+        selection: ARDRIVE,
+        keyTags: [],
+        statTags: [],
+        publishDir: indexDir(),
+      },
     ],
     l2SettleBlocks: 100,
     resettleIntervalMs: 0,
@@ -129,6 +142,7 @@ describe('ExportService, parquet-l2', () => {
   const run = async (
     options: RunOptions = {},
     more: Partial<ExportConfig> = {},
+    deps: Partial<ConstructorParameters<typeof ExportService>[0]> = {},
   ) => {
     const service = new ExportService({
       config: config(more),
@@ -142,6 +156,7 @@ describe('ExportService, parquet-l2', () => {
       openL2Source: async () => source,
       diskSpace: async () => ({ free: 1e13, total: 1e14 }),
       headerCheck: { retryDelayMs: 1 },
+      ...deps,
     });
     const report = await service.runOnce(options);
     const [index] = report.l2 ?? [];
@@ -320,6 +335,163 @@ describe('ExportService, parquet-l2', () => {
     assert.equal(step.compare?.relocated, 1);
     assert.equal(step.header?.byTag.relocated?.wrong, 1);
     assert.ok((await live()).some((b) => b.id === d1.id));
+  });
+
+  describe('key lookup and stats, derived in place', () => {
+    const derived = (index: { derived?: any[] } | undefined) =>
+      (index?.derived ?? []).map((d) => [d.id, d.result, d.reason]);
+    /** Takes a published band back to l2-1: no key or stat tags, no files for them. */
+    const downgrade = async (band: L2LiveBand) => {
+      const { keyTags: _k, statTags: _s, ...rest } = band.band;
+      const { key: _key, stats: _stats, ...lookups } = band.band.lookups;
+      await fs.rm(path.join(band.dir, 'lookup_key.parquet'));
+      await fs.rm(path.join(band.dir, 'stats.parquet'));
+      await fs.writeFile(
+        path.join(band.dir, BAND_FILE),
+        serializeBandFile({ ...rest, schema: 'l2-1', lookups }),
+      );
+    };
+    const tableStats = async (dir: string) =>
+      Object.fromEntries(
+        await Promise.all(
+          ['data_items', 'tags', 'wallets', 'parents'].map(async (t) => {
+            const stat = await fs.stat(path.join(dir, `${t}.parquet`));
+            return [t, [stat.size, stat.mtimeMs]];
+          }),
+        ),
+      );
+    const tagged = () => ({
+      l2Indexes: [
+        {
+          name: 'ardrive-l2',
+          selection: ARDRIVE,
+          keyTags: ['App-Name'],
+          statTags: ['App-Name'],
+          publishDir: indexDir(),
+        },
+      ],
+    });
+
+    it('writes every band as l2-2, for the index’s tag names', async () => {
+      const { index } = await run({}, tagged());
+      assert.deepEqual(derived(index), [], 'nothing to derive from a build');
+      for (const band of await live()) {
+        assert.equal(band.band.schema, 'l2-2');
+        assert.deepEqual(band.band.keyTags, ['App-Name']);
+        assert.deepEqual(band.band.statTags, ['App-Name']);
+        assert.ok(band.band.lookups.key.rows > 0, band.id);
+        assert.deepEqual(
+          (await fs.readdir(band.dir)).filter((n) => !n.startsWith('.')).sort(),
+          bandFiles('l2-2'),
+        );
+      }
+    });
+
+    it('derives an l2-1 band’s key lookup and stats in place: same id, tables untouched, before any build', async () => {
+      await run({}, tagged());
+      const [first, ...rest] = await live();
+      await downgrade(first);
+      assert.equal((await live())[0].band.schema, 'l2-1');
+      const before = await tableStats(first.dir);
+      const facts = await readPublisherFacts(first.dir);
+
+      const { report, index } = await run({}, tagged());
+      assert.deepEqual(derived(index), [[first.id, 'published', 'layout']]);
+      const [outcome] = index.derived ?? [];
+      assert.ok((outcome?.rows?.key ?? 0) > 0);
+      assert.ok((outcome?.rows?.stats ?? 0) > 0);
+      assert.equal(runResult(report), 'published');
+      // Derived before the builds: the log line order, and no band rebuilt.
+      assert.deepEqual(
+        index.steps.filter((s) => s.result === 'published'),
+        [],
+      );
+      const bands = await live();
+      assert.equal(bands.length, rest.length + 1);
+      const upgraded = bands.find((b) => b.id === first.id)!;
+      assert.equal(upgraded.band.schema, 'l2-2');
+      assert.deepEqual(upgraded.band.keyTags, ['App-Name']);
+      assert.deepEqual(await tableStats(first.dir), before, 'tables untouched');
+      assert.deepEqual(await readPublisherFacts(first.dir), facts);
+      assert.deepEqual(
+        (await fs.readdir(first.dir)).filter((n) => !n.startsWith('.')).sort(),
+        bandFiles('l2-2'),
+      );
+      await withBandWriter(path.join(dir, 'read'), async (duck) => {
+        assert.deepEqual(
+          await verifyBandLookups(duck, first.dir, upgraded.band),
+          [],
+        );
+      });
+      // Current now: nothing more to derive.
+      assert.deepEqual(derived((await run({}, tagged())).index), []);
+    });
+
+    it('derives again when the index’s tag names change, and on a dry run changes nothing', async () => {
+      await run({}, tagged());
+      const bands = await live();
+      const changed = {
+        l2Indexes: [
+          { ...tagged().l2Indexes[0], keyTags: ['App-Name', 'Content-Type'] },
+        ],
+      };
+      const dry = await run({ dryRun: true }, changed);
+      assert.deepEqual(
+        derived(dry.index),
+        bands.map((b) => [b.id, 'dry_run', 'dry_run']),
+      );
+      for (const band of await live()) {
+        assert.deepEqual(band.band.keyTags, ['App-Name'], 'unchanged');
+      }
+      const { index } = await run({}, changed);
+      assert.deepEqual(
+        derived(index),
+        bands.map((b) => [b.id, 'published', 'tags_changed']),
+      );
+      for (const band of await live()) {
+        assert.deepEqual(band.band.keyTags, ['App-Name', 'Content-Type']);
+        assert.deepEqual(
+          parseBandFile(
+            await fs.readFile(path.join(band.dir, BAND_FILE), 'utf8'),
+          ).keyTags,
+          ['App-Name', 'Content-Type'],
+        );
+      }
+      assert.deepEqual(derived((await run({}, changed)).index), []);
+    });
+
+    it('derives before the source is opened, so a source outage holds no upgrade back', async () => {
+      await run({}, tagged());
+      const [first] = await live();
+      await downgrade(first);
+      const { index } = await run({}, tagged(), {
+        openL2Source: async () => {
+          throw new Error('ClickHouse is down');
+        },
+      });
+      assert.equal(index.failed?.reason, 'source');
+      assert.deepEqual(derived(index), [[first.id, 'published', 'layout']]);
+      assert.equal(
+        (await live()).find((b) => b.id === first.id)?.band.schema,
+        'l2-2',
+      );
+    });
+
+    it('holds the derive to --range', async () => {
+      await run({}, tagged());
+      const bands = await live();
+      for (const band of bands) await downgrade(band);
+      const target = bands[0];
+      const { index } = await run(
+        { range: [target.from, target.to], resettle: 'full' },
+        tagged(),
+      );
+      assert.deepEqual(derived(index), [[target.id, 'published', 'layout']]);
+      assert.deepEqual(
+        (await live()).map((b) => b.band.schema),
+        bands.map((b) => (b.id === target.id ? 'l2-2' : 'l2-1')),
+      );
+    });
   });
 
   it('builds a pinned range in a dry run, publishing nothing', async () => {
@@ -643,7 +815,13 @@ describe('ExportService, parquet-l2 roots the network no longer serves', () => {
         publishDir: path.join(dir, 'published', 'root-tx-index'),
         workDir: path.join(dir, 'export'),
         l2Indexes: [
-          { name: 'ardrive-l2', selection: ARDRIVE, publishDir: indexDir() },
+          {
+            name: 'ardrive-l2',
+            selection: ARDRIVE,
+            keyTags: [],
+            statTags: [],
+            publishDir: indexDir(),
+          },
         ],
         l2SettleBlocks: 100,
         resettleIntervalMs: 0,
@@ -757,18 +935,26 @@ describe('ExportService, parquet-l2 roots the network no longer serves', () => {
     }
   });
 
-  it("keeps an owner's key: a re-settle that can no longer read it is refused", async () => {
+  it("keeps an owner's key a re-settle can no longer read, from the band it replaces", async () => {
     const first = d1(await run());
     assert.equal(first.result, 'published');
     assert.equal(first.rows?.wallets, 2);
+    assert.equal(first.stats?.owners.fromReplaced, 0);
     gone.add(toB64Url(lone.id));
+    // The root is gone, so the key can't be read; the replaced band holds
+    // it, so the band is built with it and nothing is dropped.
     const without = d1(await run({ resettle: 'full' }));
     assert.deepEqual(
       [without.result, without.reason],
-      ['rejected', 'dropped_wallets'],
+      ['unchanged', 'same_id'],
+      JSON.stringify(without.details),
     );
-    assert.equal(without.compare?.walletsMissing, 1);
-    assert.equal(without.stats?.owners.withoutKeyBy.unreadable, 1);
+    // Both owners' keys come from the replaced band: it is tried before
+    // the roots, so a re-settle reads no key the band it replaces holds.
+    assert.equal(without.stats?.owners.fromReplaced, 2);
+    assert.equal(without.stats?.owners.fromGateway, 0);
+    assert.equal(without.stats?.owners.withoutKey, 0);
+    assert.equal(without.rows?.wallets, 2);
   });
 
   it('stops a band, published or not, when the gateway fails in transport', async () => {
@@ -792,7 +978,13 @@ describe('ExportService, parquet-l2 roots the network no longer serves', () => {
         publishDir: path.join(dir, 'published', 'root-tx-index'),
         workDir: path.join(dir, 'export'),
         l2Indexes: [
-          { name: 'ardrive-l2', selection: ARDRIVE, publishDir: indexDir() },
+          {
+            name: 'ardrive-l2',
+            selection: ARDRIVE,
+            keyTags: [],
+            statTags: [],
+            publishDir: indexDir(),
+          },
         ],
         l2SettleBlocks: 100,
         resettleIntervalMs: 0,

@@ -348,6 +348,14 @@ bands come from `core.db`, checked against the chain. It writes them where the
 observer key can sign one, which is why a multi-node publisher sends
 `/ar-io/indexes*` to that node.
 
+<a id="publisher-bound"></a> **Publisher-bound** — Said of bands an index
+verifier has checked against their publisher's signed
+[publication](#index-publication): every file's size and SHA-256 as the
+publisher's registered key signed them. A band's id alone does not bind it:
+its digest is 48 bits of the band's own rows, which anyone can recompute.
+`index-l2-verify` reports `publisherBound` and binds only with
+`--publication`. See [index-verification.md](index-verification.md).
+
 <a id="subscriber"></a> **Subscriber** — A gateway whose sidecar follows one or
 more publishers, identified by wallet: it verifies each document against the
 registry, downloads bands by digest, and installs them where its gateway's

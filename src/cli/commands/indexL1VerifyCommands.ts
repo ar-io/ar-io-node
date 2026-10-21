@@ -11,6 +11,7 @@
  *
  * Read-only, so it is safe to run while the gateway is up.
  */
+import { rmSync } from 'node:fs';
 import * as fsp from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -34,8 +35,37 @@ import { verifyBands } from '../../lib/parquet-l1/verify-bands.js';
 import type { IndexL1VerifyCLIOptions, JsonSerializable } from '../types.js';
 import { requiredStringFromOptions } from '../utils.js';
 
-/** The most a check may spill, the cap `index-l1-import` uses too. */
-export const BANDS_SPILL_MAX = '16GB';
+/**
+ * The most a check may spill unless `--spill-max` says otherwise. The lookup
+ * check of a 69-million-item band (h1.8M of `ardrive-l2`) peaks at about
+ * 65 GB (measured 2026-10-20); 128 GB leaves room for a band twice that.
+ */
+export const BANDS_SPILL_MAX = '128GB';
+/** A DuckDB size: digits and a unit (`16GB`, `512MB`, `1TB`). */
+export const SPILL_MAX_PATTERN =
+  /^\d+(\.\d+)?\s*(KB|MB|GB|TB|KiB|MiB|GiB|TiB)$/i;
+
+/** Bytes in a DuckDB size such as `16GB` (10^9) or `16GiB` (2^30). */
+export function spillBytes(size: string): number {
+  const m = /^(\d+(?:\.\d+)?)\s*(K|M|G|T)(i?)B$/i.exec(size.trim());
+  if (m === null) throw new Error(`not a size: ${size}`);
+  const power = 'KMGT'.indexOf(m[2].toUpperCase()) + 1;
+  const base = m[3] !== '' ? 1024 : 1000;
+  return Math.floor(Number(m[1]) * base ** power);
+}
+
+/** The share of the spill directory's free space a run may spill into. */
+export const SPILL_FREE_SHARE = 0.8;
+/** Space a run always leaves free under its spill, whatever else it may take. */
+export const SPILL_RESERVE_BYTES = 100e9;
+/** A spill folder whose heartbeat is older than this was left by a killed run. */
+export const STALE_SPILL_MS = 24 * 3600 * 1000;
+/**
+ * A file in each spill folder its run touches every minute: another run
+ * removes the folder only once it has stopped beating for a day.
+ */
+export const SPILL_HEARTBEAT_FILE = '.heartbeat';
+const HEARTBEAT_MS = 60_000;
 
 /**
  * A DuckDB session for checking bands: bounded memory, two threads, no
@@ -47,36 +77,163 @@ export const BANDS_SPILL_MAX = '16GB';
  * so checking the lookups of a large band failed on the directory, not the
  * band. The spill goes in a folder of its own under the system temp
  * directory (`TMPDIR`), which `close` removes, and is capped so a run cannot
- * fill the disk under it (through the wrapper, the container layer on `/`).
+ * fill the disk under it: at `spillMax`, at most {@link SPILL_FREE_SHARE}
+ * of the space free there when the run starts, and never into the last
+ * {@link SPILL_RESERVE_BYTES} of it
+ * (`tools/ar-io-node` mounts a folder under the node's data directory
+ * there, so the container layer on `/` is never the one filled). An
+ * interrupt (SIGINT, SIGTERM) removes the folder before the process ends.
  */
 export async function openBandsDuck(
-  options: { tmpRoot?: string } = {},
-): Promise<{ duck: Database; spill: string; close(): Promise<void> }> {
-  const spill = await fsp.mkdtemp(
-    path.join(options.tmpRoot ?? os.tmpdir(), 'ar-io-node-l1-verify-'),
-  );
-  const removeSpill = () => fsp.rm(spill, { recursive: true, force: true });
-  let duck: Database | undefined;
-  try {
-    const { Database } = await import('duckdb-async');
-    duck = await Database.create(':memory:');
-    await duck.exec(
-      `SET memory_limit = '2GB'; SET threads = 2; SET temp_directory = '${spill.replace(/'/g, "''")}'; SET max_temp_directory_size = '${BANDS_SPILL_MAX}'; SET autoinstall_known_extensions = false; SET autoload_known_extensions = false;`,
+  options: {
+    tmpRoot?: string;
+    prefix?: string;
+    spillMax?: string;
+    /** Injected in tests: the bytes free under the temp root. */
+    freeBytes?: (dir: string) => Promise<number>;
+  } = {},
+): Promise<{
+  duck: Database;
+  spill: string;
+  /** What the spill is capped at, in bytes, and the bytes free when it opened. */
+  spillCapBytes: number;
+  freeBytes: number;
+  /** Spill folders a killed run left, removed as this one opened. */
+  removedStale: string[];
+  /**
+   * Opens `count` more databases set up as `duck` is, each spilling to a
+   * folder of its own inside the run's, each capped at the whole spill cap:
+   * a caller using more than one shares the cap out between them (as
+   * `verifyL2Bands` does, given `spillBytes`). `close` closes them too.
+   */
+  openMore(count: number): Promise<Database[]>;
+  close(): Promise<void>;
+}> {
+  const spillMax = options.spillMax ?? BANDS_SPILL_MAX;
+  if (!SPILL_MAX_PATTERN.test(spillMax)) {
+    throw new Error(
+      `--spill-max must be a size such as 16GB or 512MB, not ${spillMax}`,
     );
+  }
+  const tmpRoot = options.tmpRoot ?? os.tmpdir();
+  const freeBytes = await (
+    options.freeBytes ??
+    (async (dir: string) => {
+      const stats = await fsp.statfs(dir);
+      return Number(stats.bavail) * Number(stats.bsize);
+    })
+  )(tmpRoot);
+  const spillCapBytes = Math.max(
+    0,
+    Math.min(
+      spillBytes(spillMax),
+      Math.floor(freeBytes * SPILL_FREE_SHARE),
+      freeBytes - SPILL_RESERVE_BYTES,
+    ),
+  );
+  const prefix = options.prefix ?? 'ar-io-node-l1-verify-';
+  // Folders of this kind a killed run (SIGKILL) left a day or more ago.
+  const removedStale: string[] = [];
+  for (const name of await fsp.readdir(tmpRoot).catch(() => [] as string[])) {
+    if (!name.startsWith(prefix)) continue;
+    const dir = path.join(tmpRoot, name);
+    const stat = await fsp.lstat(dir).catch(() => undefined);
+    if (stat === undefined || !stat.isDirectory()) continue;
+    // The heartbeat's age, or the folder's where a run kept none.
+    const beat = await fsp
+      .stat(path.join(dir, SPILL_HEARTBEAT_FILE))
+      .catch(() => undefined);
+    if (Date.now() - (beat ?? stat).mtimeMs < STALE_SPILL_MS) continue;
+    try {
+      await fsp.rm(dir, { recursive: true, force: true });
+      removedStale.push(dir);
+    } catch {
+      // Another user's folder, or one still in use: not this run's to remove.
+    }
+  }
+  const spill = await fsp.mkdtemp(path.join(tmpRoot, prefix));
+  const removeSpill = () => fsp.rm(spill, { recursive: true, force: true });
+  // An interrupted run leaves no spill behind: removed, then the signal's
+  // usual end (exit 130 for Ctrl-C) follows. Set before anything is
+  // written into the folder.
+  const beat: { timer?: NodeJS.Timeout } = {};
+  const onSignal = (signal: NodeJS.Signals) => {
+    clearInterval(beat.timer);
+    rmSync(spill, { recursive: true, force: true });
+    process.removeListener('SIGINT', onSignal);
+    process.removeListener('SIGTERM', onSignal);
+    process.kill(process.pid, signal);
+  };
+  process.once('SIGINT', onSignal);
+  process.once('SIGTERM', onSignal);
+  const forget = () => {
+    clearInterval(beat.timer);
+    process.removeListener('SIGINT', onSignal);
+    process.removeListener('SIGTERM', onSignal);
+  };
+  const heartbeat = path.join(spill, SPILL_HEARTBEAT_FILE);
+  try {
+    await fsp.writeFile(heartbeat, '');
   } catch (error) {
-    await duck?.close().catch(() => undefined);
+    forget();
     await removeSpill();
     throw error;
   }
+  beat.timer = setInterval(() => {
+    const now = new Date();
+    fsp.utimes(heartbeat, now, now).catch(() => undefined);
+  }, HEARTBEAT_MS);
+  beat.timer.unref();
+  const capOf = (bytes: number) =>
+    `${Math.max(1, Math.floor(bytes / 2 ** 20))}MiB`;
+  const open = async (dir: string, capBytes: number) => {
+    const { Database } = await import('duckdb-async');
+    const opened = await Database.create(':memory:');
+    try {
+      await opened.exec(
+        `SET memory_limit = '2GB'; SET threads = 2; SET temp_directory = '${dir.replace(/'/g, "''")}'; SET max_temp_directory_size = '${capOf(capBytes)}'; SET autoinstall_known_extensions = false; SET autoload_known_extensions = false;`,
+      );
+    } catch (error) {
+      await opened.close().catch(() => undefined);
+      throw error;
+    }
+    return opened;
+  };
+  let duck: Database | undefined;
+  try {
+    duck = await open(spill, spillCapBytes);
+  } catch (error) {
+    await removeSpill();
+    forget();
+    throw error;
+  }
   const opened = duck;
+  const more: Database[] = [];
   return {
     duck: opened,
     spill,
+    spillCapBytes,
+    freeBytes,
+    removedStale,
+    openMore: async (count: number) => {
+      const added: Database[] = [];
+      for (let i = 1; i <= count; i += 1) {
+        const dir = path.join(spill, `db-${more.length + 1}`);
+        await fsp.mkdir(dir);
+        more.push(await open(dir, spillCapBytes));
+        added.push(more[more.length - 1]);
+      }
+      return added;
+    },
     close: async () => {
       try {
+        for (const other of more) {
+          await other.close().catch(() => undefined);
+        }
         await opened.close();
       } finally {
         await removeSpill();
+        forget();
       }
     },
   };
@@ -86,6 +243,7 @@ export async function openBandsDuck(
 async function verifyBandsCLI(
   options: IndexL1VerifyCLIOptions,
   log: Logger,
+  freeBytes?: (dir: string) => Promise<number>,
 ): Promise<JsonSerializable> {
   const bandsDir = options.bandsDir as string;
   const whole = (value: string | undefined, flag: string) => {
@@ -96,9 +254,22 @@ async function verifyBandsCLI(
     }
     return n;
   };
-  const session = await openBandsDuck();
+  const session = await openBandsDuck({
+    ...(options.spillMax !== undefined ? { spillMax: options.spillMax } : {}),
+    ...(freeBytes !== undefined ? { freeBytes } : {}),
+  });
   const { duck } = session;
   try {
+    // The lookup check spills; with nothing to spill into it would fail
+    // in DuckDB and report sound bands as unreadable. Refuse first.
+    if (options.skipLookups !== true && session.spillCapBytes === 0) {
+      throw new VerifyRefused(
+        `no room to spill under ${path.dirname(session.spill)}: ${(session.freeBytes / 2 ** 30).toFixed(1)} GiB free, less the ${(SPILL_RESERVE_BYTES / 2 ** 30).toFixed(1)} GiB a run always leaves. Free space there, point TMPDIR elsewhere, or --skip-lookups`,
+      );
+    }
+    for (const dir of session.removedStale) {
+      log.warn('Removed a spill folder a killed run left', { dir });
+    }
     log.info('Checking bands', { bandsDir, spill: session.spill });
     const out = await verifyBands(duck, bandsDir, {
       ...(whole(options.from, '--from') !== undefined
@@ -151,6 +322,8 @@ async function verifyBandsCLI(
 
 export interface IndexL1VerifyDeps {
   log: Logger;
+  /** Injected in tests: the bytes free under the spill directory. */
+  freeBytes?: (dir: string) => Promise<number>;
   /** Asks one source for a block's identity hash; injected in tests. */
   fetchIndepHash?: (
     url: string,
@@ -200,7 +373,7 @@ const height = (
 
 export async function indexL1VerifyCLICommand(
   options: IndexL1VerifyCLIOptions,
-  { log, fetchIndepHash = httpIndepHash }: IndexL1VerifyDeps,
+  { log, fetchIndepHash = httpIndepHash, freeBytes }: IndexL1VerifyDeps,
 ): Promise<JsonSerializable> {
   // Bands are the consumer's view: a directory of them can be checked
   // with no gateway and no `core.db`, which is the whole point of the
@@ -210,7 +383,7 @@ export async function indexL1VerifyCLICommand(
     options.bandsDir.length > 0 &&
     options.coreDb === undefined
   ) {
-    return verifyBandsCLI(options, log);
+    return verifyBandsCLI(options, log, freeBytes);
   }
   const coreDb = requiredStringFromOptions(options, 'coreDb');
   const wantFrom = height(options.from, '--from');
