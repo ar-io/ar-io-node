@@ -119,8 +119,8 @@ Load testing tool for chunk retrieval endpoints. Tests `/chunk/{offset}` request
 - `--delay <ms>` - Delay between requests per slot (default: 0)
 - `--timeout <ms>` - Request timeout in milliseconds (default: 30000)
 - `--chain-url <url>` - Chain reference URL for weave size discovery
-- `--max-offset <number>` - Override maximum offset for testing
-- `--track-fds <pid>` - Track file descriptors for specified PID (Linux only)
+- `--max-offset <number>` - Override maximum offset for testing (skips the chain reference lookup entirely)
+- `--track-fds <pid>` - Track gateway file descriptors via the gateway's `/ar-io/__gateway_metrics` endpoint (PID accepted for compatibility, no longer used; warns clearly if the metrics endpoint is unreachable)
 - `--fd-interval <ms>` - FD sampling interval in ms (default: 1000)
 - `--verbose` - Show detailed logs for each request
 - `--help` - Show help message
