@@ -805,6 +805,11 @@ export class DuckPool {
 
   readonly size: number;
 
+  /** Reads asked for and not yet started. */
+  get waiting(): number {
+    return this.queue.length;
+  }
+
   /**
    * A runner whose reads each reserve `spill` bytes of the budget. A read
    * that runs out of its share runs again, from the start, with the whole
@@ -1333,9 +1338,34 @@ export async function verifyL2Bands(
       // the L1 index run side by side, each reporting into its own log; the
       // logs are taken in this order, up to the first that could not be
       // read, as when they ran one after another.
+      // A section that stops keeps what it found before it stopped, as the
+      // checks did one after another: its log is taken, then its error.
       const section = (body: (into: Effect[]) => Promise<void>) => {
         const into: Effect[] = [];
-        return launch(body(into).then(() => into));
+        return launch(
+          body(into).then(
+            () => ({ into, failed: false, error: undefined as unknown }),
+            (error: unknown) => ({ into, failed: true, error }),
+          ),
+        );
+      };
+      // A section read through a runner that may run it again (more
+      // spill): each run logs afresh, and what the last run found before
+      // it stopped is kept.
+      const rerunnable = async (
+        outer: Effect[],
+        runner: DuckRunner,
+        body: (duck: Database, into: Effect[]) => Promise<void>,
+      ) => {
+        let last: Effect[] = [];
+        try {
+          await runner(async (duck) => {
+            last = [];
+            await body(duck, last);
+          });
+        } finally {
+          outer.push(...last);
+        }
       };
 
       // tables
@@ -1392,10 +1422,8 @@ export async function verifyL2Bands(
       const itemsWide = `(SELECT ${wide(['root_parent_offset', 'offset', 'size', 'data_offset', 'owner_offset', 'owner_size', 'signature_offset', 'signature_size', 'data_size'])} FROM ${itemsFile})`;
       const parentsWide = `(SELECT ${wide(['root_parent_offset', 'offset', 'size', 'data_offset'])} FROM ${parentsFile})`;
 
-      const sqlSection = section(async (outer) => {
-        // A log of its own, so a read run again with more spill starts afresh.
-        const found = await sortingTables(async (duck) => {
-          const into: Effect[] = [];
+      const sqlSection = section((outer) =>
+        rerunnable(outer, sortingTables, async (duck, into) => {
           const fail = failTo(into);
           const report = reportTo(fail);
           // required: what the layout never leaves NULL
@@ -1619,10 +1647,8 @@ export async function verifyL2Bands(
               `at most ${maxUnlocatedShare} of them${wholly ? ' (or --allow-unlocated)' : ''}`,
             );
           }
-          return into;
-        });
-        outer.push(...found);
-      });
+        }),
+      );
 
       // lookups
       const lookupsSection = section(async (into) => {
@@ -1637,10 +1663,8 @@ export async function verifyL2Bands(
       });
 
       // mined: every root in the L1 index, where the items place it
-      const minedSection = section(async (outer) => {
-        // A log of its own, so a read run again with more spill starts afresh.
-        const found = await sortingMined(async (duck) => {
-          const into: Effect[] = [];
+      const minedSection = section((outer) =>
+        rerunnable(outer, sortingMined, async (duck, into) => {
           const fail = failTo(into);
           const report = reportTo(fail);
           if (l1Bands !== undefined && minedSummary !== undefined) {
@@ -1727,10 +1751,8 @@ export async function verifyL2Bands(
               }
             }
           }
-          return into;
-        });
-        outer.push(...found);
-      });
+        }),
+      );
 
       for (const done of [
         tablesSection,
@@ -1738,7 +1760,9 @@ export async function verifyL2Bands(
         lookupsSection,
         minedSection,
       ]) {
-        log.push(...(await done));
+        const { into, failed, error } = await done;
+        log.push(...into);
+        if (failed) throw error;
       }
 
       // onchain: one denominator, no substitution.

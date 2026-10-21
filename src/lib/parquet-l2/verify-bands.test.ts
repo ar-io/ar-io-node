@@ -80,6 +80,8 @@ interface Tamper {
   unsorted?: string;
   /** Names the band for this publisher instead of PUBLISHER. */
   publisher?: string;
+  /** Digests this table in the order its file holds the rows, not its own. */
+  digestInFileOrder?: string;
 }
 
 /**
@@ -177,7 +179,7 @@ async function writeBand(
     );
     const digest = new RowDigest(spec.columns);
     const read = (await db.all(
-      `SELECT * FROM read_parquet('${file}') ORDER BY ${orderByClause(spec)}`,
+      `SELECT * FROM read_parquet('${file}')${tamper.digestInFileOrder === spec.name ? '' : ` ORDER BY ${orderByClause(spec)}`}`,
     )) as Array<Record<string, unknown>>;
     for (const row of read) digest.add(spec.columns.map((c) => row[c.name]));
     tables[spec.name] = { rows: digest.rows, rowDigest: digest.hex() };
@@ -1141,6 +1143,63 @@ describe('verifyL2Bands fails closed', () => {
     assert.deepEqual(unchecked.minedPartial, { bands: [id], count: 1 });
   });
 
+  it('keeps what a band found before a read that stopped it (review, partial sections)', async () => {
+    const dir = await fresh();
+    // data_items out of order (tables), then a key that is NULL: reading
+    // wallets throws, which stops the band (complete).
+    await writeBand(db, dir, 100, 199, {
+      unsorted: 'data_items',
+      rows: (r) => {
+        r.wallets[0][1] = null;
+      },
+    });
+    const more = await Promise.all(
+      [1, 2, 3].map(() => Database.create(':memory:')),
+    );
+    try {
+      for (const moreDucks of [[], more]) {
+        const result = await verifyL2Bands(db, dir, { moreDucks });
+        assert.deepEqual(failing(result).sort(), ['complete', 'tables']);
+        assert.match(
+          result.checks.find((c) => c.name === 'tables')!.failures![0].found,
+          /data_items: data_items.parquet holds two rows out of order/,
+        );
+      }
+    } finally {
+      for (const d of more) await d.close();
+    }
+  });
+
+  it('fails a table out of order even when band.json digests it as it lies (only the order check can)', async () => {
+    const dir = await fresh();
+    // Written out of order, and described by the digest of its rows in
+    // the order the file holds them: the digest matches what is read.
+    await writeBand(db, dir, 100, 199, {
+      unsorted: 'tags',
+      digestInFileOrder: 'tags',
+    });
+    const more = await Promise.all(
+      [1, 2, 3].map(() => Database.create(':memory:')),
+    );
+    try {
+      for (const moreDucks of [[], more]) {
+        const result = await verifyL2Bands(db, dir, {
+          publisher: PUBLISHER,
+          moreDucks,
+        });
+        assert.deepEqual(failing(result), ['tables']);
+        assert.deepEqual(
+          result.checks
+            .find((c) => c.name === 'tables')!
+            .failures!.map((f) => f.found.replace(/^[^:]+: /, '')),
+          ['tags: tags.parquet holds two rows out of order or of one key'],
+        );
+      }
+    } finally {
+      for (const d of more) await d.close();
+    }
+  });
+
   it('reports the same with bands and reads side by side as one after another', async () => {
     const dir = await fresh();
     await writeBand(db, dir, 100, 199);
@@ -1683,23 +1742,28 @@ describe('DuckPool', () => {
       const held = new Promise<void>((resolve) => {
         release = resolve;
       });
+      // A read starts, or is kept waiting, as it is asked for: whether
+      // it waits is known at once, whatever the timing of the reads.
       const first = pool.runner(60 * 2 ** 20)(async () => {
         order.push('first');
         await held;
       });
+      assert.equal(pool.waiting, 0);
       // Waits: 60 + 60 > 100.
       const big = pool.runner(60 * 2 ** 20)(async () => {
         order.push('big');
       });
-      // Would fit beside the first, but not beside it and the big one kept.
+      assert.equal(pool.waiting, 1);
+      // Would fit beside the first (60 + 30), but not beside it and the
+      // share kept for the big one: it waits too.
       const small = pool.runner(30 * 2 ** 20)(async () => {
         order.push('small');
       });
-      await new Promise((resolve) => setTimeout(resolve, 50));
-      assert.deepEqual(order, ['first']);
+      assert.equal(pool.waiting, 2);
       release();
       await Promise.all([first, big, small]);
-      assert.deepEqual(order, ['first', 'big', 'small']);
+      assert.equal(pool.waiting, 0);
+      assert.deepEqual([...order].sort(), ['big', 'first', 'small']);
     } finally {
       for (const duck of ducks) await duck.close();
     }
