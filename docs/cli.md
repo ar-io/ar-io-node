@@ -862,8 +862,11 @@ proves, and how to reproduce or repair a band that fails, is in
 | `--from <height>`, `--to <height>` | Check only the bands inside these heights; a band only partly inside is listed under `partial` |
 | `--skip-lookups` | Leave out the lookup check, the slowest on large bands |
 | `--spill-max <size>` | The most the lookup and consistency checks may spill (default `128GB`; never more than 80% of the space free under the temp directory, nor into its last 100 GB) |
+| `--concurrency <n>` | How many DuckDB databases (two threads and 2 GB of memory each) check side by side: bands, and a band's tables and lookups, are read on them at once (default: a quarter of the CPUs, at most 4, at least 1). They share the spill cap: a read that sorts or groups a band reserves 10 bytes per byte of the band's Parquet before it starts, and waits while that much isn't free. The result is the same at any value |
 
-It reads every row of every table in file order, so memory stays flat; the
+It reads every row of every table in file order, so memory stays flat (DuckDB
+encodes and joins each range of rows as the row digest takes them, and the
+ranges are hashed in order, so no row becomes a JavaScript object); the
 large lookups spill to a folder of their own under the system temp directory
 (`TMPDIR`; through `tools/ar-io-node`, `data/tmp/index-verify` beside the
 node's `data/indexes`), capped at `--spill-max`, at 80% of the space free

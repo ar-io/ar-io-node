@@ -293,7 +293,15 @@ reads it is listed under `vanished` and, if it could lie in the range, fails
 
 **Cost.** Every row is read, in file order, so memory stays flat; lookup files
 are read in their own order too, and only the rows derived from the tables
-are sorted. The consistency check groups `tags` and `data_items` by item. Both
+are sorted. Rows are digested in DuckDB: each range of rows is encoded as the
+row digest takes it and handed over as one buffer, hashed in order, with each
+row checked against the one before (a type it can't encode exactly, or any
+error, and the rows are read one at a time instead, with the same result).
+`--concurrency` databases (two threads and 2 GB each; by default a quarter
+of the CPUs, at most 4) read side by side: bands, and a band's tables and
+lookups, a table's ranges spread over them, results reported in band order
+as if read one after another. They share the spill cap: a read that sorts or
+groups a band reserves 10 bytes per byte of its Parquet before it starts. The consistency check groups `tags` and `data_items` by item. Both
 spill to a folder of their own under the system temp directory, capped at
 `--spill-max` (128 GB unless set) and at 80% of the space free there when the
 run starts; and never into the last 100 GB free there. A run whose largest

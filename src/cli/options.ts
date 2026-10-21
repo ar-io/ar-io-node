@@ -233,6 +233,11 @@ export const optionMap = {
     description:
       "How long one band's on-chain reads may take (default 1200); items not read by then are unchecked, so the band is inconclusive unless --max-unchecked allows them",
   },
+  l2Concurrency: {
+    alias: '--concurrency <n>',
+    description:
+      'How many DuckDB databases check side by side, two threads and 2GB of memory each: bands, and the tables and lookups of a band, are read on them at once, sharing the spill cap (default: a quarter of the CPUs, at most 4, at least 1). The result is the same at any value',
+  },
   l2SkipLookups: {
     alias: '--skip-lookups',
     description:
@@ -361,6 +366,7 @@ export const indexL2VerifyOptions: CommanderOption[] = [
   optionMap.maxUnlocatedShare,
   optionMap.allowExpired,
   optionMap.bandDeadline,
+  optionMap.l2Concurrency,
 ];
 
 export const indexL1AuditOptions: CommanderOption[] = [

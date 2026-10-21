@@ -13,6 +13,7 @@
  * Read-only. See `docs/index-verification.md`.
  */
 import * as fsp from 'node:fs/promises';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import { Logger } from 'winston';
 
@@ -63,6 +64,19 @@ export const SPILL_PER_PARQUET_BYTE = 4;
  * both tables by item. An estimate, as above.
  */
 export const SPILL_PER_TABLE_BYTE = 2;
+
+/** The most databases `--concurrency` picks by itself. */
+export const DEFAULT_MAX_CONCURRENCY = 4;
+
+/**
+ * How many databases check side by side when `--concurrency` is not given:
+ * a quarter of the CPUs (each database runs two threads, and the host
+ * may be serving a gateway), at most {@link DEFAULT_MAX_CONCURRENCY}, at
+ * least 1.
+ */
+export function defaultConcurrency(cpus = os.availableParallelism()): number {
+  return Math.max(1, Math.min(DEFAULT_MAX_CONCURRENCY, Math.floor(cpus / 4)));
+}
 
 export class L2VerifyRefused extends Error {}
 
@@ -219,6 +233,10 @@ export async function indexL2VerifyCLICommand(
     options.maxUnlocatedShare,
     '--max-unlocated-share',
   );
+  const askedConcurrency = whole(options.concurrency, '--concurrency');
+  if (askedConcurrency === 0) {
+    throw new L2VerifyRefused('--concurrency must be 1 or above');
+  }
   const deadlineSeconds =
     whole(options.bandDeadline, '--band-deadline') ??
     DEFAULT_BAND_DEADLINE_SECONDS;
@@ -420,6 +438,11 @@ export async function indexL2VerifyCLICommand(
         `the largest band is expected to spill about ${gib(need)}, more than the ${gib(session.spillCapBytes)} the spill is capped at (--spill-max; 80% of the ${gib(session.freeBytes)} free under ${path.dirname(session.spill)}; and that free space less a ${gib(SPILL_RESERVE_BYTES)} reserve): free space there, or point TMPDIR elsewhere${skipping}`,
       );
     }
+    // Databases side by side share the spill cap: each read reserves its
+    // share of it before it runs (verifyL2Bands' spillBytes), so a band
+    // that needs most of it is checked while little else spills.
+    const concurrency = askedConcurrency ?? defaultConcurrency();
+    const moreDucks = await session.openMore(concurrency - 1);
     for (const dir of session.removedStale) {
       log.warn('Removed a spill folder a killed run left', { dir });
     }
@@ -427,6 +450,7 @@ export async function indexL2VerifyCLICommand(
       bandsDir,
       spill: session.spill,
       spillCap: gib(session.spillCapBytes),
+      concurrency,
       onchainPerBand: perBand,
       l1BandsDir: l1?.bandsDir,
       publication: publication?.source,
@@ -469,6 +493,9 @@ export async function indexL2VerifyCLICommand(
         : {}),
       progress: (done, total, id) =>
         log.info('Checked band', { done, total, id }),
+      ...(moreDucks.length > 0
+        ? { moreDucks, spillBytes: session.spillCapBytes }
+        : {}),
     });
     const roots = source?.describe() as Record<string, unknown> | undefined;
     // Nodes placing the sampled roots in blocks is not the `mined` check,
