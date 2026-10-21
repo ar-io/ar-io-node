@@ -98,8 +98,11 @@ export async function verifyBandLookups(
      * side, its problems reported in the order they would be one by one.
      */
     run?: DuckRunner;
-    /** With `run`, where the rows the tables give are sorted (default `run`). */
-    runSorted?: DuckRunner;
+    /**
+     * With `run`, where each lookup's rows are derived from the tables and
+     * sorted (default `run`).
+     */
+    runSorted?: (spec: LookupSpec) => DuckRunner;
   } = {},
 ): Promise<string[]> {
   const tables = bandTableFiles(bandDir);
@@ -115,7 +118,9 @@ export async function verifyBandLookups(
       tables,
       declared,
       { order: PARQUET_L2_LOOKUP_DIGEST_ORDER },
-      run !== undefined ? { run, runSorted: runSorted ?? run } : {},
+      run !== undefined
+        ? { run, runSorted: runSorted !== undefined ? runSorted(spec) : run }
+        : {},
     );
   };
   const specs = lookupsOf(band).filter(

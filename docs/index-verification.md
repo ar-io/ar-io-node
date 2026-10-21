@@ -299,9 +299,11 @@ row checked against the one before (a type it can't encode exactly, or any
 error, and the rows are read one at a time instead, with the same result).
 `--concurrency` databases (two threads and 2 GB each; by default a quarter
 of the CPUs, at most 4) read side by side: bands, and a band's tables and
-lookups, a table's ranges spread over them, results reported in band order
-as if read one after another. They share the spill cap: a read that sorts or
-groups a band reserves 10 bytes per byte of its Parquet before it starts. The consistency check groups `tags` and `data_items` by item. Both
+lookups, a table's ranges spread over them, largest band first, results
+reported in band order as if read one after another. They share the spill
+cap: a read that derives a lookup reserves 20 bytes per byte of the tables
+it reads, the SQL checks 3 per byte of `data_items` and `tags`, and one that
+runs out of its share runs again with the whole cap. The consistency check groups `tags` and `data_items` by item. Both
 spill to a folder of their own under the system temp directory, capped at
 `--spill-max` (128 GB unless set) and at 80% of the space free there when the
 run starts; and never into the last 100 GB free there. A run whose largest

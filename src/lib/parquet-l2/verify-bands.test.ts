@@ -35,6 +35,7 @@ import { writeL1Band } from '../../../test/parquet-l2-fixture.js';
 import { writeBandLookups } from './lookups.js';
 import {
   detectableFraction,
+  DuckPool,
   drawLocated,
   drawSeed,
   onchainAssurance,
@@ -1631,5 +1632,76 @@ describe('verifyL2Bands fails closed', () => {
     assert.equal(percent(onchainAssurance(20, 0)), 14);
     // Unchecked items are said to count as possibly fabricated.
     assert.match(onchainAssurance(20, 4), /possibly fabricated/);
+  });
+});
+
+describe('DuckPool', () => {
+  it('runs a read that runs out of its share of the spill again with all of it', async () => {
+    const ducks = await Promise.all(
+      [1, 2].map(() => Database.create(':memory:')),
+    );
+    try {
+      const pool = new DuckPool(ducks, 100 * 2 ** 20);
+      const caps: string[] = [];
+      let tries = 0;
+      const result = await pool.runner(10 * 2 ** 20)(async (duck) => {
+        const [row] = (await duck.all(
+          "SELECT current_setting('max_temp_directory_size') AS cap",
+        )) as Array<{ cap: string }>;
+        caps.push(row.cap);
+        tries += 1;
+        if (tries === 1) {
+          throw new Error(
+            "failed to offload data block: the limit set by 'max_temp_directory_size'",
+          );
+        }
+        return 'read';
+      });
+      assert.equal(result, 'read');
+      assert.equal(tries, 2);
+      assert.notEqual(caps[0], caps[1]);
+      // Any other error is the read's own.
+      await assert.rejects(
+        pool.runner(10 * 2 ** 20)(async () => {
+          throw new Error('a file is gone');
+        }),
+        /a file is gone/,
+      );
+    } finally {
+      for (const duck of ducks) await duck.close();
+    }
+  });
+
+  it('keeps a waiting read its share: reads behind it go ahead only beside it', async () => {
+    const ducks = await Promise.all(
+      [1, 2, 3].map(() => Database.create(':memory:')),
+    );
+    try {
+      const pool = new DuckPool(ducks, 100 * 2 ** 20);
+      const order: string[] = [];
+      let release: () => void = () => undefined;
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const first = pool.runner(60 * 2 ** 20)(async () => {
+        order.push('first');
+        await held;
+      });
+      // Waits: 60 + 60 > 100.
+      const big = pool.runner(60 * 2 ** 20)(async () => {
+        order.push('big');
+      });
+      // Would fit beside the first, but not beside it and the big one kept.
+      const small = pool.runner(30 * 2 ** 20)(async () => {
+        order.push('small');
+      });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      assert.deepEqual(order, ['first']);
+      release();
+      await Promise.all([first, big, small]);
+      assert.deepEqual(order, ['first', 'big', 'small']);
+    } finally {
+      for (const duck of ducks) await duck.close();
+    }
   });
 });

@@ -103,7 +103,8 @@ import {
   serializeSelection,
 } from './layout.js';
 import type { DuckRunner } from '../parquet/scan-digest.js';
-import { verifyBandLookups } from './lookups.js';
+import type { LookupSpec } from '../parquet/lookups.js';
+import { bandTableFiles, verifyBandLookups } from './lookups.js';
 import { selectionDuckDb } from './selection.js';
 import { digestL2Table, L2TableError } from './tables.js';
 
@@ -216,10 +217,12 @@ export interface L2VerifyOptions {
   moreDucks?: Database[];
   /**
    * With `moreDucks`: the bytes all the databases may spill together. Each
-   * read then reserves its share before it runs ({@link DuckPool}): a read
-   * that sorts or groups a band's tables {@link SPILL_PER_BAND_BYTE} per
-   * byte of the band's Parquet files. Without it, every database spills as
-   * it is set up to.
+   * read then reserves its share before it runs ({@link DuckPool}): a
+   * lookup's derivation {@link SPILL_PER_DERIVED_BYTE} per byte of the
+   * tables it reads, the SQL checks and the L1 lookup
+   * {@link SPILL_PER_GROUPED_BYTE} per byte of `data_items` and `tags`, any
+   * other read {@link LIGHT_READ_SPILL_BYTES}; one that runs out runs again
+   * with all of it. Without it, every database spills as it is set up to.
    */
   spillBytes?: number;
 }
@@ -751,12 +754,20 @@ function boundPublication(
 type Effect = () => void;
 
 /**
- * Spill a band's sorts and groupings are expected to need, per byte of its
- * Parquet files, when databases share a spill budget: `ardrive-l2`'s h1.8M
- * band (8.4 GB of Parquet) peaked at 70.9 GB checked alone, and failed its
- * lookup check with a third of a 119 GiB cap.
+ * Spill a lookup's derived rows are expected to need, per byte of the
+ * tables they are derived from, when databases share a spill budget:
+ * `ardrive-l2`'s h1.8M band derived its tag lookup from 3.7 GB of `tags`
+ * in 64.1 GB of spill (17 per byte), its wallet lookup from 3.3 GB of
+ * `data_items` in 10.8 GB.
  */
-export const SPILL_PER_BAND_BYTE = 10;
+export const SPILL_PER_DERIVED_BYTE = 20;
+
+/**
+ * Spill the SQL checks that group a band's `data_items` and `tags` (and
+ * the L1 lookup, `data_items`) are expected to need per byte of them: the
+ * h1.8M band's consistency check grouped 7 GB in 9.9 GB of spill.
+ */
+export const SPILL_PER_GROUPED_BYTE = 3;
 
 /**
  * Spill a read that neither sorts nor groups a whole table is let use (a
@@ -772,11 +783,11 @@ export const LIGHT_READ_SPILL_BYTES = 2 ** 30;
  * Given a spill budget, each read reserves a share of it before it starts,
  * and its database is capped at that share (`max_temp_directory_size`)
  * while it runs, so the databases together never spill more than the
- * budget: a read that needs more than is free waits, and every read behind
- * it, until enough is. A read wanting more than the whole budget gets the
- * whole budget, alone.
+ * budget: a read that needs more than is free waits until enough is, and
+ * reads behind it go ahead only in what is left beside its share. A read
+ * wanting more than the whole budget gets the whole budget, alone.
  */
-class DuckPool {
+export class DuckPool {
   private readonly idle: Database[];
   private readonly queue: Array<{
     spill: number;
@@ -794,8 +805,32 @@ class DuckPool {
 
   readonly size: number;
 
-  /** A runner whose reads each reserve `spill` bytes of the budget. */
+  /**
+   * A runner whose reads each reserve `spill` bytes of the budget. A read
+   * that runs out of its share runs again, from the start, with the whole
+   * budget: what a lone database would have had. Its task must start
+   * afresh each time it is run.
+   */
   runner = (spill: number): DuckRunner => {
+    const once = this.once(spill);
+    const whole = this.once(this.budget ?? 0);
+    return async <T>(task: (duck: Database) => Promise<T>): Promise<T> => {
+      try {
+        return await once(task);
+      } catch (error) {
+        if (
+          this.budget === undefined ||
+          spill >= this.budget ||
+          !/max_temp_directory_size/.test(messageOf(error))
+        ) {
+          throw error;
+        }
+        return whole(task);
+      }
+    };
+  };
+
+  private once = (spill: number): DuckRunner => {
     return async <T>(task: (duck: Database) => Promise<T>): Promise<T> => {
       const [duck, share] = await new Promise<[Database, number]>((resolve) => {
         this.queue.push({ spill, start: (d, s) => resolve([d, s]) });
@@ -820,16 +855,25 @@ class DuckPool {
   run: DuckRunner = this.runner(LIGHT_READ_SPILL_BYTES);
 
   private pump(): void {
-    while (this.queue.length > 0 && this.idle.length > 0) {
-      const head = this.queue[0];
+    // In the order asked, each read whose share is free. One whose share
+    // isn't waits, its share kept for it: a read behind it goes first only
+    // in what is left beside that, so the one waiting is never starved.
+    let kept = 0;
+    for (let i = 0; i < this.queue.length && this.idle.length > 0; ) {
+      const read = this.queue[i];
       const share =
-        this.budget === undefined ? 0 : Math.min(head.spill, this.budget);
-      if (this.budget !== undefined && this.reserved + share > this.budget) {
-        return;
+        this.budget === undefined ? 0 : Math.min(read.spill, this.budget);
+      if (
+        this.budget !== undefined &&
+        this.reserved + kept + share > this.budget
+      ) {
+        kept += share;
+        i += 1;
+        continue;
       }
-      this.queue.shift();
+      this.queue.splice(i, 1);
       this.reserved += share;
-      head.start(this.idle.pop()!, share);
+      read.start(this.idle.pop()!, share);
     }
   }
 }
@@ -1243,19 +1287,47 @@ export async function verifyL2Bands(
       });
       if (!schemaOk) return; // rows of the wrong shape would only mislead
 
-      // Reads that sort or group the band's tables reserve what the band is
-      // expected to spill, when the databases share a budget. A file that
-      // can't be sized counts as empty: reading it fails as it would.
-      let bandBytes = 0;
+      // Reads that sort or group the band's tables reserve what they are
+      // expected to spill, by the tables they read, when the databases
+      // share a budget (a read that runs out runs again with all of it). A
+      // file that can't be sized counts as empty: reading it fails as it
+      // would.
+      const sizes = new Map<string, number>();
       if (options.spillBytes !== undefined) {
-        for (const name of wanted.filter((n) => n.endsWith('.parquet'))) {
-          bandBytes += await fs.stat(path.join(dir, name)).then(
-            (stat) => stat.size,
-            () => 0,
+        for (const spec of PARQUET_L2_TABLES) {
+          const at = path.join(dir, spec.file);
+          sizes.set(
+            at,
+            await fs.stat(at).then(
+              (stat) => stat.size,
+              () => 0,
+            ),
           );
         }
       }
-      const sorting = pool.runner(bandBytes * SPILL_PER_BAND_BYTE);
+      const tableBytes = (...names: string[]) =>
+        names.reduce(
+          (sum, name) => sum + (sizes.get(path.join(dir, name)) ?? 0),
+          0,
+        );
+      const sortingTables = pool.runner(
+        SPILL_PER_GROUPED_BYTE *
+          tableBytes('data_items.parquet', 'tags.parquet'),
+      );
+      const sortingMined = pool.runner(
+        SPILL_PER_GROUPED_BYTE * tableBytes('data_items.parquet'),
+      );
+      // A lookup's rows are derived from the tables its SQL names.
+      const sortingLookup = (spec: LookupSpec) => {
+        const sql = spec.derive(bandTableFiles(dir));
+        return pool.runner(
+          SPILL_PER_DERIVED_BYTE *
+            [...sizes].reduce(
+              (sum, [at, bytes]) => sum + (sql.includes(at) ? bytes : 0),
+              0,
+            ),
+        );
+      };
 
       // From here the reads of the tables, the SQL checks, the lookups and
       // the L1 index run side by side, each reporting into its own log; the
@@ -1320,8 +1392,10 @@ export async function verifyL2Bands(
       const itemsWide = `(SELECT ${wide(['root_parent_offset', 'offset', 'size', 'data_offset', 'owner_offset', 'owner_size', 'signature_offset', 'signature_size', 'data_size'])} FROM ${itemsFile})`;
       const parentsWide = `(SELECT ${wide(['root_parent_offset', 'offset', 'size', 'data_offset'])} FROM ${parentsFile})`;
 
-      const sqlSection = section((into) =>
-        sorting(async (duck) => {
+      const sqlSection = section(async (outer) => {
+        // A log of its own, so a read run again with more spill starts afresh.
+        const found = await sortingTables(async (duck) => {
+          const into: Effect[] = [];
           const fail = failTo(into);
           const report = reportTo(fail);
           // required: what the layout never leaves NULL
@@ -1545,8 +1619,10 @@ export async function verifyL2Bands(
               `at most ${maxUnlocatedShare} of them${wholly ? ' (or --allow-unlocated)' : ''}`,
             );
           }
-        }),
-      );
+          return into;
+        });
+        outer.push(...found);
+      });
 
       // lookups
       const lookupsSection = section(async (into) => {
@@ -1554,15 +1630,17 @@ export async function verifyL2Bands(
         const fail = failTo(into);
         for (const problem of await verifyBandLookups(duck, dir, band, {
           run: pool.run,
-          runSorted: sorting,
+          runSorted: sortingLookup,
         })) {
           fail(lookups, problem, 'the rows its tables give, in order');
         }
       });
 
       // mined: every root in the L1 index, where the items place it
-      const minedSection = section((into) =>
-        sorting(async (duck) => {
+      const minedSection = section(async (outer) => {
+        // A log of its own, so a read run again with more spill starts afresh.
+        const found = await sortingMined(async (duck) => {
+          const into: Effect[] = [];
           const fail = failTo(into);
           const report = reportTo(fail);
           if (l1Bands !== undefined && minedSummary !== undefined) {
@@ -1649,8 +1727,10 @@ export async function verifyL2Bands(
               }
             }
           }
-        }),
-      );
+          return into;
+        });
+        outer.push(...found);
+      });
 
       for (const done of [
         tablesSection,
@@ -1661,9 +1741,7 @@ export async function verifyL2Bands(
         log.push(...(await done));
       }
 
-      // onchain: one denominator, no substitution. Read band by band, in
-      // band order, as one run reads them.
-      await turn;
+      // onchain: one denominator, no substitution.
       if (options.onchain !== undefined && band.tables.data_items.rows > 0) {
         const {
           perBand,
@@ -1770,6 +1848,9 @@ export async function verifyL2Bands(
           }
           return;
         }
+        // Read on chain band by band, in band order, as one run reads
+        // them: once the band before is done.
+        await turn;
         const result = await checkDrawnHeaders({
           entries,
           openRoot,
@@ -1826,9 +1907,29 @@ export async function verifyL2Bands(
     }
   };
 
-  // Bands are checked side by side, as many as there are databases, each
-  // started in band order; their logs are applied in band order.
+  // On one database, bands are checked one after another, in band order.
+  // On more, every band is started at once, the largest first (its reads
+  // queue first), so the longest band is not left to run alone at the
+  // end; reads take turns on the databases as they free up. Either way
+  // their logs are applied in band order.
   const logs: Effect[][] = ordered.map(() => []);
+  const starts = ordered.map((_, index) => index);
+  if (pool.size > 1) {
+    const sizes = await Promise.all(
+      ordered.map(async ({ dir }) => {
+        let bytes = 0;
+        for (const name of await fs.readdir(dir).catch(() => [])) {
+          if (!name.endsWith('.parquet')) continue;
+          bytes += await fs.stat(path.join(dir, name)).then(
+            (stat) => stat.size,
+            () => 0,
+          );
+        }
+        return bytes;
+      }),
+    );
+    starts.sort((a, b) => sizes[b] - sizes[a] || a - b);
+  }
   const turns = ordered.map(() => {
     let done: () => void = () => undefined;
     const promise = new Promise<void>((resolve) => {
@@ -1839,8 +1940,8 @@ export async function verifyL2Bands(
   let next = 0;
   let checked = 0;
   const checkBands = async () => {
-    while (next < ordered.length) {
-      const index = next;
+    while (next < starts.length) {
+      const index = starts[next];
       next += 1;
       const onDisk = ordered[index];
       const log = logs[index];
@@ -1869,7 +1970,7 @@ export async function verifyL2Bands(
     }
   };
   await Promise.all(
-    Array.from({ length: Math.min(pool.size, ordered.length) }, checkBands),
+    Array.from({ length: pool.size > 1 ? ordered.length : 1 }, checkBands),
   );
   for (const log of logs) for (const effect of log) effect();
 

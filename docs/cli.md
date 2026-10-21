@@ -862,7 +862,7 @@ proves, and how to reproduce or repair a band that fails, is in
 | `--from <height>`, `--to <height>` | Check only the bands inside these heights; a band only partly inside is listed under `partial` |
 | `--skip-lookups` | Leave out the lookup check, the slowest on large bands |
 | `--spill-max <size>` | The most the lookup and consistency checks may spill (default `128GB`; never more than 80% of the space free under the temp directory, nor into its last 100 GB) |
-| `--concurrency <n>` | How many DuckDB databases (two threads and 2 GB of memory each) check side by side: bands, and a band's tables and lookups, are read on them at once (default: a quarter of the CPUs, at most 4, at least 1). They share the spill cap: a read that sorts or groups a band reserves 10 bytes per byte of the band's Parquet before it starts, and waits while that much isn't free. The result is the same at any value |
+| `--concurrency <n>` | How many DuckDB databases (two threads and 2 GB of memory each) check side by side: bands, and a band's tables and lookups, are read on them at once (default: a quarter of the CPUs, at most 4, at least 1). Bands are started largest first. The databases share the spill cap: a read that derives a lookup reserves 20 bytes per byte of the tables it reads, the SQL checks 3 per byte of `data_items` and `tags`, before they start, and wait while that much isn't free; a read that runs out of its share runs again with all of it. The result is the same at any value |
 
 It reads every row of every table in file order, so memory stays flat (DuckDB
 encodes and joins each range of rows as the row digest takes them, and the
