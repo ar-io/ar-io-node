@@ -112,7 +112,17 @@ const entry = (row: LocatedRow, tag: string): BandSampleEntry => ({
   tag,
 });
 
-/** Compares a new band's items and keys with those of the bands it replaces. */
+/**
+ * Compares a new band's items and keys with those of the bands it replaces.
+ *
+ * One pass: each side is reduced to one row per (id, root) with what the
+ * comparison asks of it, the two are joined once into a narrow temp table
+ * (`cmp`), and every count and sample reads that table. Reading the two
+ * `data_items` files once per question, as this did, took over an hour on
+ * a 6.7M-item band under the build's 2 GB DuckDB limit; this takes about
+ * a minute. Relocations alone need the location columns, and are found by
+ * one anti join of the new located rows against the old on all of them.
+ */
 export async function compareL2Bands(
   duck: Database,
   oldDirs: string[],
@@ -122,57 +132,96 @@ export async function compareL2Bands(
   const old = `read_parquet([${oldDirs.map((dir) => file(dir)).join(', ')}])`;
   const oldParents = `read_parquet([${oldDirs.map((dir) => file(dir, 'parents')).join(', ')}])`;
   const next = `read_parquet(${file(newDir)})`;
-  await duck.exec(`
-    CREATE OR REPLACE TEMP VIEW o AS SELECT * FROM ${old};
-    CREATE OR REPLACE TEMP VIEW op AS SELECT * FROM ${oldParents};
-    CREATE OR REPLACE TEMP VIEW n AS SELECT * FROM ${next};`);
-  const missingSql = 'SELECT DISTINCT o.id FROM o ANTI JOIN n ON n.id = o.id';
-  // Pairs located before and not now, split by whether the old location
-  // could be checked: directly in the root, or under a parent that the old
-  // bands' `parents` describes where the item says its payload starts
-  // (the rule `index-l2-verify` checks). One checkable place is enough.
-  const lostSql = `
-    WITH lost AS (
-      SELECT DISTINCT o.id, o.root_transaction_id FROM o
-      ANTI JOIN (SELECT id, root_transaction_id FROM n WHERE "offset" IS NOT NULL) x
-        ON x.id = o.id AND x.root_transaction_id = o.root_transaction_id
-      WHERE o."offset" IS NOT NULL),
-    described AS (
-      SELECT DISTINCT o.id, o.root_transaction_id FROM o
-      WHERE o."offset" IS NOT NULL AND o.parent_id = o.root_transaction_id
-      UNION
-      SELECT DISTINCT o.id, o.root_transaction_id FROM o
-      SEMI JOIN op ON op.id = o.parent_id
-        AND op.root_transaction_id = o.root_transaction_id
-        AND op.root_parent_offset + op.data_offset = o.root_parent_offset
-      WHERE o."offset" IS NOT NULL)`;
-  const unlocatedSql = `${lostSql}
-    SELECT l.id, l.root_transaction_id FROM lost l
-    SEMI JOIN described d ON d.id = l.id AND d.root_transaction_id = l.root_transaction_id`;
-  const correctedSql = `${lostSql}
-    SELECT l.id, l.root_transaction_id FROM lost l
-    ANTI JOIN described d ON d.id = l.id AND d.root_transaction_id = l.root_transaction_id`;
-  // Written as semi and anti joins, not as correlated EXISTS / NOT EXISTS:
-  // DuckDB 1.4.2 plans those as a delim join over a parallel hash
-  // aggregate, whose thread states can fail to combine (an internal error,
-  // "Attempting to combine TupleDataCollection with mismatching types";
-  // the h1.3M band of ardrive-l2 hit it on 2 re-settles out of 2, on
-  // 2026-10-20). A hash semi or anti join has no such state.
-  const sameItem = (p: string) =>
+  const pair = (p: string) =>
     `${p}.id = n.id AND ${p}.root_transaction_id = n.root_transaction_id`;
-  const sameLocation = LOCATION.map((c) => `q."${c}" = n."${c}"`).join(' AND ');
-  const relocatedSql = `
+  // A location as one 64-bit key, so the join that finds relocations is on
+  // three narrow columns of two materialised tables rather than ten of the
+  // Parquet files (the old rows' eight location columns beside id and root
+  // ran the join out of the build's memory and into a spill that took over
+  // an hour; keyed and materialised first, it takes a second). Two
+  // locations of one item and root that differ yet hash alike (one chance
+  // in 2^64) would hide a relocation from the header check, never report a
+  // false one.
+  const locationKey = (p: string) =>
+    `hash(${LOCATION.map((c) => `${p}."${c}"`).join(', ')})`;
+  // One statement per call, so a slow one shows in a profile as itself.
+  // The semi joins filter their right side in a subquery: a filter on one
+  // side in a semi join's ON clause had DuckDB 1.4.2 deduplicate the wide
+  // left side instead, spilling for over ten minutes on a 6.7M-item band.
+  for (const statement of [
+    `CREATE OR REPLACE TEMP VIEW o AS SELECT * FROM ${old}`,
+    `CREATE OR REPLACE TEMP VIEW n AS SELECT * FROM ${next}`,
+    `-- Per (id, root) of each side: whether it is located, and (old side)
+    -- whether at a place a reader could check: directly in the root, or
+    -- under a parent the old bands' parents table describes where the
+    -- item says its payload starts (the rule index-l2-verify checks).
+    CREATE OR REPLACE TEMP TABLE cmp AS
+    WITH described AS (
+      SELECT DISTINCT id AS parent_id, root_transaction_id,
+             root_parent_offset + data_offset AS payload_start
+      FROM ${oldParents}),
+    old_pairs AS (
+      SELECT o.id, o.root_transaction_id,
+             bool_or(o."offset" IS NOT NULL) AS old_located,
+             bool_or(o."offset" IS NOT NULL AND
+               (o.parent_id = o.root_transaction_id OR d.parent_id IS NOT NULL)) AS checkable
+      FROM o
+      LEFT JOIN described d ON d.parent_id = o.parent_id
+        AND d.root_transaction_id = o.root_transaction_id
+        AND d.payload_start = o.root_parent_offset
+      GROUP BY 1, 2),
+    new_pairs AS (
+      SELECT id, root_transaction_id, bool_or("offset" IS NOT NULL) AS new_located
+      FROM n GROUP BY 1, 2)
+    SELECT coalesce(a.id, b.id) AS id,
+           coalesce(a.root_transaction_id, b.root_transaction_id) AS root_transaction_id,
+           a.id IS NOT NULL AS in_old,
+           b.id IS NOT NULL AS in_new,
+           coalesce(a.old_located, false) AS old_located,
+           coalesce(a.checkable, false) AS checkable,
+           coalesce(b.new_located, false) AS new_located
+    FROM old_pairs a
+    FULL OUTER JOIN new_pairs b
+      ON a.id = b.id AND a.root_transaction_id = b.root_transaction_id`,
+    `-- The located rows of each side, keyed.
+    CREATE OR REPLACE TEMP TABLE o_loc AS
+    SELECT o.id, o.root_transaction_id, ${locationKey('o')} AS loc
+    FROM o WHERE o."offset" IS NOT NULL`,
+    `CREATE OR REPLACE TEMP TABLE n_loc AS
+    SELECT n.id, n.root_transaction_id, ${locationKey('n')} AS loc,
+           n.root_parent_offset, n."offset", n.data_offset
+    FROM n WHERE n."offset" IS NOT NULL`,
+    `-- New located rows of a pair the old bands located, at a location none
+    -- of their rows had, and new located rows of a pair they held unlocated.
+    CREATE OR REPLACE TEMP TABLE reloc AS
     SELECT n.id, n.root_transaction_id, n.root_parent_offset, n."offset", n.data_offset
-    FROM n
-    SEMI JOIN o p ON ${sameItem('p')} AND p."offset" IS NOT NULL
-    ANTI JOIN o q ON ${sameItem('q')} AND ${sameLocation}
-    WHERE n."offset" IS NOT NULL`;
-  const newlyLocatedSql = `
+    FROM n_loc n
+    ANTI JOIN o_loc q ON ${pair('q')} AND q.loc = n.loc
+    SEMI JOIN (SELECT id, root_transaction_id FROM cmp WHERE old_located) c
+      ON ${pair('c')}`,
+    `CREATE OR REPLACE TEMP TABLE newloc AS
     SELECT n.id, n.root_transaction_id, n.root_parent_offset, n."offset", n.data_offset
-    FROM n
-    SEMI JOIN o p ON ${sameItem('p')}
-    ANTI JOIN o q ON ${sameItem('q')} AND q."offset" IS NOT NULL
-    WHERE n."offset" IS NOT NULL`;
+    FROM n_loc n
+    SEMI JOIN (SELECT id, root_transaction_id FROM cmp WHERE in_old AND NOT old_located) c
+      ON ${pair('c')}`,
+  ]) {
+    await duck.exec(statement);
+  }
+  // Ids, not pairs: an item held under another root is still held.
+  const missingSql = `
+    SELECT DISTINCT id FROM cmp WHERE in_old
+    EXCEPT SELECT id FROM cmp WHERE in_new`;
+  const addedSql = `
+    SELECT DISTINCT id FROM cmp WHERE in_new
+    EXCEPT SELECT id FROM cmp WHERE in_old`;
+  const unlocatedSql = `
+    SELECT id, root_transaction_id FROM cmp
+    WHERE old_located AND checkable AND NOT new_located`;
+  const correctedSql = `
+    SELECT id, root_transaction_id FROM cmp
+    WHERE old_located AND NOT checkable AND NOT new_located`;
+  const relocatedSql = 'SELECT * FROM reloc n';
+  const newlyLocatedSql = 'SELECT * FROM newloc n';
   const walletsMissingSql = `
     SELECT DISTINCT o.address AS id
     FROM read_parquet([${oldDirs.map((dir) => file(dir, 'wallets')).join(', ')}]) o
@@ -183,19 +232,20 @@ export async function compareL2Bands(
         id: Buffer;
       }>
     ).map((row) => toB64Url(Buffer.from(row.id)));
+  const [counts] = (await duck.all(`
+    SELECT count(*) FILTER (WHERE old_located AND checkable AND NOT new_located) AS unlocated,
+           count(*) FILTER (WHERE old_located AND NOT checkable AND NOT new_located) AS corrected
+    FROM cmp`)) as Array<Record<string, bigint | number>>;
 
   const compare: L2Compare = {
     oldRows: await count(duck, 'SELECT * FROM o'),
     newRows: await count(duck, 'SELECT * FROM n'),
-    added: await count(
-      duck,
-      'SELECT DISTINCT n.id FROM n ANTI JOIN o ON o.id = n.id',
-    ),
+    added: await count(duck, addedSql),
     missing: await count(duck, missingSql),
     missingSample: [],
-    unlocated: await count(duck, unlocatedSql),
+    unlocated: Number(counts.unlocated),
     unlocatedSample: [],
-    corrected: await count(duck, correctedSql),
+    corrected: Number(counts.corrected),
     correctedSample: [],
     relocated: await count(duck, relocatedSql),
     relocatedEntries: [],
@@ -223,5 +273,8 @@ export async function compareL2Bands(
       entry(row, L2_NEWLY_LOCATED_TAG),
     );
   }
+  await duck.exec(
+    'DROP TABLE IF EXISTS cmp; DROP TABLE IF EXISTS o_loc; DROP TABLE IF EXISTS n_loc; DROP TABLE IF EXISTS reloc; DROP TABLE IF EXISTS newloc;',
+  );
   return compare;
 }
