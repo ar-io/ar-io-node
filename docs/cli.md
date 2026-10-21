@@ -845,7 +845,7 @@ proves, and how to reproduce or repair a band that fails, is in
 | `--publisher <wallet>` | The publisher's wallet: ids are then checked whole, its tag included |
 | `--publication <path\|url>` | The publisher's signed publication: every band must be listed in it, with every file's size and SHA-256 as signed (`publication` check, `publisherBound: true`). Without it the bands are checked only for internal consistency |
 | `--publisher-key <address>` | The key `--publication` must be signed with: the publisher's registered observer address (base58) |
-| `--registry-url <url>` | Instead of `--publisher-key`, the gateway whose view of the registry (`/ar-io/peers`) gives the key, e.g. `http://core:4000`; that gateway is trusted for it |
+| `--registry-url <url>` | Instead of `--publisher-key`, the gateway whose view of the registry (`/ar-io/peers`) gives the key, e.g. `http://core:4000`; that gateway is trusted for it. A registry that can't be read is refused as such ("could not read the registry"), apart from one that has no such publisher |
 | `--index <name>` | The index to bind to, when the publication lists more than one `parquet-l2` index |
 | `--l1-bands-dir <path>` | A `parquet-l1` index to find every root in (`mined`); every band must be covered. Without it, the node's own `installed/parquet-l1`, then `published/parquet-l1`, where they exist; `none` for none |
 | `--onchain <n>` | Items per band read at their recorded locations and checked against their ids: drawn uniformly over every located item, then nested items added until half the draw is nested (20 when not given; `0` leaves the check out). The stated bound uses only the uniform draw |
@@ -868,9 +868,9 @@ large lookups spill to a folder of their own under the system temp directory
 (`TMPDIR`; through `tools/ar-io-node`, `data/tmp/index-verify` beside the
 node's `data/indexes`), capped at `--spill-max`, at 80% of the space free
 there and at that space less 100 GB, and removed when the run ends or is
-interrupted. With less than about 100 GB free the lookup check is refused;
-a run whose largest band is expected to spill more than the cap is refused
-before it starts, `--skip-lookups` or not (the table checks spill too); point
+interrupted. A run whose largest band is expected to spill more than the cap
+is refused before it starts, `--skip-lookups` or not (the table checks spill
+too), so with less than about 100 GB free every run is refused; point
 `TMPDIR` at a disk with room. A run killed outright (SIGKILL) leaves its
 `ar-io-node-l2-verify-*` folder behind; the next run removes it once its
 `.heartbeat` file is a day old, and leaves alone a folder another run is still

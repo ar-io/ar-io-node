@@ -75,9 +75,14 @@ that won't verify where another node's does, a size other than the signed
 one, a block other nodes don't agree on, a chunk whose proof fails) is that
 node's fault: it is passed over, other nodes are asked, and it is listed in
 `roots.nodeFaults` (and logged). A root is refuted only on evidence about the
-root itself from at least two machines: no node binds it and two machines
-said something definite against it (404s for its header, or headers of this
-id that can't bind it); two machines agree on its block, hash and height,
+root itself from at least two machines: no node binds it and either two
+machines answer 404 for its header with every node heard (`missing`, below),
+or two machines serve this id's own header (its signature hashes to the id)
+in a form that can't bind it (format 1, no `data_root`, a signature that
+doesn't verify without `--allow-agreement`) with every node heard; a 404
+never counts toward that second refutation, and a node that stayed unheard
+may be the one honest holder, so either way the root is then unchecked;
+two machines agree on its block, hash and height,
 at a height other than the band gives; two machines that serve its header
 say it is in no block.
 A block is its hash and its height together: a node naming the agreed hash
@@ -289,12 +294,13 @@ are read in their own order too, and only the rows derived from the tables
 are sorted. The consistency check groups `tags` and `data_items` by item. Both
 spill to a folder of their own under the system temp directory, capped at
 `--spill-max` (128 GB unless set) and at 80% of the space free there when the
-run starts; and never into the last 100 GB free there, so with less than about 100 GB
-free the lookup check is refused (`--skip-lookups` runs the rest); a run
-whose largest band is expected to need more than that cap is refused before
-it starts, with or without `--skip-lookups`, since the consistency and
-selection checks spill too (sized at twice the band's `data_items` and
-`tags` files), and the refusal names the folder and suggests `TMPDIR`. Each run touches a `.heartbeat` file in its spill folder every
+run starts; and never into the last 100 GB free there. A run whose largest
+band is expected to need more than that cap is refused before it starts,
+with or without `--skip-lookups`: the consistency and selection checks spill
+too (sized at twice the band's `data_items` and `tags` files), so with less
+than about 100 GB free every run is refused. The refusal names the folder and
+suggests `TMPDIR`, and suggests `--skip-lookups` only when the run would fit
+without the lookups. Each run touches a `.heartbeat` file in its spill folder every
 minute; a folder of the same kind whose heartbeat stopped a day or more ago
 (a run killed outright) is removed when a run starts, and logged, and a
 folder still beating is left alone. Through `tools/ar-io-node` that folder is
