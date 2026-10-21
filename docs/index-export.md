@@ -631,9 +631,12 @@ id, and a change to them is applied to every published band in place
   key whose SHA-256 is the address: the item's own row (ClickHouse keeps
   `owner` only for keys of at most 64 bytes, so not an RSA modulus); the
   gateway's `bundles.db` `wallets` table, read-only
-  (`INDEX_EXPORT_L2_WALLETS_DB`); the root, read through the header-check
-  gateway at a located item's owner offset (`owner_size` bytes, 512 for
-  an Arweave key), up to three places an owner. An owner with none is left
+  (`INDEX_EXPORT_L2_WALLETS_DB`); the `wallets` tables of the bands this
+  one replaces (a key verifies itself, so a re-settle keeps every key they
+  had whatever the gateway serves that day; `stats.owners.fromReplaced`);
+  the root, read through the header-check gateway at a located item's
+  owner offset (`owner_size` bytes, 512 for an Arweave key), up to three
+  places an owner. An owner with none is left
   out of `wallets` and counted (`ownersWithoutKey`, and by why in
   `stats.owners.withoutKeyBy`: `unreadable`, `wrong`, `nowhere`); the
   band still builds.

@@ -218,6 +218,7 @@ export async function runL2Step(
         selection: ctx.index.selection,
         keyTags: ctx.index.keyTags,
         statTags: ctx.index.statTags,
+        replacedBandDirs: step.replaces.map((band) => band.dir),
         from: step.heightRange[0],
         to: step.heightRange[1],
         source: ctx.source,

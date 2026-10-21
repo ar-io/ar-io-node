@@ -186,6 +186,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   format 2 and found in a block by two machines, and agreement needs
   `--allow-agreement`.
 
+- **`parquet-l2`: a re-settle keeps every owner's key the bands it
+  replaces hold.** Their `wallets` tables are a key source, tried after
+  `bundles.db` and before the roots (a key verifies itself: its SHA-256 is
+  the address), so a root the gateway can't serve on the day no longer
+  refuses the band for a dropped key (`dropped_wallets`), as it did the
+  h1.3M re-settle of `ardrive-l2`. Counted as `stats.owners.fromReplaced`.
 - **`parquet-l2`: a nested item is no longer located under a parent bundle
   that `parents` does not describe.** Where every row of a bundle is
   inconsistent (offsets taken from another copy of it, ar-io-node #937),
@@ -202,7 +208,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   plans as a delim join over a parallel hash aggregate that failed to
   combine its thread states on the h1.3M band of `ardrive-l2` (an internal
   error, "Attempting to combine TupleDataCollection with mismatching
-  types"); semi and anti joins give the same rows.
+  types"). It is now one keyed pass: each side reduced to one row per
+  (id, root), joined once into a narrow table every count and sample
+  reads, and relocations found by one anti join of the located rows keyed
+  by a 64-bit hash of their location. The comparison of that 6.7M-item
+  band takes 12 seconds under the build's 2 GB DuckDB limit, where
+  reading the two tables once per question took over an hour.
 - An index-swarm subscriber can now install a Parquet band whose files have
   large footers. The footer limit was 2 MiB, and turbo-gateway.com's
   `ardrive-l2` band for heights 1,800,000–1,899,999 has a 3.7 GB
