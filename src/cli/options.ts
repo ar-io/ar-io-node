@@ -236,7 +236,7 @@ export const optionMap = {
   l2Concurrency: {
     alias: '--concurrency <n>',
     description:
-      'How many DuckDB databases check side by side, two threads and 2GB of memory each: bands, and the tables and lookups of a band, are read on them at once, sharing the spill cap (default: a quarter of the CPUs, at most 4, at least 1). The result is the same at any value',
+      'How many DuckDB databases check side by side, two threads and 2GB of memory each: bands, and the tables and lookups of a band, are read on them at once, sharing the spill cap (default: a quarter of the CPUs, at most 4, at least 1). At most 16, and at most UV_THREADPOOL_SIZE less 2: each database holds a libuv thread while it reads, and DNS and file reads need the rest (tools/ar-io-node sets UV_THREADPOOL_SIZE=16). The result is the same at any value',
   },
   l2SkipLookups: {
     alias: '--skip-lookups',

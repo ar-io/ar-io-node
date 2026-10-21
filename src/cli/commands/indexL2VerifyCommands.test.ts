@@ -15,8 +15,11 @@ import { createTestLogger } from '../../../test/test-logger.js';
 import { DEFAULT_ARWEAVE_NODE_URLS } from '../../lib/onchain/arweave-nodes.js';
 import { L2BandsRefused } from '../../lib/parquet-l2/verify-bands.js';
 import {
+  concurrencyFor,
   indexL2VerifyCLICommand,
   L2VerifyRefused,
+  MAX_CONCURRENCY,
+  threadpoolSize,
   urlList,
 } from './indexL2VerifyCommands.js';
 
@@ -63,6 +66,69 @@ describe('index-l2-verify', () => {
       ),
       /--band-deadline must be 1 or above/,
     );
+  });
+
+  it("reads libuv's threadpool size as libuv does", () => {
+    assert.equal(threadpoolSize({}), 4);
+    assert.equal(threadpoolSize({ UV_THREADPOOL_SIZE: '16' }), 16);
+    assert.equal(threadpoolSize({ UV_THREADPOOL_SIZE: '12abc' }), 12);
+    // atoi: nothing it reads, or 0, is one thread; at most 1024.
+    assert.equal(threadpoolSize({ UV_THREADPOOL_SIZE: 'x' }), 1);
+    assert.equal(threadpoolSize({ UV_THREADPOOL_SIZE: '0' }), 1);
+    assert.equal(threadpoolSize({ UV_THREADPOOL_SIZE: '5000' }), 1024);
+  });
+
+  it('runs no more databases than the threadpool leaves two threads beside (review: starved DNS and fs)', () => {
+    // Each database's query holds a libuv thread for as long as it runs;
+    // the on-chain reads' DNS lookups and the file reads need the rest.
+    assert.equal(concurrencyFor({ cpus: 24, threadpool: 4 }), 2);
+    assert.equal(concurrencyFor({ cpus: 24, threadpool: 16 }), 4);
+    assert.equal(concurrencyFor({ cpus: 8, threadpool: 16 }), 2);
+    assert.equal(concurrencyFor({ cpus: 2, threadpool: 16 }), 1);
+    assert.equal(concurrencyFor({ cpus: 24, threadpool: 1 }), 1);
+    assert.equal(concurrencyFor({ asked: 1, cpus: 24, threadpool: 1 }), 1);
+    assert.equal(concurrencyFor({ asked: 6, cpus: 2, threadpool: 16 }), 6);
+    assert.throws(
+      () => concurrencyFor({ asked: 3, cpus: 24, threadpool: 4 }),
+      (error: Error) =>
+        error instanceof L2VerifyRefused &&
+        /UV_THREADPOOL_SIZE/.test(error.message) &&
+        /at most 2/.test(error.message),
+    );
+    assert.throws(
+      () =>
+        concurrencyFor({
+          asked: MAX_CONCURRENCY + 1,
+          cpus: 256,
+          threadpool: 1024,
+        }),
+      /--concurrency must be at most/,
+    );
+  });
+
+  it('refuses --concurrency the threadpool cannot serve, before it reads a band', async () => {
+    const was = process.env.UV_THREADPOOL_SIZE;
+    delete process.env.UV_THREADPOOL_SIZE;
+    try {
+      await assert.rejects(
+        indexL2VerifyCLICommand(
+          { bandsDir: '/nowhere', concurrency: '4' },
+          { log },
+        ),
+        (error: Error) =>
+          error instanceof L2VerifyRefused &&
+          /UV_THREADPOOL_SIZE/.test(error.message),
+      );
+      await assert.rejects(
+        indexL2VerifyCLICommand(
+          { bandsDir: '/nowhere', concurrency: '0' },
+          { log },
+        ),
+        /--concurrency must be 1 or above/,
+      );
+    } finally {
+      if (was !== undefined) process.env.UV_THREADPOOL_SIZE = was;
+    }
   });
 
   it('refuses publication options without --publication, and --publication without exactly one key source', async () => {

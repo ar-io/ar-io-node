@@ -227,6 +227,12 @@ case "${COMMAND}" in
       MOUNT_TARGETS+=("data/indexes")
     fi
     mount_spill "${DATA_PATH}"
+    # Each DuckDB database index-l2-verify reads on holds a libuv thread for
+    # as long as a query runs, and the on-chain reads' DNS lookups and the
+    # file reads need threads of their own: a pool of 16 (unless the shell
+    # sets one) leaves room beside up to 14 databases. The CLI never runs
+    # more than the pool less two.
+    DOCKER_ARGS+=(-e "UV_THREADPOOL_SIZE=${UV_THREADPOOL_SIZE:-16}")
     rewrite_paths --bands-dir --l1-bands-dir --publication
     join_gateway_network
     ;;
