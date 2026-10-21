@@ -18,12 +18,28 @@ import {
   HttpByteRangeSource,
   ShortRangeReadError,
 } from '../http-byte-range-source.js';
+import { NotOnNodesError } from '../onchain/arweave-nodes.js';
 import { MAX_HEADER_BYTES, Reservoir } from './build.js';
 import type { BandSampleEntry } from './build.js';
 import { bandEntries, readBandManifest } from './read.js';
 
-/** Opens the data of a root transaction for range reads. */
-export type RootSourceFactory = (rootTxId: string) => ByteRangeSource;
+/**
+ * What a band says of a root, for a source that can check it: the height of
+ * the block holding it.
+ */
+export interface RootExpectation {
+  height?: number;
+}
+
+/**
+ * Opens the data of a root transaction for range reads. A source that can
+ * check `expect` refuses the root (an error with `refutes: true`) when the
+ * chain disagrees with it.
+ */
+export type RootSourceFactory = (
+  rootTxId: string,
+  expect?: RootExpectation,
+) => ByteRangeSource;
 
 /**
  * Candidates a caller samples for each entry the check is to read, so that
@@ -84,7 +100,10 @@ export interface HeaderCheckResult {
   /** Entries read: passed, wrong, or failed in transport. */
   checked: number;
   ok: number;
-  /** Entries whose header names another ID or ends somewhere else. */
+  /**
+   * Entries whose header names another ID or ends somewhere else, or whose
+   * root the source refutes (an error with `refutes: true`).
+   */
   wrong: Array<{ id: string; reason: string; tag?: string }>;
   /** Entries that couldn't be checked (read failed, unknown signature type). */
   errors: Array<{ id: string; error: string; tag?: string }>;
@@ -240,7 +259,10 @@ export async function checkBandHeaders({
       return false;
     };
     if (gone.has(entry.rootTxId)) return goneRoot();
-    const source = openRoot(entry.rootTxId);
+    const source = openRoot(
+      entry.rootTxId,
+      entry.height !== undefined ? { height: entry.height } : undefined,
+    );
     let bytes: Buffer;
     try {
       bytes = await readWithRetries(
@@ -260,6 +282,18 @@ export async function checkBandHeaders({
           ...tagOf(entry),
           id: entry.id,
           reason: 'offsets run past the end of the root transaction',
+        });
+        return true;
+      }
+      // A root the chain refutes (no data it signs, never mined, in another
+      // block than the band says) is as wrong as a header that isn't the
+      // item: definitive, never retried.
+      if (isRefuted(error)) {
+        stratum(entry).wrong += 1;
+        wrong.push({
+          ...tagOf(entry),
+          id: entry.id,
+          reason: `its root ${entry.rootTxId} is refuted: ${error instanceof Error ? error.message : String(error)}`,
         });
         return true;
       }
@@ -431,6 +465,10 @@ const isWrongRange = (error: unknown) =>
   error instanceof ShortRangeReadError ||
   (error as { response?: { status?: number } }).response?.status === 416;
 
+/** A root the chain refutes: counted wrong. */
+const isRefuted = (error: unknown) =>
+  (error as { refutes?: unknown } | undefined)?.refutes === true;
+
 /** A root the gateway doesn't have: not to be retried, nor counted against. */
 const isGone = (error: unknown) =>
   (error as { response?: { status?: number } }).response?.status === 404;
@@ -448,7 +486,12 @@ async function readWithRetries(
     try {
       return await read();
     } catch (error) {
-      if (attempt >= retries || isWrongRange(error) || isGone(error)) {
+      if (
+        attempt >= retries ||
+        isWrongRange(error) ||
+        isGone(error) ||
+        isRefuted(error)
+      ) {
         throw error;
       }
       await new Promise((resolve) =>
@@ -462,6 +505,317 @@ function mostCommon(values: string[]): string {
   const counts = new Map<string, number>();
   for (const value of values) counts.set(value, (counts.get(value) ?? 0) + 1);
   return [...counts.entries()].sort((a, b) => b[1] - a[1])[0][0];
+}
+
+/** A read still in flight when a check's deadline passed. */
+export class DeadlinePassedError extends Error {
+  constructor() {
+    super("the check's deadline passed during this read");
+  }
+}
+
+/** Why a drawn entry could not be checked. */
+export type UncheckedReason =
+  /** Nodes busy, failing or unreachable; a root that couldn't be bound or placed. */
+  | 'error'
+  /** The chunk holding its header is held by no node that answered. */
+  | 'unreadable'
+  /** The check's deadline passed before it was read. */
+  | 'deadline';
+
+export interface DrawnCheckOptions {
+  /**
+   * The entries drawn for the check, and only those: each ends `ok`,
+   * `wrong` or `unchecked`, and none is replaced by another.
+   */
+  entries: BandSampleEntry[];
+  openRoot: RootSourceFactory;
+  /**
+   * Unchecked entries the check may leave and still pass (default 0): past
+   * it the check is inconclusive.
+   */
+  maxUnchecked?: number;
+  /** Root reads in flight at once (default 8). */
+  concurrency?: number;
+  /** Further tries of a read that failed in transport, per pass (default 2). */
+  retries?: number;
+  /** Pause before the first retry, doubling after (default 2,000 ms). */
+  retryDelayMs?: number;
+  /** Milliseconds the whole check may take; what is unread then is unchecked. */
+  deadlineMs?: number;
+  /** Injected in tests: the clock the deadline is read from. */
+  now?: () => number;
+}
+
+export interface DrawnCheckResult {
+  passed: boolean;
+  /** No entry wrong, but more unchecked than allowed: neither pass nor refutation. */
+  inconclusive: boolean;
+  reasons: string[];
+  drawn: number;
+  ok: number;
+  /**
+   * Entries proven contrary: bytes under a proven root that aren't the
+   * item, a root the chain refutes, or a root no node has (`missing`).
+   */
+  wrong: Array<{ id: string; reason: string; tag?: string; missing?: boolean }>;
+  unchecked: Array<{
+    id: string;
+    reason: UncheckedReason;
+    error: string;
+    tag?: string;
+  }>;
+  uncheckedReasons: Partial<Record<UncheckedReason, number>>;
+  /** A few distinct errors of the unchecked, so a band's can be judged. */
+  errorSample: string[];
+  malformed: Array<{ id: string; reason: string; tag?: string }>;
+}
+
+/**
+ * The on-chain check of a verifier: one denominator, no substitution.
+ *
+ * Every drawn entry ends in exactly one of `ok` (its header, read from a
+ * root the source bound and proved, hashes to its id), `wrong` (proven
+ * contrary: another item there, a root the chain refutes, a root no node
+ * has) or `unchecked` (anything else). No entry is ever replaced by another
+ * draw because of how it ended: redrawing is what would let a fabricated
+ * item hide behind a root or chunk nobody can read. After a first pass,
+ * every unchecked entry is read once more, after the others.
+ *
+ * It passes with no entry wrong, at most `maxUnchecked` unchecked and at
+ * least one ok; with none wrong and more unchecked, it is inconclusive.
+ */
+export async function checkDrawnHeaders({
+  entries,
+  openRoot,
+  maxUnchecked = 0,
+  concurrency = 8,
+  retries = 2,
+  retryDelayMs = 2000,
+  deadlineMs,
+  now = Date.now,
+}: DrawnCheckOptions): Promise<DrawnCheckResult> {
+  if (!Number.isSafeInteger(maxUnchecked) || maxUnchecked < 0) {
+    throw new Error(
+      `maxUnchecked must be a whole number, 0 or above, not ${maxUnchecked}`,
+    );
+  }
+  const deadline = deadlineMs !== undefined ? now() + deadlineMs : undefined;
+  // Set when the deadline's timer fires, so no read starts after it however
+  // the clock and the timer disagree by a millisecond.
+  let deadlinePassed = false;
+  const pastDeadline = () =>
+    deadlinePassed || (deadline !== undefined && now() >= deadline);
+  type Outcome =
+    | { kind: 'ok'; malformed?: string }
+    | { kind: 'wrong'; reason: string; missing?: boolean }
+    | { kind: 'unchecked'; reason: UncheckedReason; error: string };
+
+  const readOne = async (entry: BandSampleEntry): Promise<Outcome> => {
+    const headerBytes = entry.rootDataOffset - entry.rootOffset;
+    if (headerBytes <= 0 || headerBytes > MAX_HEADER_BYTES) {
+      return {
+        kind: 'wrong',
+        reason: `offsets give a ${headerBytes}-byte header`,
+      };
+    }
+    if (pastDeadline()) {
+      return {
+        kind: 'unchecked',
+        reason: 'deadline',
+        error: 'not read before the deadline',
+      };
+    }
+    const source = openRoot(
+      entry.rootTxId,
+      entry.height !== undefined ? { height: entry.height } : undefined,
+    );
+    let bytes: Buffer;
+    try {
+      const reading = readWithRetries(
+        () => source.read(entry.rootOffset, headerBytes),
+        retries,
+        retryDelayMs,
+      );
+      if (deadline === undefined) {
+        bytes = await reading;
+      } else {
+        let timer: NodeJS.Timeout | undefined;
+        reading.catch(() => undefined);
+        try {
+          bytes = await Promise.race([
+            reading,
+            new Promise<never>((_, reject) => {
+              timer = setTimeout(
+                () => {
+                  deadlinePassed = true;
+                  reject(new DeadlinePassedError());
+                },
+                Math.max(0, deadline - now()),
+              );
+            }),
+          ]);
+        } finally {
+          clearTimeout(timer);
+        }
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (isWrongRange(error)) {
+        return {
+          kind: 'wrong',
+          reason: 'offsets run past the end of the root transaction',
+        };
+      }
+      if (isRefuted(error)) {
+        return {
+          kind: 'wrong',
+          reason: `its root ${entry.rootTxId} is refuted: ${message}`,
+        };
+      }
+      // A root no node has, as two machines or more say and none unheard:
+      // the on-chain source's verdict, about the root itself.
+      if (error instanceof NotOnNodesError) {
+        if (error.wholeRoot) {
+          return {
+            kind: 'wrong',
+            missing: true,
+            reason: `its root ${entry.rootTxId} is missing: ${message}`,
+          };
+        }
+        return { kind: 'unchecked', reason: 'unreadable', error: message };
+      }
+      if (error instanceof DeadlinePassedError) {
+        return { kind: 'unchecked', reason: 'deadline', error: message };
+      }
+      return {
+        kind: 'unchecked',
+        reason: isGone(error) ? 'unreadable' : 'error',
+        error: message,
+      };
+    } finally {
+      await source.close().catch(() => undefined);
+    }
+    let decoded: ReturnType<typeof decodeDataItemHeader>;
+    try {
+      decoded = decodeDataItemHeader(bytes, { allowTagCountMismatch: true });
+    } catch (error) {
+      return {
+        kind: 'wrong',
+        reason: `no data item header at rootOffset: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+    if (!decoded.complete) {
+      return {
+        kind: 'wrong',
+        reason: `header runs past rootDataOffset (needs ${decoded.needBytes} bytes, offsets give ${headerBytes})`,
+      };
+    }
+    if (decoded.header.headerSize !== headerBytes) {
+      return {
+        kind: 'wrong',
+        reason: `header is ${decoded.header.headerSize} bytes, offsets give ${headerBytes}`,
+      };
+    }
+    if (decoded.header.id !== entry.id) {
+      return {
+        kind: 'wrong',
+        reason: `header at rootOffset is item ${decoded.header.id}`,
+      };
+    }
+    const mismatch = decoded.header.tagCountMismatch;
+    return mismatch === undefined
+      ? { kind: 'ok' }
+      : {
+          kind: 'ok',
+          malformed: `its tag count field says ${mismatch.declared}, its tag bytes hold ${mismatch.decoded} tags`,
+        };
+  };
+
+  const outcomes: Outcome[] = new Array(entries.length);
+  const runPass = async (indexes: number[]) => {
+    let next = 0;
+    const worker = async () => {
+      for (;;) {
+        const i = next;
+        next += 1;
+        if (i >= indexes.length) return;
+        outcomes[indexes[i]] = await readOne(entries[indexes[i]]);
+      }
+    };
+    await Promise.all(
+      Array.from({ length: Math.max(1, concurrency) }, () => worker()),
+    );
+  };
+  await runPass(entries.map((_, i) => i));
+  // Every unchecked entry once more, after the others: busy nodes rested,
+  // and roots not bound the first time asked again.
+  const again = outcomes
+    .map((o, i) => (o.kind === 'unchecked' && o.reason !== 'deadline' ? i : -1))
+    .filter((i) => i >= 0);
+  if (again.length > 0) await runPass(again);
+
+  const tagOf = (entry: BandSampleEntry) =>
+    entry.tag !== undefined ? { tag: entry.tag } : {};
+  const wrong: DrawnCheckResult['wrong'] = [];
+  const unchecked: DrawnCheckResult['unchecked'] = [];
+  const malformed: DrawnCheckResult['malformed'] = [];
+  const uncheckedReasons: DrawnCheckResult['uncheckedReasons'] = {};
+  let ok = 0;
+  outcomes.forEach((o, i) => {
+    const entry = entries[i];
+    if (o.kind === 'ok') {
+      ok += 1;
+      if (o.malformed !== undefined) {
+        malformed.push({ ...tagOf(entry), id: entry.id, reason: o.malformed });
+      }
+    } else if (o.kind === 'wrong') {
+      wrong.push({
+        ...tagOf(entry),
+        id: entry.id,
+        reason: o.reason,
+        ...(o.missing === true ? { missing: true } : {}),
+      });
+    } else {
+      unchecked.push({
+        ...tagOf(entry),
+        id: entry.id,
+        reason: o.reason,
+        error: o.error,
+      });
+      uncheckedReasons[o.reason] = (uncheckedReasons[o.reason] ?? 0) + 1;
+    }
+  });
+  const reasons: string[] = [];
+  if (wrong.length > 0) {
+    reasons.push(
+      `${wrong.length} of ${entries.length} sampled entries are wrong`,
+    );
+  }
+  // None wrong, but too much unchecked, or nothing verified at all (however
+  // many may stay unchecked): neither a pass nor a refutation.
+  const tooMany = unchecked.length > maxUnchecked;
+  const inconclusive = wrong.length === 0 && (tooMany || ok === 0);
+  if (inconclusive && entries.length > 0) {
+    reasons.push(
+      tooMany
+        ? `inconclusive: ${unchecked.length} of ${entries.length} sampled entries could not be checked — rerun, or allow with --max-unchecked`
+        : `inconclusive: none of the ${entries.length} sampled entries could be verified`,
+    );
+  }
+  if (entries.length === 0) reasons.push('no entries drawn to check');
+  return {
+    passed: reasons.length === 0,
+    inconclusive,
+    reasons,
+    drawn: entries.length,
+    ok,
+    wrong,
+    unchecked,
+    uncheckedReasons,
+    errorSample: [...new Set(unchecked.map((u) => u.error))].slice(0, 3),
+    malformed,
+  };
 }
 
 /**

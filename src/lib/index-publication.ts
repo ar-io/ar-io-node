@@ -48,6 +48,41 @@ export const INDEX_PUBLICATION_VERSION = 1;
  */
 export const INDEX_PUBLICATION_MAX_BYTES = 4 * 1024 * 1024;
 
+/**
+ * Read a publication response's body, refusing one over
+ * {@link INDEX_PUBLICATION_MAX_BYTES} before it is buffered. The cap is
+ * checked against the declared length and again while reading, because
+ * whoever serves the document controls both the header and the stream.
+ */
+export async function readPublicationBody(response: Response): Promise<Buffer> {
+  const declared = Number(response.headers.get('content-length') ?? '0');
+  if (Number.isFinite(declared) && declared > INDEX_PUBLICATION_MAX_BYTES) {
+    await response.body?.cancel().catch(() => undefined);
+    throw new Error(
+      `Publication declares ${declared} bytes, over the ${INDEX_PUBLICATION_MAX_BYTES} byte limit`,
+    );
+  }
+  if (response.body === null) {
+    throw new Error('Publication response had no body');
+  }
+  const chunks: Buffer[] = [];
+  let total = 0;
+  const reader = response.body.getReader();
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done === true) break;
+    total += value.length;
+    if (total > INDEX_PUBLICATION_MAX_BYTES) {
+      await reader.cancel();
+      throw new Error(
+        `Publication exceeded the ${INDEX_PUBLICATION_MAX_BYTES} byte limit`,
+      );
+    }
+    chunks.push(Buffer.from(value));
+  }
+  return Buffer.concat(chunks);
+}
+
 /** Ed25519 signatures are always 64 bytes. */
 const ED25519_SIGNATURE_BYTES = 64;
 

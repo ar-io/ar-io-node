@@ -21,6 +21,7 @@ import { after, before, describe, it } from 'node:test';
 import { buildBand, BandSampleEntry, MAX_HEADER_BYTES } from './build.js';
 import {
   checkBandHeaders,
+  checkDrawnHeaders,
   gatewayRootSource,
   RootSourceFactory,
   sampleBandEntries,
@@ -37,6 +38,7 @@ import {
   MalformedTagCountRoot,
 } from '../../../test/malformed-tag-count-item.js';
 import { createTestLogger } from '../../../test/test-logger.js';
+import { NotOnNodesError } from '../onchain/arweave-nodes.js';
 
 const log = createTestLogger({ suite: 'checkBandHeaders' });
 const ROOT = 'VmFsaWRSb290VHhJZEZvclRoZUhlYWRlckNoZWNrMDE';
@@ -784,5 +786,149 @@ describe('checkBandHeaders', () => {
       minRecords: 1,
     });
     assert.equal(checked.passed, true, checked.reasons.join('; '));
+  });
+});
+
+describe('checkDrawnHeaders: every drawn entry ok, wrong or unchecked', () => {
+  let items: ScannedDataItem[];
+  let rootBytes: Buffer;
+
+  before(async () => {
+    const signer = new ArweaveSigner(await Arweave.init({}).wallets.generate());
+    const bundle = await bundleAndSignData(
+      [createData('one', signer), createData('two', signer)],
+      signer,
+    );
+    rootBytes = bundle.getRaw();
+    items = [];
+    for await (const item of scanBundle({
+      source: new BufferByteRangeSource(rootBytes),
+      rootTxId: ROOT,
+      bundleSize: rootBytes.length,
+    })) {
+      items.push(item);
+    }
+  });
+
+  const entries = (rootOf: (i: number) => string, n: number) =>
+    Array.from({ length: n }, (_, i) => ({
+      id: items[i % items.length].id,
+      rootTxId: rootOf(i),
+      rootOffset: items[i % items.length].rootDataItemOffset,
+      rootDataOffset: items[i % items.length].rootDataOffset,
+    }));
+
+  it('counts a root no source has as missing, and fails on it, only when told to', async () => {
+    const openRoot: RootSourceFactory = (root) => ({
+      read: async (offset: number, size: number) => {
+        if (root.startsWith('made-up')) {
+          throw Object.assign(new Error('404'), {
+            response: { status: 404 },
+          });
+        }
+        return new BufferByteRangeSource(rootBytes).read(offset, size);
+      },
+      close: async () => undefined,
+      isOpen: () => true,
+    });
+    const pool = entries((i) => (i % 4 === 0 ? `made-up-${i}` : ROOT), 40);
+    // The old check passes over roots a source lacks, and passes.
+    const lenient = await checkBandHeaders({
+      entries: pool,
+      totalRecords: 40,
+      openRoot,
+      minRecords: 0,
+      minVerified: 1,
+      retries: 0,
+    });
+    assert.equal(lenient.passed, true, lenient.reasons.join('; '));
+    // The drawn check replaces none of them: a 404 that is no verdict about
+    // the root (a gateway's) leaves those entries unchecked, and the
+    // check inconclusive.
+    const drawn = await checkDrawnHeaders({
+      entries: pool,
+      openRoot,
+      retries: 0,
+      retryDelayMs: 1,
+    });
+    assert.equal(drawn.passed, false);
+    assert.equal(drawn.inconclusive, true);
+    assert.equal(drawn.unchecked.length, 10);
+    assert.equal(drawn.ok, 30);
+    assert.deepEqual(drawn.uncheckedReasons, { unreadable: 10 });
+    assert.match(drawn.reasons.join('; '), /inconclusive: 10 of 40/);
+    // A root the on-chain source finds missing is wrong.
+    const missing = await checkDrawnHeaders({
+      entries: pool,
+      openRoot: (root) => ({
+        ...openRoot(root),
+        read: async (offset: number, size: number) => {
+          if (root.startsWith('made-up')) {
+            throw new NotOnNodesError('two machines: no header', 2, true);
+          }
+          return new BufferByteRangeSource(rootBytes).read(offset, size);
+        },
+      }),
+      retries: 0,
+      retryDelayMs: 1,
+    });
+    assert.equal(missing.passed, false);
+    assert.equal(missing.inconclusive, false);
+    assert.equal(missing.wrong.filter((w) => w.missing === true).length, 10);
+  });
+
+  it('leaves unchecked what its deadline cuts short, and is inconclusive', async () => {
+    let started = 0;
+    const openRoot: RootSourceFactory = () => ({
+      read: async (offset: number, size: number) => {
+        started += 1;
+        // From the third read on, none answers: whenever the deadline
+        // falls, exactly two were read.
+        if (started >= 3) await new Promise(() => undefined);
+        return new BufferByteRangeSource(rootBytes).read(offset, size);
+      },
+      close: async () => undefined,
+      isOpen: () => true,
+    });
+    const result = await checkDrawnHeaders({
+      entries: entries(() => ROOT, 10),
+      openRoot,
+      retries: 0,
+      retryDelayMs: 1,
+      concurrency: 1,
+      deadlineMs: 200,
+    });
+    assert.equal(result.passed, false);
+    assert.equal(result.inconclusive, true);
+    assert.equal(result.ok, 2);
+    assert.deepEqual(result.uncheckedReasons, { deadline: 8 });
+  });
+
+  it('starts no read once the deadline timer has fired, however the clock reads (review 9)', async () => {
+    let started = 0;
+    const openRoot: RootSourceFactory = () => ({
+      read: async (offset: number, size: number) => {
+        started += 1;
+        // The third read never answers; any later one would answer at once.
+        if (started === 3) await new Promise(() => undefined);
+        return new BufferByteRangeSource(rootBytes).read(offset, size);
+      },
+      close: async () => undefined,
+      isOpen: () => true,
+    });
+    // A clock that never reaches the deadline: only the timer can end it.
+    const frozen = Date.now();
+    const result = await checkDrawnHeaders({
+      entries: entries(() => ROOT, 10),
+      openRoot,
+      retries: 0,
+      retryDelayMs: 1,
+      concurrency: 1,
+      deadlineMs: 100,
+      now: () => frozen,
+    });
+    assert.equal(result.ok, 2);
+    assert.deepEqual(result.uncheckedReasons, { deadline: 8 });
+    assert.equal(started, 3);
   });
 });

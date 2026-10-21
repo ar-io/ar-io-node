@@ -7,8 +7,13 @@
 import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
 
-import { parseSelection } from '../../../lib/parquet-l2/layout.js';
-import { ItemTag, selectionClickHouse, selects } from './selection.js';
+import { parseSelection } from './layout.js';
+import {
+  ItemTag,
+  selectionClickHouse,
+  selectionDuckDb,
+  selects,
+} from './selection.js';
 
 const ARDRIVE = parseSelection({
   kind: 'ans104-data-items',
@@ -117,5 +122,59 @@ describe('selectionClickHouse', () => {
     );
     assert.doesNotMatch(all.condition, /l2_exclude/);
     assert.equal(all.params.l2_prefix, Buffer.from("it's\\").toString('hex'));
+  });
+});
+
+describe('selectionDuckDb', () => {
+  it('takes exactly the tags selects takes, byte for byte', async () => {
+    const { Database } = await import('duckdb-async');
+    const duck = await Database.create(':memory:');
+    try {
+      const cases: Array<[string | Buffer, string | Buffer]> = [
+        ['App-Name', 'ArDrive-App'],
+        ['App-Name', 'ArDrive'],
+        ['App-Name', 'ArDriv'],
+        ['App-Name', 'ArDriver'],
+        ['App-Name', 'ArDriver-Foo'],
+        ['app-name', 'ArDrive-App'],
+        ['App-Name ', 'ArDrive-App'],
+        ['App-Name', 'ardrive'],
+        [
+          'App-Name',
+          Buffer.from([0x41, 0x72, 0x44, 0x72, 0x69, 0x76, 0x65, 0xff]),
+        ],
+        ['App-Name', Buffer.alloc(0)],
+        [Buffer.alloc(0), 'ArDrive'],
+      ];
+      for (const selection of [
+        ARDRIVE,
+        parseSelection({
+          kind: 'ans104-data-items',
+          tag: { name: 'App-Name', valuePrefix: "Ar'Drive" },
+        }),
+      ]) {
+        for (const [name, value] of cases) {
+          const t = tag(name, value);
+          const [row] = (await duck.all(
+            `SELECT coalesce(${selectionDuckDb(selection)}, false) AS taken
+             FROM (SELECT from_hex('${t.name.toString('hex')}') AS tag_name,
+                          from_hex('${t.value.toString('hex')}') AS tag_value)`,
+          )) as Array<{ taken: boolean }>;
+          assert.equal(
+            row.taken,
+            selects(selection, [t]),
+            `${t.name.toString('hex')}=${t.value.toString('hex')}`,
+          );
+        }
+        // A NULL name or value is no match.
+        const [nulls] = (await duck.all(
+          `SELECT coalesce(${selectionDuckDb(selection)}, false) AS taken
+           FROM (SELECT NULL::BLOB AS tag_name, NULL::BLOB AS tag_value)`,
+        )) as Array<{ taken: boolean }>;
+        assert.equal(nulls.taken, false);
+      }
+    } finally {
+      await duck.close();
+    }
   });
 });

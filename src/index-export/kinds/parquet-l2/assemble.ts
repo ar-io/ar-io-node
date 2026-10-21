@@ -34,7 +34,7 @@ import {
 } from '../root-tx/sources/item-location.js';
 import type { ParentRow } from '../root-tx/sources/rows.js';
 import { BandTag, firstTagValue } from '../../../lib/parquet-l1/layout.js';
-import type { ItemTag } from './selection.js';
+import type { ItemTag } from '../../../lib/parquet-l2/selection.js';
 import type { L2SourceRow, L2SourceWindow } from './source.js';
 import type { KeyCandidate } from './wallets.js';
 

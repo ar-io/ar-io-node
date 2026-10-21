@@ -166,11 +166,106 @@ async function digestRows(
   return { rows: digest.rows, rowDigest: digest.hex() };
 }
 
+/** A lookup file whose rows are not in its spec's order. */
+export class LookupOrderError extends Error {}
+
+/** Two values of one column as DuckDB orders them: numbers, text-read integers, bytes. */
+function compareLookupValues(a: unknown, b: unknown, text: boolean): number {
+  const aNull = a === null || a === undefined;
+  const bNull = b === null || b === undefined;
+  if (aNull || bNull) return aNull === bNull ? 0 : aNull ? 1 : -1;
+  if (a instanceof Uint8Array && b instanceof Uint8Array) {
+    return Buffer.compare(a, b);
+  }
+  if (text || typeof a === 'bigint' || typeof b === 'bigint') {
+    // Columns read as text (UBIGINT, DECIMAL) compare as the integers they
+    // write; a DECIMAL(n,0) has no fraction to lose.
+    const x = BigInt(a as string | number | bigint);
+    const y = BigInt(b as string | number | bigint);
+    return x < y ? -1 : x > y ? 1 : 0;
+  }
+  if (typeof a === 'string' && typeof b === 'string') {
+    return a < b ? -1 : a > b ? 1 : 0;
+  }
+  const x = a as number;
+  const y = b as number;
+  return x < y ? -1 : x > y ? 1 : 0;
+}
+
+/**
+ * The row count and row digest of a lookup file read as the file holds its
+ * rows, with no sort, each row checked against the one before: never before
+ * it in the spec's order, and, where the order ties, the same row (the
+ * order is total up to identical rows, so a tie that differs would make the
+ * digest depend on how ties fell). Only for the `numeric` digest order,
+ * which is the files' own; DuckDB keeps file order while
+ * `preserve_insertion_order` is on.
+ *
+ * @throws LookupOrderError when a row is out of order.
+ */
+export async function digestLookupInFileOrder(
+  duck: Database,
+  spec: LookupSpec,
+  file: string,
+): Promise<LookupDescription> {
+  const order: LookupDigestOrder = 'numeric';
+  const digest = new RowDigest(spec.columns);
+  const names = spec.columns.map((c) => digestName(c, order));
+  const keys = spec.orderBy.map((name) => {
+    const index = spec.columns.findIndex((c) => c.name === name);
+    if (index < 0) throw new Error(`${spec.name} has no column ${name}`);
+    return { index, text: readAsText(spec.columns[index]) };
+  });
+  // A connection whose configuration is locked can't be told; one that
+  // doesn't keep file order can't have its rows read in it.
+  const [setting] = (await duck.all(
+    "SELECT current_setting('preserve_insertion_order') AS kept",
+  )) as Array<{ kept: unknown }>;
+  if (String(setting?.kept) !== 'true') {
+    await duck.exec('SET preserve_insertion_order = true');
+  }
+  const stream = await duck.stream(
+    `SELECT ${spec.columns.map((c) => selectColumn(c, order)).join(', ')} FROM read_parquet(${sqlPath(file)})`,
+  );
+  let previous: unknown[] | undefined;
+  for await (const row of stream) {
+    const values = names.map((n) => (row as Record<string, unknown>)[n]);
+    if (previous !== undefined) {
+      let cmp = 0;
+      for (const { index, text } of keys) {
+        cmp = compareLookupValues(previous[index], values[index], text);
+        if (cmp !== 0) break;
+      }
+      if (
+        cmp > 0 ||
+        (cmp === 0 &&
+          values.some(
+            (v, i) =>
+              compareLookupValues(
+                previous![i],
+                v,
+                readAsText(spec.columns[i]),
+              ) !== 0,
+          ))
+      ) {
+        throw new LookupOrderError(
+          `${spec.file}: row ${digest.rows + 1} is ${cmp > 0 ? 'before the row ahead of it' : 'a different row of the same key as the one ahead of it'} in the lookup's order (${spec.orderBy.join(', ')})`,
+        );
+      }
+    }
+    digest.add(values);
+    previous = values;
+  }
+  return { rows: digest.rows, rowDigest: digest.hex() };
+}
+
 /**
  * Checks a lookup file against what it should be.
  *
  * 1. Its rows reproduce `declared`, the description its band carries: the
- *    band is honest about the file.
+ *    band is honest about the file. Under `numeric` they are read in the
+ *    file's own order and must be in the spec's order
+ *    ({@link digestLookupInFileOrder}).
  * 2. It holds exactly the rows its spec derives from the tables, no more and
  *    no fewer: the file is honest about the tables. Row by row, not by bytes,
  *    so a file another DuckDB version wrote passes when its rows agree. The
@@ -193,7 +288,20 @@ export async function verifyLookup(
   // that ends the verification: the caller reports every band.
   try {
     const problems: string[] = [];
-    const found = await digestLookup(duck, spec, file, options);
+    // Under `numeric` the file's own order is the digest's: it is read as
+    // it is, each row checked against the one before, so a file out of its
+    // order fails here (a reader's binary search over its row groups would
+    // miss keys) and no sort of the file is needed.
+    let found: LookupDescription;
+    try {
+      found =
+        options.order === 'numeric'
+          ? await digestLookupInFileOrder(duck, spec, file)
+          : await digestLookup(duck, spec, file, options);
+    } catch (error) {
+      if (error instanceof LookupOrderError) return [error.message];
+      throw error;
+    }
     if (
       found.rows !== declared.rows ||
       found.rowDigest !== declared.rowDigest

@@ -45,9 +45,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - the lookups are checked against the tables;
   - a sample of items per band (`--onchain <n>`, 20 when not given) is read
     at their recorded locations from Arweave nodes and checked against their
-    ids. Items directly in their roots and items in nested bundles are
-    sampled apart, so rare nested items are always read; `--seed` repeats a
-    run.
+    ids. The items are drawn uniformly over every located item of the band,
+    then nested items are added until half the draw is nested, so rare
+    nested items are always read; `--seed` repeats a run.
   `--spill-max` sets how much the lookup check may spill (128 GB unless
   set; the 69-million-item h1.8M band of `ardrive-l2` peaks at about 65 GB,
   past the 16 GB `index-l1-verify` allowed before, which it now shares).
@@ -60,7 +60,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   (`index-band-verify --arweave-nodes`, and `index-l2-verify` by default),
   so a header check trusts no gateway:
   - a root's signature must hash to its id and verify, binding its
-    `data_root` (two nodes must agree where arweave-js can't verify);
+    `data_root`, and the root must be format 2 and found in a block by two
+    machines (see Fixed);
   - every chunk's proof is validated against that `data_root` under the
     consensus rules for its weave offset, and the chunk must hash to the
     proof;
@@ -94,6 +95,97 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   opt-out.
 
 ### Fixed
+
+- **`index-l2-verify` could report `ok: true` on bad data; it now fails
+  closed.** Three audits found ways through. Fixed:
+  - NULLs passed every row predicate: a row with no id, height, root or
+    parent, a located item with no `data_size`, a nested item with no
+    parent. They now fail the new `required` check, and every predicate
+    treats NULL as failing.
+  - Nothing checked `tags` and `wallets` against `data_items`, the items
+    against the band's selection, the Parquet column types, or the order
+    of lookup files (which were sorted before digesting). The new
+    `consistency`, `selected` and `schema` checks do, and lookups are read
+    in file order and must be in their key's order.
+  - A directory entry without a readable `band.json`, or a malformed
+    `.publisher.json`, was skipped silently; a band reached through a
+    symlink was skipped too; and a `.publisher.json` could retire any band
+    of its publisher. The first two now fail `files`, a symlinked band is
+    followed and checked like any other, and a claim counts only when the
+    claiming band covers the other's heights.
+  - A band that vanished mid-run, or a file deleted mid-run, crashed the run
+    or passed. That band now fails `complete` and the run goes on.
+  - The on-chain check passed roots no block holds (one node serving a
+    self-signed root), format-1 headers given a `data_root` they don't
+    sign, and bands whose sampled roots were mostly made up. Roots must now
+    be format 2 and placed in one block by two machines (or found in an L1
+    index, `--l1-bands-dir`); a root no node has fails the band; a band
+    with nothing located fails unless `--allow-unlocated`; agreement in place of a
+    signature needs `--allow-agreement`; chunk proofs are checked under the
+    rules of the root's block, never laxer than strict borders.
+  - `--seed` did not repeat a run. Each band's draw is now seeded by
+    sha256 of the run's seed and the band's id; the seed is random per run
+    and reported, and `--seed` is for reproducing a run only.
+  - Nothing bound the bands to their publisher: an id is a 48-bit digest
+    anyone can recompute for rows of their own. `--publication`, with
+    `--publisher-key` or `--registry-url`, checks every file against the
+    publisher's signed publication; the result now says `publisherBound`,
+    and lists every check it did not run under `skipped`.
+  - Through `tools/ar-io-node`, `index-l1-*` and `index-l2-*` spill to
+    `data/tmp/index-verify`, not the container layer on `/`; the spill is
+    capped at 80% of the free space, a run that could not fit is refused
+    before it starts, and an interrupted run removes its spill.
+  - The on-chain sample was not uniform. First it drew only from about the
+    first 82,000 rows of each band (DuckDB's `USING SAMPLE reservoir …
+    REPEATABLE`); then, ordered by DuckDB's `hash(row, seed)`, which is a
+    public function of the row XORed with one of the seed, its draws were
+    clustered, so a publisher could fabricate a cluster of rows the draw
+    almost never touched (caught in 11% of runs where the bound claimed
+    93%). It now takes the N located rows with the smallest
+    `sha256("<key>:<row position>")`, the key being sha256 of the run's
+    seed, the band's id and the stratum, with nested items topped up to
+    half the draw; the stated bound uses the uniform draw only.
+  - A node that only failed to connect, or a machine without the
+    transaction at all, no longer counts against a root: before any
+    verdict of absence every silent node is asked again, any still unheard
+    leaves the item unchecked, and a status 404 denies a root only from a
+    machine that serves its header.
+  - A band with nothing verified on chain is inconclusive, whatever
+    `--max-unchecked` allows. With k items allowed unchecked, the stated
+    bound treats them as possibly fabricated (a fabricated item behind
+    unseeded data comes back unchecked): the share p at which
+    P(at most k of N drawn are fabricated) is 5%, not the N − k draws it
+    first claimed (N = 20, k = 4: 41%, where 18% was stated).
+  - The on-chain check draws its sample up front and never replaces an
+    item: each ends `ok`, `wrong` or `unchecked`; any wrong fails the band,
+    any unchecked (after a second try) leaves it inconclusive unless
+    `--max-unchecked` allows it. The pass ratio, floor and
+    `--max-unreadable-share` are gone: tolerances stacked let fabricated
+    items through. `assurance` says what a pass of N items means.
+  - A sampled root the chain refutes (no `data_root`, format 1, a signature
+    that doesn't verify, not mined, in a block at another height than its
+    items) counted only as an error, tolerated up to 20%; it now fails the
+    band. A node that times out no longer keeps a made-up root two machines
+    deny from being `missing`; two ports of one address are one machine.
+  - No single node can fail an honest band, any more than pass a bad one:
+    an answer of one node that doesn't hold up is its fault, passed over
+    for others and listed in `roots.nodeFaults`; a root is refuted only on
+    evidence from two machines. A block is its hash and height together, a
+    bound root is never `missing` (nodes holding no data answer 404 to
+    `/offset`), machines are compared by all their addresses, and moved
+    roots in the L1 check are listed with both positions.
+  - The publication is refused once expired (`--allow-expired`), a band it
+    lists in the range that the directory lacks fails, and `assurance` says
+    when its key came from a registry.
+  - New `coverage` check: heights asked for (`--from`/`--to`) that no
+    checked band covers fail. New `located` check: a band's unlocated items
+    must be exactly what its `band.json` declares and at most
+    `--max-unlocated-share` (0.001) of them.
+  - The spill also leaves 100 GB free, and spill folders a killed run left a
+    day ago are removed.
+  `index-band-verify --arweave-nodes` shares the root checks: roots must be
+  format 2 and found in a block by two machines, and agreement needs
+  `--allow-agreement`.
 
 - **`parquet-l2`: a re-settle keeps every owner's key the bands it
   replaces hold.** Their `wallets` tables are a key source, tried after

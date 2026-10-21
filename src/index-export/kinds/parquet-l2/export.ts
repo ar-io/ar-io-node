@@ -93,7 +93,7 @@ import {
 import { rowComparator, rowIdentity } from '../../../lib/parquet-l2/order.js';
 import { digestL2Table, L2TableError } from '../../../lib/parquet-l2/tables.js';
 import { positionsByRoot, RootResolver, rootResolver } from './roots.js';
-import { selectionMatcher } from './selection.js';
+import { selectionMatcher } from '../../../lib/parquet-l2/selection.js';
 import type { L2ItemSource, RootPosition } from './source.js';
 import {
   loadReplacedWallets,

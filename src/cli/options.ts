@@ -178,6 +178,61 @@ export const optionMap = {
     description:
       'The most the lookup check may spill to the temp directory, as a DuckDB size (default 128GB); the 69-million-item h1.8M band of ardrive-l2 needs about 65GB',
   },
+  l2Publication: {
+    alias: '--publication <path|url>',
+    description:
+      "The publisher's signed index publication (a file, such as data/indexes/published/publication.json, or a URL, such as https://<gateway>/ar-io/indexes/publication.json): every band must be listed in it and every file must have the size and SHA-256 it signs. Needs --publisher-key or --registry-url. Without it the bands are checked only for internal consistency (publisherBound: false)",
+  },
+  l2PublisherKey: {
+    alias: '--publisher-key <address>',
+    description:
+      "The key --publication must be signed with: the publisher's registered observer address (base58), as its gateway record shows it",
+  },
+  l2RegistryUrl: {
+    alias: '--registry-url <url>',
+    description:
+      "Read --publication's key from this gateway's view of the registry (its /ar-io/peers), as the index-swarm sidecar does: e.g. http://core:4000. That gateway is trusted for the key",
+  },
+  l2Index: {
+    alias: '--index <name>',
+    description:
+      'The index to bind to in --publication, when it lists more than one parquet-l2 index',
+  },
+  l1BandsDir: {
+    alias: '--l1-bands-dir <path>',
+    description:
+      "A directory of parquet-l1 bands to find every root transaction in, at the height and index its items give (check 'mined'); every band must be covered. Without it, data/indexes/installed/parquet-l1, then data/indexes/published/parquet-l1, are used where they exist and cover a band; 'none' uses none. The L1 index must itself be verified (index-l1-verify) for this to trust nothing",
+  },
+  allowAgreement: {
+    alias: '--allow-agreement',
+    description:
+      "Accept a root whose signature arweave-js won't verify when two other machines serve the same signed header (default: such a root is an error)",
+  },
+  allowUnlocated: {
+    alias: '--allow-unlocated',
+    description:
+      'Pass a band whose items all have no locations (as its band.json declares), so nothing of it can be read on chain (default: such a band fails the located and onchain checks)',
+  },
+  maxUnchecked: {
+    alias: '--max-unchecked <n>',
+    description:
+      'Drawn on-chain entries per band (fewer than --onchain) that may be left unchecked (nodes busy, data unseeded, a root no node locates) and the band still pass (default 0). Past it, a band with none wrong is inconclusive: ok false, listed in onchain.inconclusiveBands. Every drawn entry counts: none is replaced by another draw',
+  },
+  maxUnlocatedShare: {
+    alias: '--max-unlocated-share <fraction>',
+    description:
+      "The largest share of a band's items that may be unlocated, so not checkable on chain (default 0.001); a band's unlocated items must also be exactly the ones its band.json declares",
+  },
+  allowExpired: {
+    alias: '--allow-expired',
+    description:
+      'Bind to a --publication past its expiresAt (default: refused)',
+  },
+  bandDeadline: {
+    alias: '--band-deadline <seconds>',
+    description:
+      "How long one band's on-chain reads may take (default 1200); items not read by then are unchecked, so the band is inconclusive unless --max-unchecked allows them",
+  },
   l2SkipLookups: {
     alias: '--skip-lookups',
     description:
@@ -256,6 +311,7 @@ export const indexBandVerifyOptions: CommanderOption[] = [
   optionMap.bandDir,
   optionMap.gatewayUrl,
   optionMap.arweaveNodes,
+  optionMap.allowAgreement,
   optionMap.readTimeout,
   optionMap.sampleSize,
 ];
@@ -294,6 +350,17 @@ export const indexL2VerifyOptions: CommanderOption[] = [
   optionMap.toHeight,
   optionMap.l2SkipLookups,
   optionMap.spillMax,
+  optionMap.l2Publication,
+  optionMap.l2PublisherKey,
+  optionMap.l2RegistryUrl,
+  optionMap.l2Index,
+  optionMap.l1BandsDir,
+  optionMap.allowAgreement,
+  optionMap.allowUnlocated,
+  optionMap.maxUnchecked,
+  optionMap.maxUnlocatedShare,
+  optionMap.allowExpired,
+  optionMap.bandDeadline,
 ];
 
 export const indexL1AuditOptions: CommanderOption[] = [

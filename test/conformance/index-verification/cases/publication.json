@@ -1,0 +1,258 @@
+[
+  {
+    "id": "bands-honest-publication",
+    "description": "Sound bands bound to the publisher's signed publication",
+    "tampered": "nothing",
+    "kind": "bands",
+    "bands": [
+      {
+        "from": 100,
+        "to": 199,
+        "publisher": "wallet"
+      },
+      {
+        "from": 200,
+        "to": 299,
+        "publisher": "wallet"
+      }
+    ],
+    "publication": {},
+    "expect": {
+      "verdict": "verified",
+      "publisherBound": true
+    }
+  },
+  {
+    "id": "bands-honest-publication-expired-allowed",
+    "description": "Sound bands bound to an expired publication, expiry allowed",
+    "tampered": "publication expired",
+    "kind": "bands",
+    "bands": [
+      {
+        "from": 100,
+        "to": 199,
+        "publisher": "wallet"
+      }
+    ],
+    "publication": {
+      "expiresAt": "2020-01-01T00:00:00Z",
+      "issuedAt": "2019-12-31T00:00:00Z"
+    },
+    "options": {
+      "allowExpired": true
+    },
+    "expect": {
+      "verdict": "verified",
+      "publisherBound": true
+    }
+  },
+  {
+    "id": "pub-band-json-edit",
+    "description": "band.json edited after signing (checks only, outside the id)",
+    "tampered": "checks.ownersWithoutKey raised",
+    "kind": "bands",
+    "bands": [
+      {
+        "from": 100,
+        "to": 199,
+        "publisher": "wallet"
+      }
+    ],
+    "files": [
+      {
+        "op": "editBandJson",
+        "band": 0,
+        "checks": {
+          "ownersWithoutKey": 5
+        }
+      }
+    ],
+    "publication": {},
+    "expect": {
+      "verdict": "refuted",
+      "check": "publication",
+      "failing": [
+        "publication"
+      ]
+    }
+  },
+  {
+    "id": "pub-expired",
+    "description": "An expired publication",
+    "tampered": "expiresAt in 2020",
+    "kind": "bands",
+    "bands": [
+      {
+        "from": 100,
+        "to": 199,
+        "publisher": "wallet"
+      }
+    ],
+    "publication": {
+      "expiresAt": "2020-01-01T00:00:00Z",
+      "issuedAt": "2019-12-31T00:00:00Z"
+    },
+    "expect": {
+      "verdict": "refuted",
+      "check": "refused",
+      "failing": [
+        "refused"
+      ]
+    }
+  },
+  {
+    "id": "pub-extra-file",
+    "description": "A file in a band that the publication doesn't list",
+    "tampered": "extra.parquet written",
+    "kind": "bands",
+    "bands": [
+      {
+        "from": 100,
+        "to": 199,
+        "publisher": "wallet"
+      }
+    ],
+    "files": [
+      {
+        "op": "writeFile",
+        "band": 0,
+        "file": "extra.parquet",
+        "text": "x"
+      }
+    ],
+    "publication": {},
+    "expect": {
+      "verdict": "refuted",
+      "check": "publication",
+      "failing": [
+        "files",
+        "publication"
+      ]
+    }
+  },
+  {
+    "id": "pub-file-changed",
+    "description": "A lookup file changed after signing",
+    "tampered": "one byte appended",
+    "kind": "bands",
+    "bands": [
+      {
+        "from": 100,
+        "to": 199,
+        "publisher": "wallet"
+      }
+    ],
+    "files": [
+      {
+        "op": "appendByte",
+        "band": 0,
+        "file": "lookup_wallet.parquet"
+      }
+    ],
+    "publication": {},
+    "expect": {
+      "verdict": "refuted",
+      "check": "publication",
+      "failing": [
+        "publication",
+        "schema"
+      ]
+    }
+  },
+  {
+    "id": "pub-forged-rows",
+    "description": "Rows rewritten, band.json and id recomputed, against the honest publication",
+    "tampered": "tag value rewritten after signing",
+    "kind": "bands",
+    "bands": [
+      {
+        "from": 100,
+        "to": 199,
+        "publisher": "wallet"
+      }
+    ],
+    "files": [
+      {
+        "op": "rebuild",
+        "band": 0,
+        "spec": {
+          "from": 100,
+          "to": 199,
+          "publisher": "wallet",
+          "rows": [
+            {
+              "op": "set",
+              "table": "tags",
+              "row": 1,
+              "column": "tag_value",
+              "value": "utf8:ArDrive-Forged"
+            }
+          ]
+        }
+      }
+    ],
+    "publication": {},
+    "expect": {
+      "verdict": "refuted",
+      "check": "publication",
+      "failing": [
+        "publication"
+      ]
+    }
+  },
+  {
+    "id": "pub-listed-absent",
+    "description": "A band the publication lists is not in the directory",
+    "tampered": "tip band removed",
+    "kind": "bands",
+    "bands": [
+      {
+        "from": 100,
+        "to": 199,
+        "publisher": "wallet"
+      },
+      {
+        "from": 200,
+        "to": 299,
+        "publisher": "wallet"
+      }
+    ],
+    "files": [
+      {
+        "op": "removeDir",
+        "band": 1
+      }
+    ],
+    "publication": {},
+    "expect": {
+      "verdict": "refuted",
+      "check": "publication",
+      "failing": [
+        "publication"
+      ]
+    }
+  },
+  {
+    "id": "pub-wrong-key",
+    "description": "A publication checked against a key that didn't sign it",
+    "tampered": "another key given",
+    "kind": "bands",
+    "bands": [
+      {
+        "from": 100,
+        "to": 199,
+        "publisher": "wallet"
+      }
+    ],
+    "publication": {
+      "key": "other"
+    },
+    "expect": {
+      "verdict": "refuted",
+      "check": "refused",
+      "failing": [
+        "refused"
+      ]
+    }
+  }
+]
