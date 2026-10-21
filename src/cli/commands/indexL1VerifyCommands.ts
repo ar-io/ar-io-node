@@ -213,6 +213,7 @@ export async function openBandsDuck(
 async function verifyBandsCLI(
   options: IndexL1VerifyCLIOptions,
   log: Logger,
+  freeBytes?: (dir: string) => Promise<number>,
 ): Promise<JsonSerializable> {
   const bandsDir = options.bandsDir as string;
   const whole = (value: string | undefined, flag: string) => {
@@ -225,9 +226,17 @@ async function verifyBandsCLI(
   };
   const session = await openBandsDuck({
     ...(options.spillMax !== undefined ? { spillMax: options.spillMax } : {}),
+    ...(freeBytes !== undefined ? { freeBytes } : {}),
   });
   const { duck } = session;
   try {
+    // The lookup check spills; with nothing to spill into it would fail
+    // in DuckDB and report sound bands as unreadable. Refuse first.
+    if (options.skipLookups !== true && session.spillCapBytes === 0) {
+      throw new VerifyRefused(
+        `no room to spill under ${path.dirname(session.spill)}: ${(session.freeBytes / 2 ** 30).toFixed(1)} GiB free, less the ${(SPILL_RESERVE_BYTES / 2 ** 30).toFixed(1)} GiB a run always leaves. Free space there, point TMPDIR elsewhere, or --skip-lookups`,
+      );
+    }
     for (const dir of session.removedStale) {
       log.warn('Removed a spill folder a killed run left', { dir });
     }
@@ -283,6 +292,8 @@ async function verifyBandsCLI(
 
 export interface IndexL1VerifyDeps {
   log: Logger;
+  /** Injected in tests: the bytes free under the spill directory. */
+  freeBytes?: (dir: string) => Promise<number>;
   /** Asks one source for a block's identity hash; injected in tests. */
   fetchIndepHash?: (
     url: string,
@@ -332,7 +343,7 @@ const height = (
 
 export async function indexL1VerifyCLICommand(
   options: IndexL1VerifyCLIOptions,
-  { log, fetchIndepHash = httpIndepHash }: IndexL1VerifyDeps,
+  { log, fetchIndepHash = httpIndepHash, freeBytes }: IndexL1VerifyDeps,
 ): Promise<JsonSerializable> {
   // Bands are the consumer's view: a directory of them can be checked
   // with no gateway and no `core.db`, which is the whole point of the
@@ -342,7 +353,7 @@ export async function indexL1VerifyCLICommand(
     options.bandsDir.length > 0 &&
     options.coreDb === undefined
   ) {
-    return verifyBandsCLI(options, log);
+    return verifyBandsCLI(options, log, freeBytes);
   }
   const coreDb = requiredStringFromOptions(options, 'coreDb');
   const wantFrom = height(options.from, '--from');

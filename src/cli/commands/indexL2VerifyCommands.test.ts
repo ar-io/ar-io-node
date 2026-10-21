@@ -116,4 +116,40 @@ describe('index-l2-verify', () => {
     assert.equal(urlList(undefined), undefined);
     assert.throws(() => urlList(' , '), L2VerifyRefused);
   });
+
+  it('refuses before it starts when the spill can not hold what will run, lookups skipped or not (review 13)', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'l2-verify-nospill-'));
+    try {
+      const band = path.join(dir, 'l2-h100-199-aaaaaaaa-000000000000');
+      await fs.mkdir(band);
+      await fs.writeFile(
+        path.join(band, 'data_items.parquet'),
+        Buffer.alloc(1000),
+      );
+      await fs.writeFile(path.join(band, 'tags.parquet'), Buffer.alloc(1000));
+      // 50 GB free: under the 100 GB reserve, so the spill is capped at 0.
+      const tight = { log, freeBytes: async () => 50e9 };
+      // With --skip-lookups the consistency checks still group the tables,
+      // and spill: refused, and skipping lookups is not offered.
+      await assert.rejects(
+        indexL2VerifyCLICommand(
+          { bandsDir: dir, onchain: '0', skipLookups: true },
+          tight,
+        ),
+        (e: unknown) =>
+          e instanceof L2VerifyRefused &&
+          /TMPDIR/.test(e.message) &&
+          !/--skip-lookups/.test(e.message),
+      );
+      await assert.rejects(
+        indexL2VerifyCLICommand({ bandsDir: dir, onchain: '0' }, tight),
+        (e: unknown) =>
+          e instanceof L2VerifyRefused &&
+          /TMPDIR/.test(e.message) &&
+          !/--skip-lookups/.test(e.message),
+      );
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
 });

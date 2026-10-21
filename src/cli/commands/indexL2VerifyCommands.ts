@@ -57,6 +57,12 @@ export const DEFAULT_BAND_DEADLINE_SECONDS = 1200;
  * what keeps the disk from filling.
  */
 export const SPILL_PER_PARQUET_BYTE = 4;
+/**
+ * Spill the consistency and selection checks are expected to need with the
+ * lookups skipped, per byte of a band's `data_items` and `tags`: they group
+ * both tables by item. An estimate, as above.
+ */
+export const SPILL_PER_TABLE_BYTE = 2;
 
 export class L2VerifyRefused extends Error {}
 
@@ -151,8 +157,14 @@ async function l1Index(
   return undefined;
 }
 
-/** The bytes of Parquet in the largest band of a directory. */
-async function largestBandBytes(bandsDir: string): Promise<number> {
+/**
+ * The bytes of Parquet in the largest band of a directory: of every file, or
+ * of the files named.
+ */
+async function largestBandBytes(
+  bandsDir: string,
+  only?: readonly string[],
+): Promise<number> {
   let largest = 0;
   for (const name of await fsp.readdir(bandsDir).catch(() => [])) {
     if (name.startsWith('.')) continue;
@@ -160,6 +172,7 @@ async function largestBandBytes(bandsDir: string): Promise<number> {
     let bytes = 0;
     for (const file of await fsp.readdir(dir).catch(() => [])) {
       if (!file.endsWith('.parquet')) continue;
+      if (only !== undefined && !only.includes(file)) continue;
       bytes += (await fsp.stat(path.join(dir, file)).catch(() => ({ size: 0 })))
         .size;
     }
@@ -176,11 +189,18 @@ export interface IndexL2VerifyDeps {
   openRoot?: RootSourceFactory;
   /** Injected in tests: the registry `--registry-url` reads. */
   registry?: GatewayRegistry;
+  /** Injected in tests: the bytes free under the spill directory. */
+  freeBytes?: (dir: string) => Promise<number>;
 }
 
 export async function indexL2VerifyCLICommand(
   options: IndexL2VerifyCLIOptions,
-  { log, openRoot: injected, registry: injectedRegistry }: IndexL2VerifyDeps,
+  {
+    log,
+    openRoot: injected,
+    registry: injectedRegistry,
+    freeBytes: injectedFree,
+  }: IndexL2VerifyDeps,
 ): Promise<JsonSerializable> {
   const bandsDir = requiredStringFromOptions(options, 'bandsDir');
   const from = whole(options.from, '--from');
@@ -347,6 +367,7 @@ export async function indexL2VerifyCLICommand(
   try {
     session = await openBandsDuck({
       prefix: 'ar-io-node-l2-verify-',
+      ...(injectedFree !== undefined ? { freeBytes: injectedFree } : {}),
       ...(options.spillMax !== undefined ? { spillMax: options.spillMax } : {}),
     });
   } catch (error) {
@@ -357,14 +378,27 @@ export async function indexL2VerifyCLICommand(
   }
   try {
     // Refuse a run whose largest band can't be checked in the spill there
-    // is room for, before it starts rather than hours in.
-    if (options.skipLookups !== true) {
-      const need = (await largestBandBytes(bandsDir)) * SPILL_PER_PARQUET_BYTE;
-      if (need > session.spillCapBytes) {
-        throw new L2VerifyRefused(
-          `the largest band is expected to spill about ${gib(need)}, more than the ${gib(session.spillCapBytes)} the spill is capped at (--spill-max; 80% of the ${gib(session.freeBytes)} free under ${path.dirname(session.spill)}; and that free space less a ${gib(SPILL_RESERVE_BYTES)} reserve): free space there, point TMPDIR elsewhere, or --skip-lookups`,
-        );
-      }
+    // is room for, before it starts rather than hours in. The consistency
+    // and selection checks group the tables and spill too, lookups or not.
+    const tablesNeed =
+      (await largestBandBytes(bandsDir, [
+        'data_items.parquet',
+        'tags.parquet',
+      ])) * SPILL_PER_TABLE_BYTE;
+    const lookupsNeed =
+      options.skipLookups === true
+        ? 0
+        : (await largestBandBytes(bandsDir)) * SPILL_PER_PARQUET_BYTE;
+    const need = Math.max(tablesNeed, lookupsNeed);
+    if (need > session.spillCapBytes) {
+      // Skipping the lookups is offered only where it would make room.
+      const skipping =
+        options.skipLookups !== true && tablesNeed <= session.spillCapBytes
+          ? ', or --skip-lookups'
+          : '';
+      throw new L2VerifyRefused(
+        `the largest band is expected to spill about ${gib(need)}, more than the ${gib(session.spillCapBytes)} the spill is capped at (--spill-max; 80% of the ${gib(session.freeBytes)} free under ${path.dirname(session.spill)}; and that free space less a ${gib(SPILL_RESERVE_BYTES)} reserve): free space there, or point TMPDIR elsewhere${skipping}`,
+      );
     }
     for (const dir of session.removedStale) {
       log.warn('Removed a spill folder a killed run left', { dir });

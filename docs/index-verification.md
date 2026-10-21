@@ -292,7 +292,9 @@ spill to a folder of their own under the system temp directory, capped at
 run starts; and never into the last 100 GB free there, so with less than about 100 GB
 free the lookup check is refused (`--skip-lookups` runs the rest); a run
 whose largest band is expected to need more than that cap is refused before
-it starts. Each run touches a `.heartbeat` file in its spill folder every
+it starts, with or without `--skip-lookups`, since the consistency and
+selection checks spill too (sized at twice the band's `data_items` and
+`tags` files), and the refusal names the folder and suggests `TMPDIR`. Each run touches a `.heartbeat` file in its spill folder every
 minute; a folder of the same kind whose heartbeat stopped a day or more ago
 (a run killed outright) is removed when a run starts, and logged, and a
 folder still beating is left alone. Through `tools/ar-io-node` that folder is

@@ -417,3 +417,29 @@ describe('openBandsDuck', () => {
     assert.deepEqual(await fsp.readdir(root), []);
   });
 });
+
+describe('index-l1-verify --bands-dir with no room to spill (review 13)', () => {
+  it('refuses before it starts when the spill would be capped at nothing, unless lookups are skipped', async () => {
+    const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'l1-verify-nospill-'));
+    try {
+      // 50 GB free: under the 100 GB reserve, so the spill is capped at 0.
+      const tight = { log, freeBytes: async () => 50e9 };
+      await assert.rejects(
+        indexL1VerifyCLICommand({ bandsDir: dir }, tight),
+        (e: unknown) =>
+          e instanceof VerifyRefused &&
+          /no room to spill/.test(e.message) &&
+          /TMPDIR/.test(e.message) &&
+          /--skip-lookups/.test(e.message),
+      );
+      // Without the lookup check nothing spills: it runs (and refuses the
+      // empty directory for what it is, not for room).
+      await assert.rejects(
+        indexL1VerifyCLICommand({ bandsDir: dir, skipLookups: true }, tight),
+        (e: unknown) => !/no room to spill/.test((e as Error).message),
+      );
+    } finally {
+      await fsp.rm(dir, { recursive: true, force: true });
+    }
+  });
+});

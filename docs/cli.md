@@ -870,7 +870,8 @@ node's `data/indexes`), capped at `--spill-max`, at 80% of the space free
 there and at that space less 100 GB, and removed when the run ends or is
 interrupted. With less than about 100 GB free the lookup check is refused;
 a run whose largest band is expected to spill more than the cap is refused
-before it starts. A run killed outright (SIGKILL) leaves its
+before it starts, `--skip-lookups` or not (the table checks spill too); point
+`TMPDIR` at a disk with room. A run killed outright (SIGKILL) leaves its
 `ar-io-node-l2-verify-*` folder behind; the next run removes it once its
 `.heartbeat` file is a day old, and leaves alone a folder another run is still
 beating.
