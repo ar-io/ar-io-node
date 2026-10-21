@@ -111,13 +111,8 @@ function compareSql(column: string): string {
 
 /** The order of the row before against this one, by `by`, lexicographic. */
 function rowCompareSql(by: string[]): string {
-  return by.reduceRight<string>(
-    (rest, column, i) =>
-      i === by.length - 1
-        ? compareSql(column)
-        : `CASE WHEN (${compareSql(column)}) <> 0 THEN (${compareSql(column)}) ELSE (${rest}) END`,
-    '0',
-  );
+  // The first column's order that is not a tie, else a tie.
+  return `coalesce(${by.map((column) => `nullif(${compareSql(column)}, 0)`).join(', ')}, 0)`;
 }
 
 export interface ScanOrder {
@@ -269,14 +264,15 @@ export async function scanDigest(
   const same = lagged
     .map((c) => `${ident(c)} IS NOT DISTINCT FROM ${ident(`__p_${c}`)}`)
     .join(' AND ');
+  // Over `__cmp`, the row before's order against this row's.
   const bad =
     order === undefined
       ? 'false'
       : order.rule === 'strict'
-        ? `(${cmp}) >= 0`
+        ? '__cmp >= 0'
         : order.rule === 'sorted'
-          ? `(${cmp}) > 0`
-          : `((${cmp}) > 0 OR ((${cmp}) = 0 AND NOT (${same})))`;
+          ? '__cmp > 0'
+          : `(__cmp > 0 OR (__cmp = 0 AND NOT (${same})))`;
   const struct = `struct_pack(${columns.map((c, i) => `__c${i} := ${ident(c.name)}`).join(', ')})`;
   // Each range is a query of its own, streamed (its one row read), as the
   // row readers stream theirs.
@@ -292,14 +288,15 @@ export async function scanDigest(
     streamed(`WITH r AS (
         SELECT ${pos} AS __rn, ${names} FROM ${source.relation}
         WHERE ${pos} >= ${from} AND ${pos} < ${from + rangeRows}),
-      w AS (SELECT __rn, ${names}, ${row} AS __h${lags !== '' ? `, ${lags}` : ''} FROM r)
+      w AS (SELECT __rn, ${names}, ${row} AS __h${lags !== '' ? `, ${lags}` : ''} FROM r),
+      c AS (SELECT *, ${cmp} AS __cmp FROM w)
       SELECT count(*) AS n,
         unhex(string_agg(__h, '' ORDER BY __rn)) AS bytes,
         min(__rn) FILTER (WHERE __rn > ${from} AND ${bad}) AS bad_row,
-        arg_min(${cmp}, __rn) FILTER (WHERE __rn > ${from} AND ${bad}) AS bad_cmp,
+        arg_min(__cmp, __rn) FILTER (WHERE __rn > ${from} AND ${bad}) AS bad_cmp,
         arg_min(${struct}, __rn) AS first_row,
         arg_max(${struct}, __rn) AS last_row
-      FROM w`);
+      FROM c`);
   const values = (s: unknown) =>
     columns.map((_, i) => (s as Record<string, unknown>)[`__c${i}`]);
 
@@ -314,10 +311,17 @@ export async function scanDigest(
   // each on a database of its own, `lookahead` at a time.
   const inFlight: Array<Promise<Array<Record<string, unknown>>>> = [];
   const ahead = run !== undefined ? Math.max(1, lookahead) : 1;
+  // Ranges are asked for up to the rows the relation says it holds (one
+  // range when it holds none), and past them only while every range read
+  // comes back full: a short range is the end, however many were said.
+  const [{ n: said }] = (await on((d) =>
+    d.all(`SELECT count(*) AS n FROM ${source.relation}`),
+  )) as Array<{ n: unknown }>;
+  let horizon = Math.max(1, Math.ceil(Number(said) / rangeRows)) * rangeRows;
   let asked = 0;
   let ended = false;
   const fill = () => {
-    while (!ended && inFlight.length < ahead) {
+    while (!ended && inFlight.length < ahead && asked < horizon) {
       inFlight.push(query(asked));
       asked += rangeRows;
     }
@@ -330,6 +334,7 @@ export async function scanDigest(
       const n = Number(result.n);
       const more = n === rangeRows;
       if (!more) ended = true;
+      else if (from + rangeRows >= horizon) horizon += rangeRows;
       fill();
       if (n > 0) {
         // Positions are 0, 1, …: a range not starting at its first is a
