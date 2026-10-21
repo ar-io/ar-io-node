@@ -935,18 +935,26 @@ describe('ExportService, parquet-l2 roots the network no longer serves', () => {
     }
   });
 
-  it("keeps an owner's key: a re-settle that can no longer read it is refused", async () => {
+  it("keeps an owner's key a re-settle can no longer read, from the band it replaces", async () => {
     const first = d1(await run());
     assert.equal(first.result, 'published');
     assert.equal(first.rows?.wallets, 2);
+    assert.equal(first.stats?.owners.fromReplaced, 0);
     gone.add(toB64Url(lone.id));
+    // The root is gone, so the key can't be read; the replaced band holds
+    // it, so the band is built with it and nothing is dropped.
     const without = d1(await run({ resettle: 'full' }));
     assert.deepEqual(
       [without.result, without.reason],
-      ['rejected', 'dropped_wallets'],
+      ['unchanged', 'same_id'],
+      JSON.stringify(without.details),
     );
-    assert.equal(without.compare?.walletsMissing, 1);
-    assert.equal(without.stats?.owners.withoutKeyBy.unreadable, 1);
+    // Both owners' keys come from the replaced band: it is tried before
+    // the roots, so a re-settle reads no key the band it replaces holds.
+    assert.equal(without.stats?.owners.fromReplaced, 2);
+    assert.equal(without.stats?.owners.fromGateway, 0);
+    assert.equal(without.stats?.owners.withoutKey, 0);
+    assert.equal(without.rows?.wallets, 2);
   });
 
   it('stops a band, published or not, when the gateway fails in transport', async () => {
