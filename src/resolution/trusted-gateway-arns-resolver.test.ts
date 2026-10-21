@@ -228,6 +228,7 @@ describe('TrustedGatewayArNSResolver', () => {
       assert.equal(resolution.antId, undefined);
       assert.equal(resolution.resolvedId, resolvedId);
     });
+
     it('should preserve an upstream undername limit of 0', async () => {
       interceptorId = axios.interceptors.request.use((config) => {
         config.adapter = () =>
