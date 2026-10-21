@@ -102,6 +102,7 @@ import {
   parseBandFile,
   serializeSelection,
 } from './layout.js';
+import type { DuckRunner } from '../parquet/scan-digest.js';
 import { verifyBandLookups } from './lookups.js';
 import { selectionDuckDb } from './selection.js';
 import { digestL2Table, L2TableError } from './tables.js';
@@ -205,6 +206,22 @@ export interface L2VerifyOptions {
   allowUnlocated?: boolean;
   /** Called after each band, for progress. */
   progress?: (done: number, total: number, id: string) => void;
+  /**
+   * More DuckDB databases to read with, beside the one given, each set up
+   * as that one is: bands are checked side by side, as many at a time as
+   * there are databases, and a band's tables and lookups are read side by
+   * side, each read on one database at a time. What is found is reported
+   * as if every band were checked one after another, in order.
+   */
+  moreDucks?: Database[];
+  /**
+   * With `moreDucks`: the bytes all the databases may spill together. Each
+   * read then reserves its share before it runs ({@link DuckPool}): a read
+   * that sorts or groups a band's tables {@link SPILL_PER_BAND_BYTE} per
+   * byte of the band's Parquet files. Without it, every database spills as
+   * it is set up to.
+   */
+  spillBytes?: number;
 }
 
 /** One band's part of the on-chain check. */
@@ -730,6 +747,93 @@ function boundPublication(
   return { publication, entry };
 }
 
+/** Something a band's check found, applied to the result in band order. */
+type Effect = () => void;
+
+/**
+ * Spill a band's sorts and groupings are expected to need, per byte of its
+ * Parquet files, when databases share a spill budget: `ardrive-l2`'s h1.8M
+ * band (8.4 GB of Parquet) peaked at 70.9 GB checked alone, and failed its
+ * lookup check with a third of a 119 GiB cap.
+ */
+export const SPILL_PER_BAND_BYTE = 10;
+
+/**
+ * Spill a read that neither sorts nor groups a whole table is let use (a
+ * range of rows, a footer), when databases share a spill budget.
+ */
+export const LIGHT_READ_SPILL_BYTES = 2 ** 30;
+
+/**
+ * DuckDB databases that reads take turns on, first come first served: one
+ * read on a database at a time (the Node binding runs one query at a time
+ * on a database anyway).
+ *
+ * Given a spill budget, each read reserves a share of it before it starts,
+ * and its database is capped at that share (`max_temp_directory_size`)
+ * while it runs, so the databases together never spill more than the
+ * budget: a read that needs more than is free waits, and every read behind
+ * it, until enough is. A read wanting more than the whole budget gets the
+ * whole budget, alone.
+ */
+class DuckPool {
+  private readonly idle: Database[];
+  private readonly queue: Array<{
+    spill: number;
+    start: (duck: Database, spill: number) => void;
+  }> = [];
+  private reserved = 0;
+
+  constructor(
+    ducks: Database[],
+    private readonly budget?: number,
+  ) {
+    this.idle = [...ducks];
+    this.size = ducks.length;
+  }
+
+  readonly size: number;
+
+  /** A runner whose reads each reserve `spill` bytes of the budget. */
+  runner = (spill: number): DuckRunner => {
+    return async <T>(task: (duck: Database) => Promise<T>): Promise<T> => {
+      const [duck, share] = await new Promise<[Database, number]>((resolve) => {
+        this.queue.push({ spill, start: (d, s) => resolve([d, s]) });
+        this.pump();
+      });
+      try {
+        if (this.budget !== undefined) {
+          await duck.exec(
+            `SET max_temp_directory_size = '${Math.max(1, Math.floor(share / 2 ** 20))}MiB'`,
+          );
+        }
+        return await task(duck);
+      } finally {
+        this.reserved -= share;
+        this.idle.push(duck);
+        this.pump();
+      }
+    };
+  };
+
+  /** Runs a read that neither sorts nor groups a whole table. */
+  run: DuckRunner = this.runner(LIGHT_READ_SPILL_BYTES);
+
+  private pump(): void {
+    while (this.queue.length > 0 && this.idle.length > 0) {
+      const head = this.queue[0];
+      const share =
+        this.budget === undefined ? 0 : Math.min(head.spill, this.budget);
+      if (this.budget !== undefined && this.reserved + share > this.budget) {
+        return;
+      }
+      this.queue.shift();
+      this.reserved += share;
+      head.start(this.idle.pop()!, share);
+    }
+  }
+}
+
 const sqlString = (value: string) => `'${value.replace(/'/g, "''")}'`;
 const num = (v: unknown) => Number(v ?? 0);
 
@@ -779,6 +883,13 @@ export async function verifyL2Bands(
   const maxUnlocatedShare = options.maxUnlocatedShare ?? 0.001;
   // Reading every row in file order relies on DuckDB keeping it.
   await duck.exec('SET preserve_insertion_order = true');
+  for (const more of options.moreDucks ?? []) {
+    await more.exec('SET preserve_insertion_order = true');
+  }
+  const pool = new DuckPool(
+    [duck, ...(options.moreDucks ?? [])],
+    options.spillBytes,
+  );
   const found = await readL2BandsDir(bandsDir);
   const { live: all, superseded } = liveL2Bands(found.bands);
   const inside = (from: number, to: number) =>
@@ -997,212 +1108,278 @@ export async function verifyL2Bands(
   const sigLengths = signatureLengthsSql();
   const selectedSql = selectionDuckDb(ordered[0].band.selection);
 
-  /** Every check of one band; throws only on what it could not read. */
-  const checkBand = async ({ dir, id, band }: L2BandOnDisk) => {
+  /**
+   * Every check of one band; throws only on what it could not read. What it
+   * finds goes into `log`, applied once every band is checked, in band
+   * order, so bands checked side by side report as one after another. Its
+   * on-chain reads wait for `turn`, the band before it to finish its own.
+   */
+  const checkBand = async (
+    { dir, id, band }: L2BandOnDisk,
+    log: Effect[],
+    turn: Promise<void>,
+  ) => {
     const [from, to] = band.heightRange;
-    const fail = (c: VerifyCheck, found: string, expected: string) =>
-      addFailure(c, { height: from, found: `${id}: ${found}`, expected });
-
-    // identity
-    const m = L2_BAND_ID_PATTERN.exec(id);
-    const digest = bandTablesDigest(band).toString('hex').slice(0, 12);
-    if (m === null) {
-      fail(
-        identity,
-        'not an l2 band id',
-        'l2-h<from>-<to>-<tag>-<digest>, heights in canonical decimals',
-      );
-    } else {
-      if (Number(m[1]) !== from || Number(m[2]) !== to) {
+    const failTo =
+      (into: Effect[]) => (c: VerifyCheck, found: string, expected: string) => {
+        into.push(() =>
+          addFailure(c, { height: from, found: `${id}: ${found}`, expected }),
+        );
+      };
+    const fail = failTo(log);
+    const reportTo =
+      (failInto: ReturnType<typeof failTo>) =>
+      (
+        c: VerifyCheck,
+        row: Record<string, unknown>,
+        what: ReadonlyArray<readonly [string, string]>,
+      ) => {
+        for (const [key, text] of what) {
+          if (num(row[key]) > 0) failInto(c, `${num(row[key])} ${text}`, '0');
+        }
+      };
+    // Reads started ahead of the check that reports them, so they run side
+    // by side; each settles before the band is done.
+    const launched: Array<Promise<unknown>> = [];
+    const launch = <T>(read: Promise<T>): Promise<T> => {
+      launched.push(read.catch(() => undefined));
+      return read;
+    };
+    try {
+      // identity
+      const m = L2_BAND_ID_PATTERN.exec(id);
+      const digest = bandTablesDigest(band).toString('hex').slice(0, 12);
+      if (m === null) {
         fail(
           identity,
-          `id heights ${m[1]}-${m[2]}`,
-          `band.json heights ${from}-${to}`,
-        );
-      }
-      if (m[4] !== digest) {
-        fail(
-          identity,
-          `id digest ${m[4]}`,
-          `the digest of its contents, ${digest}`,
-        );
-      }
-      if (tag !== undefined && m[3] !== tag) {
-        fail(identity, `publisher tag ${m[3]}`, `the publisher's tag ${tag}`);
-      }
-    }
-
-    // selection
-    if (serializeSelection(band.selection) !== selection) {
-      fail(selectionCheck, serializeSelection(band.selection), selection);
-    }
-
-    // files: exactly the layout's, dot-files (a publisher's own) aside
-    const present = (await fs.readdir(dir))
-      .filter((n) => !n.startsWith('.'))
-      .sort();
-    const wanted = bandFiles(band.schema);
-
-    // publication: every file as signed
-    if (listed !== undefined) {
-      const descriptor = listed.get(id);
-      if (descriptor === undefined) {
-        fail(
-          publicationCheck,
-          'not listed in the publication',
-          'every band listed',
+          'not an l2 band id',
+          'l2-h<from>-<to>-<tag>-<digest>, heights in canonical decimals',
         );
       } else {
-        const signedNames = descriptor.files.map((f) => f.name).sort();
-        if (signedNames.join(',') !== present.join(',')) {
+        if (Number(m[1]) !== from || Number(m[2]) !== to) {
           fail(
-            publicationCheck,
-            `holds ${present.join(', ')}`,
-            `the files signed: ${signedNames.join(', ')}`,
+            identity,
+            `id heights ${m[1]}-${m[2]}`,
+            `band.json heights ${from}-${to}`,
           );
         }
-        for (const file of descriptor.files) {
-          if (!present.includes(file.name)) continue;
-          const at = path.join(dir, file.name);
-          const { size } = await fs.stat(at);
-          const sha256 = size === file.size ? await sha256File(at) : '';
-          if (size !== file.size || sha256 !== file.sha256) {
+        if (m[4] !== digest) {
+          fail(
+            identity,
+            `id digest ${m[4]}`,
+            `the digest of its contents, ${digest}`,
+          );
+        }
+        if (tag !== undefined && m[3] !== tag) {
+          fail(identity, `publisher tag ${m[3]}`, `the publisher's tag ${tag}`);
+        }
+      }
+
+      // selection
+      if (serializeSelection(band.selection) !== selection) {
+        fail(selectionCheck, serializeSelection(band.selection), selection);
+      }
+
+      // files: exactly the layout's, dot-files (a publisher's own) aside
+      const present = (await fs.readdir(dir))
+        .filter((n) => !n.startsWith('.'))
+        .sort();
+      const wanted = bandFiles(band.schema);
+
+      // publication: every file as signed
+      if (listed !== undefined) {
+        const descriptor = listed.get(id);
+        if (descriptor === undefined) {
+          fail(
+            publicationCheck,
+            'not listed in the publication',
+            'every band listed',
+          );
+        } else {
+          const signedNames = descriptor.files.map((f) => f.name).sort();
+          if (signedNames.join(',') !== present.join(',')) {
             fail(
               publicationCheck,
-              `${file.name}: ${size} bytes${sha256 !== '' ? `, SHA-256 ${sha256}` : ''}`,
-              `${file.size} bytes, SHA-256 ${file.sha256}, as signed`,
+              `holds ${present.join(', ')}`,
+              `the files signed: ${signedNames.join(', ')}`,
             );
+          }
+          for (const file of descriptor.files) {
+            if (!present.includes(file.name)) continue;
+            const at = path.join(dir, file.name);
+            const { size } = await fs.stat(at);
+            const sha256 = size === file.size ? await sha256File(at) : '';
+            if (size !== file.size || sha256 !== file.sha256) {
+              fail(
+                publicationCheck,
+                `${file.name}: ${size} bytes${sha256 !== '' ? `, SHA-256 ${sha256}` : ''}`,
+                `${file.size} bytes, SHA-256 ${file.sha256}, as signed`,
+              );
+            }
           }
         }
       }
-    }
 
-    if (present.join(',') !== wanted.join(',')) {
-      fail(files, present.join(', '), wanted.join(', '));
-      return; // the rest would only fail on the missing files
-    }
-
-    // schema: before any row is read by name
-    let schemaOk = true;
-    // Row counts are the tables' and lookups' checks, which read the rows.
-    for (const spec of [...PARQUET_L2_TABLES, ...lookupsOf(band)]) {
-      try {
-        await checkParquetFile(duck, path.join(dir, spec.file), {
-          columns: spec.columns,
-        });
-      } catch (error) {
-        if (await isGone(path.join(dir, spec.file))) throw error;
-        schemaOk = false;
-        fail(schema, messageOf(error).replace(`${dir}/`, ''), 'the layout');
+      if (present.join(',') !== wanted.join(',')) {
+        fail(files, present.join(', '), wanted.join(', '));
+        return; // the rest would only fail on the missing files
       }
-    }
-    if (!schemaOk) return; // rows of the wrong shape would only mislead
 
-    // tables
-    for (const spec of PARQUET_L2_TABLES) {
-      const declared = band.tables[spec.name];
-      try {
-        const read = await digestL2Table(duck, dir, spec, {
-          inFileOrder: true,
-        });
-        if (spec.name === 'data_items') items += read.rows;
-        if (
-          read.rows !== declared.rows ||
-          read.rowDigest !== declared.rowDigest
-        ) {
-          fail(
-            tables,
-            `${spec.name}: ${read.rows} rows, digest ${read.rowDigest}`,
-            `${declared.rows} rows, digest ${declared.rowDigest}`,
+      // schema: before any row is read by name
+      let schemaOk = true;
+      // Row counts are the tables' and lookups' checks, which read the rows.
+      await pool.run(async (duck) => {
+        for (const spec of [...PARQUET_L2_TABLES, ...lookupsOf(band)]) {
+          try {
+            await checkParquetFile(duck, path.join(dir, spec.file), {
+              columns: spec.columns,
+            });
+          } catch (error) {
+            if (await isGone(path.join(dir, spec.file))) throw error;
+            schemaOk = false;
+            fail(schema, messageOf(error).replace(`${dir}/`, ''), 'the layout');
+          }
+        }
+      });
+      if (!schemaOk) return; // rows of the wrong shape would only mislead
+
+      // Reads that sort or group the band's tables reserve what the band is
+      // expected to spill, when the databases share a budget. A file that
+      // can't be sized counts as empty: reading it fails as it would.
+      let bandBytes = 0;
+      if (options.spillBytes !== undefined) {
+        for (const name of wanted.filter((n) => n.endsWith('.parquet'))) {
+          bandBytes += await fs.stat(path.join(dir, name)).then(
+            (stat) => stat.size,
+            () => 0,
           );
         }
-      } catch (error) {
-        if (!(error instanceof L2TableError)) throw error;
-        fail(
-          tables,
-          `${spec.name}: ${error.message}${error.details.length > 0 ? ` (${error.details.join(', ')})` : ''}`,
-          'rows in order, keys that hash to their addresses',
-        );
       }
-    }
+      const sorting = pool.runner(bandBytes * SPILL_PER_BAND_BYTE);
 
-    const file = (name: string) =>
-      `read_parquet(${sqlString(path.join(dir, name))})`;
-    const itemsFile = file('data_items.parquet');
-    const tagsFile = file('tags.parquet');
-    const walletsFile = file('wallets.parquet');
-    const parentsFile = file('parents.parquet');
-    // Offsets are unsigned 64-bit; a malformed row (a payload that starts
-    // past its item's end) would underflow them, so the arithmetic is done
-    // in 128 bits and such a row is counted, not a crash.
-    const wide = (cols: string[]) =>
-      `* REPLACE (${cols.map((c) => `CAST("${c}" AS HUGEINT) AS "${c}"`).join(', ')})`;
-    const itemsWide = `(SELECT ${wide(['root_parent_offset', 'offset', 'size', 'data_offset', 'owner_offset', 'owner_size', 'signature_offset', 'signature_size', 'data_size'])} FROM ${itemsFile})`;
-    const parentsWide = `(SELECT ${wide(['root_parent_offset', 'offset', 'size', 'data_offset'])} FROM ${parentsFile})`;
-    const report = (
-      c: VerifyCheck,
-      row: Record<string, unknown>,
-      what: ReadonlyArray<readonly [string, string]>,
-    ) => {
-      for (const [key, text] of what) {
-        if (num(row[key]) > 0) fail(c, `${num(row[key])} ${text}`, '0');
-      }
-    };
+      // From here the reads of the tables, the SQL checks, the lookups and
+      // the L1 index run side by side, each reporting into its own log; the
+      // logs are taken in this order, up to the first that could not be
+      // read, as when they ran one after another.
+      const section = (body: (into: Effect[]) => Promise<void>) => {
+        const into: Effect[] = [];
+        return launch(body(into).then(() => into));
+      };
 
-    // required: what the layout never leaves NULL
-    const nullCounts = (columns: string[]) =>
-      columns
-        .map((c) => `count(*) FILTER (WHERE "${c}" IS NULL) AS "null_${c}"`)
-        .join(', ');
-    const requiredOf: Array<[string, string, string[]]> = [
-      [
-        'data_items',
-        itemsFile,
-        [
-          'id',
-          'height',
-          'block_transaction_index',
-          'root_transaction_id',
-          'parent_id',
-          'owner_address',
-          'data_size',
-          'tag_count',
-        ],
-      ],
-      [
-        'tags',
-        tagsFile,
-        ['height', 'id', 'tag_index', 'tag_name', 'tag_value'],
-      ],
-      ['wallets', walletsFile, ['address', 'public_modulus']],
-      [
-        'parents',
-        parentsFile,
-        [
-          'id',
-          'root_transaction_id',
-          'root_parent_offset',
-          'offset',
-          'size',
-          'data_offset',
-        ],
-      ],
-    ];
-    for (const [table, from_, columns] of requiredOf) {
-      const [row] = (await duck.all(
-        `SELECT ${nullCounts(columns)} FROM ${from_}`,
-      )) as Array<Record<string, unknown>>;
-      report(
-        required,
-        row,
-        columns.map(
-          (c) => [`null_${c}`, `${table} rows with no ${c}`] as const,
+      // tables
+      const tableReads = PARQUET_L2_TABLES.map((spec) =>
+        launch(
+          // Read through the pool (`duck` is not used): a table's ranges
+          // are read side by side.
+          digestL2Table(duck, dir, spec, { inFileOrder: true, run: pool.run }),
         ),
       );
-    }
+      const tablesSection = section(async (into) => {
+        const fail = failTo(into);
+        for (const [index, spec] of PARQUET_L2_TABLES.entries()) {
+          const declared = band.tables[spec.name];
+          try {
+            const read = await tableReads[index];
+            if (spec.name === 'data_items') {
+              into.push(() => {
+                items += read.rows;
+              });
+            }
+            if (
+              read.rows !== declared.rows ||
+              read.rowDigest !== declared.rowDigest
+            ) {
+              fail(
+                tables,
+                `${spec.name}: ${read.rows} rows, digest ${read.rowDigest}`,
+                `${declared.rows} rows, digest ${declared.rowDigest}`,
+              );
+            }
+          } catch (error) {
+            if (!(error instanceof L2TableError)) throw error;
+            fail(
+              tables,
+              `${spec.name}: ${error.message}${error.details.length > 0 ? ` (${error.details.join(', ')})` : ''}`,
+              'rows in order, keys that hash to their addresses',
+            );
+          }
+        }
+      });
 
-    // locations
-    const [loc] = (await duck.all(`SELECT
+      const file = (name: string) =>
+        `read_parquet(${sqlString(path.join(dir, name))})`;
+      const itemsFile = file('data_items.parquet');
+      const tagsFile = file('tags.parquet');
+      const walletsFile = file('wallets.parquet');
+      const parentsFile = file('parents.parquet');
+      // Offsets are unsigned 64-bit; a malformed row (a payload that starts
+      // past its item's end) would underflow them, so the arithmetic is done
+      // in 128 bits and such a row is counted, not a crash.
+      const wide = (cols: string[]) =>
+        `* REPLACE (${cols.map((c) => `CAST("${c}" AS HUGEINT) AS "${c}"`).join(', ')})`;
+      const itemsWide = `(SELECT ${wide(['root_parent_offset', 'offset', 'size', 'data_offset', 'owner_offset', 'owner_size', 'signature_offset', 'signature_size', 'data_size'])} FROM ${itemsFile})`;
+      const parentsWide = `(SELECT ${wide(['root_parent_offset', 'offset', 'size', 'data_offset'])} FROM ${parentsFile})`;
+
+      const sqlSection = section((into) =>
+        sorting(async (duck) => {
+          const fail = failTo(into);
+          const report = reportTo(fail);
+          // required: what the layout never leaves NULL
+          const nullCounts = (columns: string[]) =>
+            columns
+              .map(
+                (c) => `count(*) FILTER (WHERE "${c}" IS NULL) AS "null_${c}"`,
+              )
+              .join(', ');
+          const requiredOf: Array<[string, string, string[]]> = [
+            [
+              'data_items',
+              itemsFile,
+              [
+                'id',
+                'height',
+                'block_transaction_index',
+                'root_transaction_id',
+                'parent_id',
+                'owner_address',
+                'data_size',
+                'tag_count',
+              ],
+            ],
+            [
+              'tags',
+              tagsFile,
+              ['height', 'id', 'tag_index', 'tag_name', 'tag_value'],
+            ],
+            ['wallets', walletsFile, ['address', 'public_modulus']],
+            [
+              'parents',
+              parentsFile,
+              [
+                'id',
+                'root_transaction_id',
+                'root_parent_offset',
+                'offset',
+                'size',
+                'data_offset',
+              ],
+            ],
+          ];
+          for (const [table, from_, columns] of requiredOf) {
+            const [row] = (await duck.all(
+              `SELECT ${nullCounts(columns)} FROM ${from_}`,
+            )) as Array<Record<string, unknown>>;
+            report(
+              required,
+              row,
+              columns.map(
+                (c) => [`null_${c}`, `${table} rows with no ${c}`] as const,
+              ),
+            );
+          }
+
+          // locations
+          const [loc] = (await duck.all(`SELECT
       count(*) FILTER (WHERE NOT (
         (root_parent_offset IS NULL AND "offset" IS NULL AND size IS NULL AND data_offset IS NULL AND owner_offset IS NULL AND owner_size IS NULL AND signature_offset IS NULL AND signature_size IS NULL)
         OR (root_parent_offset IS NOT NULL AND "offset" IS NOT NULL AND size IS NOT NULL AND data_offset IS NOT NULL AND owner_offset IS NOT NULL AND owner_size IS NOT NULL AND signature_offset IS NOT NULL AND signature_size IS NOT NULL))) AS part_location,
@@ -1217,23 +1394,26 @@ export async function verifyL2Bands(
       count(*) FILTER (WHERE ${holds('id = root_transaction_id')}) AS own_root,
       ${countNot(`height BETWEEN ${from} AND ${to}`)} AS outside
       FROM ${itemsWide}`)) as Array<Record<string, unknown>>;
-    report(locations, loc, [
-      ['part_location', 'items with part of a location'],
-      [
-        'bad_layout',
-        'items whose location is not laid out as ANS-104 requires',
-      ],
-      [
-        'bad_lengths',
-        'items whose signature or owner length is not their type’s',
-      ],
-      ['bad_widths', 'items with an id, address or root that is not 32 bytes'],
-      ['own_root', 'items that are their own root transaction'],
-      ['outside', 'items outside the band’s heights'],
-    ]);
+          report(locations, loc, [
+            ['part_location', 'items with part of a location'],
+            [
+              'bad_layout',
+              'items whose location is not laid out as ANS-104 requires',
+            ],
+            [
+              'bad_lengths',
+              'items whose signature or owner length is not their type’s',
+            ],
+            [
+              'bad_widths',
+              'items with an id, address or root that is not 32 bytes',
+            ],
+            ['own_root', 'items that are their own root transaction'],
+            ['outside', 'items outside the band’s heights'],
+          ]);
 
-    // parents
-    const [par] = (await duck.all(`WITH located AS (
+          // parents
+          const [par] = (await duck.all(`WITH located AS (
         SELECT parent_id, root_transaction_id, root_parent_offset FROM ${itemsWide} WHERE "offset" IS NOT NULL)
       SELECT
         count(*) FILTER (WHERE ${holds('parent_id = root_transaction_id')} AND NOT ${holds('root_parent_offset = 0')}) AS direct_off_zero,
@@ -1244,26 +1424,29 @@ export async function verifyL2Bands(
         (SELECT ${countNot('size > 0 AND data_offset > "offset" AND data_offset <= "offset" + size')} FROM ${parentsWide}) AS bad_parent_layout,
         (SELECT ${countNot('octet_length(id) = 32 AND octet_length(root_transaction_id) = 32')} FROM ${parentsFile}) AS bad_parent_widths
       FROM located`)) as Array<Record<string, unknown>>;
-    report(parents, par, [
-      ['direct_off_zero', 'items directly in their root not at offset 0'],
-      [
-        'undescribed',
-        'items in a nested bundle that parents does not describe there',
-      ],
-      ['bad_parent_layout', 'parents whose payload does not start inside them'],
-      ['bad_parent_widths', 'parents whose id or root is not 32 bytes'],
-    ]);
+          report(parents, par, [
+            ['direct_off_zero', 'items directly in their root not at offset 0'],
+            [
+              'undescribed',
+              'items in a nested bundle that parents does not describe there',
+            ],
+            [
+              'bad_parent_layout',
+              'parents whose payload does not start inside them',
+            ],
+            ['bad_parent_widths', 'parents whose id or root is not 32 bytes'],
+          ]);
 
-    // consistency and selected: tags against items, keys against owners
-    const [tagRows] = (await duck.all(`SELECT
+          // consistency and selected: tags against items, keys against owners
+          const [tagRows] = (await duck.all(`SELECT
         ${countNot(`height BETWEEN ${from} AND ${to}`)} AS outside,
         ${countNot('octet_length(id) = 32')} AS bad_widths
       FROM ${tagsFile}`)) as Array<Record<string, unknown>>;
-    report(consistency, tagRows, [
-      ['outside', 'tag rows outside the band’s heights'],
-      ['bad_widths', 'tag rows whose id is not 32 bytes'],
-    ]);
-    const [joined] = (await duck.all(`WITH
+          report(consistency, tagRows, [
+            ['outside', 'tag rows outside the band’s heights'],
+            ['bad_widths', 'tag rows whose id is not 32 bytes'],
+          ]);
+          const [joined] = (await duck.all(`WITH
         t AS (SELECT height, id, count(*) AS n, bool_or(${holds(selectedSql)}) AS sel, true AS in_t
               FROM ${tagsFile} GROUP BY height, id),
         d AS (SELECT height, id, min(tag_count) AS tc_min, max(tag_count) AS tc_max,
@@ -1274,112 +1457,141 @@ export async function verifyL2Bands(
         count(*) FILTER (WHERE in_d AND NOT ${holds('tc_null = 0 AND tc_min = coalesce(n, 0) AND tc_max = coalesce(n, 0)')}) AS bad_count,
         count(*) FILTER (WHERE in_d AND NOT ${holds('sel')}) AS not_selected
       FROM t FULL OUTER JOIN d ON t.height = d.height AND t.id = d.id`)) as Array<
-      Record<string, unknown>
-    >;
-    report(consistency, joined, [
-      [
-        'orphan_tags',
-        'items with tag rows but no data_items row at that height',
-      ],
-      ['bad_count', 'items whose tag_count is not their number of tag rows'],
-    ]);
-    report(selected, joined, [
-      ['not_selected', `items with no tag the selection ${selection} takes`],
-    ]);
-    const [keys] = (await duck.all(`SELECT
+            Record<string, unknown>
+          >;
+          report(consistency, joined, [
+            [
+              'orphan_tags',
+              'items with tag rows but no data_items row at that height',
+            ],
+            [
+              'bad_count',
+              'items whose tag_count is not their number of tag rows',
+            ],
+          ]);
+          report(selected, joined, [
+            [
+              'not_selected',
+              `items with no tag the selection ${selection} takes`,
+            ],
+          ]);
+          const [keys] = (await duck.all(`SELECT
         (SELECT count(*) FROM (SELECT DISTINCT owner_address FROM ${itemsFile} WHERE owner_address IS NOT NULL) d
           ANTI JOIN ${walletsFile} w ON w.address = d.owner_address) AS without_key,
         (SELECT count(*) FROM ${walletsFile} w
           ANTI JOIN (SELECT DISTINCT owner_address FROM ${itemsFile}) d ON w.address = d.owner_address) AS stray_keys`)) as Array<
-      Record<string, unknown>
-    >;
-    report(consistency, keys, [
-      ['stray_keys', 'keys in wallets of no item’s owner'],
-    ]);
-    // A builder leaves out an owner whose key it couldn't find, and says how
-    // many it left out. More than it says is a key removed.
-    const declaredWithout = band.checks?.ownersWithoutKey;
-    const allowedWithout =
-      typeof declaredWithout === 'number' &&
-      Number.isSafeInteger(declaredWithout) &&
-      declaredWithout >= 0
-        ? declaredWithout
-        : 0;
-    if (num(keys.without_key) > allowedWithout) {
-      fail(
-        consistency,
-        `${num(keys.without_key)} owners with no key in wallets`,
-        `at most the ${allowedWithout} its band.json says (checks.ownersWithoutKey)`,
-      );
-    }
+            Record<string, unknown>
+          >;
+          report(consistency, keys, [
+            ['stray_keys', 'keys in wallets of no item’s owner'],
+          ]);
+          // A builder leaves out an owner whose key it couldn't find, and says how
+          // many it left out. More than it says is a key removed.
+          const declaredWithout = band.checks?.ownersWithoutKey;
+          const allowedWithout =
+            typeof declaredWithout === 'number' &&
+            Number.isSafeInteger(declaredWithout) &&
+            declaredWithout >= 0
+              ? declaredWithout
+              : 0;
+          if (num(keys.without_key) > allowedWithout) {
+            fail(
+              consistency,
+              `${num(keys.without_key)} owners with no key in wallets`,
+              `at most the ${allowedWithout} its band.json says (checks.ownersWithoutKey)`,
+            );
+          }
 
-    // located: what is unlocated is what band.json declares, and little
-    const [counts] = (await duck.all(
-      `SELECT count(*) AS n, count(*) FILTER (WHERE "offset" IS NULL) AS unlocated FROM ${itemsFile}`,
-    )) as Array<Record<string, unknown>>;
-    const total = num(counts.n);
-    const unlocated = num(counts.unlocated);
-    const declaredRaw = band.checks?.unlocated;
-    const declared =
-      typeof declaredRaw === 'number'
-        ? declaredRaw
-        : declaredRaw !== null &&
-            typeof declaredRaw === 'object' &&
-            !Array.isArray(declaredRaw)
-          ? Object.values(declaredRaw).reduce<number>(
-              (sum, n) => sum + (typeof n === 'number' ? n : Number.NaN),
-              0,
-            )
-          : 0;
-    const share = total > 0 ? unlocated / total : 0;
-    locatedReport.push({ id, items: total, unlocated, declared, share });
-    if (unlocated !== declared) {
-      fail(
-        located_,
-        `${unlocated} unlocated items`,
-        `the ${declared} its band.json declares (checks.unlocated)`,
-      );
-    }
-    const wholly = total > 0 && unlocated === total;
-    if (share > maxUnlocatedShare && !(wholly && allowUnlocated)) {
-      fail(
-        located_,
-        `${unlocated} of ${total} items unlocated (${share.toPrecision(3)})`,
-        `at most ${maxUnlocatedShare} of them${wholly ? ' (or --allow-unlocated)' : ''}`,
-      );
-    }
-
-    // lookups
-    if (options.lookups !== false) {
-      for (const problem of await verifyBandLookups(duck, dir, band)) {
-        fail(lookups, problem, 'the rows its tables give, in order');
-      }
-    }
-
-    // mined: every root in the L1 index, where the items place it
-    if (l1Bands !== undefined && minedSummary !== undefined) {
-      const covering = coveringL1(l1Bands, from, to);
-      if (covering === undefined) {
-        minedSummary.uncovered.push(id);
-        if (options.l1?.required === true) {
-          fail(
-            mined,
-            `the L1 index in ${options.l1.bandsDir} does not cover heights ${from}-${to}`,
-            'an L1 band over every height',
+          // located: what is unlocated is what band.json declares, and little
+          const [counts] = (await duck.all(
+            `SELECT count(*) AS n, count(*) FILTER (WHERE "offset" IS NULL) AS unlocated FROM ${itemsFile}`,
+          )) as Array<Record<string, unknown>>;
+          const total = num(counts.n);
+          const unlocated = num(counts.unlocated);
+          const declaredRaw = band.checks?.unlocated;
+          const declared =
+            typeof declaredRaw === 'number'
+              ? declaredRaw
+              : declaredRaw !== null &&
+                  typeof declaredRaw === 'object' &&
+                  !Array.isArray(declaredRaw)
+                ? Object.values(declaredRaw).reduce<number>(
+                    (sum, n) => sum + (typeof n === 'number' ? n : Number.NaN),
+                    0,
+                  )
+                : 0;
+          const share = total > 0 ? unlocated / total : 0;
+          into.push(() =>
+            locatedReport.push({
+              id,
+              items: total,
+              unlocated,
+              declared,
+              share,
+            }),
           );
+          if (unlocated !== declared) {
+            fail(
+              located_,
+              `${unlocated} unlocated items`,
+              `the ${declared} its band.json declares (checks.unlocated)`,
+            );
+          }
+          const wholly = total > 0 && unlocated === total;
+          if (share > maxUnlocatedShare && !(wholly && allowUnlocated)) {
+            fail(
+              located_,
+              `${unlocated} of ${total} items unlocated (${share.toPrecision(3)})`,
+              `at most ${maxUnlocatedShare} of them${wholly ? ' (or --allow-unlocated)' : ''}`,
+            );
+          }
+        }),
+      );
+
+      // lookups
+      const lookupsSection = section(async (into) => {
+        if (options.lookups === false) return;
+        const fail = failTo(into);
+        for (const problem of await verifyBandLookups(duck, dir, band, {
+          run: pool.run,
+          runSorted: sorting,
+        })) {
+          fail(lookups, problem, 'the rows its tables give, in order');
         }
-      } else {
-        const btSpec = PARQUET_L1_TABLES.find(
-          (t) => t.name === 'block_transactions',
-        )!;
-        const l1Files = covering.map((b) => path.join(b.dir, btSpec.file));
-        for (const l1File of l1Files) {
-          await checkParquetFile(duck, l1File, { columns: btSpec.columns });
-        }
-        // By id and height: a root the L1 index does not hold there is not
-        // mined there. At another index of the same block, the indexes
-        // disagree on the block's order; that fails too, named apart.
-        const [roots] = (await duck.all(`SELECT
+      });
+
+      // mined: every root in the L1 index, where the items place it
+      const minedSection = section((into) =>
+        sorting(async (duck) => {
+          const fail = failTo(into);
+          const report = reportTo(fail);
+          if (l1Bands !== undefined && minedSummary !== undefined) {
+            const covering = coveringL1(l1Bands, from, to);
+            if (covering === undefined) {
+              into.push(() => minedSummary.uncovered.push(id));
+              if (options.l1?.required === true) {
+                fail(
+                  mined,
+                  `the L1 index in ${options.l1.bandsDir} does not cover heights ${from}-${to}`,
+                  'an L1 band over every height',
+                );
+              }
+            } else {
+              const btSpec = PARQUET_L1_TABLES.find(
+                (t) => t.name === 'block_transactions',
+              )!;
+              const l1Files = covering.map((b) =>
+                path.join(b.dir, btSpec.file),
+              );
+              for (const l1File of l1Files) {
+                await checkParquetFile(duck, l1File, {
+                  columns: btSpec.columns,
+                });
+              }
+              // By id and height: a root the L1 index does not hold there is not
+              // mined there. At another index of the same block, the indexes
+              // disagree on the block's order; that fails too, named apart.
+              const [roots] = (await duck.all(`SELECT
             count(*) FILTER (WHERE l.transaction_id IS NULL) AS absent,
             count(*) FILTER (WHERE l.transaction_id IS NOT NULL
               AND NOT ${holds('l.block_transaction_index = d.block_transaction_index')}) AS moved
@@ -1388,20 +1600,20 @@ export async function verifyL2Bands(
             SELECT transaction_id, height, block_transaction_index
             FROM read_parquet([${l1Files.map(sqlString).join(', ')}]) WHERE height BETWEEN ${from} AND ${to}) l
           ON l.transaction_id = d.root_transaction_id AND l.height = d.height`)) as Array<
-          Record<string, unknown>
-        >;
-        report(mined, roots, [
-          [
-            'absent',
-            'roots not in the L1 index at the height their items give',
-          ],
-        ]);
-        if (num(roots.moved) > 0) {
-          // Two indexes disagreeing on a block's order: tx_root does not
-          // bind it, so the L1 index may be the one wrong. Named, both
-          // positions given, and failed all the same.
-          const rows =
-            (await duck.all(`SELECT d.root_transaction_id AS root, d.height,
+                Record<string, unknown>
+              >;
+              report(mined, roots, [
+                [
+                  'absent',
+                  'roots not in the L1 index at the height their items give',
+                ],
+              ]);
+              if (num(roots.moved) > 0) {
+                // Two indexes disagreeing on a block's order: tx_root does not
+                // bind it, so the L1 index may be the one wrong. Named, both
+                // positions given, and failed all the same.
+                const rows =
+                  (await duck.all(`SELECT d.root_transaction_id AS root, d.height,
               d.block_transaction_index AS l2_index, l.block_transaction_index AS l1_index
             FROM (SELECT DISTINCT root_transaction_id, height, block_transaction_index FROM ${itemsFile}) d
             JOIN (
@@ -1410,194 +1622,256 @@ export async function verifyL2Bands(
             ON l.transaction_id = d.root_transaction_id AND l.height = d.height
             WHERE NOT ${holds('l.block_transaction_index = d.block_transaction_index')}
             ORDER BY d.height, d.block_transaction_index LIMIT ${MAX_MOVED_REPORTED}`)) as Array<
-              Record<string, unknown>
-            >;
-          for (const r of rows) {
-            if (minedSummary.moved.length >= MAX_MOVED_REPORTED) break;
-            minedSummary.moved.push({
-              band: id,
-              root: Buffer.from(r.root as Buffer).toString('base64url'),
-              height: num(r.height),
-              l2Index: num(r.l2_index),
-              l1Index: num(r.l1_index),
-            });
+                    Record<string, unknown>
+                  >;
+                into.push(() => {
+                  for (const r of rows) {
+                    if (minedSummary.moved.length >= MAX_MOVED_REPORTED) break;
+                    minedSummary.moved.push({
+                      band: id,
+                      root: Buffer.from(r.root as Buffer).toString('base64url'),
+                      height: num(r.height),
+                      l2Index: num(r.l2_index),
+                      l1Index: num(r.l1_index),
+                    });
+                  }
+                });
+                fail(
+                  mined,
+                  `${num(roots.moved)} roots the L1 index at ${options.l1?.bandsDir} holds at another block_transaction_index than their items give (see mined.moved)`,
+                  "the same position in both: the two indexes disagree on the order of a block, and either may be wrong (tx_root does not bind the order); check the L1 index with index-l1-verify, and compare it with the publisher's own L1 index",
+                );
+              }
+              if (num(roots.absent) === 0 && num(roots.moved) === 0) {
+                into.push(() => {
+                  minedSummary.checked += 1;
+                });
+              }
+            }
           }
-          fail(
-            mined,
-            `${num(roots.moved)} roots the L1 index at ${options.l1?.bandsDir} holds at another block_transaction_index than their items give (see mined.moved)`,
-            "the same position in both: the two indexes disagree on the order of a block, and either may be wrong (tx_root does not bind the order); check the L1 index with index-l1-verify, and compare it with the publisher's own L1 index",
-          );
-        }
-        if (num(roots.absent) === 0 && num(roots.moved) === 0) {
-          minedSummary.checked += 1;
-        }
-      }
-    }
+        }),
+      );
 
-    // onchain: one denominator, no substitution
-    if (options.onchain !== undefined && band.tables.data_items.rows > 0) {
-      const {
-        perBand,
-        openRoot,
-        concurrency,
-        maxUnchecked = 0,
-        deadlineMs,
-      } = options.onchain;
-      const [counted] = (await duck.all(
-        `SELECT count(*) FILTER (WHERE "offset" IS NOT NULL) AS located,
+      for (const done of [
+        tablesSection,
+        sqlSection,
+        lookupsSection,
+        minedSection,
+      ]) {
+        log.push(...(await done));
+      }
+
+      // onchain: one denominator, no substitution. Read band by band, in
+      // band order, as one run reads them.
+      await turn;
+      if (options.onchain !== undefined && band.tables.data_items.rows > 0) {
+        const {
+          perBand,
+          openRoot,
+          concurrency,
+          maxUnchecked = 0,
+          deadlineMs,
+        } = options.onchain;
+        const [counted] = (await pool.run((duck) =>
+          duck.all(
+            `SELECT count(*) FILTER (WHERE "offset" IS NOT NULL) AS located,
                 count(*) FILTER (WHERE "offset" IS NOT NULL AND root_parent_offset = 0) AS direct,
                 count(*) FILTER (WHERE "offset" IS NOT NULL AND root_parent_offset <> 0) AS nested,
                 count(*) AS n FROM ${itemsFile}`,
-      )) as Array<Record<string, unknown>>;
-      const located = num(counted.located);
-      const locatedShare = num(counted.n) > 0 ? located / num(counted.n) : 0;
-      // The draw, up front: N items uniformly over every located item of
-      // the band (the sample the stated bound is about; a publisher chooses
-      // an item's stratum, so a stratified draw would weaken it), then
-      // nested items on top until ceil(N/2) are nested, where the band has
-      // them, so the nested path is always read. Seeded per band by
-      // sha256(seed | band id | stratum): the rows with the smallest
-      // sha256("<that key>:<row position>").
-      const sample = (where: string, size: number, stratum: number) =>
-        drawLocated(duck, itemsFile, {
-          where,
-          size,
-          seed: drawSeed(onchainSummary.seed, id, stratum),
-        });
-      const rowKey = (r: Record<string, unknown>) =>
-        `${Buffer.from(r.id as Buffer).toString('hex')}:${Buffer.from(r.root_transaction_id as Buffer).toString('hex')}:${String(r.root_parent_offset)}:${String(r.offset)}`;
-      const uniform = await sample('', Math.min(perBand, located), 0);
-      const nestedWant = Math.ceil(perBand / 2);
-      const isNested = (r: Record<string, unknown>) =>
-        num(r.root_parent_offset) !== 0;
-      const nestedInUniform = uniform.filter(isNested).length;
-      const drawnKeys = new Set(uniform.map(rowKey));
-      const extra: Array<Record<string, unknown>> = [];
-      if (
-        nestedInUniform < nestedWant &&
-        num(counted.nested) > nestedInUniform
-      ) {
-        for (const r of await sample(
-          ' AND root_parent_offset <> 0',
-          Math.min(nestedWant, num(counted.nested)),
-          1,
-        )) {
-          if (nestedInUniform + extra.length >= nestedWant) break;
-          if (drawnKeys.has(rowKey(r))) continue;
-          drawnKeys.add(rowKey(r));
-          extra.push(r);
+          ),
+        )) as Array<Record<string, unknown>>;
+        const located = num(counted.located);
+        const locatedShare = num(counted.n) > 0 ? located / num(counted.n) : 0;
+        // The draw, up front: N items uniformly over every located item of
+        // the band (the sample the stated bound is about; a publisher chooses
+        // an item's stratum, so a stratified draw would weaken it), then
+        // nested items on top until ceil(N/2) are nested, where the band has
+        // them, so the nested path is always read. Seeded per band by
+        // sha256(seed | band id | stratum): the rows with the smallest
+        // sha256("<that key>:<row position>").
+        const sample = (where: string, size: number, stratum: number) =>
+          pool.run((duck) =>
+            drawLocated(duck, itemsFile, {
+              where,
+              size,
+              seed: drawSeed(onchainSummary.seed, id, stratum),
+            }),
+          );
+        const rowKey = (r: Record<string, unknown>) =>
+          `${Buffer.from(r.id as Buffer).toString('hex')}:${Buffer.from(r.root_transaction_id as Buffer).toString('hex')}:${String(r.root_parent_offset)}:${String(r.offset)}`;
+        const uniform = await sample('', Math.min(perBand, located), 0);
+        const nestedWant = Math.ceil(perBand / 2);
+        const isNested = (r: Record<string, unknown>) =>
+          num(r.root_parent_offset) !== 0;
+        const nestedInUniform = uniform.filter(isNested).length;
+        const drawnKeys = new Set(uniform.map(rowKey));
+        const extra: Array<Record<string, unknown>> = [];
+        if (
+          nestedInUniform < nestedWant &&
+          num(counted.nested) > nestedInUniform
+        ) {
+          for (const r of await sample(
+            ' AND root_parent_offset <> 0',
+            Math.min(nestedWant, num(counted.nested)),
+            1,
+          )) {
+            if (nestedInUniform + extra.length >= nestedWant) break;
+            if (drawnKeys.has(rowKey(r))) continue;
+            drawnKeys.add(rowKey(r));
+            extra.push(r);
+          }
         }
-      }
-      const toEntries = (rows: Array<Record<string, unknown>>) =>
-        rows.map(
-          (r): BandSampleEntry => ({
-            id: Buffer.from(r.id as Buffer).toString('base64url'),
-            rootTxId: Buffer.from(r.root_transaction_id as Buffer).toString(
-              'base64url',
-            ),
-            rootOffset: num(r.root_parent_offset) + num(r.offset),
-            rootDataOffset: num(r.root_parent_offset) + num(r.data_offset),
-            tag: isNested(r) ? 'nested' : 'direct',
-            height: num(r.height),
-          }),
-        );
-      const entries = [...toEntries(uniform), ...toEntries(extra)];
-      const empty = {
-        id,
-        located,
-        locatedShare,
-        drawn: 0,
-        drawnUniform: 0,
-        drawnNested: 0,
-        ok: 0,
-        wrong: 0,
-        missing: 0,
-        unchecked: 0,
-        uncheckedReasons: {},
-        errorSample: [],
-        inconclusive: false,
-      };
-      if (entries.length === 0) {
-        // Items, none located: nothing can be read on chain, so the band is
-        // not verified there, and fails unless that is allowed.
-        onchainSummary.unlocatedBands.push(id);
-        onchainSummary.bands.push({
-          ...empty,
-          passed: allowUnlocated,
-          reasons: ['no located items to read on chain'],
+        const toEntries = (rows: Array<Record<string, unknown>>) =>
+          rows.map(
+            (r): BandSampleEntry => ({
+              id: Buffer.from(r.id as Buffer).toString('base64url'),
+              rootTxId: Buffer.from(r.root_transaction_id as Buffer).toString(
+                'base64url',
+              ),
+              rootOffset: num(r.root_parent_offset) + num(r.offset),
+              rootDataOffset: num(r.root_parent_offset) + num(r.data_offset),
+              tag: isNested(r) ? 'nested' : 'direct',
+              height: num(r.height),
+            }),
+          );
+        const entries = [...toEntries(uniform), ...toEntries(extra)];
+        const empty = {
+          id,
+          located,
+          locatedShare,
+          drawn: 0,
+          drawnUniform: 0,
+          drawnNested: 0,
+          ok: 0,
+          wrong: 0,
+          missing: 0,
+          unchecked: 0,
+          uncheckedReasons: {},
+          errorSample: [],
+          inconclusive: false,
+        };
+        if (entries.length === 0) {
+          // Items, none located: nothing can be read on chain, so the band is
+          // not verified there, and fails unless that is allowed.
+          log.push(() => {
+            onchainSummary.unlocatedBands.push(id);
+            onchainSummary.bands.push({
+              ...empty,
+              passed: allowUnlocated,
+              reasons: ['no located items to read on chain'],
+            });
+          });
+          if (!allowUnlocated) {
+            fail(
+              onchainCheck,
+              'no item located: not verified on chain',
+              'located items to read (or --allow-unlocated)',
+            );
+          }
+          return;
+        }
+        const result = await checkDrawnHeaders({
+          entries,
+          openRoot,
+          maxUnchecked,
+          ...(deadlineMs !== undefined ? { deadlineMs } : {}),
+          ...(concurrency !== undefined ? { concurrency } : {}),
         });
-        if (!allowUnlocated) {
+        const missing = result.wrong.filter((w) => w.missing === true).length;
+        const bandSummary: L2OnChainBand = {
+          ...empty,
+          drawn: result.drawn,
+          drawnUniform: uniform.length,
+          drawnNested: entries.filter((e) => e.tag === 'nested').length,
+          ok: result.ok,
+          wrong: result.wrong.length,
+          missing,
+          unchecked: result.unchecked.length,
+          uncheckedReasons: result.uncheckedReasons,
+          errorSample: result.errorSample,
+          inconclusive: result.inconclusive,
+          passed: result.passed,
+          reasons: result.reasons,
+        };
+        log.push(() => {
+          onchainSummary.drawn += result.drawn;
+          onchainSummary.ok += result.ok;
+          onchainSummary.wrong += result.wrong.length;
+          onchainSummary.missing += missing;
+          onchainSummary.unchecked += result.unchecked.length;
+          onchainSummary.bands.push(bandSummary);
+        });
+        for (const w of result.wrong) {
           fail(
             onchainCheck,
-            'no item located: not verified on chain',
-            'located items to read (or --allow-unlocated)',
+            `${w.id}: ${w.reason}`,
+            'its header at its recorded location',
           );
         }
-        return;
+        if (result.inconclusive) {
+          log.push(() => onchainSummary.inconclusiveBands.push(id));
+          fail(
+            onchainCheck,
+            result.reasons.join('; '),
+            `every drawn entry checked (at most ${maxUnchecked} unchecked)`,
+          );
+        } else if (!result.passed) {
+          log.push(() =>
+            onchainSummary.failedBands.push({ id, reasons: result.reasons }),
+          );
+        }
       }
-      const result = await checkDrawnHeaders({
-        entries,
-        openRoot,
-        maxUnchecked,
-        ...(deadlineMs !== undefined ? { deadlineMs } : {}),
-        ...(concurrency !== undefined ? { concurrency } : {}),
-      });
-      const missing = result.wrong.filter((w) => w.missing === true).length;
-      onchainSummary.drawn += result.drawn;
-      onchainSummary.ok += result.ok;
-      onchainSummary.wrong += result.wrong.length;
-      onchainSummary.missing += missing;
-      onchainSummary.unchecked += result.unchecked.length;
-      onchainSummary.bands.push({
-        ...empty,
-        drawn: result.drawn,
-        drawnUniform: uniform.length,
-        drawnNested: entries.filter((e) => e.tag === 'nested').length,
-        ok: result.ok,
-        wrong: result.wrong.length,
-        missing,
-        unchecked: result.unchecked.length,
-        uncheckedReasons: result.uncheckedReasons,
-        errorSample: result.errorSample,
-        inconclusive: result.inconclusive,
-        passed: result.passed,
-        reasons: result.reasons,
-      });
-      for (const w of result.wrong) {
-        fail(
-          onchainCheck,
-          `${w.id}: ${w.reason}`,
-          'its header at its recorded location',
-        );
-      }
-      if (result.inconclusive) {
-        onchainSummary.inconclusiveBands.push(id);
-        fail(
-          onchainCheck,
-          result.reasons.join('; '),
-          `every drawn entry checked (at most ${maxUnchecked} unchecked)`,
-        );
-      } else if (!result.passed) {
-        onchainSummary.failedBands.push({ id, reasons: result.reasons });
-      }
+    } finally {
+      await Promise.all(launched);
     }
   };
 
-  for (const [index, onDisk] of ordered.entries()) {
-    try {
-      await checkBand(onDisk);
-    } catch (error) {
-      // One band that can't be read fails, and the rest are still checked.
-      const gone = await isGone(onDisk.dir);
-      if (gone) vanished.push(onDisk.id);
-      addFailure(complete, {
-        height: onDisk.band.heightRange[0],
-        found: `${onDisk.id}: ${gone ? 'vanished during the run' : `stopped: ${messageOf(error)}`}`,
-        expected: 'every check of the band run to its end',
-      });
+  // Bands are checked side by side, as many as there are databases, each
+  // started in band order; their logs are applied in band order.
+  const logs: Effect[][] = ordered.map(() => []);
+  const turns = ordered.map(() => {
+    let done: () => void = () => undefined;
+    const promise = new Promise<void>((resolve) => {
+      done = resolve;
+    });
+    return { promise, done };
+  });
+  let next = 0;
+  let checked = 0;
+  const checkBands = async () => {
+    while (next < ordered.length) {
+      const index = next;
+      next += 1;
+      const onDisk = ordered[index];
+      const log = logs[index];
+      try {
+        await checkBand(
+          onDisk,
+          log,
+          index === 0 ? Promise.resolve() : turns[index - 1].promise,
+        );
+      } catch (error) {
+        // One band that can't be read fails, and the rest are still checked.
+        const gone = await isGone(onDisk.dir);
+        log.push(() => {
+          if (gone) vanished.push(onDisk.id);
+          addFailure(complete, {
+            height: onDisk.band.heightRange[0],
+            found: `${onDisk.id}: ${gone ? 'vanished during the run' : `stopped: ${messageOf(error)}`}`,
+            expected: 'every check of the band run to its end',
+          });
+        });
+      } finally {
+        turns[index].done();
+      }
+      checked += 1;
+      options.progress?.(checked, ordered.length, onDisk.id);
     }
-    options.progress?.(index + 1, ordered.length, onDisk.id);
-  }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(pool.size, ordered.length) }, checkBands),
+  );
+  for (const log of logs) for (const effect of log) effect();
 
   const checks = [identity];
   if (options.publication !== undefined) checks.push(publicationCheck);

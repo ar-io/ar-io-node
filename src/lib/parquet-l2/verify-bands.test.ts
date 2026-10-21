@@ -1140,6 +1140,65 @@ describe('verifyL2Bands fails closed', () => {
     assert.deepEqual(unchecked.minedPartial, { bands: [id], count: 1 });
   });
 
+  it('reports the same with bands and reads side by side as one after another', async () => {
+    const dir = await fresh();
+    await writeBand(db, dir, 100, 199);
+    await writeBand(db, dir, 200, 299, { unsorted: 'tags' });
+    await writeBand(db, dir, 300, 399, {
+      rows: (r) => {
+        r.parents = [];
+      },
+    });
+    await writeBand(db, dir, 400, 499, {
+      rows: (r) => {
+        r.data_items[0][12] = 2; // tag_count
+      },
+    });
+    const gone = await writeBand(db, dir, 500, 599);
+    await fs.rm(path.join(gone.dir, 'lookup_id.parquet'));
+    await writeBand(db, dir, 600, 699);
+    const l1 = await fresh();
+    await writeL1Band(l1, 100, 399, [
+      { id: hash('band-100-root'), height: 101, blockTransactionIndex: 1 },
+      { id: hash('band-200-root'), height: 201, blockTransactionIndex: 0 },
+    ]);
+    const more = await Promise.all(
+      [1, 2, 3].map(() => Database.create(':memory:')),
+    );
+    try {
+      const run = async (moreDucks: Database[], spillBytes?: number) => {
+        const progress: number[] = [];
+        const { seconds: _, ...result } = await verifyL2Bands(db, dir, {
+          publisher: PUBLISHER,
+          l1: { bandsDir: l1, required: false },
+          onchain: { perBand: 2, openRoot: strangerHeaders([]), seed: 7 },
+          progress: (done) => progress.push(done),
+          moreDucks,
+          ...(spillBytes !== undefined ? { spillBytes } : {}),
+        });
+        return { result, progress };
+      };
+      const serial = await run([]);
+      assert.deepEqual(failing(serial.result as never).sort(), [
+        'consistency',
+        'files',
+        'mined',
+        'onchain',
+        'parents',
+        'tables',
+      ]);
+      assert.deepEqual(serial.progress, [1, 2, 3, 4, 5, 6]);
+      for (let i = 0; i < 3; i += 1) {
+        assert.deepEqual(await run(more), serial);
+      }
+      // Sharing a spill budget: room for every read, and room for one.
+      assert.deepEqual(await run(more, 1e12), serial);
+      assert.deepEqual(await run(more, 1), serial);
+    } finally {
+      for (const d of more) await d.close();
+    }
+  });
+
   it('fails a band the publication lists in the range checked that the directory lacks (review 4)', async () => {
     const key = publisherKey();
     const dir = await fresh();

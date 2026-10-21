@@ -16,7 +16,9 @@ import * as path from 'node:path';
 import type { Database } from 'duckdb-async';
 
 import {
+  DuckRunner,
   LookupDescription,
+  type LookupSpec,
   TableFiles,
   verifyLookup,
   writeLookup,
@@ -86,27 +88,47 @@ export async function verifyBandLookups(
   {
     only,
     lookupsDir = bandDir,
-  }: { only?: readonly string[]; lookupsDir?: string } = {},
+    run,
+    runSorted,
+  }: {
+    only?: readonly string[];
+    lookupsDir?: string;
+    /**
+     * Where each read runs: given one, every lookup is checked side by
+     * side, its problems reported in the order they would be one by one.
+     */
+    run?: DuckRunner;
+    /** With `run`, where the rows the tables give are sorted (default `run`). */
+    runSorted?: DuckRunner;
+  } = {},
 ): Promise<string[]> {
   const tables = bandTableFiles(bandDir);
-  const problems: string[] = [];
-  for (const spec of lookupsOf(band)) {
-    if (only !== undefined && !only.includes(spec.name)) continue;
+  const check = (spec: LookupSpec): Promise<string[]> => {
     const declared = band.lookups[spec.name] as LookupDescription | undefined;
     if (declared === undefined) {
-      problems.push(`${spec.file}: not described in the band`);
-      continue;
+      return Promise.resolve([`${spec.file}: not described in the band`]);
     }
-    problems.push(
-      ...(await verifyLookup(
-        duck,
-        spec,
-        path.join(lookupsDir, spec.file),
-        tables,
-        declared,
-        { order: PARQUET_L2_LOOKUP_DIGEST_ORDER },
-      )),
+    return verifyLookup(
+      duck,
+      spec,
+      path.join(lookupsDir, spec.file),
+      tables,
+      declared,
+      { order: PARQUET_L2_LOOKUP_DIGEST_ORDER },
+      run !== undefined ? { run, runSorted: runSorted ?? run } : {},
     );
+  };
+  const specs = lookupsOf(band).filter(
+    (spec) => only === undefined || only.includes(spec.name),
+  );
+  const problems: string[] = [];
+  if (run !== undefined) {
+    // verifyLookup reports what it can't read rather than throwing.
+    for (const found of await Promise.all(specs.map(check))) {
+      problems.push(...found);
+    }
+    return problems;
   }
+  for (const spec of specs) problems.push(...(await check(spec)));
   return problems;
 }
