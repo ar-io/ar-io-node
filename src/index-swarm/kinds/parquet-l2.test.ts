@@ -18,6 +18,7 @@ import {
   BAND_FILE,
   bandFiles,
   l2BandId,
+  lookupsOf,
   PARQUET_L2_LOOKUPS,
   PARQUET_L2_TABLES,
   ParquetL2Band,
@@ -213,6 +214,48 @@ describe('ParquetL2Kind', () => {
       kind.validate(descriptor, band, indexOf(descriptor)),
       /bytes, the publication says/,
     );
+  });
+
+  it('validates an l2-2 band with its key lookup and stats, and refuses it without them', async () => {
+    const layout = {
+      schema: 'l2-2' as const,
+      keyTags: ['Drive-Id'],
+      statTags: ['Content-Type'],
+    };
+    const next: ParquetL2Band = {
+      ...described(),
+      ...layout,
+      lookups: Object.fromEntries(
+        lookupsOf(layout).map((l) => [
+          l.name,
+          { rows: 3, rowDigest: 'b'.repeat(64) },
+        ]),
+      ),
+    };
+    for (const spec of lookupsOf(layout).slice(3)) {
+      await writeTable(path.join(band, spec.file), spec, 3);
+    }
+    // The same rows: the same id.
+    assert.equal(await rewrite(next), id);
+    const descriptor = await kind.describe(band);
+    assert.deepEqual(
+      descriptor.files.map((f) => f.name),
+      bandFiles('l2-2'),
+    );
+    assert.deepEqual(descriptor.metadata, {
+      schema: 'l2-2',
+      selection: SELECTION,
+    });
+    await kind.validate(descriptor, band, indexOf(descriptor));
+    // A key lookup with other columns, or fewer rows than the band says.
+    const key = lookupsOf(layout)[3];
+    await writeTable(path.join(band, key.file), key, 2);
+    await assert.rejects(
+      kind.validate(descriptor, band, indexOf(descriptor)),
+      /lookup_key\.parquet/,
+    );
+    await fs.rm(path.join(band, 'stats.parquet'));
+    await assert.rejects(kind.describe(band), /lacks stats\.parquet/);
   });
 
   it('refuses a band.json of another layout', async () => {

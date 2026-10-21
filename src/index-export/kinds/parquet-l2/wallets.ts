@@ -52,6 +52,8 @@ export interface OwnerKeyStats {
   owners: number;
   fromSource: number;
   fromWalletsDb: number;
+  /** Keys taken from the `wallets` tables of the bands this one replaces. */
+  fromReplaced: number;
   fromGateway: number;
   /** Owners left out of `wallets`: no key whose hash is their address. */
   withoutKey: number;
@@ -171,17 +173,56 @@ export class OwnerNotes {
  *
  * @throws ReadUnavailableError / ReadBudgetError from the reads.
  */
+/**
+ * The owners' keys the bands a build replaces hold, as a key source like
+ * `bundles.db`'s: a key verifies itself (its SHA-256 is the address), so one
+ * a published band carries is as good as one read from the root, and it
+ * costs no read. A re-settle therefore keeps every key the bands it
+ * replaces had, whatever the gateway can serve that day.
+ */
+export async function loadReplacedWallets(
+  duck: Database,
+  walletsFiles: string[],
+): Promise<{ get: (address: Buffer) => Buffer | undefined; size: number }> {
+  const keys = new Map<string, Buffer>();
+  if (walletsFiles.length > 0) {
+    const files = walletsFiles
+      .map((file) => `'${file.replace(/'/g, "''")}'`)
+      .join(', ');
+    const rows = await duck.stream(
+      `SELECT address, public_modulus FROM read_parquet([${files}])`,
+    );
+    for await (const row of rows) {
+      const { address, public_modulus } = row as {
+        address: Buffer;
+        public_modulus: Buffer;
+      };
+      keys.set(
+        Buffer.from(address).toString('latin1'),
+        Buffer.from(public_modulus),
+      );
+    }
+  }
+  return {
+    get: (address) => keys.get(address.toString('latin1')),
+    size: keys.size,
+  };
+}
+
 export async function resolveOwnerKeys(
   duck: Database,
   notes: string,
   {
     walletsDb,
+    replaced,
     reads,
     write,
     concurrency = 32,
     batch = 10_000,
   }: {
     walletsDb?: { get: (address: Buffer) => Buffer | undefined };
+    /** The replaced bands' keys ({@link loadReplacedWallets}), tried after `walletsDb`, before the roots. */
+    replaced?: { get: (address: Buffer) => Buffer | undefined };
     reads?: GatewayReads;
     write: (rows: unknown[][]) => Promise<void>;
     concurrency?: number;
@@ -192,6 +233,7 @@ export async function resolveOwnerKeys(
     owners: 0,
     fromSource: 0,
     fromWalletsDb: 0,
+    fromReplaced: 0,
     fromGateway: 0,
     withoutKey: 0,
     withoutKeyBy: { unreadable: 0, wrong: 0, nowhere: 0 },
@@ -239,6 +281,12 @@ export async function resolveOwnerKeys(
     if (fromDb !== undefined && sha256(fromDb).equals(address)) {
       stats.fromWalletsDb += 1;
       found.push([address, fromDb]);
+      return;
+    }
+    const fromReplaced = replaced?.get(address);
+    if (fromReplaced !== undefined && sha256(fromReplaced).equals(address)) {
+      stats.fromReplaced += 1;
+      found.push([address, fromReplaced]);
       return;
     }
     let unreadable = false;

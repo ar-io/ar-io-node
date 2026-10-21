@@ -213,6 +213,25 @@ describe('parseExportConfig, parquet-l2', () => {
       config.l2Indexes?.[0].selection.tag.excludeValuePrefix,
       'ArDriver',
     );
+    // No key or stat tags unless given.
+    assert.deepEqual(config.l2Indexes?.[0].keyTags, []);
+    assert.deepEqual(config.l2Indexes?.[0].statTags, []);
+    const tagged = parseExportConfig({
+      ...L2,
+      INDEX_EXPORT_L2_INDEXES: JSON.stringify([
+        {
+          ...JSON.parse(L2.INDEX_EXPORT_L2_INDEXES)[0],
+          keyTags: ['Parent-Folder-Id', 'Drive-Id', 'Drive-Id'],
+          statTags: ['Content-Type'],
+        },
+      ]),
+    });
+    // Each once, in byte order, whatever order they were given in.
+    assert.deepEqual(tagged.l2Indexes?.[0].keyTags, [
+      'Drive-Id',
+      'Parent-Folder-Id',
+    ]);
+    assert.deepEqual(tagged.l2Indexes?.[0].statTags, ['Content-Type']);
     assert.deepEqual(config.l2Source?.config, {
       type: 'clickhouse',
       name: 'clickhouse',
@@ -298,6 +317,25 @@ describe('parseExportConfig, parquet-l2', () => {
     assert.throws(
       () => indexes([{ name: 'a', selection, filter: {} }]),
       /unknown key "filter"/,
+    );
+    assert.throws(
+      () => indexes([{ name: 'a', selection, keyTags: 'Drive-Id' }]),
+      /INDEX_EXPORT_L2_INDEXES\[0\]\.keyTags must be a list of tag names/,
+    );
+    assert.throws(
+      () => indexes([{ name: 'a', selection, statTags: [''] }]),
+      /INDEX_EXPORT_L2_INDEXES\[0\]\.statTags\[0\] must be a non-empty string/,
+    );
+    assert.throws(
+      () =>
+        indexes([
+          {
+            name: 'a',
+            selection,
+            keyTags: Array.from({ length: 17 }, (_, i) => `t${i}`),
+          },
+        ]),
+      /keyTags lists more than 16 tag names/,
     );
     assert.throws(
       () =>

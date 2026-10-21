@@ -47,6 +47,8 @@ export interface IndexBandBuildCLIOptions extends GlobalCLIOptions {
 export interface IndexBandVerifyCLIOptions extends GlobalCLIOptions {
   bandDir?: string;
   gatewayUrl?: string;
+  arweaveNodes?: string;
+  allowAgreement?: boolean;
   readTimeout?: string;
   sampleSize?: string;
 }
@@ -62,6 +64,7 @@ export interface IndexL1ImportCLIOptions extends GlobalCLIOptions {
 }
 
 export interface IndexL1VerifyCLIOptions extends GlobalCLIOptions {
+  spillMax?: string;
   coreDb?: string;
   bandsDir?: string;
   skipTxRoot?: boolean;
@@ -70,6 +73,32 @@ export interface IndexL1VerifyCLIOptions extends GlobalCLIOptions {
   to?: string;
   anchorFrom?: string;
   anchorMin?: string;
+}
+
+export interface IndexL2VerifyCLIOptions extends GlobalCLIOptions {
+  bandsDir?: string;
+  publisher?: string;
+  onchain?: string;
+  seed?: string;
+  spillMax?: string;
+  arweaveNodes?: string;
+  gatewayUrl?: string;
+  readTimeout?: string;
+  from?: string;
+  to?: string;
+  skipLookups?: boolean;
+  publication?: string;
+  publisherKey?: string;
+  registryUrl?: string;
+  index?: string;
+  l1BandsDir?: string;
+  allowAgreement?: boolean;
+  allowUnlocated?: boolean;
+  maxUnchecked?: string;
+  maxUnlocatedShare?: string;
+  allowExpired?: boolean;
+  bandDeadline?: string;
+  concurrency?: string;
 }
 
 export interface IndexL1AuditCLIOptions extends GlobalCLIOptions {

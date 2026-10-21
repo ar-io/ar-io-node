@@ -35,7 +35,7 @@ import {
   ParquetL2Selection,
 } from '../src/lib/parquet-l2/layout.js';
 import { withBandWriter } from '../src/index-export/kinds/parquet-l1/export.js';
-import { selectionMatcher } from '../src/index-export/kinds/parquet-l2/selection.js';
+import { selectionMatcher } from '../src/lib/parquet-l2/selection.js';
 import type {
   L2ItemSource,
   L2SourceRow,
