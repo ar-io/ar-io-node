@@ -464,11 +464,33 @@ type DebugInfo = {
     maxBundleUnbundledAt: number;
     maxBundleFullyIndexedAt: number;
     maxStableDataItemIndexedAt: number;
+    /**
+     * When the newest stable data item row was written. The ClickHouse
+     * import's prune threshold: unlike indexed_at, a row flushed after it is
+     * read can't fall below it. -1 when no row has one yet.
+     */
+    maxStableDataItemStableAt: number;
     maxNewDataItemIndexedAt: number;
   };
   errors: string[];
   warnings: string[];
 };
+
+/**
+ * Which stable data items to delete: those in the height range below one
+ * threshold. `stableAtThreshold` (a `maxStableDataItemStableAt` read before
+ * exporting the range) deletes only rows that were in the range when it was
+ * read, so only rows the export saw. `indexedAtThreshold` is kept for older
+ * callers but can delete rows the export never saw: the flush copies
+ * indexed_at from new_data_items, so a row flushed late can carry an old one.
+ */
+export type PruneStableDataItemsParams = {
+  startHeight: number;
+  endHeight: number;
+} & (
+  | { stableAtThreshold: number; indexedAtThreshold?: undefined }
+  | { indexedAtThreshold: number; stableAtThreshold?: undefined }
+);
 
 export class StandaloneSqliteDatabaseWorker {
   private log: winston.Logger;
@@ -529,7 +551,7 @@ export class StandaloneSqliteDatabaseWorker {
   saveBundlesStableDataFn: Sqlite.Transaction;
   deleteCoreStaleNewDataFn: Sqlite.Transaction;
   deleteBundlesStaleNewDataFn: Sqlite.Transaction;
-  deleteStableDataItemsWithHeightAndIndexedAtFn: Sqlite.Transaction;
+  pruneStableDataItemsFn: Sqlite.Transaction;
 
   constructor({
     log,
@@ -932,17 +954,32 @@ export class StandaloneSqliteDatabaseWorker {
       },
     );
 
-    this.deleteStableDataItemsWithHeightAndIndexedAtFn =
+    this.pruneStableDataItemsFn =
       this.dbs.bundles.transaction(
         ({
           indexedAtThreshold,
+          stableAtThreshold,
           startHeight,
           endHeight,
-        }: {
-          indexedAtThreshold: number;
-          startHeight: number;
-          endHeight: number;
-        }) => {
+        }: PruneStableDataItemsParams) => {
+          // By stable_at when given: see PruneStableDataItemsParams.
+          if (stableAtThreshold !== undefined) {
+            // Delete the tags which reference data items first
+            this.stmts.bundles.deleteStableDataItemTagsWithHeightAndStableAt.run(
+              {
+                stable_at_threshold: stableAtThreshold,
+                start_height: startHeight,
+                end_height: endHeight,
+              },
+            );
+            this.stmts.bundles.deleteStableDataItemsWithHeightAndStableAt.run({
+              stable_at_threshold: stableAtThreshold,
+              start_height: startHeight,
+              end_height: endHeight,
+            });
+            return;
+          }
+
           // Delete the tags which reference data items first
           this.stmts.bundles.deleteStableDataItemTagsWithHeightAndIndexedAt.run(
             {
@@ -1979,6 +2016,7 @@ export class StandaloneSqliteDatabaseWorker {
         maxBundleFullyIndexedAt: bundleStats.max_fully_indexed_at,
         maxNewDataItemIndexedAt: dataItemStats.max_new_indexed_at,
         maxStableDataItemIndexedAt: dataItemStats.max_stable_indexed_at,
+        maxStableDataItemStableAt: dataItemStats.max_stable_stable_at ?? -1,
       },
       errors,
       warnings,
@@ -3593,20 +3631,8 @@ export class StandaloneSqliteDatabaseWorker {
     return walCheckpoint[0];
   }
 
-  pruneStableDataItems({
-    indexedAtThreshold,
-    startHeight,
-    endHeight,
-  }: {
-    indexedAtThreshold: number;
-    startHeight: number;
-    endHeight: number;
-  }) {
-    this.deleteStableDataItemsWithHeightAndIndexedAtFn({
-      indexedAtThreshold,
-      startHeight,
-      endHeight,
-    });
+  pruneStableDataItems(params: PruneStableDataItemsParams) {
+    this.pruneStableDataItemsFn(params);
   }
 }
 
@@ -4922,11 +4948,9 @@ export class StandaloneSqliteDatabase
     return this.queueWrite('data', 'saveVerificationPriority', [id, priority]);
   }
 
-  async pruneStableDataItems(params: {
-    indexedAtThreshold: number;
-    startHeight: number;
-    endHeight: number;
-  }): Promise<void> {
+  async pruneStableDataItems(
+    params: PruneStableDataItemsParams,
+  ): Promise<void> {
     return this.queueWrite('bundles', 'pruneStableDataItems', [params]);
   }
 

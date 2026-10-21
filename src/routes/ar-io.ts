@@ -898,18 +898,36 @@ arIoRouter.get(
   },
 );
 
-// Prune stable data items before a given timestamp and within a height range
+// Prune stable data items written before a threshold, within a height range.
+// stableAtThreshold (maxStableDataItemStableAt read before exporting the range)
+// deletes only what the export saw; indexedAtThreshold is kept for older
+// callers, but a row flushed late can carry an old indexed_at and be deleted
+// unexported. Exactly one is required.
 arIoRouter.post(
   '/ar-io/admin/prune-stable-data-items',
   express.json(),
   async (req, res) => {
     try {
-      const { indexedAtThreshold, startHeight, endHeight } = req.body;
+      const { indexedAtThreshold, stableAtThreshold, startHeight, endHeight } =
+        req.body;
 
-      if (!Number.isInteger(indexedAtThreshold) || indexedAtThreshold < 0) {
+      if (
+        (indexedAtThreshold === undefined) ===
+        (stableAtThreshold === undefined)
+      ) {
         res
           .status(400)
-          .send('Invalid indexedAtThreshold - must be a positive integer');
+          .send('Give exactly one of stableAtThreshold or indexedAtThreshold');
+        return;
+      }
+      const [thresholdName, threshold] =
+        stableAtThreshold !== undefined
+          ? ['stableAtThreshold', stableAtThreshold]
+          : ['indexedAtThreshold', indexedAtThreshold];
+      if (!Number.isInteger(threshold) || threshold < 0) {
+        res
+          .status(400)
+          .send(`Invalid ${thresholdName} - must be a positive integer`);
         return;
       }
 
@@ -933,11 +951,11 @@ arIoRouter.post(
         return;
       }
 
-      await db.pruneStableDataItems({
-        indexedAtThreshold,
-        startHeight,
-        endHeight,
-      });
+      await db.pruneStableDataItems(
+        stableAtThreshold !== undefined
+          ? { stableAtThreshold, startHeight, endHeight }
+          : { indexedAtThreshold, startHeight, endHeight },
+      );
       res.json({ message: 'Stable data items pruned successfully' });
     } catch (error: any) {
       res.status(500).send(error?.message);

@@ -3301,6 +3301,153 @@ describe('StandaloneSqliteDatabase', () => {
     });
   });
 
+  describe('pruneStableDataItems by stable_at (late flush race)', () => {
+    // The ClickHouse import reads a threshold, exports a height range, then
+    // prunes the range below the threshold. The flush copies indexed_at from
+    // new_data_items, so a bundle unbundled earlier and flushed during the
+    // export lands with an old indexed_at: pruning by indexed_at deletes it
+    // unexported. stable_at is stamped at the flush, so it lands at or above
+    // a threshold read before it.
+    const height = 777_000;
+    const rootTxId = toB64Url(crypto.randomBytes(32));
+
+    const stage = async (indexedAt: number) => {
+      const id = toB64Url(crypto.randomBytes(32));
+      const item = normalizeAns104DataItem({
+        rootTxId,
+        parentId: rootTxId,
+        parentIndex: -1,
+        index: 0,
+        ans104DataItem: { ...dataItem, id },
+        filter: '{"always": true}',
+        dataHash: '',
+        rootParentOffset: 0,
+      });
+      await db.saveDataItem(item);
+      bundlesDb
+        .prepare(
+          'UPDATE new_data_items SET height = @height, indexed_at = @indexedAt WHERE id = @id',
+        )
+        .run({ height, indexedAt, id: fromB64Url(id) });
+      bundlesDb
+        .prepare(
+          'UPDATE new_data_item_tags SET height = @height WHERE data_item_id = @id',
+        )
+        .run({ height, id: fromB64Url(id) });
+      await db.flushStableDataItems(height + 1, Date.now());
+      return fromB64Url(id);
+    };
+    const isStable = (id: Buffer) =>
+      bundlesDb
+        .prepare('SELECT 1 FROM stable_data_items WHERE id = @id')
+        .get({ id }) !== undefined;
+    // The stats statement getDebugInfo runs, read directly: each worker
+    // caches its debug info, so a call may return an older snapshot.
+    const dataItemStats = () =>
+      bundlesDb
+        .prepare(
+          loadSql(fileURLToPath(new URL('./sql/bundles', import.meta.url)))[
+            'selectDataItemStats'
+          ],
+        )
+        .get() as {
+        max_stable_indexed_at: number;
+        max_stable_stable_at: number;
+      };
+    const setStableAt = (id: Buffer, stableAt: number) =>
+      bundlesDb
+        .prepare(
+          'UPDATE stable_data_items SET stable_at = @stableAt WHERE id = @id',
+        )
+        .run({ stableAt, id });
+
+    // Every table is emptied after each test (test/sqlite-helpers.ts).
+    beforeEach(() => {
+      coreDb
+        .prepare(
+          `INSERT INTO stable_block_transactions (
+             block_indep_hash, transaction_id, block_transaction_index
+           ) VALUES (@hash, @tx, 0)`,
+        )
+        .run({ hash: crypto.randomBytes(32), tx: fromB64Url(rootTxId) });
+    });
+
+    it('stamps stable_at at the flush, not the indexed_at it copies', async () => {
+      const before = Math.floor(Date.now() / 1000);
+      const id = await stage(1_000);
+      const row = bundlesDb
+        .prepare(
+          'SELECT indexed_at, stable_at FROM stable_data_items WHERE id = @id',
+        )
+        .get({ id }) as { indexed_at: number; stable_at: number };
+      assert.equal(row.indexed_at, 1_000);
+      assert.ok(row.stable_at >= before, `${row.stable_at} >= ${before}`);
+      assert.ok(row.stable_at <= Math.floor(Date.now() / 1000) + 1);
+      assert.ok(dataItemStats().max_stable_stable_at >= row.stable_at);
+    });
+
+    it('keeps a row flushed after the threshold was read, which indexed_at would delete', async () => {
+      const now = Math.floor(Date.now() / 1000);
+      // Exported: flushed a while before the threshold was read.
+      const exported = await stage(2_000);
+      setStableAt(exported, now - 100);
+      // The newest row when the threshold is read.
+      const atThreshold = await stage(2_000);
+
+      // The import reads both thresholds, then exports the range...
+      const stats = dataItemStats();
+      const stableAtThreshold = stats.max_stable_stable_at;
+      const indexedAtThreshold = stats.max_stable_indexed_at;
+      assert.ok(stableAtThreshold >= now, `${stableAtThreshold} >= ${now}`);
+      setStableAt(atThreshold, stableAtThreshold);
+
+      // ...while a bundle unbundled long ago is flushed into the range.
+      const late = await stage(1_500);
+      assert.ok(
+        1_500 < indexedAtThreshold,
+        'the late row looks old by indexed_at',
+      );
+
+      await db.pruneStableDataItems({
+        stableAtThreshold,
+        startHeight: height,
+        endHeight: height,
+      });
+      assert.equal(isStable(exported), false, 'the exported row is pruned');
+      assert.equal(
+        isStable(atThreshold),
+        true,
+        'the threshold row waits a cycle',
+      );
+      assert.equal(
+        isStable(late),
+        true,
+        'the late row is kept for the next export',
+      );
+
+      // The old threshold deletes the late row although no export saw it.
+      await db.pruneStableDataItems({
+        indexedAtThreshold,
+        startHeight: height,
+        endHeight: height,
+      });
+      assert.equal(isStable(late), false);
+    });
+
+    it('treats rows from before the migration (no stable_at) as old', async () => {
+      const legacy = await stage(3_000);
+      bundlesDb
+        .prepare('UPDATE stable_data_items SET stable_at = NULL WHERE id = @id')
+        .run({ id: legacy });
+      await db.pruneStableDataItems({
+        stableAtThreshold: 1,
+        startHeight: height,
+        endHeight: height,
+      });
+      assert.equal(isStable(legacy), false);
+    });
+  });
+
   describe('optimistic tag rows superseded by the unbundle write', () => {
     // Regression: new_data_item_tags carries root_transaction_id in its
     // primary key and the optimistic path writes NULL there. The later
