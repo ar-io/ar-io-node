@@ -839,6 +839,80 @@
     }
   },
   {
+    "id": "onchain-liar-format1-404-holder-unheard",
+    "description": "One node serves a format-1 copy, one lacks the header, the holder 503s: two machines said something, only one of them served the root",
+    "tampered": "liar header, holder 503",
+    "kind": "onchain",
+    "roots": {
+      "G": {}
+    },
+    "nodes": {
+      "bad:1984": {
+        "header": {
+          "*": "format1"
+        }
+      },
+      "tip1:1984": {
+        "header": {
+          "*": "404"
+        }
+      },
+      "data1:1984": {
+        "header": {
+          "*": "503"
+        }
+      }
+    },
+    "entries": [
+      {
+        "root": "G",
+        "repeat": 20
+      }
+    ],
+    "expect": {
+      "verdict": "unknown",
+      "check": "onchain",
+      "failing": [
+        "onchain"
+      ],
+      "reason": [
+        "unchecked"
+      ]
+    }
+  },
+  {
+    "id": "onchain-liar-format1-404-holder-heard",
+    "description": "One node serves a format-1 copy, one lacks the header, the holder answers",
+    "tampered": "liar header",
+    "kind": "onchain",
+    "roots": {
+      "G": {}
+    },
+    "nodes": {
+      "bad:1984": {
+        "header": {
+          "*": "format1"
+        }
+      },
+      "tip1:1984": {
+        "header": {
+          "*": "404"
+        }
+      },
+      "h1:1984": {}
+    },
+    "entries": [
+      {
+        "root": "G",
+        "repeat": 20
+      }
+    ],
+    "expect": {
+      "verdict": "verified",
+      "reason": []
+    }
+  },
+  {
     "id": "onchain-honest-liar-height",
     "description": "One node names the right block at another height (D1)",
     "tampered": "liar status height",

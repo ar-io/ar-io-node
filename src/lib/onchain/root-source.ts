@@ -299,6 +299,20 @@ export function onChainRootSource({
           true,
         );
       }
+      // Refuted unbound only on the root's own header: two machines that
+      // served this very transaction (its signature hashes to the id) and
+      // whose copies can't bind it, with every node heard. A 404 says a
+      // node doesn't hold it, not that what it holds can't be bound, so it
+      // never counts here; and an unheard node may be the honest holder.
+      const servers = new Set(headers.answers.map((a) => a.machine)).size;
+      if (machines >= 2 && (servers < 2 || headers.unheard.length > 0)) {
+        throw new NodesRefusedError(
+          `no header that binds ${id}: ${servers} machine${servers === 1 ? '' : 's'} served it unbindable (${reasons.join('; ')}), ${headers.absent.length} said 404 and ${headers.unheard.length} stayed unheard; a root is refuted unbound only when two machines serve it so and every node was heard: unchecked`,
+          headers.absent.length,
+          headers.busy.length,
+          headers.faults.length,
+        );
+      }
       if (machines >= 2) {
         throw new RootUnboundError(
           `${id} can't be bound: ${reasons.join('; ')}${allowAgreement ? '' : ' (agreement in place of a signature needs --allow-agreement)'}`,

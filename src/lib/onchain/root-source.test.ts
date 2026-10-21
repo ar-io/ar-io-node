@@ -1247,6 +1247,13 @@ describe('the on-chain check counts a refuted root against its band', () => {
       ],
       fetch: hosts({ '127.0.0.1:1984': m, '127.0.0.1:1985': m }),
       dedupeByAddress: true,
+      // Resolved here, so the test never asks a real resolver about h1.
+      lookupAll: async (host) =>
+        host === '127.0.0.1'
+          ? ['127.0.0.1']
+          : host === 'h1'
+            ? ['10.0.0.9']
+            : [],
     });
     await assert.rejects(onChainRootSource({ pool }).bind(good.f.id));
     // Without resolving names, two ports of one host are one machine too.
