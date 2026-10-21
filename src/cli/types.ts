@@ -98,6 +98,7 @@ export interface IndexL2VerifyCLIOptions extends GlobalCLIOptions {
   maxUnlocatedShare?: string;
   allowExpired?: boolean;
   bandDeadline?: string;
+  concurrency?: string;
 }
 
 export interface IndexL1AuditCLIOptions extends GlobalCLIOptions {

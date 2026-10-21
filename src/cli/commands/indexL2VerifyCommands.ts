@@ -13,6 +13,7 @@
  * Read-only. See `docs/index-verification.md`.
  */
 import * as fsp from 'node:fs/promises';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import { Logger } from 'winston';
 
@@ -63,6 +64,75 @@ export const SPILL_PER_PARQUET_BYTE = 4;
  * both tables by item. An estimate, as above.
  */
 export const SPILL_PER_TABLE_BYTE = 2;
+
+/** The most databases `--concurrency` picks by itself. */
+export const DEFAULT_MAX_CONCURRENCY = 4;
+
+/** The most databases `--concurrency` may ask for. */
+export const MAX_CONCURRENCY = 16;
+
+/**
+ * Threads of libuv's pool left beside the databases: each database's query
+ * holds a pool thread for as long as it runs, and the on-chain reads' DNS
+ * lookups and the file reads need the rest. With none left, a lookup
+ * waited out its timeout and an honest band came back inconclusive.
+ */
+export const THREADPOOL_SPARE = 2;
+
+/**
+ * libuv's threadpool size, read as libuv reads `UV_THREADPOOL_SIZE`: its
+ * leading digits (atoi), 4 when unset, at least 1 and at most 1024.
+ */
+export function threadpoolSize(
+  env: Record<string, string | undefined> = process.env,
+): number {
+  const value = env.UV_THREADPOOL_SIZE;
+  if (value === undefined) return 4;
+  const n = Number.parseInt(value.trim(), 10);
+  if (!Number.isFinite(n) || n <= 0) return 1;
+  return Math.min(1024, n);
+}
+
+/**
+ * How many databases check side by side: `asked` (`--concurrency`), or by
+ * default a quarter of the CPUs (each database runs two threads, and the
+ * host may be serving a gateway), at most {@link DEFAULT_MAX_CONCURRENCY};
+ * never more than libuv's threadpool leaves {@link THREADPOOL_SPARE}
+ * threads beside, nor {@link MAX_CONCURRENCY}.
+ *
+ * @throws L2VerifyRefused when `asked` is more than that.
+ */
+export function concurrencyFor({
+  asked,
+  cpus = os.availableParallelism(),
+  threadpool = threadpoolSize(),
+}: {
+  asked?: number;
+  cpus?: number;
+  threadpool?: number;
+}): number {
+  const room = Math.max(1, threadpool - THREADPOOL_SPARE);
+  if (asked === undefined) {
+    return Math.max(
+      1,
+      Math.min(DEFAULT_MAX_CONCURRENCY, Math.floor(cpus / 4), room),
+    );
+  }
+  if (asked < 1) {
+    throw new L2VerifyRefused('--concurrency must be 1 or above');
+  }
+  if (asked > MAX_CONCURRENCY) {
+    throw new L2VerifyRefused(
+      `--concurrency must be at most ${MAX_CONCURRENCY}`,
+    );
+  }
+  if (asked > room) {
+    throw new L2VerifyRefused(
+      `--concurrency ${asked} needs a libuv threadpool of ${asked + THREADPOOL_SPARE} or more (each database holds a thread while it reads, and DNS and file reads need ${THREADPOOL_SPARE} beside them); UV_THREADPOOL_SIZE is ${threadpool}, so at most ${room}: set UV_THREADPOOL_SIZE higher, or ask for fewer`,
+    );
+  }
+  return asked;
+}
 
 export class L2VerifyRefused extends Error {}
 
@@ -219,6 +289,9 @@ export async function indexL2VerifyCLICommand(
     options.maxUnlocatedShare,
     '--max-unlocated-share',
   );
+  const concurrency = concurrencyFor({
+    asked: whole(options.concurrency, '--concurrency'),
+  });
   const deadlineSeconds =
     whole(options.bandDeadline, '--band-deadline') ??
     DEFAULT_BAND_DEADLINE_SECONDS;
@@ -420,6 +493,10 @@ export async function indexL2VerifyCLICommand(
         `the largest band is expected to spill about ${gib(need)}, more than the ${gib(session.spillCapBytes)} the spill is capped at (--spill-max; 80% of the ${gib(session.freeBytes)} free under ${path.dirname(session.spill)}; and that free space less a ${gib(SPILL_RESERVE_BYTES)} reserve): free space there, or point TMPDIR elsewhere${skipping}`,
       );
     }
+    // Databases side by side share the spill cap: each read reserves its
+    // share of it before it runs (verifyL2Bands' spillBytes), so a band
+    // that needs most of it is checked while little else spills.
+    const moreDucks = await session.openMore(concurrency - 1);
     for (const dir of session.removedStale) {
       log.warn('Removed a spill folder a killed run left', { dir });
     }
@@ -427,6 +504,7 @@ export async function indexL2VerifyCLICommand(
       bandsDir,
       spill: session.spill,
       spillCap: gib(session.spillCapBytes),
+      concurrency,
       onchainPerBand: perBand,
       l1BandsDir: l1?.bandsDir,
       publication: publication?.source,
@@ -469,6 +547,9 @@ export async function indexL2VerifyCLICommand(
         : {}),
       progress: (done, total, id) =>
         log.info('Checked band', { done, total, id }),
+      ...(moreDucks.length > 0
+        ? { moreDucks, spillBytes: session.spillCapBytes }
+        : {}),
     });
     const roots = source?.describe() as Record<string, unknown> | undefined;
     // Nodes placing the sampled roots in blocks is not the `mined` check,

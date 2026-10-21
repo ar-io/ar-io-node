@@ -35,6 +35,7 @@ import { writeL1Band } from '../../../test/parquet-l2-fixture.js';
 import { writeBandLookups } from './lookups.js';
 import {
   detectableFraction,
+  DuckPool,
   drawLocated,
   drawSeed,
   onchainAssurance,
@@ -79,6 +80,8 @@ interface Tamper {
   unsorted?: string;
   /** Names the band for this publisher instead of PUBLISHER. */
   publisher?: string;
+  /** Digests this table in the order its file holds the rows, not its own. */
+  digestInFileOrder?: string;
 }
 
 /**
@@ -176,7 +179,7 @@ async function writeBand(
     );
     const digest = new RowDigest(spec.columns);
     const read = (await db.all(
-      `SELECT * FROM read_parquet('${file}') ORDER BY ${orderByClause(spec)}`,
+      `SELECT * FROM read_parquet('${file}')${tamper.digestInFileOrder === spec.name ? '' : ` ORDER BY ${orderByClause(spec)}`}`,
     )) as Array<Record<string, unknown>>;
     for (const row of read) digest.add(spec.columns.map((c) => row[c.name]));
     tables[spec.name] = { rows: digest.rows, rowDigest: digest.hex() };
@@ -1140,6 +1143,241 @@ describe('verifyL2Bands fails closed', () => {
     assert.deepEqual(unchecked.minedPartial, { bands: [id], count: 1 });
   });
 
+  /**
+   * Hooks every database's `method`: `before(sql)` runs before each query
+   * (and may throw, as the query would). Returns the undo.
+   */
+  const hook = (
+    ducks: Database[],
+    method: 'all' | 'stream',
+    before: (sql: string) => void,
+  ) => {
+    const originals = ducks.map((d) => d[method].bind(d));
+    ducks.forEach((d, i) => {
+      (d as unknown as Record<string, unknown>)[method] = (
+        sql: string,
+        ...rest: unknown[]
+      ) => {
+        before(sql);
+        return (originals[i] as (...a: unknown[]) => unknown)(sql, ...rest);
+      };
+    });
+    return () =>
+      ducks.forEach((d, i) => {
+        (d as unknown as Record<string, unknown>)[method] = originals[i];
+      });
+  };
+
+  it('keeps an SQL check that failed before its section stopped (review R2)', async () => {
+    const dir = await fresh();
+    // A required value missing (required), then the section's next query
+    // fails (complete).
+    await writeBand(db, dir, 100, 199, {
+      rows: (r) => {
+        r.data_items[0][12] = null; // tag_count
+      },
+    });
+    const more = await Promise.all(
+      [1, 2, 3].map(() => Database.create(':memory:')),
+    );
+    const undo = hook([db, ...more], 'all', (sql) => {
+      if (sql.includes('part_location')) {
+        throw new Error('the locations query could not be read');
+      }
+    });
+    try {
+      for (const moreDucks of [[], more]) {
+        const result = await verifyL2Bands(db, dir, { moreDucks });
+        assert.deepEqual(failing(result).sort(), ['complete', 'required']);
+        assert.match(
+          result.checks.find((c) => c.name === 'required')!.failures![0].found,
+          /data_items rows with no tag_count/,
+        );
+        assert.match(
+          result.checks.find((c) => c.name === 'complete')!.failures![0].found,
+          /stopped: the locations query could not be read/,
+        );
+      }
+    } finally {
+      undo();
+      for (const d of more) await d.close();
+    }
+  });
+
+  it('fails only the band whose file is deleted as it is read, the same on one database and four', async () => {
+    const run = async (moreDucks: Database[]) => {
+      const dir = await fresh();
+      await writeBand(db, dir, 100, 199);
+      await writeBand(db, dir, 200, 299, { unsorted: 'tags' });
+      const tip = await writeBand(db, dir, 300, 399);
+      // Deleted when its first read starts, on whichever database.
+      const undo = hook([db, ...moreDucks], 'stream', (sql) => {
+        if (sql.includes(tip.dir) && sql.includes('tags.parquet')) {
+          rmSync(path.join(tip.dir, 'tags.parquet'), { force: true });
+        }
+      });
+      try {
+        const {
+          seconds: _,
+          bandsDir: __,
+          ...result
+        } = await verifyL2Bands(db, dir, { publisher: PUBLISHER, moreDucks });
+        // Each run has a directory of its own: named apart, as `<dir>`.
+        return {
+          result: JSON.parse(
+            JSON.stringify(result).split(dir).join('<dir>'),
+          ) as typeof result,
+          tip: tip.id,
+        };
+      } finally {
+        undo();
+      }
+    };
+    const more = await Promise.all(
+      [1, 2, 3].map(() => Database.create(':memory:')),
+    );
+    try {
+      const alone = await run([]);
+      assert.deepEqual(failing(alone.result as never).sort(), [
+        'complete',
+        'tables',
+      ]);
+      const complete = alone.result.checks.find((c) => c.name === 'complete')!;
+      assert.equal(complete.failures!.length, 1);
+      assert.match(complete.failures![0].found, new RegExp(`^${alone.tip}: `));
+      // The other bands' findings: the unsorted tags of the middle band.
+      const tables = alone.result.checks.find((c) => c.name === 'tables')!;
+      assert.deepEqual(
+        tables.failures!.map((f) => f.height),
+        [200],
+      );
+      assert.deepEqual(
+        alone.result.located.map((l) => l.id),
+        alone.result.located.map((l) => l.id).filter((id) => id !== alone.tip),
+      );
+      const side = await run(more);
+      assert.deepEqual(side.result, alone.result);
+    } finally {
+      for (const d of more) await d.close();
+    }
+  });
+
+  it('keeps what a band found before a read that stopped it (review, partial sections)', async () => {
+    const dir = await fresh();
+    // data_items out of order (tables), then a key that is NULL: reading
+    // wallets throws, which stops the band (complete).
+    await writeBand(db, dir, 100, 199, {
+      unsorted: 'data_items',
+      rows: (r) => {
+        r.wallets[0][1] = null;
+      },
+    });
+    const more = await Promise.all(
+      [1, 2, 3].map(() => Database.create(':memory:')),
+    );
+    try {
+      for (const moreDucks of [[], more]) {
+        const result = await verifyL2Bands(db, dir, { moreDucks });
+        assert.deepEqual(failing(result).sort(), ['complete', 'tables']);
+        assert.match(
+          result.checks.find((c) => c.name === 'tables')!.failures![0].found,
+          /data_items: data_items.parquet holds two rows out of order/,
+        );
+      }
+    } finally {
+      for (const d of more) await d.close();
+    }
+  });
+
+  it('fails a table out of order even when band.json digests it as it lies (only the order check can)', async () => {
+    const dir = await fresh();
+    // Written out of order, and described by the digest of its rows in
+    // the order the file holds them: the digest matches what is read.
+    await writeBand(db, dir, 100, 199, {
+      unsorted: 'tags',
+      digestInFileOrder: 'tags',
+    });
+    const more = await Promise.all(
+      [1, 2, 3].map(() => Database.create(':memory:')),
+    );
+    try {
+      for (const moreDucks of [[], more]) {
+        const result = await verifyL2Bands(db, dir, {
+          publisher: PUBLISHER,
+          moreDucks,
+        });
+        assert.deepEqual(failing(result), ['tables']);
+        assert.deepEqual(
+          result.checks
+            .find((c) => c.name === 'tables')!
+            .failures!.map((f) => f.found.replace(/^[^:]+: /, '')),
+          ['tags: tags.parquet holds two rows out of order or of one key'],
+        );
+      }
+    } finally {
+      for (const d of more) await d.close();
+    }
+  });
+
+  it('reports the same with bands and reads side by side as one after another', async () => {
+    const dir = await fresh();
+    await writeBand(db, dir, 100, 199);
+    await writeBand(db, dir, 200, 299, { unsorted: 'tags' });
+    await writeBand(db, dir, 300, 399, {
+      rows: (r) => {
+        r.parents = [];
+      },
+    });
+    await writeBand(db, dir, 400, 499, {
+      rows: (r) => {
+        r.data_items[0][12] = 2; // tag_count
+      },
+    });
+    const gone = await writeBand(db, dir, 500, 599);
+    await fs.rm(path.join(gone.dir, 'lookup_id.parquet'));
+    await writeBand(db, dir, 600, 699);
+    const l1 = await fresh();
+    await writeL1Band(l1, 100, 399, [
+      { id: hash('band-100-root'), height: 101, blockTransactionIndex: 1 },
+      { id: hash('band-200-root'), height: 201, blockTransactionIndex: 0 },
+    ]);
+    const more = await Promise.all(
+      [1, 2, 3].map(() => Database.create(':memory:')),
+    );
+    try {
+      const run = async (moreDucks: Database[], spillBytes?: number) => {
+        const progress: number[] = [];
+        const { seconds: _, ...result } = await verifyL2Bands(db, dir, {
+          publisher: PUBLISHER,
+          l1: { bandsDir: l1, required: false },
+          onchain: { perBand: 2, openRoot: strangerHeaders([]), seed: 7 },
+          progress: (done) => progress.push(done),
+          moreDucks,
+          ...(spillBytes !== undefined ? { spillBytes } : {}),
+        });
+        return { result, progress };
+      };
+      const serial = await run([]);
+      assert.deepEqual(failing(serial.result as never).sort(), [
+        'consistency',
+        'files',
+        'mined',
+        'onchain',
+        'parents',
+        'tables',
+      ]);
+      assert.deepEqual(serial.progress, [1, 2, 3, 4, 5, 6]);
+      for (let i = 0; i < 3; i += 1) {
+        assert.deepEqual(await run(more), serial);
+      }
+      // Sharing a spill budget: room for every read, and room for one.
+      assert.deepEqual(await run(more, 1e12), serial);
+      assert.deepEqual(await run(more, 1), serial);
+    } finally {
+      for (const d of more) await d.close();
+    }
+  });
+
   it('fails a band the publication lists in the range checked that the directory lacks (review 4)', async () => {
     const key = publisherKey();
     const dir = await fresh();
@@ -1572,5 +1810,81 @@ describe('verifyL2Bands fails closed', () => {
     assert.equal(percent(onchainAssurance(20, 0)), 14);
     // Unchecked items are said to count as possibly fabricated.
     assert.match(onchainAssurance(20, 4), /possibly fabricated/);
+  });
+});
+
+describe('DuckPool', () => {
+  it('runs a read that runs out of its share of the spill again with all of it', async () => {
+    const ducks = await Promise.all(
+      [1, 2].map(() => Database.create(':memory:')),
+    );
+    try {
+      const pool = new DuckPool(ducks, 100 * 2 ** 20);
+      const caps: string[] = [];
+      let tries = 0;
+      const result = await pool.runner(10 * 2 ** 20)(async (duck) => {
+        const [row] = (await duck.all(
+          "SELECT current_setting('max_temp_directory_size') AS cap",
+        )) as Array<{ cap: string }>;
+        caps.push(row.cap);
+        tries += 1;
+        if (tries === 1) {
+          throw new Error(
+            "failed to offload data block: the limit set by 'max_temp_directory_size'",
+          );
+        }
+        return 'read';
+      });
+      assert.equal(result, 'read');
+      assert.equal(tries, 2);
+      assert.notEqual(caps[0], caps[1]);
+      // Any other error is the read's own.
+      await assert.rejects(
+        pool.runner(10 * 2 ** 20)(async () => {
+          throw new Error('a file is gone');
+        }),
+        /a file is gone/,
+      );
+    } finally {
+      for (const duck of ducks) await duck.close();
+    }
+  });
+
+  it('keeps a waiting read its share: reads behind it go ahead only beside it', async () => {
+    const ducks = await Promise.all(
+      [1, 2, 3].map(() => Database.create(':memory:')),
+    );
+    try {
+      const pool = new DuckPool(ducks, 100 * 2 ** 20);
+      const order: string[] = [];
+      let release: () => void = () => undefined;
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      // A read starts, or is kept waiting, as it is asked for: whether
+      // it waits is known at once, whatever the timing of the reads.
+      const first = pool.runner(60 * 2 ** 20)(async () => {
+        order.push('first');
+        await held;
+      });
+      assert.equal(pool.waiting, 0);
+      // Waits: 60 + 60 > 100.
+      const big = pool.runner(60 * 2 ** 20)(async () => {
+        order.push('big');
+      });
+      assert.equal(pool.waiting, 1);
+      // Would fit beside the first (60 + 30), but not beside it and the
+      // share kept for the big one: it waits too.
+      const small = pool.runner(30 * 2 ** 20)(async () => {
+        order.push('small');
+      });
+      assert.equal(pool.waiting, 2);
+      release();
+      await Promise.all([first, big, small]);
+      assert.equal(pool.waiting, 0);
+      assert.deepEqual([...order].sort(), ['big', 'first', 'small']);
+    } finally {
+      for (const duck of ducks) await duck.close();
+    }
   });
 });

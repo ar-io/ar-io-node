@@ -100,6 +100,13 @@ export async function openBandsDuck(
   freeBytes: number;
   /** Spill folders a killed run left, removed as this one opened. */
   removedStale: string[];
+  /**
+   * Opens `count` more databases set up as `duck` is, each spilling to a
+   * folder of its own inside the run's, each capped at the whole spill cap:
+   * a caller using more than one shares the cap out between them (as
+   * `verifyL2Bands` does, given `spillBytes`). `close` closes them too.
+   */
+  openMore(count: number): Promise<Database[]>;
   close(): Promise<void>;
 }> {
   const spillMax = options.spillMax ?? BANDS_SPILL_MAX;
@@ -177,29 +184,52 @@ export async function openBandsDuck(
     fsp.utimes(heartbeat, now, now).catch(() => undefined);
   }, HEARTBEAT_MS);
   beat.timer.unref();
+  const capOf = (bytes: number) =>
+    `${Math.max(1, Math.floor(bytes / 2 ** 20))}MiB`;
+  const open = async (dir: string, capBytes: number) => {
+    const { Database } = await import('duckdb-async');
+    const opened = await Database.create(':memory:');
+    try {
+      await opened.exec(
+        `SET memory_limit = '2GB'; SET threads = 2; SET temp_directory = '${dir.replace(/'/g, "''")}'; SET max_temp_directory_size = '${capOf(capBytes)}'; SET autoinstall_known_extensions = false; SET autoload_known_extensions = false;`,
+      );
+    } catch (error) {
+      await opened.close().catch(() => undefined);
+      throw error;
+    }
+    return opened;
+  };
   let duck: Database | undefined;
   try {
-    const { Database } = await import('duckdb-async');
-    duck = await Database.create(':memory:');
-    const cap = `${Math.max(1, Math.floor(spillCapBytes / 2 ** 20))}MiB`;
-    await duck.exec(
-      `SET memory_limit = '2GB'; SET threads = 2; SET temp_directory = '${spill.replace(/'/g, "''")}'; SET max_temp_directory_size = '${cap}'; SET autoinstall_known_extensions = false; SET autoload_known_extensions = false;`,
-    );
+    duck = await open(spill, spillCapBytes);
   } catch (error) {
-    await duck?.close().catch(() => undefined);
     await removeSpill();
     forget();
     throw error;
   }
   const opened = duck;
+  const more: Database[] = [];
   return {
     duck: opened,
     spill,
     spillCapBytes,
     freeBytes,
     removedStale,
+    openMore: async (count: number) => {
+      const added: Database[] = [];
+      for (let i = 1; i <= count; i += 1) {
+        const dir = path.join(spill, `db-${more.length + 1}`);
+        await fsp.mkdir(dir);
+        more.push(await open(dir, spillCapBytes));
+        added.push(more[more.length - 1]);
+      }
+      return added;
+    },
     close: async () => {
       try {
+        for (const other of more) {
+          await other.close().catch(() => undefined);
+        }
         await opened.close();
       } finally {
         await removeSpill();
