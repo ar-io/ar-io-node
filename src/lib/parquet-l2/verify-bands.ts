@@ -102,7 +102,7 @@ import {
   parseBandFile,
   serializeSelection,
 } from './layout.js';
-import type { DuckRunner } from '../parquet/scan-digest.js';
+import { type DuckRunner, outOfSpill } from '../parquet/scan-digest.js';
 import type { LookupSpec } from '../parquet/lookups.js';
 import { bandTableFiles, verifyBandLookups } from './lookups.js';
 import { selectionDuckDb } from './selection.js';
@@ -826,7 +826,7 @@ export class DuckPool {
         if (
           this.budget === undefined ||
           spill >= this.budget ||
-          !/max_temp_directory_size/.test(messageOf(error))
+          !outOfSpill(error)
         ) {
           throw error;
         }

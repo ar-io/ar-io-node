@@ -53,6 +53,17 @@ export type DuckRunner = <T>(
 export class ScanDigestUnavailable extends Error {}
 
 /**
+ * Whether a DuckDB error is a read running out of its spill share
+ * (`max_temp_directory_size`). A pool runner runs such a read again with
+ * the whole budget, so nothing may catch it on the way and retry under the
+ * same share.
+ */
+export function outOfSpill(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /max_temp_directory_size/.test(message);
+}
+
+/**
  * Integers the Node binding hands over exactly (a number or a BigInt), so
  * the row reader encodes their digits. Not HUGEINT: a large one comes back
  * as an inexact number, which the row reader refuses.

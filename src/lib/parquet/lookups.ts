@@ -31,6 +31,7 @@ import {
   type ScanDuck,
   scanDigest,
   ScanDigestUnavailable,
+  outOfSpill,
 } from './scan-digest.js';
 
 /** Rows per row group: the measured best for point lookups in 256 KiB pieces. */
@@ -163,7 +164,11 @@ async function digestRows(
   if (options.order === 'numeric') {
     try {
       return await scanSortedRows(duck, spec, from);
-    } catch {
+    } catch (error) {
+      // Out of its spill share: the runner reads it again with the whole
+      // budget. Reading the old way here would sort it all again first,
+      // under the same share.
+      if (outOfSpill(error)) throw error;
       // Read the old way: what it reports is what is reported.
     }
   }
