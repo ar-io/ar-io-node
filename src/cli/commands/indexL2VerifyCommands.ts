@@ -27,6 +27,7 @@ import {
 import {
   INDEX_PUBLICATION_MAX_BYTES,
   parseIndexPublication,
+  readPublicationBody,
 } from '../../lib/index-publication.js';
 import {
   ArweaveNodePool,
@@ -104,13 +105,9 @@ async function readPublication(
         `--publication: HTTP ${response.status} from ${where}`,
       );
     }
-    const bytes = Buffer.from(await response.arrayBuffer());
-    if (bytes.byteLength > INDEX_PUBLICATION_MAX_BYTES) {
-      throw new L2VerifyRefused(
-        `--publication is over ${INDEX_PUBLICATION_MAX_BYTES} bytes`,
-      );
-    }
-    return bytes;
+    return readPublicationBody(response).catch((error: Error) => {
+      throw new L2VerifyRefused(`--publication: ${error.message}`);
+    });
   }
   const { size } = await fsp.stat(where).catch((error) => {
     throw new L2VerifyRefused(

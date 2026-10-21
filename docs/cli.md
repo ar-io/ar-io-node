@@ -848,7 +848,7 @@ proves, and how to reproduce or repair a band that fails, is in
 | `--registry-url <url>` | Instead of `--publisher-key`, the gateway whose view of the registry (`/ar-io/peers`) gives the key, e.g. `http://core:4000`; that gateway is trusted for it |
 | `--index <name>` | The index to bind to, when the publication lists more than one `parquet-l2` index |
 | `--l1-bands-dir <path>` | A `parquet-l1` index to find every root in (`mined`); every band must be covered. Without it, the node's own `installed/parquet-l1`, then `published/parquet-l1`, where they exist; `none` for none |
-| `--onchain <n>` | Items per band read at their recorded locations and checked against their ids, half directly in their roots and half in nested bundles (20 when not given; `0` leaves the check out) |
+| `--onchain <n>` | Items per band read at their recorded locations and checked against their ids: drawn uniformly over every located item, then nested items added until half the draw is nested (20 when not given; `0` leaves the check out). The stated bound uses only the uniform draw |
 | `--seed <n>` | Seeds that sample and the order it is read in, to repeat a run; the result reports the seed drawn when none is given |
 | `--arweave-nodes <urls>` | The Arweave nodes those reads go to (comma-separated, or `default`, the default: the `tip` and `data` nodes) |
 | `--allow-agreement` | Accept a root whose signature arweave-js won't verify when two other machines serve the same signed header (default: an error) |

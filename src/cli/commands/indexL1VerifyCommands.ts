@@ -137,8 +137,12 @@ export async function openBandsDuck(
       .stat(path.join(dir, SPILL_HEARTBEAT_FILE))
       .catch(() => undefined);
     if (Date.now() - (beat ?? stat).mtimeMs < STALE_SPILL_MS) continue;
-    await fsp.rm(dir, { recursive: true, force: true });
-    removedStale.push(dir);
+    try {
+      await fsp.rm(dir, { recursive: true, force: true });
+      removedStale.push(dir);
+    } catch {
+      // Another user's folder, or one still in use: not this run's to remove.
+    }
   }
   const spill = await fsp.mkdtemp(path.join(tmpRoot, prefix));
   const removeSpill = () => fsp.rm(spill, { recursive: true, force: true });
