@@ -271,10 +271,12 @@ checking its own bands can pass `data/indexes/published/publication.json`.
 in that `parquet-l1` index (`mined`); every band must be covered. Without it,
 the node's own `data/indexes/installed/parquet-l1`, else
 `data/indexes/published/parquet-l1`, is used where it exists, and a band it
-does not cover is listed in `mined.uncovered` and in `skipped` as
-`mined:partial:<band ids>`; `--l1-bands-dir none` uses
-none. This trusts the L1 index, so check it first with `index-l1-verify`.
-With neither an L1 index nor Arweave nodes, `mined` is in `skipped`: through
+does not cover is listed in `mined.uncovered` and in `minedPartial` as
+`{ bands: [...], count: n }`, and `skipped` then includes `mined`;
+`--l1-bands-dir none` uses none. This trusts the L1 index, so check it first with `index-l1-verify`.
+`mined` is in `skipped` whenever an L1 index does not cover every band: Arweave
+nodes placing the sampled roots in blocks is reported in `assurance` and
+`onchain.roots.checks`, not as `mined`, which finds every root. Through
 `--gateway-url`, the gateway is trusted for the bytes and nobody says the
 roots are mined.
 

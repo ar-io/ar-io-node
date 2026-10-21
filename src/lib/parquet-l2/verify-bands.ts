@@ -1656,9 +1656,18 @@ export async function verifyL2Bands(
           onchainAssurance(
             options.onchain.perBand,
             options.onchain.maxUnchecked ?? 0,
-            onchainSummary.bands.length > 0
-              ? Math.min(...onchainSummary.bands.map((b) => b.drawnUniform))
-              : options.onchain.perBand,
+            // Bands passed as wholly unlocated (--allow-unlocated) draw
+            // nothing: they don't lower the bound of the bands that drew,
+            // and when no band drew, nothing can be said (0).
+            onchainSummary.bands.length === 0
+              ? options.onchain.perBand
+              : onchainSummary.bands.some((b) => b.drawnUniform > 0)
+                ? Math.min(
+                    ...onchainSummary.bands
+                      .filter((b) => b.drawnUniform > 0)
+                      .map((b) => b.drawnUniform),
+                  )
+                : 0,
           ),
         ]
       : []),

@@ -222,6 +222,11 @@ export async function indexL2VerifyCLICommand(
   const deadlineSeconds =
     whole(options.bandDeadline, '--band-deadline') ??
     DEFAULT_BAND_DEADLINE_SECONDS;
+  // A deadline of 0 would leave every drawn item unchecked before its first
+  // read: no band could pass, so it is refused rather than run.
+  if (deadlineSeconds === 0) {
+    throw new L2VerifyRefused('--band-deadline must be 1 or above');
+  }
   if (options.gatewayUrl !== undefined && options.arweaveNodes !== undefined) {
     throw new L2VerifyRefused(
       '--gateway-url and --arweave-nodes are exclusive',
@@ -466,15 +471,11 @@ export async function indexL2VerifyCLICommand(
         log.info('Checked band', { done, total, id }),
     });
     const roots = source?.describe() as Record<string, unknown> | undefined;
-    // Sampled roots found in blocks by nodes count only with Arweave nodes.
+    // Nodes placing the sampled roots in blocks is not the `mined` check,
+    // which finds every root of a band in an L1 index: `mined` stays in
+    // `skipped`, and the sampled check is reported in `assurance` and
+    // `onchain.roots.checks`.
     const skipped = [...out.skipped];
-    if (
-      skipped.includes('mined') &&
-      roots?.minedVia === 'node-status' &&
-      out.onchain !== undefined
-    ) {
-      skipped.splice(skipped.indexOf('mined'), 1);
-    }
     const assurance = [
       ...out.assurance,
       ...(roots?.minedVia === 'node-status'

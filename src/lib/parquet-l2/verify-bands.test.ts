@@ -999,6 +999,35 @@ describe('verifyL2Bands fails closed', () => {
     });
     assert.equal(allowed.ok, true, JSON.stringify(allowed.checks));
     assert.equal(reads.length, 0);
+    // Nothing was drawn, so the sample bounds nothing (CodeRabbit, #1071).
+    assert.ok(
+      allowed.assurance.some((a) => /nothing can be said/.test(a)),
+      JSON.stringify(allowed.assurance),
+    );
+  });
+
+  it('leaves a wholly unlocated band out of the bound the bands that drew state', async () => {
+    const dir = await fresh();
+    await writeBand(db, dir, 100, 199, {
+      rows: (r) => {
+        for (const row of r.data_items) {
+          for (const name of DATA_ITEM_LOCATION_COLUMNS) row[LOC(name)] = null;
+        }
+        r.parents = [];
+      },
+      band: (b) => {
+        b.checks = { unlocated: { no_offsets: 2 } };
+      },
+    });
+    await writeBand(db, dir, 200, 299);
+    const result = await verifyL2Bands(db, dir, {
+      allowUnlocated: true,
+      onchain: { perBand: 2, openRoot: strangerHeaders([]) },
+    });
+    const onchain = result.assurance.find((a) => a.startsWith('on chain'));
+    assert.ok(onchain !== undefined, JSON.stringify(result.assurance));
+    assert.doesNotMatch(onchain, /nothing can be said/);
+    assert.match(onchain, /or more/);
   });
 
   it('fails a band whose sampled roots are missing on chain (audit C, fabricated roots)', async () => {

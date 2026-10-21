@@ -55,6 +55,16 @@ describe('index-l2-verify', () => {
     }
   });
 
+  it('refuses --band-deadline 0, which would leave every item unchecked (CodeRabbit, #1071)', async () => {
+    await assert.rejects(
+      indexL2VerifyCLICommand(
+        { bandsDir: '/nowhere', bandDeadline: '0' },
+        { log },
+      ),
+      /--band-deadline must be 1 or above/,
+    );
+  });
+
   it('refuses publication options without --publication, and --publication without exactly one key source', async () => {
     for (const bad of [
       { publisherKey: 'x' },
