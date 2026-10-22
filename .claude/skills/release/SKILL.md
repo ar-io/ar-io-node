@@ -26,7 +26,7 @@ external side effects: tag push, GitHub release creation, merge to main.
 Run the release from a dedicated worktree with `develop` checked out (for
 example `git worktree add ../node-wt-release develop`), never from a directory
 a live gateway runs its compose stack from: Phase 4 runs `docker compose down`,
-and the release tools edit `docker-compose.yaml`. The tools need Node 20
+and the release tools edit `docker-compose.yaml`. The tools need Node 22
 (`nvm use`); under Node 16 they fail with `bad option: --import`.
 
 ## Phase 1 — Preflight

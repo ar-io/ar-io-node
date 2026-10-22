@@ -57,7 +57,7 @@ sudo apt-get install docker-ce docker-ce-cli containerd.io docker-buildx-plugin 
 ```
 
 ```bash
-nvm install 20.11.1 && nvm use 20.11.1 && npm install -g yarn@1.22.22
+nvm install 22.23.4 && nvm use 22.23.4 && npm install -g yarn@1.22.22
 ```
 
 ### Required packages
@@ -148,7 +148,7 @@ These packages are not required to run a node in its basic form. However, they w
 
 9. Install Node.js:
     ```
-    nvm install 20.11.1
+    nvm install 22.23.4
     ```
 
 

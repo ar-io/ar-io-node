@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Security
+
+- **The core image now runs Node.js 22.23.4, up from 20.19.6.** Node's
+  October 21, 2026 security release fixes an out-of-bounds write in its
+  bundled Brotli decoder that permits remote code execution
+  (CVE-2026-111497), plus two TLS hostname-check bypasses and a
+  `dns.resolve` truncation bug. Node 20 reached end of life in April 2026
+  and gets no fix. A gateway is exposed: its HTTP clients ask peers,
+  trusted gateways and Arweave nodes for Brotli-compressed responses and
+  decode them, and any gateway on the network can act as a peer. The
+  runtime stage now copies the pinned `node` binary onto
+  `distroless/cc-debian12` instead of using `distroless/nodejs22-debian12`,
+  whose floating tag still carried an unpatched 22.22.0 the day after the
+  fix shipped. The binary stays at `/nodejs/bin/node`, so compose files,
+  `docker-entrypoint.sh` and the `tools/` scripts are unchanged. Operators
+  who stopped Brotli decoding with a `NODE_OPTIONS=--require` shim can
+  drop it once they run this image. Running from source now wants Node 22
+  (`.nvmrc`).
+
 ### Added
 
 - **`parquet-l2` layout `l2-2`: a key lookup and stats per band, derived
