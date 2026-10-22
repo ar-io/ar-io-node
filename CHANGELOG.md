@@ -208,6 +208,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     `trusted: false`, and a redirect could make one machine count as two.
     Fork gates on transaction rules were one block early, as the chain
     validates a block's transactions with the height of the block below.
+  - A fourth round found a false refusal of real mainnet data and more,
+    all fixed. RSA-PSS signatures were checked by OpenSSL, which is
+    stricter than Arweave's `rsa_pss:verify` and rejected real mined
+    transactions (`SnN5f1fBk3hD-_PSnFBFDze-kMBU-NFIKYWvrTEQWTo` at
+    1,602,352); they are now checked by a port of Arweave's own rule (and
+    its pre-2.4 legacy form), pinned. A source whose signatures did not
+    verify could stop a survey early, and refuted draws were counted as
+    proven (now `txsRefuted`, `format1Refuted`). Invented format-1 ids
+    passed as possibly hidden; their block is now asked whether it lists
+    them. The unreadable cap applied over the whole range, so an
+    unreadable band passed beside readable ones; it now applies per band.
+    A draw lacking its owner key was attested whatever owner the index
+    named; the owner address is now compared. The format-1 byte budget is
+    now 4 GB a band. The import refuses sources fewer than two machines
+    up front, treats an anchor nobody answered as an outage, settles
+    unfinished ledger rows that later imports covered (a range of another
+    grid spanning two bands was redone for ever), and its disk check
+    counts `missing_transactions` too. The worker backs off a fill whose
+    sources could not be read, up to two hours.
 
   Gateways with `L1_BAND_IMPORT_ENABLED=true` now refuse today's `l1-3`
   bands below height 2,000,000 unless `L1_BAND_IMPORT_ALLOW_UNVERIFIED=true`.

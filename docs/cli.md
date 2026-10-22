@@ -327,8 +327,11 @@ Before a band's first row reaches SQLite, both modes check it:
    is refused unless `--allow-unsampled`, and then that part is not
    checked against the chain. A sample that refutes the band refuses it
    ("the sample refutes the bands"); one that could not be read (too many
-   draws unanswered) refuses it as `refusal: "unreadable"` — an outage, not
-   evidence, and the next run tries again.
+   draws unanswered in any band), or whose anchor no source answered,
+   refuses it as `refusal: "unreadable"` — an outage, not evidence, and a
+   later run tries again. Sources that resolve to fewer distinct machines
+   than `--anchor-min` (never fewer than two) are refused before any band
+   is read: they can neither refute nor attest.
 5. **What nothing binds is refused unless accepted.** Blocks below the 2.0
    fork (`--allow-unbound`); blocks whose transactions or owners' keys the
    band lacks (`--allow-incomplete`); post-2.0 blocks holding a format-1
@@ -412,9 +415,10 @@ that refuses a band, or cannot read the bands directory, counts as
 and logs why (a warning when the parent directory is missing too, or after
 six runs). A refused fill is not re-verified every interval: the worker
 waits, twice as long each time (up to a day), until the bands directory
-changes, counting `deferred`. A fill refused only because its sample could
-not be read is a warning, counted `unreadable`, and tried again at the
-normal interval. The worker anchors and samples against
+changes, counting `deferred`. A fill refused only because its sources
+could not be read is a warning, counted `unreadable`, and tried again after
+an interval, twice as long each time it repeats (up to two hours), and at
+once when the bands directory changes. The worker anchors and samples against
 `L1_BAND_IMPORT_SAMPLE_FROM` (by default the trusted node and the trusted
 gateways not marked `trusted: false`), and warns at its first run when
 those resolve to fewer than two distinct machines, since then the sample
@@ -709,14 +713,26 @@ Arweave's rules passes every self-check. What ties it to the real chain:
   recomputed, which catches a format-2 transaction relabelled format 1 to
   escape `tx_root`. A draw whose owner key the index lacks is fetched all
   the same: a signature hashing to its id shows the id is real, and its
-  fields are then attested. A format-1 transaction with data is signed
-  over its data, which every machine asked sends in full: one budget of
-  1 GB per band covers both transaction draws and counts every copy.
-  Past it a draw is left unverified (`txsOverBudget`,
-  `format1OverBudget`), but its format and data size are still compared
-  (`/tx/{id}/format`, `/tx/{id}/data_size`). A format-1 transaction with
-  more than 10 MiB of data was never valid and is refuted from the index
-  alone.
+  fields, and the owner address the index holds (the SHA-256 of the owner
+  each answer states, or of the key an ECDSA signature recovers), are then
+  attested. A format-1 transaction with data is signed over its data,
+  which every machine asked sends in full: one budget of 4 GB per band
+  covers both transaction draws and counts every copy (a band of 1,000
+  pre-2.0 draws measured about 1.22 GB at two copies). Past it a draw is
+  left unverified (`txsOverBudget`, `format1OverBudget`, counted as
+  unreadable), but its format and data size are still compared
+  (`/tx/{id}/format`, `/tx/{id}/data_size`). ar.io gateways answer
+  `/tx/{id}/format` with a 500, so against them that check is the size
+  alone, and the draw's reason says which was compared. A format-1
+  transaction with more than 10 MiB of data was never valid and is refuted
+  from the index alone. Refuted draws are counted as `txsRefuted` and
+  `format1Refuted`, never as checked.
+
+  RSA signatures are verified exactly as Arweave verifies them
+  (`rsa_pss:verify/4`, and `verify_legacy/4` for blocks at or below the
+  2.4 fork), not by OpenSSL, which is stricter: Arweave masks the bits
+  above the modulus length and accepts a salt of any length, and real
+  mined transactions rely on it.
 
   **What a signature proves.** For an RSA format-2 transaction (and a
   format-1 one with a denomination) the segment is a deep hash, so a
@@ -741,12 +757,18 @@ Arweave's rules passes every self-check. What ties it to the real chain:
   makes a draw unreadable, never a failure, and with sources that resolve
   to one machine the sample says so in `warnings`. Absence refutes only
   when every source was heard, none answered, and that many machines said
-  404: one busy source may hold what the others lack. A 404 never refutes
-  a format-1 transaction, because since Arweave be18c1be (2026-08-31)
-  nodes deliberately hide some real format-1 transactions without a
-  denomination from `GET /tx`. More than 20% of any one kind of draw
-  (blocks, transactions, format-1) unreadable fails the sample as
-  unreadable, each kind listing its own unreadable draws. `sample.detects` says what a pass
+  404: one busy source may hold what the others lack. A 404 alone never
+  refutes a format-1 transaction, because since Arweave be18c1be
+  (2026-08-31) nodes deliberately hide some real format-1 transactions
+  without a denomination from `GET /tx`; its block is asked instead. If
+  the block, as the chain serves it (its header recomputed to the index's
+  hash, or below the 2.0 fork the same transaction list from that many
+  machines), does not list the id, the draw is refuted; if it does, or
+  the list cannot be had, the draw is unreadable. Only answers whose
+  signature verified count toward agreement. More than 20% of any one kind
+  of draw (blocks, transactions, format-1) unreadable in any one band
+  fails the sample as unreadable, each kind and band listing its own
+  unreadable draws. `sample.detects` says what a pass
   means: the share of forged rows that would have been caught with 95%
   probability, counting every unreadable draw as possibly forged (in the
   weakest band, for transactions). A forgery confined to fewer rows may
@@ -907,7 +929,7 @@ One shape in both views:
     "seed": 7, "machines": 2, "confirm": 2,
     "blocksDrawn": 1000, "blocksChecked": 1000, "blocksUnreadable": 0,
     "txsDrawn": 1000, "txsChecked": 997, "txsAttested": 3, "txsUnreadable": 0, "txsOverBudget": 0,
-    "format1Drawn": 200, "format1Checked": 200, "format1Unreadable": 0, "format1OverBudget": 0,
+    "txsRefuted": 0, "format1Drawn": 200, "format1Checked": 200, "format1Refuted": 0, "format1Unreadable": 0, "format1OverBudget": 0,
     "empty": [], "warnings": [],
     "detects": ["…"]
   },
