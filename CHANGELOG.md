@@ -227,6 +227,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     grid spanning two bands was redone for ever), and its disk check
     counts `missing_transactions` too. The worker backs off a fill whose
     sources could not be read, up to two hours.
+  - A fifth round: an invented format-1 id past the byte budget was never
+    checked against its block, and one in a block the chain does not have
+    stayed unreadable; both are now refuted. Real pre-2.4 (legacy RSA-PSS)
+    and ECDSA transactions are now in the tests.
 
   Gateways with `L1_BAND_IMPORT_ENABLED=true` now refuse today's `l1-3`
   bands below height 2,000,000 unless `L1_BAND_IMPORT_ALLOW_UNVERIFIED=true`.

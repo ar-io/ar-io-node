@@ -723,7 +723,8 @@ Arweave's rules passes every self-check. What ties it to the real chain:
   unreadable), but its format and data size are still compared
   (`/tx/{id}/format`, `/tx/{id}/data_size`). ar.io gateways answer
   `/tx/{id}/format` with a 500, so against them that check is the size
-  alone, and the draw's reason says which was compared. A format-1
+  alone, and the draw's reason says which was compared. If every source
+  says it has no such transaction, its block is asked, as below. A format-1
   transaction with more than 10 MiB of data was never valid and is refuted
   from the index alone. Refuted draws are counted as `txsRefuted` and
   `format1Refuted`, never as checked.
@@ -763,8 +764,11 @@ Arweave's rules passes every self-check. What ties it to the real chain:
   without a denomination from `GET /tx`; its block is asked instead. If
   the block, as the chain serves it (its header recomputed to the index's
   hash, or below the 2.0 fork the same transaction list from that many
-  machines), does not list the id, the draw is refuted; if it does, or
-  the list cannot be had, the draw is unreadable. Only answers whose
+  machines), does not list the id, the draw is refuted; so is it when no
+  source has a block with the index's hash and that many machines agree
+  the chain's block at that height is another (the index's block is not
+  the chain's). If the block lists the id, or none of that can be had,
+  the draw is unreadable. Only answers whose
   signature verified count toward agreement. More than 20% of any one kind
   of draw (blocks, transactions, format-1) unreadable in any one band
   fails the sample as unreadable, each kind and band listing its own
