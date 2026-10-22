@@ -185,6 +185,19 @@ export function chainNode(
           )
           .pluck()
           .all(row.height) as Buffer[];
+        if (row.height < FORK_2_9) {
+          // Below the era test headers recompute in, a header as a node
+          // states it: its hash and its transaction list, nothing more a
+          // verifier can check.
+          return {
+            status: 200,
+            body: {
+              height: row.height,
+              indep_hash: b64(row.indep_hash),
+              txs: ids.map((id) => b64(id)),
+            },
+          };
+        }
         return { status: 200, body: syntheticHeader(row, ids) };
       };
       let m = /^\/block\/height\/(\d+)$/.exec(path);
@@ -219,8 +232,10 @@ export function chainNode(
         const row = db
           .prepare(
             `SELECT t.format, t.target, t.quantity, t.reward, t.last_tx,
-                    t.data_size, t.data_root, s.signature, s.data
+                    t.data_size, t.data_root, s.signature, s.data,
+                    w.public_modulus AS owner
              FROM stable_transactions t JOIN test_signatures s ON s.id = t.id
+             LEFT JOIN wallets w ON w.address = t.owner_address
              WHERE t.id = ?`,
           )
           .get(id) as
@@ -234,6 +249,7 @@ export function chainNode(
               data_root: Buffer | null;
               signature: Buffer;
               data: Buffer | null;
+              owner: Buffer | null;
             }
           | undefined;
         if (row === undefined) return tamper(path, { status: 404 });
@@ -251,6 +267,7 @@ export function chainNode(
           body: {
             id: m[1],
             format: row.format,
+            owner: b64(row.owner),
             target: b64(row.target),
             quantity: String(row.quantity),
             reward: String(row.reward),

@@ -387,9 +387,9 @@ describe('L1BandImportWorker and its sample sources (round 3)', () => {
       },
     );
     await subject.runOnce();
-    clock += 1;
+    clock += 60_000 + 1;
     await subject.runOnce();
-    assert.equal(runs, 2);
+    assert.equal(runs, 2, 'tried again after one interval, not a day');
   });
 
   it('I3: warns once when the sample sources are fewer than two machines', async () => {
@@ -414,5 +414,45 @@ describe('L1BandImportWorker and its sample sources (round 3)', () => {
       ).length,
       1,
     );
+  });
+});
+
+describe('L1BandImportWorker after an unreadable fill (round 4, M1)', () => {
+  it('backs off by doubling up to two hours, and tries at once when the bands change', async () => {
+    let runs = 0;
+    let clock = 1_000_000;
+    let entries = ['l1-h0-99-aaaaaaaa-000000000000'];
+    const subject = worker(
+      async () => {
+        runs += 1;
+        return {
+          code: 1,
+          summary: { refused: 'could not be read', refusal: 'unreadable' },
+          tail: '',
+        };
+      },
+      0,
+      { listDir: async () => entries, now: () => clock },
+    );
+    await subject.runOnce();
+    clock += 1;
+    await subject.runOnce();
+    assert.equal(runs, 1, 'waits an interval');
+    // Doubling: 1, 2, 4, ... minutes, capped at two hours.
+    for (let i = 0; i < 12; i += 1) {
+      clock += 2 * 3600 * 1000 + 1;
+      await subject.runOnce();
+    }
+    assert.equal(runs, 13);
+    clock += 2 * 3600 * 1000 - 1000;
+    await subject.runOnce();
+    assert.equal(
+      runs,
+      13,
+      'never waits more than two hours, nor less once capped',
+    );
+    entries = ['l1-h0-99-aaaaaaaa-111111111111'];
+    await subject.runOnce();
+    assert.equal(runs, 14, 'a changed band is tried at once');
   });
 });

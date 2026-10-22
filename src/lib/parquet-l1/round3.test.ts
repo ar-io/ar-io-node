@@ -346,6 +346,9 @@ describe('round 3: fail-opens closed (H)', () => {
   });
 
   it('H3: an honest draw whose owner key the index lacks is attested, not unreadable', async () => {
+    // The chain is served from an untouched copy.
+    const chain = path.join(dir, 'chain.db');
+    await fsp.copyFile(real, chain);
     const db = new Sqlite(real);
     const victim = db
       .prepare(
@@ -353,13 +356,12 @@ describe('round 3: fail-opens closed (H)', () => {
       )
       .pluck()
       .get(F + 5) as Buffer;
-    db.prepare(
-      'UPDATE stable_transactions SET owner_address = ? WHERE id = ?',
-    ).run(Buffer.alloc(32, 7), victim);
+    // The key is gone from the index; its owner address stays.
+    db.prepare('DELETE FROM wallets').run();
     db.close();
     const item = await firstDrawOf(real, victim);
     assert.ok(!('tx' in item));
-    assert.equal((await judgeTx(honestPool(real), item, 2)).kind, 'attested');
+    assert.equal((await judgeTx(honestPool(chain), item, 2)).kind, 'attested');
   });
 
   it('H4 (S5): a format-1 transaction past the 10 MiB limit is refuted from the index alone', async () => {

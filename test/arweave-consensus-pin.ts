@@ -497,6 +497,76 @@ export const CONSENSUS_PINS: ConsensusPin[] = [
     sha256: '431033be3bca35516a96aa15add2dd1da39c75812f819d9cd8e8595419095e21',
   },
   {
+    file: 'apps/arweave/src/rsa_pss.erl',
+    startsWith:
+      "verify({digest, Digest}, DigestType, Signature, PublicKey=#'RSAPublicKey'{modulus=N}) ->",
+    lines: 44,
+    mirrors:
+      'rsa-pss.ts arweaveRsaPssVerify: the RSA-PSS rule every transaction from block 2.4 + 1 is checked by (masked top bits, any salt length)',
+    sha256: 'e936260db344a90c7976f7bd38c5600626f879e4c49ca1d3dbe3ff73027837bc',
+  },
+  {
+    file: 'apps/arweave/src/rsa_pss.erl',
+    startsWith:
+      "verify_legacy({digest, Digest}, DigestType, Signature, PublicKey=#'RSAPublicKey'{modulus=N}) ->",
+    lines: 44,
+    mirrors:
+      'rsa-pss.ts arweaveRsaPssVerify legacy: the rule below 2.4 (encoded message sized by bits div 8)',
+    sha256: 'cf6308d31cb2bc76cf2680ab7a90d898d4398d31dad5c4ecf591bac750f97552',
+  },
+  {
+    file: 'apps/arweave/src/rsa_pss.erl',
+    startsWith: 'mgf1(DigestType, Seed, Len, T, Counter) ->',
+    lines: 4,
+    mirrors: 'rsa-pss.ts mgf1',
+    sha256: '0c63e52a37dcc19771ab9300c4cd82ea5cdb6254dd59f7f462e3cc1bc56551a9',
+  },
+  {
+    file: 'apps/arweave/src/rsa_pss.erl',
+    startsWith: 'normalize_to_key_size(Bits, _A = << C, Rest/binary >>) ->',
+    lines: 10,
+    mirrors:
+      'rsa-pss.ts normalizeToKeySize: bits above the modulus length masked, not checked',
+    sha256: 'c860e13f467b248b6243785e0dae74249f8ec6d7b40cf74754998df6a19a743b',
+  },
+  {
+    file: 'apps/arweave/src/rsa_pss.erl',
+    startsWith: 'pad_to_key_size(Bytes, Data) when byte_size(Data) < Bytes ->',
+    lines: 4,
+    mirrors: 'rsa-pss.ts padToKeySize',
+    sha256: '42240689d60c6d7ee324f097b6fcece8f466d1847a3d634ab5984a3fb3a54e2c',
+  },
+  {
+    file: 'apps/arweave/src/ar_tx.erl',
+    startsWith: 'verify_signature_v1(TX, verify_signature, Height) ->',
+    lines: 10,
+    mirrors:
+      'tx-signature.ts: verify_pre_fork_2_4 below Height 2.4 (block 2.4 itself included), verify after',
+    sha256: '70fe70133a3f5cc0500a8fe609ee47292ade359e5ba4a02e70408cc6b7add187',
+  },
+  {
+    file: 'apps/arweave/src/ar_tx.erl',
+    startsWith: 'verify_signature_v2(TX, verify_signature, Height) ->',
+    lines: 16,
+    mirrors: 'tx-signature.ts: the same gate for format 2',
+    sha256: '9b967fd20d6b7ef72cd3cfaa2392092c662c5cdc722fcbd08c50365ae47ed976',
+  },
+  {
+    file: 'apps/arweave/src/ar_wallet.erl',
+    startsWith: 'verify({{KeyAlg, PublicExpnt}, Pub}, Data, Sig)',
+    lines: 24,
+    mirrors:
+      'rsa-pss.ts: ar_wallet:verify is rsa_pss:verify over SHA-256, e = 65537, false on any exception',
+    sha256: '5ca03b3bd08acd43340f79335ed902834df14a3707280fcd44c61efb1e816109',
+  },
+  {
+    file: 'apps/arweave/src/ar_wallet.erl',
+    startsWith: 'verify_pre_fork_2_4({{KeyAlg, PublicExpnt}, Pub}, Data, Sig)',
+    lines: 24,
+    mirrors: 'rsa-pss.ts: verify_pre_fork_2_4 is rsa_pss:verify_legacy',
+    sha256: 'ea3537624b5454875303b244dd7bbea6427f0c79a5d65cf39df71d030245e9f5',
+  },
+  {
     file: 'apps/arweave/src/ar_tx.erl',
     startsWith: 'signature_data_segment_v2(TX) ->',
     lines: 20,
