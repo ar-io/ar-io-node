@@ -8,6 +8,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **`index-l1-verify` and `index-l1-import` options to bind and to accept.**
+  `index-l1-verify` takes `--sample-blocks`, `--sample-txs`, `--seed`,
+  `--concurrency`, `--read-timeout`, `--allow-unanchored`,
+  `--allow-unbound`, `--allow-unverified-format1`, `--spill-reserve-gb`, and
+  with `--bands-dir` `--publication`, `--publisher-key`, `--registry-url`,
+  `--index` and `--allow-expired`; its result has one shape in both views
+  (`anchor`, `unbound`, `sample`, `skipped`, `accepted`, `assurance`).
+  `index-l1-import` takes `--anchor-from`, `--anchor-min`, the three
+  `--allow-*` flags, `--read-timeout`, `--spill-max` and
+  `--spill-reserve-gb`. New env var `L1_BAND_IMPORT_ALLOW_UNVERIFIED`
+  (default false). See [docs/cli.md](docs/cli.md#index-l1-verify).
+
 - **`parquet-l2` layout `l2-2`: a key lookup and stats per band, derived
   for tag names the publisher chooses.** `lookup_key.parquet` holds, for
   each value of the index's `keyTags` (an ArDrive `Drive-Id`,
@@ -95,6 +107,56 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   opt-out.
 
 ### Fixed
+
+- **`index-l1-verify` and `index-l1-import` could pass, or write, an L1
+  index that was not the chain's; both now fail closed.** Three audits
+  (2026-10-22) found ways through. Fixed:
+  - The anchor compared only the top block's hash: a fabricated chain
+    under the real top hash passed with two sources agreeing, a NULL hash
+    at the anchor height compared nothing, the same machine under two
+    names counted twice, and without `--anchor-from` the result still
+    said `anchored: true`. Each source's header is now fetched whole, its
+    hash recomputed from its own fields (every era from the 2.0 fork), at
+    least two distinct machines must agree, and the index's row and
+    transaction ids must equal it. Without an anchor the run says
+    `anchored: false` and fails unless `--allow-unanchored`.
+  - Blocks holding a format-1 transaction with data were skipped from
+    `tx_root` and counted as passing, and pre-2.0 blocks (whose hash
+    cannot be recomputed) were described as bound by the anchor. Both are
+    now reported in `unbound` and fail unless `--allow-unverified-format1`
+    or `--allow-unbound` accepts them. Every published `l1-3` band below
+    height 2,000,000 holds such blocks.
+  - Transaction ids, their order, and every transaction field were bound
+    by nothing. Positions, counts, tags and owners are now checked against
+    the links and wallets, and a keyed uniform sample of block headers and
+    transaction signatures (`--sample-blocks`, `--sample-txs`) checks the
+    rest, with the share of forged rows it would catch stated in `sample`.
+  - `--bands-dir` read rows by a glob (so retired copies, second
+    generations and stray directories were read, and sound sets failed),
+    read only blocks and a few transaction columns, never checked
+    `band.json`'s row counts and digests, column layouts, lookup file
+    order, rows outside a band, band names, or a publication, silently
+    dropped an unreadable edge band, clamped `--from`/`--to`, and ignored
+    `--anchor-*`. Each band is now read by its own paths and checked whole,
+    with `--publication` binding, and the anchor and sample run as for
+    `--core-db`.
+  - NULLs were read as zero or passed. They now fail `nulls`.
+  - The import checked nothing against the chain: `--fill` spliced any
+    band beneath held blocks, and the worker's fill did the same. Every
+    band is now checked before a row is written, and bound by the block the
+    gateway holds above it or by `--anchor-from`. A band refused part way
+    with the gateway stopped left its rows behind and reported no hole; it
+    is now cleared, and `holes` read from what the database holds. A band
+    id's digest was never checked and a republished band was skipped as
+    imported; both are now checked. A missing or unreadable bands
+    directory made `--fill` exit 0; it is now an error, and the worker
+    counts it `failed`.
+  - The default `core.db` range stopped at the 2.0 fork; it is now the
+    whole held range.
+
+  Gateways with `L1_BAND_IMPORT_ENABLED=true` now refuse today's `l1-3`
+  bands below height 2,000,000 unless `L1_BAND_IMPORT_ALLOW_UNVERIFIED=true`.
+  See [docs/cli.md](docs/cli.md#index-l1-verify).
 
 - **`index-l2-verify` could report `ok: true` on bad data; it now fails
   closed.** Three audits found ways through. Fixed:
