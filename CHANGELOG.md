@@ -4,7 +4,20 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased]
+## [Release 86] - 2026-10-22
+
+This is an **urgent, recommended release** focused on **the Node.js
+Brotli remote-code-execution fix (CVE-2026-111497), checking L2 indexes
+you did not build, and ArNS undername limits**. Key highlights include the
+core image moving from the end-of-life Node.js 20 to 22.23.4, and the
+default observer image (`2aa908dc`, which also cranks epochs) moving to
+22.23.4, closing the Brotli decoder RCE and the TLS hostname-check
+bypasses from Node's October 21 security release (**upgrade both images
+today**); `index-l2-verify`, which checks a `parquet-l2` index against a
+signed publication and reads the roots it names from Arweave nodes with
+every byte proven, and fails closed; `parquet-l2` layout `l2-2` with a key
+lookup and stats per band; opting out of Index Sharing now also stops
+seeding; and an upstream ArNS undername limit of 0 no longer read as 10.
 
 ### Security
 
@@ -24,6 +37,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   who stopped Brotli decoding with a `NODE_OPTIONS=--require` shim can
   drop it once they run this image. Running from source now wants Node 22
   (`.nvmrc`).
+
+- **The observer moves to Node.js 22.23.4 for the same fixes.**
+  `OBSERVER_IMAGE_TAG` now pins an observer image built on
+  `node:22.23.4-bookworm-slim`, up from 22.13.0. The observer fetches from
+  every gateway on the network, and on a gateway that cranks epochs the
+  same process signs with the operator wallet.
 
 ### Added
 
@@ -269,6 +288,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   a signal yet, so one already started still runs to completion. An aborted
   probe is not remembered as a miss
   (`CHUNK_METADATA_ANCHOR_MISS_CACHE_TTL_SECONDS`).
+
+- **An ArNS undername limit of 0 from a trusted gateway is kept, not
+  replaced with the default of 10.** The resolver read the limit and index
+  headers with `parseInt(header) || default`, so a name whose upstream
+  limit was 0 was treated as allowing 10 undernames and served undernames
+  it should not have. Only a missing or non-numeric header now falls back
+  to the default (#927).
 
 ## [Release 85] - 2026-10-17
 
