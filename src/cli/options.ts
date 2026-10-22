@@ -67,7 +67,7 @@ export const optionMap = {
   readTimeout: {
     alias: '--read-timeout <ms>',
     description:
-      'How long the header check waits for each root range read (default 30000)',
+      'How long each read from a source may take, in milliseconds (default 30000)',
   },
   skipHeaderCheck: {
     alias: '--skip-header-check',
@@ -136,12 +136,51 @@ export const optionMap = {
   anchorFrom: {
     alias: '--anchor-from <urls>',
     description:
-      'Comma-separated Arweave nodes or gateways to ask for the anchor block hashes. Raw nodes (port 1984) are a different implementation, so their agreement is worth most',
+      "Comma-separated Arweave nodes or gateways serving /block/height/N, /block/hash/H and /tx/{id}: the top block is fetched from every one, each header's hash recomputed from its fields, and compared with the index; the samples are fetched from them in turn. Names that resolve to a shared address count as one machine. Without it the run is not anchored and fails unless --allow-unanchored",
   },
   anchorMin: {
     alias: '--anchor-min <n>',
     description:
-      'How many sources must answer for each anchor height (default 2)',
+      'How many distinct machines must serve the anchor block, all with the same recomputed hash (default 2)',
+  },
+  allowUnanchored: {
+    alias: '--allow-unanchored',
+    description:
+      'Pass without binding the index to the chain (no --anchor-from, or an anchor that did not bind): the result shows only that the index agrees with itself, and says so',
+  },
+  allowUnbound: {
+    alias: '--allow-unbound',
+    description:
+      'Pass with blocks nothing binds: pre-2.0 blocks (their hashes cannot be recomputed and the layout carries no transition tx_root witnesses), and blocks whose transactions the index lacks. Listed in unbound either way',
+  },
+  allowUnverifiedFormat1: {
+    alias: '--allow-unverified-format1',
+    description:
+      'Pass with post-2.0 blocks whose tx_root could not be recomputed because they hold a format-1 transaction with data (the layout carries no v1 data roots). Listed in unbound.txRootFormat1 either way',
+  },
+  sampleBlocks: {
+    alias: '--sample-blocks <n>',
+    description:
+      "Blocks drawn uniformly whose headers are fetched (by the index's own hash), recomputed and compared field by field and by transaction order (default 1000; 0 to skip). Needs --anchor-from",
+  },
+  sampleTxs: {
+    alias: '--sample-txs <n>',
+    description:
+      "Transactions drawn uniformly per band (per 100,000 heights of a core.db) whose signatures are fetched and verified over the index's fields (default 1000; 0 to skip). Needs --anchor-from",
+  },
+  sampleSeed: {
+    alias: '--seed <n>',
+    description:
+      'Seeds the samples, to repeat a run (the result reports the seed it drew when none is given)',
+  },
+  sampleConcurrency: {
+    alias: '--concurrency <n>',
+    description: 'Sample fetches in flight at once (default 8)',
+  },
+  spillReserveGb: {
+    alias: '--spill-reserve-gb <n>',
+    description:
+      'Space a run always leaves free under its spill directory, in GB (default 100). Lower it knowingly on a small disk',
   },
   arweaveNodes: {
     alias: '--arweave-nodes <urls>',
@@ -196,7 +235,7 @@ export const optionMap = {
   l2Index: {
     alias: '--index <name>',
     description:
-      'The index to bind to in --publication, when it lists more than one parquet-l2 index',
+      'The index to bind to in --publication, when it lists more than one index of the kind checked',
   },
   l1BandsDir: {
     alias: '--l1-bands-dir <path>',
@@ -329,6 +368,14 @@ export const indexL1ImportOptions: CommanderOption[] = [
   optionMap.importTo,
   optionMap.maxBands,
   optionMap.cacheMib,
+  optionMap.anchorFrom,
+  optionMap.anchorMin,
+  optionMap.allowUnanchored,
+  optionMap.allowUnbound,
+  optionMap.allowUnverifiedFormat1,
+  optionMap.readTimeout,
+  optionMap.spillMax,
+  optionMap.spillReserveGb,
 ];
 
 export const indexL1VerifyOptions: CommanderOption[] = [
@@ -337,10 +384,24 @@ export const indexL1VerifyOptions: CommanderOption[] = [
   optionMap.skipTxRoot,
   optionMap.skipLookups,
   optionMap.spillMax,
+  optionMap.spillReserveGb,
   optionMap.fromHeight,
   optionMap.toHeight,
   optionMap.anchorFrom,
   optionMap.anchorMin,
+  optionMap.allowUnanchored,
+  optionMap.allowUnbound,
+  optionMap.allowUnverifiedFormat1,
+  optionMap.sampleBlocks,
+  optionMap.sampleTxs,
+  optionMap.sampleSeed,
+  optionMap.sampleConcurrency,
+  optionMap.readTimeout,
+  optionMap.l2Publication,
+  optionMap.l2PublisherKey,
+  optionMap.l2RegistryUrl,
+  optionMap.l2Index,
+  optionMap.allowExpired,
 ];
 
 export const indexL2VerifyOptions: CommanderOption[] = [

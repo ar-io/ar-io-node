@@ -12,14 +12,18 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import Sqlite from 'better-sqlite3';
 import type { Database } from 'duckdb-async';
 
-import { exportL1Band } from '../../index-export/kinds/parquet-l1/export.js';
+import { exportBands } from '../../../test/parquet-l1-bands.js';
 import { buildCoreDb } from '../../../test/parquet-l1-core-db.js';
-import { bandCoverage, BandsRefused, verifyBands } from './verify-bands.js';
 import {
-  checkTxRoots,
-  STRICT_DATA_SPLIT_THRESHOLD,
-  verifyRange,
-} from './verify.js';
+  bandCoverage,
+  BandsRefused,
+  verifyBands as verifyBandsStrict,
+} from './verify-bands.js';
+import { STRICT_DATA_SPLIT_THRESHOLD, verifyCoreDb } from './verify.js';
+
+/** Unanchored, accepted: these tests are about the bands' own checks. */
+const verifyBands: typeof verifyBandsStrict = (duck, dir, options = {}) =>
+  verifyBandsStrict(duck, dir, { allow: { unanchored: true }, ...options });
 
 const FIRST = 1_900_000;
 const SPAN = 10;
@@ -89,17 +93,10 @@ describe('verifyBands', () => {
     // `padded: false` is how the weave grew below the strict data split,
     // so the accounting identity is exercised rather than skipped.
     await buildCoreDb(coreDb, FIRST, SPAN * 2, { padded: false });
-    for (const [from, to] of [
+    await exportBands(coreDb, bandsDir, [
       [FIRST, FIRST + SPAN - 1],
       [FIRST + SPAN, FIRST + SPAN * 2 - 1],
-    ]) {
-      const out = await exportL1Band({ coreDbPath: coreDb, workDir, from, to });
-      await fsp.rename(
-        out.dir,
-        path.join(bandsDir, `l1-h${from}-${to}-f5b1208c-${'0'.repeat(12)}`),
-      );
-      await fsp.rm(path.dirname(out.dir), { recursive: true, force: true });
-    }
+    ]);
     const { Database: D } = await import('duckdb-async');
     duck = await D.create(':memory:');
   });
@@ -134,21 +131,17 @@ describe('verifyBands', () => {
     );
   });
 
-  it('reports a lookup file it cannot read as a failed check, not an error', async () => {
+  it('reports a missing lookup file as a failed check, not an error', async () => {
     const [first] = (await fsp.readdir(bandsDir)).sort();
     await fsp.rm(path.join(bandsDir, first, 'lookup_wallet.parquet'));
     const out = await verifyBands(duck, bandsDir, { window: 7 });
     assert.equal(out.ok, false);
-    const check = out.checks.find((c) => c.name === 'lookups');
+    const check = out.checks.find((c) => c.name === 'files');
     assert.equal(check?.ok, false);
     assert.equal(check?.failures?.length, 1);
     assert.match(
       check?.failures?.[0].found ?? '',
-      new RegExp(`^${first}: lookup_wallet\\.parquet: could not be read`),
-    );
-    // The other checks still ran and passed.
-    assert.ok(
-      out.checks.filter((c) => c.name !== 'lookups').every((c) => c.ok),
+      new RegExp(`^${first}: holds`),
     );
   });
 
@@ -173,72 +166,67 @@ describe('verifyBands', () => {
   });
 
   it('agrees with the core.db verifier on the same chain', async () => {
-    // The two drive the same chain.ts rules over different readers. A
-    // rule reimplemented twice is a rule that drifts, so this requires
-    // the same verdicts and the same counts rather than hoping.
+    // The two read the same chain through different readers into the same
+    // judge. A reader that dropped a column or a row would show here.
     const db = new Sqlite(coreDb, { readonly: true });
     try {
       const low = FIRST;
       const high = FIRST + SPAN * 2 - 1;
-      const sqlite = verifyRange(db, { from: low, to: high });
-      const roots = await checkTxRoots(db, { from: low, to: high });
+      const sqlite = await verifyCoreDb(db, {
+        from: low,
+        to: high,
+        allow: { unanchored: true },
+      });
       const bands = await verifyBands(duck, bandsDir, {
         from: low,
         to: high,
         window: 6,
       });
-
-      assert.equal(sqlite.ok, true, 'the fixture is sound');
-      assert.equal(roots.check.ok, true);
-      assert.equal(bands.ok, true, 'and both verifiers say so');
-      assert.equal(bands.blocks, sqlite.blocks);
-      assert.equal(bands.merkleChecked, sqlite.merkleChecked);
-      assert.equal(bands.merkleSkipped, sqlite.merkleSkipped);
-      assert.equal(bands.accountingChecked, sqlite.accountingChecked);
-      assert.equal(bands.accountingSkipped, sqlite.accountingSkipped);
-      assert.equal(bands.txRootChecked, roots.checked);
-      assert.equal(bands.txRootSkipped, roots.skipped);
+      assert.equal(sqlite.ok, true, JSON.stringify(sqlite.checks));
+      assert.equal(bands.ok, true, JSON.stringify(bands.checks));
+      for (const key of [
+        'blocks',
+        'merkleChecked',
+        'merkleSkipped',
+        'accountingChecked',
+        'accountingSkipped',
+        'txRootChecked',
+        'weaveSize',
+        'weaveGrowth',
+        'accountedFor',
+      ] as const) {
+        assert.equal(bands[key], sqlite[key], key);
+      }
+      // Every check the judge runs, with the same verdict.
+      const verdicts = (r: { checks: Array<{ name: string; ok: boolean }> }) =>
+        Object.fromEntries(r.checks.map((c) => [c.name, c.ok]));
+      const fromDb = verdicts(sqlite);
+      const fromBands = verdicts(bands);
+      for (const name of Object.keys(fromDb)) {
+        assert.equal(fromBands[name], fromDb[name], name);
+      }
     } finally {
       db.close();
     }
   });
 
   it('agrees with the core.db verifier above the padding threshold too', async () => {
-    // The sub-threshold fixture cannot exercise the skip, so a driver
-    // that ignored the threshold would look identical. This one is
-    // past it, where both must count the accounting out.
     const hi = path.join(dir, 'hi');
     const hiBands = path.join(hi, 'bands');
     const hiDb = path.join(hi, 'source.db');
-    await fsp.mkdir(path.join(hi, 'work'), { recursive: true });
-    await fsp.mkdir(hiBands, { recursive: true });
+    await fsp.mkdir(hi, { recursive: true });
     await buildCoreDb(hiDb, FIRST, SPAN, {
-      weaveStart: STRICT_DATA_SPLIT_THRESHOLD + 1,
+      weaveStart: Number(STRICT_DATA_SPLIT_THRESHOLD) + 1,
     });
-    const out = await exportL1Band({
-      coreDbPath: hiDb,
-      workDir: path.join(hi, 'work'),
-      from: FIRST,
-      to: FIRST + SPAN - 1,
-    });
-    await fsp.rename(
-      out.dir,
-      path.join(
-        hiBands,
-        `l1-h${FIRST}-${FIRST + SPAN - 1}-f5b1208c-${'0'.repeat(12)}`,
-      ),
-    );
-
+    await exportBands(hiDb, hiBands, [[FIRST, FIRST + SPAN - 1]]);
     const db = new Sqlite(hiDb, { readonly: true });
     try {
-      const low = FIRST;
-      const high = FIRST + SPAN - 1;
-      const sqlite = verifyRange(db, { from: low, to: high });
-      const bands = await verifyBands(duck, hiBands, {
-        from: low,
-        to: high,
-        window: 4,
+      const sqlite = await verifyCoreDb(db, {
+        from: FIRST,
+        to: FIRST + SPAN - 1,
+        allow: { unanchored: true },
       });
+      const bands = await verifyBands(duck, hiBands, { window: 4 });
       assert.ok(
         sqlite.accountingSkipped > 0,
         'the fixture is past the threshold',
@@ -289,6 +277,8 @@ describe('verifyBands', () => {
 
     const out = await verifyBands(duck, bandsDir, { window: 20 });
     assert.equal(out.ok, false);
+    // Caught twice: the file is not the layout's, and the chain itself.
+    assert.equal(out.checks.find((c) => c.name === 'schema')?.ok, false);
     const merkle = out.checks.find((c) => c.name === 'hash_list_merkle');
     assert.equal(merkle?.ok, false);
     assert.ok(

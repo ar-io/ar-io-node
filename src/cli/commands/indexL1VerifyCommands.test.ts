@@ -13,17 +13,31 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import Sqlite from 'better-sqlite3';
 
 import { buildCoreDb } from '../../../test/parquet-l1-core-db.js';
+import {
+  chainNode,
+  scriptedFetch,
+  scriptedLookup,
+  syntheticHeader,
+} from '../../../test/parquet-l1-headers.js';
 import { createTestLogger } from '../../../test/test-logger.js';
+import {
+  ChainBlock,
+  ChainTransaction,
+  computeTxRoot,
+  FORK_2_0,
+  nextHashListMerkle,
+} from '../../lib/parquet-l1/chain.js';
 import { VerifyRefused } from '../../lib/parquet-l1/verify.js';
 import {
   indexL1VerifyCLICommand,
+  type IndexL1VerifyDeps,
   openBandsDuck,
   SPILL_HEARTBEAT_FILE,
   spillBytes,
 } from './indexL1VerifyCommands.js';
 
 const log = createTestLogger({ suite: 'index-l1-verify' });
-const FIRST = 300_000;
+const FIRST = 1_900_000;
 const COUNT = 20;
 
 describe('indexL1VerifyCLICommand', () => {
@@ -33,34 +47,68 @@ describe('indexL1VerifyCLICommand', () => {
   beforeEach(async () => {
     dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'l1-verify-cli-'));
     coreDb = path.join(dir, 'core.db');
-    await buildCoreDb(coreDb, FIRST, COUNT, { padded: false });
+    await buildCoreDb(coreDb, FIRST, COUNT, {
+      padded: false,
+      verifiable: true,
+    });
   });
 
   afterEach(async () => {
     await fsp.rm(dir, { recursive: true, force: true });
   });
 
-  const run = (options: Record<string, string> = {}) =>
-    indexL1VerifyCLICommand({ coreDb, ...options }, { log }) as Promise<
-      Record<string, unknown>
-    >;
+  /** Two machines serving `served` (default: the index's own chain). */
+  const nodes = (
+    served = coreDb,
+    tamper?: Parameters<typeof chainNode>[1],
+  ) => ({
+    fetch: scriptedFetch({
+      'http://a.test': chainNode(served, tamper),
+      'http://b.test': chainNode(served, tamper),
+    }),
+    lookupAll: scriptedLookup(),
+  });
+  const ANCHORS = 'http://a.test,http://b.test';
+  const run = (
+    options: Record<string, string | boolean> = {},
+    deps: Partial<IndexL1VerifyDeps> = {},
+  ) =>
+    indexL1VerifyCLICommand({ coreDb, ...options }, { log, ...deps }).catch(
+      (answer: unknown) => {
+        if (answer instanceof Error) throw answer;
+        return answer;
+      },
+    ) as Promise<Record<string, any>>;
+  const failing = (r: Record<string, any>) =>
+    (r.checks as Array<{ name: string; ok: boolean }>)
+      .filter((c) => !c.ok)
+      .map((c) => c.name);
 
-  it('checks the whole index and answers in the documented shape', async () => {
-    const result = await run();
-    assert.equal(result.ok, true, JSON.stringify(result.checks));
+  it('checks the whole index anchored and sampled, and answers in the documented shape', async () => {
+    const result = await run(
+      { anchorFrom: ANCHORS, sampleBlocks: '3', sampleTxs: '3', seed: '1' },
+      nodes(),
+    );
+    assert.equal(result.ok, true, JSON.stringify(failing(result)));
+    assert.equal(result.mode, 'core-db');
     assert.deepEqual(result.heightRange, [FIRST - 1, FIRST + COUNT - 1]);
     assert.equal(result.coreDb, coreDb);
-    assert.equal(
-      result.anchored,
-      false,
-      'this fixture stops well below the fork, so nothing anchors it',
-    );
+    assert.equal(result.anchored, true);
+    assert.equal(result.anchor.recomputed, true);
+    assert.equal(result.anchor.machines, 2);
+    assert.deepEqual(result.accepted, []);
+    assert.deepEqual(result.unbound, {});
+    assert.equal(result.sample.seed, 1);
     // Everything it reports must survive JSON, which is the CLI's contract.
     assert.deepEqual(JSON.parse(JSON.stringify(result)), result);
   });
 
   it('honours an explicit range', async () => {
-    const result = await run({ from: String(FIRST), to: String(FIRST + 5) });
+    const result = await run({
+      from: String(FIRST),
+      to: String(FIRST + 5),
+      allowUnanchored: true,
+    });
     assert.deepEqual(result.heightRange, [FIRST, FIRST + 5]);
     assert.equal(result.blocks, 6);
   });
@@ -79,6 +127,15 @@ describe('indexL1VerifyCLICommand', () => {
       run({ from: 'tomorrow' }),
       (e: Error) => e instanceof VerifyRefused && /--from/.test(e.message),
     );
+    await assert.rejects(
+      run({ anchorMin: '0' }),
+      (e: Error) =>
+        e instanceof VerifyRefused && /--anchor-min/.test(e.message),
+    );
+    await assert.rejects(
+      run({ publication: 'p.json' }),
+      (e: Error) => e instanceof VerifyRefused && /--bands-dir/.test(e.message),
+    );
   });
 
   it('refuses a database with no stable blocks', async () => {
@@ -94,9 +151,6 @@ describe('indexL1VerifyCLICommand', () => {
   });
 
   it('fails the command on a broken index, with the result as the error', async () => {
-    // Returning it would print the same JSON and exit 0, and a script
-    // would read a broken index as a good one. `runCommand` prints a
-    // thrown result on stderr and exits 1.
     const db = new Sqlite(coreDb);
     db.prepare(
       'UPDATE stable_transactions SET data_size = data_size + 1 WHERE height = ?',
@@ -104,7 +158,7 @@ describe('indexL1VerifyCLICommand', () => {
     db.close();
     let thrown: Record<string, unknown> | undefined;
     try {
-      await run();
+      await indexL1VerifyCLICommand({ coreDb, allowUnanchored: true }, { log });
     } catch (error) {
       thrown = error as Record<string, unknown>;
     }
@@ -118,152 +172,207 @@ describe('indexL1VerifyCLICommand', () => {
       (bad?.failures as Array<Record<string, unknown>>)[0].height,
       FIRST + 3,
     );
-    assert.deepEqual(
-      JSON.parse(JSON.stringify(thrown)),
-      thrown,
-      'and it survives JSON, because the CLI prints it',
-    );
+    assert.deepEqual(JSON.parse(JSON.stringify(thrown)), thrown);
   });
 
-  it('asks the named sources for the anchor hash and agrees with them', async () => {
-    const ours = (h: number) => {
-      const db = new Sqlite(coreDb);
-      try {
-        return (
-          db
-            .prepare('SELECT indep_hash FROM stable_blocks WHERE height = ?')
-            .pluck()
-            .get(h) as Buffer
-        ).toString('base64url');
-      } finally {
-        db.close();
-      }
-    };
-    const asked: Array<[string, number]> = [];
-    const result = (await indexL1VerifyCLICommand(
-      { coreDb, anchorFrom: 'http://one.example,http://two.example' },
-      {
-        log,
-        fetchIndepHash: async (url, h) => {
-          asked.push([url, h]);
-          return ours(h);
-        },
-      },
-    )) as Record<string, unknown>;
-    assert.equal(result.ok, true);
-    // Wholly below the fork, so one anchor at the top of the range.
-    assert.deepEqual(
-      asked.map(([, h]) => h),
-      [FIRST + COUNT - 1, FIRST + COUNT - 1],
-    );
-    const check = (result.checks as Array<Record<string, unknown>>).find(
-      (c) => c.name === 'anchor_hash',
-    );
-    assert.equal(check?.ok, true);
-    assert.equal((result.anchorSources as unknown[]).length, 2);
-    assert.deepEqual(JSON.parse(JSON.stringify(result)), result);
-  });
-
-  it('does not let one node satisfy --anchor-min by being listed twice', async () => {
-    // The whole point of a minimum is to remove a single point of
-    // trust, so the same URL repeated, or differing only by a trailing
-    // slash, must count once.
-    const asked: string[] = [];
-    await assert.rejects(
-      indexL1VerifyCLICommand(
-        {
-          coreDb,
-          anchorFrom: 'http://a.example,http://a.example/,http://a.example',
-        },
-        {
-          log,
-          fetchIndepHash: async (url, h) => {
-            asked.push(url);
-            const db = new Sqlite(coreDb);
-            try {
-              return (
-                db
-                  .prepare(
-                    'SELECT indep_hash FROM stable_blocks WHERE height = ?',
-                  )
-                  .pluck()
-                  .get(h) as Buffer
-              ).toString('base64url');
-            } finally {
-              db.close();
-            }
-          },
-        },
-      ),
-      'one node listed three times is still one node',
-    );
-    assert.deepEqual([...new Set(asked)], ['http://a.example']);
-    assert.equal(asked.length, 1, 'and it was only asked once');
-  });
-
-  it('fails when a source disagrees about the anchor', async () => {
-    let thrown: Record<string, unknown> | undefined;
-    try {
-      await indexL1VerifyCLICommand(
-        { coreDb, anchorFrom: 'http://liar.example,http://other.example' },
-        { log, fetchIndepHash: async () => 'not-the-real-hash' },
-      );
-    } catch (error) {
-      thrown = error as Record<string, unknown>;
-    }
-    assert.ok(thrown !== undefined, 'the command failed');
-    const check = (thrown.checks as Array<Record<string, unknown>>).find(
-      (c) => c.name === 'anchor_hash',
-    );
-    assert.equal(check?.ok, false);
-  });
-
-  it('fails when too few sources could be reached', async () => {
-    // One source is a single point of trust, which is the thing the
-    // anchor exists to remove — so an unreachable second is a failure,
-    // not a pass with a shrug.
-    const ours = new Sqlite(coreDb);
-    const top = ours
-      .prepare('SELECT indep_hash FROM stable_blocks WHERE height = ?')
-      .pluck()
-      .get(FIRST + COUNT - 1) as Buffer;
-    ours.close();
-    await assert.rejects(
-      indexL1VerifyCLICommand(
-        { coreDb, anchorFrom: 'http://up.example,http://down.example' },
-        {
-          log,
-          fetchIndepHash: async (url) => {
-            if (url.includes('down')) throw new Error('ECONNREFUSED');
-            return top.toString('base64url');
-          },
-        },
-      ),
-    );
-  });
-
-  it('asks nobody when no source is named, and says so', async () => {
+  it('B F5: is not anchored without a source, says so, and fails unless that is accepted', async () => {
     const result = await run();
-    assert.equal(result.anchorSources, undefined);
-    const names = (result.checks as Array<Record<string, unknown>>).map(
-      (c) => c.name,
+    assert.equal(result.ok, false);
+    assert.equal(result.anchored, false);
+    assert.ok(result.skipped.includes('anchor'));
+    assert.ok(result.skipped.includes('sample'));
+    assert.deepEqual(failing(result), ['anchor']);
+    const accepted = await run({ allowUnanchored: true });
+    assert.equal(accepted.ok, true);
+    assert.deepEqual(accepted.accepted, ['--allow-unanchored']);
+  });
+
+  it('B F1a: refuses a fabricated chain grafted under the real top, though two sources agree on its hash', async () => {
+    // A copy of the chain whose blocks below the top are fabricated, with
+    // every self-check redone and a transaction invented; the top block's
+    // hash is the real one, but its fields are now the forger's.
+    const forged = path.join(dir, 'forged.db');
+    await fsp.copyFile(coreDb, forged);
+    const db = new Sqlite(forged);
+    db.prepare(
+      `INSERT INTO stable_transactions (id, height, block_transaction_index, format,
+        last_tx, owner_address, quantity, reward, data_size, data_root, tag_count)
+       VALUES (?, ?, 9, 2, ?, ?, '0', '0', 123456, ?, 0)`,
+    ).run(
+      crypto.randomBytes(32),
+      FIRST + 5,
+      crypto.randomBytes(32),
+      crypto.randomBytes(32),
+      crypto.randomBytes(32),
     );
-    assert.ok(!names.includes('anchor_hash'));
+    await rechain(db, FIRST, FIRST + COUNT - 1);
+    db.close();
+    const result = await run(
+      {
+        coreDb: forged,
+        anchorFrom: ANCHORS,
+        sampleBlocks: '0',
+        sampleTxs: '0',
+      },
+      nodes(coreDb),
+    );
+    assert.equal(result.ok, false);
+    assert.equal(result.anchored, false);
+    assert.ok(
+      result.anchor.mismatches.some(
+        (m: { field: string }) => m.field === 'hash_list_merkle',
+      ),
+      JSON.stringify(result.anchor),
+    );
+  });
+
+  it('B F1a: refuses a source that pairs the real hash with fabricated fields', async () => {
+    const result = await run(
+      { anchorFrom: ANCHORS, sampleBlocks: '0', sampleTxs: '0' },
+      nodes(coreDb, (p, answer) => {
+        if (!p.startsWith('/block/height/')) return answer;
+        const body = { ...(answer.body as Record<string, unknown>) };
+        body.weave_size = String(BigInt(body.weave_size as string) + 1n);
+        return { status: 200, body };
+      }),
+    );
+    assert.equal(result.ok, false);
+    assert.equal(result.anchored, false);
+    assert.match(result.anchor.problems.join(';'), /does not verify/);
+  });
+
+  it('B F1b: reports pre-2.0 blocks as unbound and fails without --allow-unbound', async () => {
+    const pre = path.join(dir, 'pre.db');
+    await buildCoreDb(pre, FORK_2_0 - 9, 9, { padded: false });
+    const result = await run({ coreDb: pre, allowUnanchored: true });
+    assert.equal(result.ok, false);
+    assert.equal(result.unbound.pre20.blocks, 10);
+    assert.deepEqual(failing(result), ['unbound']);
+    const accepted = await run({
+      coreDb: pre,
+      allowUnanchored: true,
+      allowUnbound: true,
+    });
+    assert.equal(accepted.ok, true);
+    assert.ok(accepted.accepted.includes('--allow-unbound'));
+  });
+
+  it('B F2: lists a format-1 flip as unbound, and catches the id substituted beside it', async () => {
+    const h = FIRST + 7; // three transactions
+    const db = new Sqlite(coreDb);
+    db.prepare(
+      'UPDATE stable_transactions SET format = 1 WHERE height = ? AND block_transaction_index = 0',
+    ).run(h);
+    db.prepare(
+      'UPDATE stable_transactions SET id = ? WHERE height = ? AND block_transaction_index = 2',
+    ).run(crypto.randomBytes(32), h);
+    db.close();
+    const result = await run({
+      allowUnanchored: true,
+      allowUnverifiedFormat1: true,
+    });
+    assert.equal(result.ok, false);
+    assert.deepEqual(result.unbound.txRootFormat1.heights, [h]);
+    assert.ok(failing(result).includes('position'));
+  });
+
+  it('B F3: catches a substituted id, owner or quantity in a sampled block, and a reordered block', async () => {
+    const h = FIRST + 1; // one transaction: any id keeps its tx_root
+    const db = new Sqlite(coreDb);
+    db.prepare(
+      'UPDATE stable_transactions SET quantity = ? WHERE height = ?',
+    ).run('999999999999', h);
+    db.close();
+    const result = await run(
+      { anchorFrom: ANCHORS, sampleBlocks: '0', sampleTxs: '100', seed: '5' },
+      nodes(),
+    );
+    assert.equal(result.ok, false);
+    assert.deepEqual(failing(result), ['sample']);
+    assert.match(
+      JSON.stringify(result.checks.find((c: any) => c.name === 'sample')),
+      /does not verify over the index/,
+    );
+  });
+
+  it('B F4: refuses a NULL top indep_hash, whatever the sources say', async () => {
+    const db = new Sqlite(coreDb);
+    db.prepare(
+      'UPDATE stable_blocks SET indep_hash = NULL WHERE height = ?',
+    ).run(FIRST + COUNT - 1);
+    db.close();
+    const result = await run(
+      { anchorFrom: ANCHORS, sampleBlocks: '0', sampleTxs: '0' },
+      nodes(path.join(dir, 'nothing.db')),
+    ).catch((e) => e);
+    assert.equal(result.ok, false);
+    assert.equal(result.anchored, false);
+    assert.ok(failing(result).includes('nulls'));
+    assert.ok(failing(result).includes('anchor'));
+  });
+
+  it('B F7: counts two names that share an address as one machine', async () => {
+    const result = await run(
+      { anchorFrom: ANCHORS, sampleBlocks: '0', sampleTxs: '0' },
+      {
+        ...nodes(),
+        lookupAll: scriptedLookup({
+          'a.test': ['192.0.2.9'],
+          'b.test': ['192.0.2.9', '198.51.100.1'],
+        }),
+      },
+    );
+    assert.equal(result.ok, false);
+    assert.equal(result.anchor.machines, 1);
+    assert.match(result.anchor.problems.join(';'), /at least 2 are required/);
+  });
+
+  it('fails when a source disagrees, or too few answer', async () => {
+    const liar = await run(
+      { anchorFrom: ANCHORS, sampleBlocks: '0', sampleTxs: '0' },
+      {
+        fetch: scriptedFetch({
+          'http://a.test': chainNode(coreDb),
+          'http://b.test': chainNode(coreDb, (p, answer) => {
+            if (!p.startsWith('/block/height/')) return answer;
+            const row = answer.body as Record<string, any>;
+            // A whole different block that recomputes on its own.
+            return {
+              status: 200,
+              body: syntheticHeader(
+                {
+                  ...headerRow(row),
+                  previous_block: crypto.randomBytes(48),
+                },
+                [],
+              ),
+            };
+          }),
+        }),
+        lookupAll: scriptedLookup(),
+      },
+    );
+    assert.equal(liar.ok, false);
+    assert.match(liar.anchor.problems.join(';'), /disagree/);
+    const one = await run(
+      { anchorFrom: ANCHORS, sampleBlocks: '0', sampleTxs: '0' },
+      {
+        fetch: scriptedFetch({ 'http://a.test': chainNode(coreDb) }),
+        lookupAll: scriptedLookup(),
+      },
+    );
+    assert.equal(one.ok, false);
+    assert.equal(one.anchor.machines, 1);
   });
 
   it('leaves the database byte for byte as it found it', async () => {
-    // What an operator needs is that running this against a live
-    // gateway changes nothing. The handle is also opened read-only, so a
-    // write added here later fails loudly rather than quietly touching a
-    // running gateway's database — that flag is a guard on future
-    // changes, which this cannot observe and does not claim to.
     const digest = async () =>
       crypto
         .createHash('sha256')
         .update(await fsp.readFile(coreDb))
         .digest('hex');
     const before = await digest();
-    await run();
+    await run({ allowUnanchored: true });
     assert.equal(await digest(), before);
     assert.deepEqual(
       await fsp.readdir(dir).then((f) => f.filter((n) => n !== 'core.db')),
@@ -272,6 +381,72 @@ describe('indexL1VerifyCLICommand', () => {
     );
   });
 });
+
+/** A served header's stored fields, to build another header from. */
+function headerRow(json: Record<string, any>) {
+  const b = (v: string) => Buffer.from(v, 'base64url');
+  return {
+    height: json.height,
+    previous_block: b(json.previous_block),
+    nonce: b(json.nonce),
+    hash: b(json.hash),
+    block_timestamp: json.timestamp,
+    diff: json.diff,
+    cumulative_diff: json.cumulative_diff,
+    last_retarget: json.last_retarget,
+    reward_addr: json.reward_addr === 'unclaimed' ? null : b(json.reward_addr),
+    reward_pool: json.reward_pool,
+    block_size: Number(json.block_size),
+    weave_size: Number(json.weave_size),
+    usd_to_ar_rate_dividend: 1,
+    usd_to_ar_rate_divisor: 10,
+    scheduled_usd_to_ar_rate_dividend: 1,
+    scheduled_usd_to_ar_rate_divisor: 10,
+    hash_list_merkle: b(json.hash_list_merkle),
+    wallet_list: b(json.wallet_list),
+    tx_root: b(json.tx_root),
+  };
+}
+
+/**
+ * Redoes every self-check of `[start, top]` after a forger's edits: weave,
+ * block_size, tx_root, links and hash_list_merkle, with every block hash
+ * below `top` fabricated and `top`'s kept.
+ */
+async function rechain(db: Sqlite.Database, start: number, top: number) {
+  type Row = {
+    height: number;
+    indep_hash: Buffer;
+    previous_block: Buffer | null;
+    weave_size: number;
+    tx_root: Buffer | null;
+    hash_list_merkle: Buffer | null;
+  };
+  const get = db.prepare('SELECT * FROM stable_blocks WHERE height = ?');
+  const update =
+    db.prepare(`UPDATE stable_blocks SET indep_hash = ?, previous_block = ?,
+     weave_size = ?, block_size = ?, tx_root = ?, hash_list_merkle = ? WHERE height = ?`);
+  const txs = db.prepare(
+    'SELECT id, format, data_size, data_root FROM stable_transactions WHERE height = ? ORDER BY block_transaction_index',
+  );
+  let previous = get.get(start - 1) as Row;
+  for (let h = start; h <= top; h++) {
+    const row = get.get(h) as Row;
+    const list = txs.all(h) as ChainTransaction[];
+    const size = list.reduce((sum, t) => sum + Number(t.data_size), 0);
+    const indep = h < top ? crypto.randomBytes(48) : row.indep_hash;
+    update.run(
+      indep,
+      previous.indep_hash,
+      Number(previous.weave_size) + size,
+      size,
+      (await computeTxRoot(h, list)) ?? row.tx_root,
+      nextHashListMerkle(previous as unknown as ChainBlock),
+      h,
+    );
+    previous = get.get(h) as Row;
+  }
+}
 
 describe('openBandsDuck', () => {
   let root: string;
