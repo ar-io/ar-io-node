@@ -266,8 +266,12 @@ export const DEFAULT_SAMPLE_TXS = 1000;
  * recomputed, by default: what catches a format-2 transaction relabelled.
  */
 export const DEFAULT_SAMPLE_FORMAT1 = 200;
-/** Bytes of format-1 data a band's signature sample may fetch. */
-export const DEFAULT_SAMPLE_V1_BYTES = 1e9;
+/**
+ * Bytes of format-1 data a band's signature sample may fetch, counting
+ * every machine's copy: a band of 1,000 draws at two copies measured about
+ * 1.22 GB (200000-299999), so this leaves room to spare.
+ */
+export const DEFAULT_SAMPLE_V1_BYTES = 4e9;
 /** Sample fetches in flight by default. */
 export const DEFAULT_SAMPLE_CONCURRENCY = 8;
 /** How long one read from a source may take by default. */

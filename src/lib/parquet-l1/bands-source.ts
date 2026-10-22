@@ -231,7 +231,7 @@ export class BandsSource implements L1Source {
               CAST(t.quantity AS VARCHAR) AS quantity,
               CAST(t.reward AS VARCHAR) AS reward, t.anchor,
               CAST(t.data_size AS VARCHAR) AS data_size, t.data_root,
-              w.public_modulus
+              t.owner_address, w.public_modulus
        FROM read_parquet(${fileOf(band, 'transactions')}, file_row_number = true) t
        LEFT JOIN read_parquet(${fileOf(band, 'wallets')}) w
          ON w.address = t.owner_address
@@ -267,7 +267,13 @@ export class BandsSource implements L1Source {
       };
       out.push(
         owner === null
-          ? { id, height, problem: 'no wallet row for its owner', partial: tx }
+          ? {
+              id,
+              height,
+              problem: 'no wallet row for its owner',
+              partial: tx,
+              ownerAddress: asBuffer(r.owner_address),
+            }
           : { tx },
       );
     }

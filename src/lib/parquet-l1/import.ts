@@ -67,7 +67,12 @@ import { verifyBands } from './verify-bands.js';
 import type { L1Allowances } from './verify-run.js';
 import type { VerifyCheck } from './checks.js';
 import type { JudgeUnbound } from './judge.js';
-import { runSample, type SampleOptions, type SampleSummary } from './sample.js';
+import {
+  MIN_CONFIRM,
+  runSample,
+  type SampleOptions,
+  type SampleSummary,
+} from './sample.js';
 import type { ArweaveNodePool } from '../onchain/arweave-nodes.js';
 import sleep from '../wait.js';
 
@@ -96,6 +101,46 @@ export interface ImportOutcome {
 
 const refusalOf = (error: unknown): 'refused' | 'unreadable' =>
   error instanceof ImportRefused ? error.kind : 'refused';
+
+/**
+ * Forgets every unfinished ledger row whose heights (up to `ceiling`)
+ * completed imports started after it now cover between them — one of
+ * another grid spanning two bands, say — so it is neither redone nor
+ * held against the blocks those imports wrote.
+ */
+function forgetCoveredUnfinished(db: Sqlite.Database, ceiling: number): void {
+  const unfinished = db
+    .prepare(
+      `SELECT band_id, height_from AS a, height_to AS b, started_at
+       FROM parquet_l1_imports WHERE completed_at IS NULL`,
+    )
+    .all() as Array<{
+    band_id: string;
+    a: number;
+    b: number;
+    started_at: number;
+  }>;
+  if (unfinished.length === 0) return;
+  const completed = db.prepare(
+    `SELECT height_from AS a, height_to AS b FROM parquet_l1_imports
+     WHERE completed_at IS NOT NULL AND started_at >= ?
+       AND height_to >= ? AND height_from <= ?`,
+  );
+  const forget = db.prepare(
+    'DELETE FROM parquet_l1_imports WHERE band_id = ? AND completed_at IS NULL',
+  );
+  for (const row of unfinished) {
+    const top = Math.min(row.b, ceiling);
+    if (top < row.a) continue;
+    const over = (
+      completed.all(row.started_at, row.a, top) as Array<{
+        a: number;
+        b: number;
+      }>
+    ).map((r): [number, number] => [r.a, r.b]);
+    if (uncoveredBy(row.a, top, over).length === 0) forget.run(row.band_id);
+  }
+}
 
 /** The parts of `[from, to]` none of `ranges` covers, in order. */
 export function uncoveredBy(
@@ -958,14 +1003,21 @@ function heldBlockVouches(
   // An import that never finished (it crashed, or was refused part way
   // online) left rows whose binding was never recorded: they vouch for
   // nothing until it is redone.
+  // One a later import has since completed over these heights is
+  // superseded here: its leftovers there were replaced.
   const unfinished = db
     .prepare(
-      `SELECT band_id FROM parquet_l1_imports
-       WHERE completed_at IS NULL AND height_from <= ? AND height_to >= ?
+      `SELECT u.band_id FROM parquet_l1_imports u
+       WHERE u.completed_at IS NULL AND u.height_from <= ? AND u.height_to >= ?
+         AND NOT EXISTS (
+           SELECT 1 FROM parquet_l1_imports c
+           WHERE c.completed_at IS NOT NULL
+             AND c.height_from <= ? AND c.height_to >= ?
+             AND c.started_at >= u.started_at)
        LIMIT 1`,
     )
     .pluck()
-    .get(height, height) as string | undefined;
+    .get(height, height, height, height) as string | undefined;
   if (unfinished !== undefined) {
     return `an import of ${unfinished} covering it never finished`;
   }
@@ -1043,6 +1095,20 @@ export async function verifyBeforeImport(
   log: Logger,
 ): Promise<ImportCheck> {
   const allow = verification.allow ?? {};
+  // Sources that are fewer distinct machines than a refutation or an
+  // attestation needs can settle neither: a configuration to fix, said
+  // before the bands are read, not an outage to wait out.
+  if (verification.pool !== undefined) {
+    const pool = verification.pool;
+    await pool.ready();
+    const machines = new Set(pool.urls.map((u) => pool.addressOf(u))).size;
+    const need = Math.max(MIN_CONFIRM, verification.anchorMin ?? MIN_CONFIRM);
+    if (machines < need) {
+      throw new ImportRefused(
+        `the sources (--anchor-from) are ${machines} distinct machine${machines === 1 ? '' : 's'}, fewer than the ${need} the anchor and the sample need: add sources`,
+      );
+    }
+  }
   const out = await verifyBands(duck, bandsDir, {
     only: bands.map((b) => b.id),
     lookups: false,
@@ -1126,8 +1192,24 @@ export async function verifyBeforeImport(
       verification.anchorMin ?? 2,
     );
     if (!result.ok) {
+      // Too few machines answered at all, and none said anything against
+      // the band: an outage to wait out, not a refusal of the band.
+      const outage =
+        result.mismatches.length === 0 &&
+        result.sources.every(
+          (src) =>
+            src.indepHash !== undefined ||
+            (src.error ?? '').startsWith('did not answer'),
+        ) &&
+        result.sources.some((src) =>
+          (src.error ?? '').startsWith('did not answer'),
+        ) &&
+        new Set(result.sources.flatMap((src) => src.indepHash ?? [])).size <=
+          1 &&
+        result.problems.every((p) => /distinct machine\(s\) answered/.test(p));
       throw new ImportRefused(
         `the band's top block at ${to} is not anchored: ${[...notes, ...result.problems].join('; ')}`,
+        outage ? 'unreadable' : 'refused',
       );
     }
     binding = { kind: 'anchored', accepted };
@@ -1774,6 +1856,7 @@ export async function importBand(
     );
     // After this band's own row is complete, so it is not caught by it.
     insert.forgetSuperseded.run(from, ceiling, to);
+    forgetCoveredUnfinished(db, ceiling);
     await commit();
   } catch (error) {
     rollback();
@@ -1914,13 +1997,15 @@ export async function runImport({
   }
   // A band over heights that already hold rows is one transaction: the
   // log holds all of it at once.
+  // The same probe as importBand's `anyRows`, which decides that.
   const holdsRows = db.prepare(
     `SELECT EXISTS (SELECT 1 FROM stable_blocks WHERE height BETWEEN ? AND ?)
-       OR EXISTS (SELECT 1 FROM stable_transactions WHERE height BETWEEN ? AND ?)`,
+       OR EXISTS (SELECT 1 FROM stable_transactions WHERE height BETWEEN ? AND ?)
+       OR EXISTS (SELECT 1 FROM missing_transactions WHERE height BETWEEN ? AND ?)`,
   );
   const walRows = planned.reduce((sum, step) => {
     const [a, b] = step.band.heightRange;
-    return (holdsRows.pluck().get(a, b, a, b) as number) === 1
+    return (holdsRows.pluck().get(a, b, a, b, a, b) as number) === 1
       ? sum + Object.values(step.band.tables).reduce((n, t) => n + t.rows, 0)
       : sum;
   }, 0);

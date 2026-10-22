@@ -42,10 +42,11 @@
  * the others lack). A 404 never refutes a format-1 transaction: since
  * Arweave be18c1be (2026-08-31) nodes deliberately hide some real format-1
  * transactions without a denomination from `GET /tx`
- * (`is_hidden_v1_denomination0_tx`).
+ * (`is_hidden_v1_denomination0_tx`); its block is asked instead whether
+ * it lists the id at all.
  *
- * More than {@link MAX_UNREADABLE_SHARE} of any one kind of draw
- * unreadable fails the sample as unreadable — not as refuted, so a caller
+ * More than {@link MAX_UNREADABLE_SHARE} of any one kind of draw in any
+ * one band unreadable fails the sample as unreadable — not as refuted, so a caller
  * can tell an outage from a forgery ({@link SampleResult.refuted}). What a
  * pass detects is in `detects`, with the unreadable draws counted as
  * possibly forged (L2's rule): a forgery confined to fewer rows than that
@@ -62,6 +63,7 @@ import type { DrawnTx, L1Source } from './source.js';
 import {
   consensusProblem,
   type FetchedTx,
+  fetchedOwnerAddress,
   type IndexedTx,
   indexedFields,
   needsAttestation,
@@ -116,12 +118,15 @@ export interface SampleSummary {
   txsChecked: number;
   /** Checked against the same fields from `confirm` machines: their word, not a proof. */
   txsAttested: number;
+  /** Shown wrong (said by `confirm` machines, or proven): never counted as checked. */
+  txsRefuted: number;
   txsUnreadable: number;
   /** Format-1 transactions of the uniform draw left unverified for the byte budget (counted unreadable too). */
   txsOverBudget: number;
   /** The format-1 stratum: drawn, checked (proven or attested) and unreadable. */
   format1Drawn: number;
   format1Checked: number;
+  format1Refuted: number;
   format1Unreadable: number;
   /** Format-1 draws left unverified for the byte budget (counted unreadable too). */
   format1OverBudget: number;
@@ -198,12 +203,25 @@ export interface TxVerdict {
  *
  * A draw the index holds only part of (no key for its owner) is asked
  * about all the same: a signature that hashes to its id shows the id is
- * real, and its fields must then be attested.
+ * real, and its fields, and the owner address the index holds, must then
+ * be attested.
+ *
+ * A format-1 transaction every source says it lacks may be one nodes hide
+ * on purpose, so absence alone never refutes it: `membership` is asked
+ * whether its block, as the chain serves it, lists it at all.
  */
 export async function judgeTx(
   pool: ArweaveNodePool,
   item: DrawnTx,
   confirm: number,
+  {
+    membership,
+  }: {
+    membership?: (
+      height: number,
+      id: Buffer,
+    ) => Promise<{ verdict: 'absent' | 'listed' | 'unknown'; reason: string }>;
+  } = {},
 ): Promise<TxVerdict> {
   const need = Math.max(MIN_CONFIRM, confirm);
   const complete = 'tx' in item;
@@ -227,6 +245,15 @@ export async function judgeTx(
     }
   }
   const index = indexedFields(tx);
+  const ownerAddress = 'tx' in item ? undefined : item.ownerAddress;
+  /** For a partial draw: the owner address this answer gives, hex, or ''. */
+  const ownerOf = (fetched: FetchedTx) =>
+    complete ? '' : (fetchedOwnerAddress(tx, fetched)?.toString('hex') ?? '');
+  const ownerMatches = (fetched: FetchedTx) =>
+    complete ||
+    (ownerAddress !== undefined &&
+      ownerAddress !== null &&
+      ownerOf(fetched) === ownerAddress.toString('hex'));
   const verdictOf = (fetched: FetchedTx) => {
     if (complete) return verifyIndexedTx(tx, fetched);
     // No owner key: the signature cannot be checked over the fields, but
@@ -252,8 +279,13 @@ export async function judgeTx(
     const good = judged.filter((a) => a.verdict.ok);
     if (good.length === 0) return false;
     if (!mustAttest(good[0].value)) return true;
+    // Only answers whose signature checked out count toward agreement.
     const agreeing = judged.filter(
-      (a) => a.value.fields !== undefined && sameFields(a.value.fields, index),
+      (a) =>
+        a.verdict.ok &&
+        a.value.fields !== undefined &&
+        sameFields(a.value.fields, index) &&
+        ownerMatches(a.value),
     );
     return machinesOf(agreeing) >= need;
   };
@@ -275,24 +307,31 @@ export async function judgeTx(
     const stated = judged.filter(
       (a) => a.verdict.ok && a.value.fields !== undefined,
     );
-    const agreeing = stated.filter((a) =>
-      sameFields(a.value.fields as NonNullable<FetchedTx['fields']>, index),
+    const agreeing = stated.filter(
+      (a) =>
+        sameFields(a.value.fields as NonNullable<FetchedTx['fields']>, index) &&
+        ownerMatches(a.value),
     );
     if (machinesOf(agreeing) >= need) {
       return { kind: 'attested', reason: '', answers };
     }
-    // Machines agreeing on other fields than the index's refute it.
+    // Machines agreeing on other fields (or, for a partial draw, another
+    // owner) than the index's refute it.
     const others = new Map<string, Set<string>>();
     for (const a of stated) {
       if (agreeing.includes(a)) continue;
-      const key = JSON.stringify(a.value.fields);
+      const key = JSON.stringify([a.value.fields, ownerOf(a.value)]);
       others.set(key, (others.get(key) ?? new Set()).add(a.machine));
     }
-    for (const [, machines] of others) {
+    for (const [key, machines] of others) {
       if (machines.size >= need) {
+        const [fields] = JSON.parse(key) as [FetchedTx['fields'], string];
+        const fieldsDiffer = fields === undefined || !sameFields(fields, index);
         return {
           kind: 'mismatch',
-          reason: `${machines.size} machines state other fields than the index's (format, target, quantity, reward, anchor, tags, data_size or data_root), which ${complete ? 'its signature does not bind' : 'the index cannot check by signature (it lacks the owner key)'}`,
+          reason: fieldsDiffer
+            ? `${machines.size} machines state other fields than the index's (format, target, quantity, reward, anchor, tags, data_size or data_root), which ${complete ? 'its signature does not bind' : 'the index cannot check by signature (it lacks the owner key)'}`
+            : `${machines.size} machines give it an owner whose address is not the ${ownerAddress === undefined || ownerAddress === null ? 'missing' : ownerAddress.toString('base64url')} the index holds`,
           answers,
         };
       }
@@ -313,9 +352,22 @@ export async function judgeTx(
   }
   if (heardOnlyAbsence(survey) && machinesOf(survey.absent) >= need) {
     if (tx.format === 1) {
+      // Nodes hide some real format-1 transactions: ask whether its block
+      // lists it at all.
+      const member =
+        membership === undefined
+          ? { verdict: 'unknown' as const, reason: 'no block to ask' }
+          : await membership(tx.height, tx.id);
+      if (member.verdict === 'absent') {
+        return {
+          kind: 'mismatch',
+          reason: `every source was heard, ${machinesOf(survey.absent)} machines have no transaction with this id, and ${member.reason}`,
+          answers,
+        };
+      }
       return {
         kind: 'unreadable',
-        reason: `${machinesOf(survey.absent)} machines answer 404, which does not refute a format-1 transaction: nodes hide some real ones (is_hidden_v1_denomination0_tx)`,
+        reason: `${machinesOf(survey.absent)} machines answer 404, which alone does not refute a format-1 transaction (nodes hide some real ones, is_hidden_v1_denomination0_tx); ${member.reason}`,
         answers,
       };
     }
@@ -350,6 +402,7 @@ async function judgeTxHeader(
   need: number,
 ): Promise<{ kind: 'mismatch' | 'unreadable'; reason: string }> {
   const id = tx.id.toString('base64url');
+  const compared: string[] = [];
   for (const [field, expected] of [
     ['format', String(tx.format)],
     ['data_size', tx.data_size],
@@ -372,6 +425,9 @@ async function judgeTxHeader(
     } catch {
       continue;
     }
+    // Compared only where `need` machines answered it at all (ar.io
+    // gateways answer /tx/{id}/format with a 500).
+    if (machinesOf(survey.answers) >= need) compared.push(field);
     const byValue = new Map<string, Set<string>>();
     for (const a of survey.answers) {
       if (a.value === expected) continue;
@@ -388,7 +444,7 @@ async function judgeTxHeader(
   }
   return {
     kind: 'unreadable',
-    reason: `format 1 with ${tx.data_size} bytes of data, past the stratum's byte budget: its format and size were compared, its signature not checked`,
+    reason: `format 1 with ${tx.data_size} bytes of data, past the band's byte budget: its signature not checked; ${compared.length > 0 ? `its ${compared.join(' and ')} compared` : 'neither its format nor its size could be compared'}`,
   };
 }
 
@@ -417,10 +473,12 @@ export async function runSample(
     txsDrawn: 0,
     txsChecked: 0,
     txsAttested: 0,
+    txsRefuted: 0,
     txsUnreadable: 0,
     txsOverBudget: 0,
     format1Drawn: 0,
     format1Checked: 0,
+    format1Refuted: 0,
     format1Unreadable: 0,
     format1OverBudget: 0,
     empty: [],
@@ -444,6 +502,99 @@ export async function runSample(
     format1: [] as string[],
   };
 
+  // Unreadable draws are capped per kind and per band: a band whose draws
+  // mostly went unanswered is not vouched for by the rest of the range.
+  const bands = source.strata(from, to);
+  const bandOf = (height: number) =>
+    bands.find((b) => b.from <= height && height <= b.to)?.id ?? 'range';
+  const tallies = new Map<
+    string,
+    { what: string; band: string; drawn: number; bad: number; list: string[] }
+  >();
+  const tally = (what: string, band: string) => {
+    const key = `${what}\u0000${band}`;
+    let t = tallies.get(key);
+    if (t === undefined) {
+      t = { what, band, drawn: 0, bad: 0, list: [] };
+      tallies.set(key, t);
+    }
+    return t;
+  };
+
+  /**
+   * Whether the block at `height`, as the chain serves it, lists `id`: a
+   * header recomputed to the index's hash (from the 2.0 fork), or, below
+   * it, the same transaction list from `confirm` machines.
+   */
+  const membership = async (
+    height: number,
+    id: Buffer,
+  ): Promise<{ verdict: 'absent' | 'listed' | 'unknown'; reason: string }> => {
+    const row = await source.blockAt(height);
+    if (row === undefined || row.indep_hash === null) {
+      return {
+        verdict: 'unknown',
+        reason: 'the index holds no hash for its block',
+      };
+    }
+    const indep = row.indep_hash;
+    const hash = indep.toString('base64url');
+    const recomputed = height >= FORK_2_0;
+    const parse = (body: unknown): string[] => {
+      if (recomputed) {
+        const verified = verifyHeader(body);
+        if (!verified.indepHash.equals(indep)) {
+          throw new Error('served another block');
+        }
+        return verified.txs.map((t) => t.toString('base64url'));
+      }
+      const json = (body ?? {}) as Record<string, unknown>;
+      if (json.indep_hash !== hash) throw new Error('served another block');
+      if (!Array.isArray(json.txs)) throw new Error('no txs');
+      return (json.txs as unknown[]).map(String);
+    };
+    const agreed = (survey: Survey<string[]>) => {
+      if (recomputed) return survey.answers[0]?.value;
+      const groups = new Map<string, Set<string>>();
+      for (const a of survey.answers) {
+        const key = JSON.stringify(a.value);
+        groups.set(key, (groups.get(key) ?? new Set()).add(a.machine));
+      }
+      for (const [key, machines] of groups) {
+        if (machines.size >= confirm) return JSON.parse(key) as string[];
+      }
+      return undefined;
+    };
+    for (const path of [`/block/hash/${hash}`, `/block/height/${height}`]) {
+      let survey: Survey<string[]>;
+      try {
+        survey = await pool.survey(path, parse, {
+          enough: (s) => agreed(s) !== undefined,
+        });
+      } catch {
+        continue;
+      }
+      const list = agreed(survey);
+      if (list === undefined) continue;
+      const how = recomputed
+        ? 'its header recomputed to the index hash'
+        : `the same list from ${confirm} machines`;
+      return list.includes(id.toString('base64url'))
+        ? {
+            verdict: 'listed',
+            reason: `its block at ${height} lists it (${how})`,
+          }
+        : {
+            verdict: 'absent',
+            reason: `its block at ${height} does not list it (${how})`,
+          };
+    }
+    return {
+      verdict: 'unknown',
+      reason: `the transaction list of its block at ${height} could not be had${recomputed ? '' : ` from ${confirm} agreeing machines`}`,
+    };
+  };
+
   // Blocks: a keyed uniform draw of heights, each header fetched by the
   // index's own hash.
   if (options.blocks > 0 && to >= low) {
@@ -457,12 +608,19 @@ export async function runSample(
       (h) => String(h),
     );
     summary.blocksDrawn = drawn.length;
+    for (const height of drawn) tally('blocks', bandOf(height)).drawn += 1;
+    const lostBlock = (height: number, why: string) => {
+      summary.blocksUnreadable += 1;
+      unreadable.blocks.push(why);
+      const t = tally('blocks', bandOf(height));
+      t.bad += 1;
+      t.list.push(why);
+    };
     await inPool(drawn, options.concurrency, async (height) => {
       const row = await source.blockAt(height);
       if (row === undefined || row.indep_hash === null) {
         // The judge has failed this already; the draw cannot be read.
-        summary.blocksUnreadable += 1;
-        unreadable.blocks.push(`block ${height}: no indep_hash in the index`);
+        lostBlock(height, `block ${height}: no indep_hash in the index`);
         return;
       }
       const hash = row.indep_hash.toString('base64url');
@@ -480,8 +638,7 @@ export async function runSample(
           { enough: (s) => s.answers.length > 0 },
         );
       } catch (error) {
-        summary.blocksUnreadable += 1;
-        unreadable.blocks.push(`block ${height}: ${(error as Error).message}`);
+        lostBlock(height, `block ${height}: ${(error as Error).message}`);
         return;
       }
       const header = survey.answers[0]?.value;
@@ -495,8 +652,8 @@ export async function runSample(
           });
           return;
         }
-        summary.blocksUnreadable += 1;
-        unreadable.blocks.push(
+        lostBlock(
+          height,
           `block ${height}: ${survey.faults[0]?.reason ?? `no header, ${survey.unheard.length + survey.busy.length} sources unheard`}`,
         );
         return;
@@ -556,18 +713,28 @@ export async function runSample(
       let lost = 0;
       if (kind === 'all') summary.txsDrawn += drawn.length;
       else summary.format1Drawn += drawn.length;
+      const band = tally(
+        kind === 'all' ? 'transactions' : 'format-1 transactions',
+        stratum.id,
+      );
+      band.drawn += drawn.length;
       const miss = (why: string) => {
         lost += 1;
         if (kind === 'all') summary.txsUnreadable += 1;
         else summary.format1Unreadable += 1;
         unreadable[kind === 'all' ? 'txs' : 'format1'].push(why);
+        band.bad += 1;
+        band.list.push(why);
       };
       const settle = (height: number, id: string, verdict: TxVerdict) => {
         if (verdict.kind === 'unreadable') {
           miss(`transaction ${id}: ${verdict.reason}`);
           return;
         }
-        if (kind === 'all') {
+        if (verdict.kind === 'mismatch') {
+          if (kind === 'all') summary.txsRefuted += 1;
+          else summary.format1Refuted += 1;
+        } else if (kind === 'all') {
           if (verdict.kind === 'attested') summary.txsAttested += 1;
           else summary.txsChecked += 1;
         } else {
@@ -610,7 +777,7 @@ export async function runSample(
           reserved = size * confirm;
           budgets.set(stratum.id, left - reserved);
         }
-        const verdict = await judgeTx(pool, item, confirm);
+        const verdict = await judgeTx(pool, item, confirm, { membership });
         if (reserved > 0 && tx !== undefined) {
           const spent = Number(tx.data_size) * verdict.answers;
           budgets.set(
@@ -635,33 +802,20 @@ export async function runSample(
     );
   }
 
-  for (const [what, drawn, bad, list] of [
-    [
-      'blocks',
-      summary.blocksDrawn,
-      summary.blocksUnreadable,
-      unreadable.blocks,
-    ],
-    ['transactions', summary.txsDrawn, summary.txsUnreadable, unreadable.txs],
-    [
-      'format-1 transactions',
-      summary.format1Drawn,
-      summary.format1Unreadable,
-      unreadable.format1,
-    ],
-  ] as const) {
+  for (const { what, band, drawn, bad, list } of tallies.values()) {
     if (drawn > 0 && bad / drawn > MAX_UNREADABLE_SHARE) {
+      const at = bands.find((b) => b.id === band);
       addFailure(check, {
-        height: to,
-        found: `${bad} of ${drawn} drawn ${what} could not be read (first: ${list.slice(0, 3).join('; ')})`,
-        expected: `at most ${Math.round(MAX_UNREADABLE_SHARE * 100)}% unreadable`,
+        height: at?.to ?? to,
+        found: `${bad} of ${drawn} drawn ${what} of ${band} could not be read (first: ${list.slice(0, 3).join('; ')})`,
+        expected: `at most ${Math.round(MAX_UNREADABLE_SHARE * 100)}% unreadable in any band`,
       });
     }
   }
   const all = [...unreadable.blocks, ...unreadable.txs, ...unreadable.format1];
   check.detail =
     `seed ${options.seed}, ${machines} machines, ${confirm} to confirm: ${summary.blocksChecked} of ${summary.blocksDrawn} drawn blocks' headers recomputed and compared field by field; ` +
-    `${summary.txsChecked} of ${summary.txsDrawn} drawn transactions proven by their signatures and ${summary.txsAttested} source-attested; ${summary.format1Checked} of ${summary.format1Drawn} format-1 draws checked` +
+    `${summary.txsChecked} of ${summary.txsDrawn} drawn transactions proven by their signatures, ${summary.txsAttested} source-attested and ${summary.txsRefuted} refuted; ${summary.format1Checked} of ${summary.format1Drawn} format-1 draws checked and ${summary.format1Refuted} refuted` +
     (summary.warnings.length > 0 ? `; ${summary.warnings.join('; ')}` : '') +
     (all.length > 0
       ? `; unreadable: ${all.slice(0, 3).join('; ')}${all.length > 3 ? ` and ${all.length - 3} more` : ''}`

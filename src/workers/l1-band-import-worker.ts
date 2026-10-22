@@ -173,6 +173,9 @@ export const spawnFill: FillRunner = (args, onLog, register) =>
 /** Runs without a bands directory before the worker says so as a warning. */
 export const MISSING_RUNS_BEFORE_WARNING = 6;
 
+/** The longest a fill whose sources could not be read waits before it is tried again. */
+export const UNREADABLE_MAX_BACKOFF_MS = 2 * 3600 * 1000;
+
 export class L1BandImportWorker {
   private log: winston.Logger;
   private args: string[];
@@ -194,7 +197,12 @@ export class L1BandImportWorker {
   private readonly countMachines: (urls: string[]) => Promise<number>;
   private sourcesChecked = false;
   private refused:
-    | { entries: string; until: number; backoffMs: number }
+    | {
+        kind: 'refused' | 'unreadable';
+        entries: string;
+        until: number;
+        backoffMs: number;
+      }
     | undefined;
   /** Runs in a row that found no bands directory. */
   private missingRuns = 0;
@@ -391,9 +399,12 @@ export class L1BandImportWorker {
       this.now() < this.refused.until
     ) {
       metrics.l1BandImportRunsTotal.inc({ result: 'deferred' });
-      this.log.debug('Fill deferred: the same bands were refused last time', {
-        retryAt: new Date(this.refused.until).toISOString(),
-      });
+      this.log.debug(
+        'Fill deferred: the same bands were refused, or their sources unreadable, last time',
+        {
+          retryAt: new Date(this.refused.until).toISOString(),
+        },
+      );
       return undefined;
     }
 
@@ -425,13 +436,31 @@ export class L1BandImportWorker {
         );
       }
       if (result.code !== 0 && summary?.refusal === 'unreadable') {
-        // The sample's sources could not be read: an outage, not evidence
-        // against the bands. Tried again at the normal interval, unchanged.
+        // The sources could not be read: an outage, not evidence against
+        // the bands. Tried again after an interval, doubling while it
+        // lasts up to UNREADABLE_MAX_BACKOFF_MS, and at once when the
+        // bands change.
         metrics.l1BandImportRunsTotal.inc({ result: 'unreadable' });
+        const same =
+          this.refused?.kind === 'unreadable' &&
+          this.refused.entries === entries;
+        const backoffMs = same
+          ? Math.min(
+              UNREADABLE_MAX_BACKOFF_MS,
+              (this.refused?.backoffMs ?? 0) * 2,
+            )
+          : this.intervalMs;
+        this.refused = {
+          kind: 'unreadable',
+          entries,
+          backoffMs,
+          until: this.now() + backoffMs,
+        };
         this.log.warn(
-          'Fill waits: its sample could not be read; the next run tries again',
+          'Fill waits: its sources could not be read; it is tried again later',
           {
             reason: summary.refused,
+            retryAt: new Date(this.refused.until).toISOString(),
             seconds: Math.round((Date.now() - started) / 1000),
           },
         );
@@ -440,11 +469,18 @@ export class L1BandImportWorker {
       if (result.code !== 0) {
         metrics.l1BandImportRunsTotal.inc({ result: 'failed' });
         if (summary?.refused !== undefined) {
-          const same = this.refused?.entries === entries;
+          const same =
+            this.refused?.kind === 'refused' &&
+            this.refused.entries === entries;
           const backoffMs = same
             ? Math.min(this.maxBackoffMs, (this.refused?.backoffMs ?? 0) * 2)
             : this.intervalMs;
-          this.refused = { entries, backoffMs, until: this.now() + backoffMs };
+          this.refused = {
+            kind: 'refused',
+            entries,
+            backoffMs,
+            until: this.now() + backoffMs,
+          };
         }
         if (wasRunning && this.stopped) {
           this.log.info('Fill interrupted by shutdown; the next run redoes it');

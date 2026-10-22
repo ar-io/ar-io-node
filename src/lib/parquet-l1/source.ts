@@ -31,7 +31,14 @@ export interface L1Stratum {
  */
 export type DrawnTx =
   | { tx: IndexedTx }
-  | { id: Buffer; height: number; problem: string; partial?: IndexedTx };
+  | {
+      id: Buffer;
+      height: number;
+      problem: string;
+      partial?: IndexedTx;
+      /** The owner address the index holds for it, which the fetched owner must hash to. */
+      ownerAddress?: Buffer | null;
+    };
 
 export interface L1Source {
   /** Judges every block of `[from, to]` in height order, `window` heights per read. */

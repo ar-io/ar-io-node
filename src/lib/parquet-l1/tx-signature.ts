@@ -44,8 +44,9 @@
  *   `deep_hash([denomination, owner, target, data, quantity, reward,
  *   last_tx, tags])`.
  *
- * RSA signatures are PSS over SHA-256 with the salt length read from the
- * signature (`rsa_pss`); ECDSA ones are 65 bytes, `r ‖ s ‖ recovery id`,
+ * RSA signatures are PSS over SHA-256, checked exactly as Arweave checks
+ * them (`rsa-pss.ts`: a port of `rsa_pss:verify/4`, more lenient than
+ * OpenSSL's); ECDSA ones are 65 bytes, `r ‖ s ‖ recovery id`,
  * over the SHA-256 of the segment. Verified against 2,899 mainnet
  * transactions (v2 RSA, v2 ECDSA, v1 with and without data, pre-2.4 v1)
  * rebuilt from band columns alone (2026-10-22).
@@ -53,6 +54,7 @@
 import crypto from 'node:crypto';
 import secp256k1 from 'secp256k1';
 
+import { arweaveRsaPssVerify } from './rsa-pss.js';
 import {
   deepHash,
   type DeepHashItem,
@@ -96,6 +98,8 @@ export interface FetchedTx {
   denomination: bigint;
   /** A format-1 transaction's data, when the answer carried it. */
   data?: Buffer;
+  /** The owner key the answer states (empty for an ECDSA transaction). */
+  owner?: Buffer;
   /** The fields the answer states, for attestation ({@link attestedFields}). */
   fields?: AttestedFields;
 }
@@ -254,11 +258,16 @@ export function parseFetchedTx(body: unknown): FetchedTx {
       data_root: format === 2 ? str('data_root') : '',
     };
   }
+  const owner =
+    typeof json.owner === 'string' && /^[A-Za-z0-9_-]*$/.test(json.owner)
+      ? Buffer.from(json.owner, 'base64url')
+      : undefined;
   return {
     signature,
     format,
     denomination,
     ...(data !== undefined ? { data } : {}),
+    ...(owner !== undefined ? { owner } : {}),
     ...(fields !== undefined ? { fields } : {}),
   };
 }
@@ -429,20 +438,12 @@ export function verifyIndexedTx(tx: IndexedTx, fetched: FetchedTx): TxVerdict {
         verified = recovered.equals(tx.owner);
       }
     } else {
-      const key = crypto.createPublicKey({
-        key: { kty: 'RSA', n: tx.owner.toString('base64url'), e: 'AQAB' },
-        format: 'jwk',
+      // As the chain verifies it (rsa-pss.ts): `ar_wallet:verify` for a
+      // block validated at or above 2.4 (with the height of the block
+      // below), `verify_pre_fork_2_4` before.
+      verified = arweaveRsaPssVerify(message, fetched.signature, tx.owner, {
+        legacy: tx.height - 1 < FORK_2_4,
       });
-      verified = crypto.verify(
-        'sha256',
-        message,
-        {
-          key,
-          padding: crypto.constants.RSA_PKCS1_PSS_PADDING,
-          saltLength: crypto.constants.RSA_PSS_SALTLEN_AUTO,
-        },
-        fetched.signature,
-      );
     }
   } catch (error) {
     return {
@@ -459,6 +460,43 @@ export function verifyIndexedTx(tx: IndexedTx, fetched: FetchedTx): TxVerdict {
         reason:
           "the signature does not verify over the index's fields (owner, target, quantity, reward, anchor, tags, data_size or data_root differ from what was signed)",
       };
+}
+
+/**
+ * The owner address a fetched answer gives a transaction: the SHA-256 of
+ * the owner key it states, or, for an ECDSA transaction (no owner stated),
+ * of the key recovered from its signature over `tx`'s segment. Undefined
+ * when neither can be had.
+ */
+export function fetchedOwnerAddress(
+  tx: IndexedTx,
+  fetched: FetchedTx,
+): Buffer | undefined {
+  if (fetched.owner !== undefined && fetched.owner.length > 0) {
+    return crypto.createHash('sha256').update(fetched.owner).digest();
+  }
+  if (fetched.signature.length !== 65 || tx.format !== 2) return undefined;
+  try {
+    const recid =
+      fetched.signature[64] >= 27
+        ? fetched.signature[64] - 27
+        : fetched.signature[64];
+    const message = signatureData(
+      { ...tx, owner: Buffer.alloc(ECDSA_KEY_BYTES) },
+      { denomination: fetched.denomination },
+    );
+    const key = Buffer.from(
+      secp256k1.ecdsaRecover(
+        fetched.signature.subarray(0, 64),
+        recid,
+        crypto.createHash('sha256').update(message).digest(),
+        true,
+      ),
+    );
+    return crypto.createHash('sha256').update(key).digest();
+  } catch {
+    return undefined;
+  }
 }
 
 /**

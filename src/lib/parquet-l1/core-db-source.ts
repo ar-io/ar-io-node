@@ -258,7 +258,8 @@ export class CoreDbSource implements L1Source {
     const drawn = drawByKey(positions, n, key, ([h, i]) => `${h}:${i}`);
     const row = this.db.prepare(
       `SELECT t.id, t.height, t.format, t.target, t.quantity, t.reward,
-              t.last_tx, t.data_size, t.data_root, w.public_modulus
+              t.last_tx, t.data_size, t.data_root, t.owner_address,
+              w.public_modulus
        FROM stable_transactions t LEFT JOIN wallets w ON w.address = t.owner_address
        WHERE t.height = ? AND t.block_transaction_index = ?`,
     );
@@ -293,6 +294,7 @@ export class CoreDbSource implements L1Source {
             height: h,
             problem: 'no wallet row for its owner',
             partial: tx,
+            ownerAddress: r.owner_address ?? null,
           }
         : { tx };
     });
