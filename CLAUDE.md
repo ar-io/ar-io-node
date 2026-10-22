@@ -106,7 +106,7 @@ load), use the `testing` skill in `.claude/skills/`; `release` and
 - **Branching**: branches are cut from and merged back to `develop`; `main`
   only moves at release time. Open PRs against `develop`, not `main`.
 - **ESM + NodeNext**: relative imports must carry a `.js` extension even in
-  TypeScript (`import { x } from '../lib/y.js'`). Node 20 (`.nvmrc`),
+  TypeScript (`import { x } from '../lib/y.js'`). Node 22 (`.nvmrc`),
   `"type": "module"`, run via `ts-node/esm` + SWC (`register.js`).
 - **License header**: every `.ts` file must start with the AGPL header in
   `resources/license.header.js` — `eslint-plugin-header` fails the build
