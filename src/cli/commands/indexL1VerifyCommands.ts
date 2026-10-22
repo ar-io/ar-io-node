@@ -385,11 +385,17 @@ export function allowances(options: {
   };
 }
 
-/** `--anchor-min`, at least 1 (default 2). */
-export function anchorMin(value: string | undefined): number {
+/**
+ * `--anchor-min`, at least 2 (the default): one machine never anchors an
+ * index, as it never refutes or attests a draw.
+ */
+export function anchorMin(
+  value: string | undefined,
+  Refused: new (message: string) => Error = VerifyRefused,
+): number {
   const n = value === undefined ? 2 : Number(value);
-  if (!Number.isInteger(n) || n < 1) {
-    throw new VerifyRefused('--anchor-min must be a positive whole number');
+  if (!Number.isInteger(n) || n < 2) {
+    throw new Refused('--anchor-min must be a whole number of at least 2');
   }
   return n;
 }

@@ -28,6 +28,7 @@ import {
   runFill,
   runImport,
 } from '../../lib/parquet-l1/import.js';
+import { VerifyRefused } from '../../lib/parquet-l1/checks.js';
 import type { IndexL1ImportCLIOptions, JsonSerializable } from '../types.js';
 import { requiredStringFromOptions } from '../utils.js';
 import type { FetchLike } from '../../lib/onchain/arweave-nodes.js';
@@ -131,6 +132,16 @@ export async function indexL1ImportCLICommand(
 ): Promise<JsonSerializable> {
   const { log } = deps;
   const pool = anchorPool(options, deps, ImportRefused);
+  // Checked before the database, lock and spill folder are opened, so a
+  // bad option leaves nothing held.
+  const min = anchorMin(options.anchorMin, ImportRefused);
+  let sample: ReturnType<typeof sampleOptions>;
+  try {
+    sample = sampleOptions(options, pool, min);
+  } catch (error) {
+    if (error instanceof VerifyRefused) throw new ImportRefused(error.message);
+    throw error;
+  }
   const bandsDir = requiredStringFromOptions(options, 'bandsDir');
   const coreDb = requiredStringFromOptions(options, 'coreDb');
   const maxBands =
@@ -202,8 +213,6 @@ export async function indexL1ImportCLICommand(
     throw error;
   }
   const duck = session.duck;
-  const min = anchorMin(options.anchorMin);
-  const sample = sampleOptions(options, pool, min);
   const verification: ImportVerification = {
     ...(pool !== undefined ? { pool } : {}),
     anchorMin: min,

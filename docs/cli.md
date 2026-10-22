@@ -498,7 +498,7 @@ underneath.
 | `--max-bands` | Import at most this many bands, then stop. With `--fill`, at most this many ranges |
 | `--cache-mib` | SQLite page cache for the import, in MiB (default 1024) |
 | `--anchor-from` | Comma-separated sources to anchor the bands' top at, where `core.db` holds no block above them (as `index-l1-verify`) |
-| `--anchor-min` | Distinct machines that must agree on that anchor (default 2) |
+| `--anchor-min` | Distinct machines that must agree on that anchor (default and minimum 2) |
 | `--allow-unanchored` | Import bands nothing binds to the chain (no block above, no anchor) |
 | `--allow-unbound` | Import pre-2.0 blocks |
 | `--allow-incomplete` | Import blocks whose transactions or owners' keys the band lacks |
@@ -883,7 +883,7 @@ its heartbeat is a day old.
 | `--bands-dir` | A directory of bands to check instead, with no gateway and no database |
 | `--from`, `--to` | The heights to check. Default: everything held |
 | `--anchor-from` | Comma-separated Arweave nodes or gateways (`/block/height/N`, `/block/hash/H`, `/tx/{id}`) to anchor and sample from |
-| `--anchor-min` | Distinct machines that must serve the anchor block, all with the same recomputed hash (default 2) |
+| `--anchor-min` | Distinct machines that must serve the anchor block, all with the same recomputed hash (default and minimum 2) |
 | `--allow-unanchored` | Pass without an anchor, or with one that did not bind |
 | `--allow-unbound` | Pass with pre-2.0 blocks |
 | `--allow-incomplete` | Pass with blocks whose transactions or owners' keys the index lacks |

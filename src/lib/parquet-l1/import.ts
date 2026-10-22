@@ -2088,7 +2088,8 @@ export async function runImport({
         ...(commitEvery !== undefined ? { commitEvery } : {}),
         ...(check !== undefined ? { binding: check.binding } : {}),
       });
-      haveTo = entry.band.heightRange[1];
+      // A republished band may lie below what is held: never lower haveTo.
+      haveTo = Math.max(haveTo, entry.band.heightRange[1]);
       const outcome: ImportOutcome = {
         ...base,
         result: 'imported',

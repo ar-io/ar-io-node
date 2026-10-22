@@ -105,8 +105,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     refuted an honest index; absence now refutes only when every source
     was heard. A 404 refuted a format-1 transaction, though Arweave nodes
     now hide some real ones from `GET /tx`; it no longer does.
-    `--anchor-min 1` let one machine refute; at least two are now needed,
-    and the sample warns when its sources are fewer. A sample that could
+    `--anchor-min 1` let one machine refute a draw, or anchor the index on
+    its own; `--anchor-min` now refuses anything below 2, and the sample warns when its sources are fewer. A sample that could
     not be read was reported as refuting the bands; it is now
     `refusal: "unreadable"`, and the worker retries it at the normal
     interval (`l1_band_import_runs_total{result="unreadable"}`).

@@ -15,7 +15,7 @@ import { strict as assert } from 'node:assert';
 import * as fsp from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { after, before, beforeEach, describe, it } from 'node:test';
+import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
 import Sqlite from 'better-sqlite3';
 import type { Database } from 'duckdb-async';
 
@@ -369,7 +369,7 @@ describe('index-l1-verify --core-db fails closed', () => {
   beforeEach(async () => {
     dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'l1-fail-closed-db-'));
   });
-  after(async () => {
+  afterEach(async () => {
     if (dir !== undefined) await fsp.rm(dir, { recursive: true, force: true });
   });
   const nodes = (coreDb: string) => ({

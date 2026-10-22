@@ -171,6 +171,11 @@ export async function verifyBands(
   if (options.only !== undefined) {
     const only = new Set(options.only);
     listing.bands = listing.bands.filter((b) => only.has(b.id));
+    // An unrelated entry that vanishes during this read is not the import's
+    // concern; one of the selected bands (or a generation of one) is.
+    listing.vanished = listing.vanished.filter((entry) =>
+      only.has(entry.split('~')[0]),
+    );
   }
   const inside = (from: number, to: number) =>
     (options.from === undefined || from >= options.from) &&

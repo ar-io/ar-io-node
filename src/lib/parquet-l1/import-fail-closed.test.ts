@@ -31,6 +31,7 @@ import { indexL1ImportCLICommand } from '../../cli/commands/indexL1ImportCommand
 import {
   bandDigest,
   importBand,
+  ImportRefused,
   LEDGER_MIGRATION,
   planImport,
   readBands,
@@ -224,15 +225,19 @@ describe('index-l1-import fails closed', () => {
       ),
       /ENOENT/,
     );
-    await fsp.chmod(bandsDir, 0o000);
-    await assert.rejects(
-      indexL1ImportCLICommand(
-        { bandsDir, coreDb: core, fill: true, allowUnsampled: true },
-        { log },
-      ),
-      /EACCES/,
-    );
-    await fsp.chmod(bandsDir, 0o755);
+    // Root reads a mode-000 directory regardless, so only a non-root run
+    // can see EACCES.
+    if (process.getuid?.() !== 0) {
+      await fsp.chmod(bandsDir, 0o000);
+      await assert.rejects(
+        indexL1ImportCLICommand(
+          { bandsDir, coreDb: core, fill: true, allowUnsampled: true },
+          { log },
+        ),
+        /EACCES/,
+      );
+      await fsp.chmod(bandsDir, 0o755);
+    }
     const filled = (await indexL1ImportCLICommand(
       { bandsDir, coreDb: core, fill: true, allowUnsampled: true },
       { log },
@@ -252,5 +257,31 @@ describe('index-l1-import fails closed', () => {
     assert.equal(out.filled, 0);
     assert.match(out.refused, /does not build on it/);
     assert.equal(count(core, 'stable_blocks'), 20, 'only the blocks it held');
+  });
+
+  it('refuses a bad --anchor-min or sample option before opening anything, and holds no lock after', async () => {
+    holdBlocksFrom(source, core, FIRST + 10);
+    await exportBands(source, bandsDir, [[FIRST, FIRST + 9]]);
+    const spills = () =>
+      fs.readdirSync(dir).filter((f) => f.startsWith('.duckdb-import-'));
+    for (const bad of [
+      { anchorMin: '1' },
+      { anchorMin: '0' },
+      { sampleBlocks: 'x' },
+    ]) {
+      await assert.rejects(
+        indexL1ImportCLICommand({ bandsDir, coreDb: core, ...bad }, { log }),
+        (error: Error) =>
+          error instanceof ImportRefused &&
+          /--anchor-min|--sample-blocks/.test(error.message),
+      );
+    }
+    assert.deepEqual(spills(), [], 'no spill folder left behind');
+    // The lock was never taken: the next run is not "already running".
+    const filled = (await indexL1ImportCLICommand(
+      { bandsDir, coreDb: core, fill: true, allowUnsampled: true },
+      { log },
+    )) as Record<string, any>;
+    assert.equal(filled.filled, 1);
   });
 });

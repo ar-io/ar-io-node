@@ -233,6 +233,25 @@ describe('round 2: import never removes what was there (A)', () => {
     );
   });
 
+  it('a republished band below what is held does not lower haveTo', async () => {
+    holdBlock(source, core, F + 30);
+    const bands = await exportBands(source, bandsDir, [
+      [F, F + 9],
+      [F + 10, F + 19],
+      [F + 20, F + 29],
+    ]);
+    const first = await run({ from: F });
+    const db = new Sqlite(core);
+    db.prepare(
+      'UPDATE parquet_l1_imports SET band_digest = ? WHERE band_id = ?',
+    ).run(Buffer.alloc(32), bands[1].id);
+    db.close();
+    const out = await run({});
+    assert.deepEqual(out.republished, [bands[1].id]);
+    assert.equal(out.outcomes.at(-1)?.result, 'imported');
+    assert.equal(out.haveTo, first.haveTo);
+  });
+
   it('A7 (import F7): a republished band outside --from/--to is not imported', () => {
     const band = (id: string, from: number, to: number): ImportableBand => ({
       id,
