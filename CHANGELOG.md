@@ -15,10 +15,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   with `--bands-dir` `--publication`, `--publisher-key`, `--registry-url`,
   `--index` and `--allow-expired`; its result has one shape in both views
   (`anchor`, `unbound`, `sample`, `skipped`, `accepted`, `assurance`).
-  `index-l1-import` takes `--anchor-from`, `--anchor-min`, the three
-  `--allow-*` flags, `--read-timeout`, `--spill-max` and
-  `--spill-reserve-gb`. New env var `L1_BAND_IMPORT_ALLOW_UNVERIFIED`
-  (default false). See [docs/cli.md](docs/cli.md#index-l1-verify).
+  Both take `--allow-incomplete` (blocks whose transactions or owners'
+  keys the index lacks, no longer under `--allow-unbound`) and
+  `--sample-format1` (format-1 transactions drawn from blocks whose
+  `tx_root` cannot be recomputed, default 200).
+  `index-l1-import` takes `--anchor-from`, `--anchor-min`, the `--allow-*`
+  flags, `--allow-unsampled`, the `--sample-*` options, `--seed`,
+  `--concurrency`, `--read-timeout`, `--spill-max` and
+  `--spill-reserve-gb`, and reports per band what bound it, what it
+  accepted, what is unbound or skipped, the sample and the assurance. New
+  env vars `L1_BAND_IMPORT_ALLOW_UNVERIFIED` (default false; not
+  `--allow-incomplete`), `L1_BAND_IMPORT_SAMPLE_FROM` (default the trusted
+  node and trusted gateways) and `L1_BAND_IMPORT_ALLOW_UNSAMPLED` (default
+  false). A core migration adds `binding` and `accepted` to
+  `parquet_l1_imports`. See [docs/cli.md](docs/cli.md#index-l1-verify).
 
 - **`parquet-l2` layout `l2-2`: a key lookup and stats per band, derived
   for tag names the publisher chooses.** `lookup_key.parquet` holds, for
@@ -153,6 +163,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     counts it `failed`.
   - The default `core.db` range stopped at the 2.0 fork; it is now the
     whole held range.
+  - A second review round found more, all fixed. A refused import deleted
+    rows the gateway held before it (its own, or a republished band's);
+    it now removes only what it committed, and over held rows writes one
+    transaction. A republished band outside `--from`/`--to` was imported.
+    The import and fill drew no sample, so forged transaction fields
+    passed; they now sample and refuse without one unless
+    `--allow-unsampled`. A range imported unanchored or accepting a gap
+    vouched for bands below it; the ledger now records each range's
+    binding. Invented transaction ids no source holds came back
+    unreadable rather than failing; one lying source could fail a run.
+    An ECDSA transaction's fields, and a format-1 transaction's field
+    boundaries, are not bound by its signature; they are now checked
+    against two machines' answers (`txsAttested`) and the consensus rules
+    (canonical decimals, target and anchor lengths, no format 1 from
+    height 2,000,000). A sampled header at another height passed.
+    `--allow-unbound` also accepted incomplete blocks. A format-2
+    transaction relabelled format 1 escaped `tx_root` unsampled. The first
+    block's link and size were never checked. A tag row filed under a
+    transaction id at another height passed `tag_count`. A band whose
+    `band.json` was removed silently shrank the set. `publisherBound` was
+    true on a failed publication. `detects` ignored unreadable draws. The
+    worker re-verified the same refused bands every interval; it now backs
+    off until they change.
 
   Gateways with `L1_BAND_IMPORT_ENABLED=true` now refuse today's `l1-3`
   bands below height 2,000,000 unless `L1_BAND_IMPORT_ALLOW_UNVERIFIED=true`.

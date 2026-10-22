@@ -512,8 +512,16 @@ a reason, never passed silently: `pre20` (below the 2.0 fork, whose hash
 needs the full wallet list), `txRootFormat1` (a post-2.0 block holding a
 format-1 transaction with data, whose `tx_root` needs that data's root),
 `incomplete` (a link whose transaction, or a transaction whose owner's key,
-the index lacks). Each fails
-the run unless accepted (`--allow-unbound`, `--allow-unverified-format1`).
+the index lacks). Each fails the run unless accepted (`--allow-unbound`,
+`--allow-unverified-format1`, `--allow-incomplete`, one flag per class).
+
+<a id="l1-attested"></a> **Attested (L1 sample)** — A sampled transaction
+whose fields its signature does not settle (an ECDSA transaction, whose
+owner is recovered from the signature; a format-1 transaction without a
+denomination, whose signed segment does not mark where one field ends and
+the next begins), checked instead as the same fields answered by at least
+two distinct machines. The sources' word, not a proof: counted as
+`txsAttested`.
 
 <a id="hash-2-0-of-1-0"></a> **2.0 hash of a 1.0 block** — What Arweave
 uses in place of a pre-2.0 block's hash, which needs the full wallet list

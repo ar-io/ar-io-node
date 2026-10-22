@@ -307,24 +307,44 @@ Before a band's first row reaches SQLite, both modes check it:
    `hash_list_merkle` where the era lets it be computed), and the block
    `core.db` holds above the last height written must build on the band.
 3. **A binding to the chain.** The block above, when `core.db` holds one
-   (in `stable_blocks`, or, above them, `new_blocks`): the gateway synced
-   it from its own nodes, and from the 2.0 fork the band's
-   `hash_list_merkle` recurrence then binds every block beneath it. With
-   no block above, an anchor fetched with `--anchor-from` (as
-   `index-l1-verify` does, at the band's top). With neither, the run is
-   refused unless `--allow-unanchored`.
-4. **What nothing binds is refused unless accepted.** Blocks below the 2.0
-   fork, and blocks whose transactions the band lacks (`--allow-unbound`);
-   post-2.0 blocks holding a format-1 transaction with data
-   (`--allow-unverified-format1`). See
+   (in `stable_blocks`, or, above them, `new_blocks`) and it may vouch: a
+   block the gateway synced from its own nodes, or one an earlier import
+   wrote bound `anchored` or `held` without accepting a gap
+   (`--allow-unanchored`, `--allow-unbound`, `--allow-incomplete`,
+   `--allow-unverified-format1`; each range's binding is recorded in the
+   ledger). From the 2.0 fork the band's `hash_list_merkle` recurrence then
+   binds every block hash, weave size and `tx_root` beneath it. Otherwise
+   an anchor fetched with `--anchor-from` (as `index-l1-verify` does, at
+   the band's top). With neither, the run is refused unless
+   `--allow-unanchored`.
+4. **The sample.** What the binding does not reach — transaction ids, their
+   order, every transaction field, and block fields beyond the hash, weave
+   size, `tx_root`, link and size — is checked by the same keyed sample of
+   headers and signatures as `index-l1-verify` (`--sample-blocks`,
+   `--sample-txs`, `--sample-format1`, from the `--anchor-from` sources).
+   Without sources the run is refused unless `--allow-unsampled`, and then
+   none of that is checked against the chain.
+5. **What nothing binds is refused unless accepted.** Blocks below the 2.0
+   fork (`--allow-unbound`); blocks whose transactions or owners' keys the
+   band lacks (`--allow-incomplete`); post-2.0 blocks holding a format-1
+   transaction with data (`--allow-unverified-format1`). See
    [what the checks bind](#what-binds-what). Today's `l1-3` bands carry no
-   witnesses for either, so **every band below height 2,000,000 is refused
-   without these flags**.
+   witnesses for the first and last, so **every band below height
+   2,000,000 is refused without these flags**.
+
+Each band's result carries what bound it (`boundBy`, `binding`), every flag
+that accepted something (`accepted`), what is left `unbound` or `skipped`,
+the sample, and the `assurance` text.
 
 A band whose rows change after the check (bands live on a shared volume)
-is still caught as it is written, against its digests. A band refused part
-way is cleared, its rows and its ledger row, with the gateway stopped as
-with it running, so nothing a refused band wrote stays behind.
+is still caught as it is written, against its digests. **A refused band
+removes nothing that was there before.** Over heights that already held
+rows (the gateway's own, a band imported before, a republished band), an
+import writes the band as one transaction, so a failure rolls back to
+exactly what was there, ledger row included; over empty heights, only the
+rows this attempt committed are cleared, with its ledger row. A fill
+writes only heights the gateway lacks, and refuses a range that holds rows
+other than an unfinished earlier run's.
 
 **Which bands are read.** The directory is listed explicitly, never
 globbed. A directory with a readable `band.json` is a band. One without
@@ -383,8 +403,14 @@ nothing to fill writes nothing to `core.db`. Its runs are counted in
 that refuses a band, or cannot read the bands directory, counts as
 `failed`. The one quiet case is a bands directory that was never created
 (nothing installed yet): the worker does not run the fill, counts `idle`,
-and logs why. The worker passes `--allow-unbound --allow-unverified-format1`
-only with `L1_BAND_IMPORT_ALLOW_UNVERIFIED=true`.
+and logs why (a warning when the parent directory is missing too, or after
+six runs). A refused fill is not re-verified every interval: the worker
+waits, twice as long each time (up to a day), until the bands directory
+changes, counting `deferred`. The worker anchors and samples against
+`L1_BAND_IMPORT_SAMPLE_FROM` (by default the trusted node and trusted
+gateways), passes `--allow-unbound --allow-unverified-format1` only with
+`L1_BAND_IMPORT_ALLOW_UNVERIFIED=true` (never `--allow-incomplete`), and
+`--allow-unsampled` only with `L1_BAND_IMPORT_ALLOW_UNSAMPLED=true`.
 
 ### With the gateway stopped
 
@@ -460,8 +486,11 @@ underneath.
 | `--anchor-from` | Comma-separated sources to anchor the bands' top at, where `core.db` holds no block above them (as `index-l1-verify`) |
 | `--anchor-min` | Distinct machines that must agree on that anchor (default 2) |
 | `--allow-unanchored` | Import bands nothing binds to the chain (no block above, no anchor) |
-| `--allow-unbound` | Import pre-2.0 blocks, and blocks whose transactions the band lacks |
+| `--allow-unbound` | Import pre-2.0 blocks |
+| `--allow-incomplete` | Import blocks whose transactions or owners' keys the band lacks |
 | `--allow-unverified-format1` | Import post-2.0 blocks whose `tx_root` cannot be recomputed (a format-1 transaction with data) |
+| `--allow-unsampled` | Import with no sample (no `--anchor-from`, or every `--sample-*` 0) |
+| `--sample-blocks`, `--sample-txs`, `--sample-format1`, `--seed`, `--concurrency` | The sample, as `index-l1-verify` |
 | `--read-timeout` | Milliseconds each read from a source may take (default 30000) |
 | `--spill-max` | The most the check's DuckDB may spill, as a DuckDB size (default 128GB) |
 | `--spill-reserve-gb` | Space always left free beside `core.db` under the spill, in GB (default 100) |
@@ -658,18 +687,41 @@ Arweave's rules passes every self-check. What ties it to the real chain:
   means fetching every header (about 800 GB) or every signature (no index
   stores them), so the command draws a keyed uniform sample: headers of
   `--sample-blocks` blocks (default 1000) across the range, fetched by the
-  index's own hash (`/block/hash/H`) from one source in turn, recomputed,
-  and compared field by field and by transaction order; and
-  `--sample-txs` transactions per band (default 1000; per 100,000 heights
-  of a `core.db`), whose signatures are fetched (`/tx/{id}`) and verified
-  over the segment rebuilt from the index's columns, the id checked as the
-  signature's SHA-256. A format-1 transaction with data is signed over its
-  data, which is fetched with it, within 1 GB per band; past that it is
-  left unread. A fetched item proves itself, so one source is enough, and
-  any mismatch fails. More than 20% of a sample unreadable fails it.
-  `sample.detects` says what a pass means: the share of forged rows that
-  would have been caught with 95% probability. A forgery confined to fewer
-  rows may pass. `--seed` repeats a run.
+  index's own hash (`/block/hash/H`), recomputed, and compared field by
+  field, by height and by transaction order; `--sample-txs` transactions
+  per band (default 1000; per 100,000 heights of a `core.db`), each
+  fetched (`/tx/{id}`) and checked against its signature over the segment
+  rebuilt from the index's columns, the id as the signature's SHA-256; and
+  `--sample-format1` format-1 transactions per band (default 200) drawn from
+  blocks whose `tx_root` cannot be recomputed, which catches a format-2
+  transaction relabelled format 1 to escape `tx_root`. A format-1
+  transaction with data is signed over its data, fetched with it, within
+  1 GB per band; past that it is left unread.
+
+  **What a signature proves.** For an RSA format-2 transaction (and a
+  format-1 one with a denomination) the segment is a deep hash, so a
+  verifying signature proves every field, from any one source. It does not
+  for two kinds: an **ECDSA** transaction, whose owner is recovered from
+  the signature, so some key verifies for any fields (the owner is checked
+  to be the key the signature's recovery id gives); and a **format-1**
+  transaction without a denomination, whose segment is a plain
+  concatenation, so the boundaries between quantity and reward, anchor and
+  tags, tag names and values are unsigned (the consensus rules that fix
+  some of them — canonical decimals, target length, anchor length, no
+  format 1 from 2,000,000 — are checked). For those the fields must be the
+  same from `--anchor-min` distinct machines: such draws are counted as
+  `txsAttested`, the sources' word, not a proof.
+
+  **Verdicts.** A recomputed header, or a verifying signature, proves
+  itself: one source decides. A refutation on a source's word — every
+  source lacking the block or transaction, answers that do not verify,
+  fields that differ — needs `--anchor-min` distinct machines saying so; a
+  single lying source makes a draw unreadable, never a failure. More than
+  20% of a sample unreadable fails it. `sample.detects` says what a pass
+  means: the share of forged rows that would have been caught with 95%
+  probability, counting every unreadable draw as possibly forged (in the
+  weakest band, for transactions). A forgery confined to fewer rows may
+  pass. `--seed` repeats a run.
 
 What two agreeing sources mean depends on who they are. Two ar.io gateways
 both route `/block/` to their operators' chosen Arweave nodes, so their
@@ -679,7 +731,8 @@ names each source and the address it was counted as.
 **What it cannot bind at all under the `l1-3` layout** is reported in
 `unbound`, by class, and fails the run unless accepted:
 
-- `pre20` — blocks below the 2.0 fork (`--allow-unbound`). A pre-2.0
+- `pre20` — blocks below the 2.0 fork (`--allow-unbound`, which accepts
+  this class only). A pre-2.0
   block's identity hash is a deep hash over its header fields **and the
   full wallet list** at that height (below the 1.6 fork, the full hash
   list too); a header carries only a digest of the list, so the hash
@@ -690,12 +743,15 @@ names each source and the address it was counted as.
   carry.
 - `txRootFormat1` — post-2.0 blocks holding a format-1 transaction with
   data (`--allow-unverified-format1`): that leaf is the root of data the
-  index does not store. In the published bands this is 208,812 of
-  1,604,083 post-2.0 blocks, the last at height 1,999,999.
+  index does not store, so **every field of every transaction in such a
+  block** is bound only by the sample (the format-1 draw is what catches a
+  transaction relabelled into the class). In the published bands this is
+  208,812 of 1,604,083 post-2.0 blocks, the last at height 1,999,999.
+  Closing it needs the v1 data roots, a later layout.
 - `incomplete` — blocks the index holds only part of: a link whose
   transaction it lacks (so `tx_root` and the weave accounting cannot be
   checked), or a transaction whose owner's key it lacks (so its signature
-  cannot be) (`--allow-unbound`). An exporter publishes a tip band like
+  cannot be) (`--allow-incomplete`). An exporter publishes a tip band like
   this, counting what it lacks.
 
 Without `--anchor-from` nothing outside the index vouches for it: the
@@ -771,7 +827,9 @@ its heartbeat is a day old.
 | `--anchor-from` | Comma-separated Arweave nodes or gateways (`/block/height/N`, `/block/hash/H`, `/tx/{id}`) to anchor and sample from |
 | `--anchor-min` | Distinct machines that must serve the anchor block, all with the same recomputed hash (default 2) |
 | `--allow-unanchored` | Pass without an anchor, or with one that did not bind |
-| `--allow-unbound` | Pass with pre-2.0 blocks, and blocks whose transactions the index lacks |
+| `--allow-unbound` | Pass with pre-2.0 blocks |
+| `--allow-incomplete` | Pass with blocks whose transactions or owners' keys the index lacks |
+| `--sample-format1` | Format-1 transactions per band drawn from blocks whose `tx_root` cannot be recomputed (default 200; 0 to skip) |
 | `--allow-unverified-format1` | Pass with post-2.0 blocks whose `tx_root` needs a format-1 data root |
 | `--sample-blocks` | Blocks whose headers are sampled (default 1000; 0 to skip). Needs `--anchor-from` |
 | `--sample-txs` | Transactions per band whose signatures are sampled (default 1000; 0 to skip). Needs `--anchor-from` |
@@ -816,7 +874,8 @@ One shape in both views:
   "sample": {
     "seed": 7,
     "blocksDrawn": 1000, "blocksChecked": 1000, "blocksUnreadable": 0,
-    "txsDrawn": 1000, "txsChecked": 1000, "txsUnreadable": 0, "txsOverBudget": 0,
+    "txsDrawn": 1000, "txsChecked": 997, "txsAttested": 3, "txsUnreadable": 0, "txsOverBudget": 0,
+    "format1Drawn": 200, "format1Checked": 200, "format1Unreadable": 0,
     "detects": ["…"]
   },
   "skipped": ["tag_orphans", "publication"],
@@ -848,9 +907,12 @@ One shape in both views:
   that differ from the chain's header; `problems` say why it did not bind.
 - `unbound` holds a class only when it has blocks: `blocks`, the first 20
   `heights`, and the `reason`.
-- `weaveSize` is the weave size at the top of the range; `weaveGrowth` its
-  growth over the range, which `accountedFor` (the transactions' sizes
-  below the padding threshold) must equal. All three are strings.
+- `weaveSize` is the weave size at the top of the range and `weaveGrowth`
+  its growth over the range (from the block below the range when the index
+  holds it). `accountedFor` is the transactions' sizes over the blocks
+  whose accounting was checked (at or below the padding threshold, and not
+  incomplete); it equals `weaveGrowth` only when every block was. All three
+  are strings.
 - A failing check carries `failures` (at most 20, each naming a height,
   what was found and what was expected) and `more` for the rest.
 
