@@ -147,6 +147,9 @@ export async function runL1Verify(
 
   // The anchor.
   let anchored = false;
+  // The anchor showed the index wrong (its row differs from the chain's,
+  // is missing, or does not build on the range): never accepted away.
+  let refuted = false;
   let anchorReport: L1VerifyReport['anchor'];
   const anchorCheck: VerifyCheck = { name: 'anchor', ok: true, detail: '' };
   if (options.pool === undefined) {
@@ -193,12 +196,20 @@ export async function runL1Verify(
           !row.previous_block.equals(top.indep_hash)
         ) {
           result.ok = false;
+          refuted = true;
           result.problems.push(
             `the block at ${at.height} does not build on the index's block at ${to}`,
           );
         }
       }
       anchored = result.ok;
+      if (
+        result.mismatches.length > 0 ||
+        row === undefined ||
+        row.indep_hash === null
+      ) {
+        refuted = true;
+      }
       anchorReport = {
         height: at.height,
         ...(result.indepHash !== undefined
@@ -228,7 +239,7 @@ export async function runL1Verify(
       `anchored at ${anchorReport?.height ?? to}: ${anchorReport?.machines ?? 0} distinct machines agreed on a header whose hash was recomputed from its fields, and the index equals it. Agreement means the sources' upstream nodes agree: two gateways proxying /block/ to their operators' chosen Arweave nodes are not two independent nodes.`,
       `every block from the 2.0 fork up to the anchor has its indep_hash, weave_size and tx_root bound to the chain through the hash_list_merkle recurrence, and its previous_block and block_size through the links and the weave; its other fields, its transaction ids and their order, and every transaction field are bound only by the sample`,
     );
-  } else if (allow.unanchored === true) {
+  } else if (allow.unanchored === true && !refuted) {
     if (!skipped.includes('anchor')) skipped.push('anchor');
     accepted.push('--allow-unanchored');
     checks.push({

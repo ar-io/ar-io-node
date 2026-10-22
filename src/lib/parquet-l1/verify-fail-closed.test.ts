@@ -434,6 +434,19 @@ describe('index-l1-verify --core-db fails closed', () => {
     assert.equal(out.ok, false);
     assert.equal(out.anchored, false);
     assert.ok(out.anchor.mismatches.length > 0);
+    // An anchor that shows the index wrong is not accepted away.
+    const accepted = (await indexL1VerifyCLICommand(
+      {
+        coreDb: fake,
+        anchorFrom: 'http://a.test,http://b.test',
+        sampleBlocks: '0',
+        sampleTxs: '0',
+        allowUnanchored: true,
+      },
+      { log, ...nodes(real) },
+    ).catch((answer) => answer)) as Record<string, any>;
+    assert.equal(accepted.ok, false);
+    assert.ok(!accepted.accepted.includes('--allow-unanchored'));
   });
 
   it('C3: refuses a NULL indep_hash at the anchor height', async () => {
