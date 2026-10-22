@@ -188,6 +188,12 @@ const heardOnlyAbsence = <T>(survey: Survey<T>) =>
 
 type TxVerdictKind = 'proven' | 'attested' | 'mismatch' | 'unreadable';
 
+/**
+ * What a transaction's block says about it: it lists it, it does not, the
+ * index's block is not the chain's at all, or none of that could be had.
+ */
+export type MembershipVerdict = 'absent' | 'listed' | 'wrongBlock' | 'unknown';
+
 export interface TxVerdict {
   kind: TxVerdictKind;
   reason: string;
@@ -220,7 +226,7 @@ export async function judgeTx(
     membership?: (
       height: number,
       id: Buffer,
-    ) => Promise<{ verdict: 'absent' | 'listed' | 'unknown'; reason: string }>;
+    ) => Promise<{ verdict: MembershipVerdict; reason: string }>;
   } = {},
 ): Promise<TxVerdict> {
   const need = Math.max(MIN_CONFIRM, confirm);
@@ -358,6 +364,9 @@ export async function judgeTx(
         membership === undefined
           ? { verdict: 'unknown' as const, reason: 'no block to ask' }
           : await membership(tx.height, tx.id);
+      if (member.verdict === 'wrongBlock') {
+        return { kind: 'mismatch', reason: member.reason, answers };
+      }
       if (member.verdict === 'absent') {
         return {
           kind: 'mismatch',
@@ -394,15 +403,23 @@ export async function judgeTx(
  * A format-1 draw past the byte budget: its signature cannot be checked
  * without its data, but its format and data size can, from the field
  * endpoints (`/tx/{id}/format`, `/tx/{id}/data_size`). Machines stating
- * other values refute the index; otherwise the draw stays unreadable.
+ * other values refute the index. When every source was heard and `need`
+ * machines have no such transaction, its block is asked, as in
+ * {@link judgeTx}: a 404 alone never refutes a format-1 transaction.
+ * Otherwise the draw stays unreadable.
  */
 async function judgeTxHeader(
   pool: ArweaveNodePool,
   tx: IndexedTx,
   need: number,
+  membership?: (
+    height: number,
+    id: Buffer,
+  ) => Promise<{ verdict: MembershipVerdict; reason: string }>,
 ): Promise<{ kind: 'mismatch' | 'unreadable'; reason: string }> {
   const id = tx.id.toString('base64url');
   const compared: string[] = [];
+  let absentFrom = 0;
   for (const [field, expected] of [
     ['format', String(tx.format)],
     ['data_size', tx.data_size],
@@ -428,6 +445,9 @@ async function judgeTxHeader(
     // Compared only where `need` machines answered it at all (ar.io
     // gateways answer /tx/{id}/format with a 500).
     if (machinesOf(survey.answers) >= need) compared.push(field);
+    if (heardOnlyAbsence(survey) && machinesOf(survey.absent) >= need) {
+      absentFrom = Math.max(absentFrom, machinesOf(survey.absent));
+    }
     const byValue = new Map<string, Set<string>>();
     for (const a of survey.answers) {
       if (a.value === expected) continue;
@@ -442,9 +462,23 @@ async function judgeTxHeader(
       }
     }
   }
+  let asked = '';
+  if (absentFrom > 0) {
+    const member =
+      membership === undefined
+        ? { verdict: 'unknown' as const, reason: 'no block to ask' }
+        : await membership(tx.height, tx.id);
+    if (member.verdict === 'absent' || member.verdict === 'wrongBlock') {
+      return {
+        kind: 'mismatch',
+        reason: `every source was heard, ${absentFrom} machines have no transaction with this id, and ${member.reason}`,
+      };
+    }
+    asked = `; ${absentFrom} machines answer 404, which alone does not refute a format-1 transaction, and ${member.reason}`;
+  }
   return {
     kind: 'unreadable',
-    reason: `format 1 with ${tx.data_size} bytes of data, past the band's byte budget: its signature not checked; ${compared.length > 0 ? `its ${compared.join(' and ')} compared` : 'neither its format nor its size could be compared'}`,
+    reason: `format 1 with ${tx.data_size} bytes of data, past the band's byte budget: its signature not checked; ${compared.length > 0 ? `its ${compared.join(' and ')} compared` : 'neither its format nor its size could be compared'}${asked}`,
   };
 }
 
@@ -524,12 +558,15 @@ export async function runSample(
   /**
    * Whether the block at `height`, as the chain serves it, lists `id`: a
    * header recomputed to the index's hash (from the 2.0 fork), or, below
-   * it, the same transaction list from `confirm` machines.
+   * it, the same transaction list from `confirm` machines. When no source
+   * has a block with the index's hash and `confirm` machines agree on the
+   * block at that height, the index's block is not the chain's
+   * (`wrongBlock`).
    */
   const membership = async (
     height: number,
     id: Buffer,
-  ): Promise<{ verdict: 'absent' | 'listed' | 'unknown'; reason: string }> => {
+  ): Promise<{ verdict: MembershipVerdict; reason: string }> => {
     const row = await source.blockAt(height);
     if (row === undefined || row.indep_hash === null) {
       return {
@@ -540,54 +577,108 @@ export async function runSample(
     const indep = row.indep_hash;
     const hash = indep.toString('base64url');
     const recomputed = height >= FORK_2_0;
-    const parse = (body: unknown): string[] => {
+    /** A header's hash and transaction list: recomputed from the 2.0 fork, as stated below it. */
+    const parse = (body: unknown): { hash: string; txs: string[] } => {
       if (recomputed) {
         const verified = verifyHeader(body);
-        if (!verified.indepHash.equals(indep)) {
-          throw new Error('served another block');
+        if (verified.height !== height) {
+          throw new Error(`served the block at ${verified.height}`);
         }
-        return verified.txs.map((t) => t.toString('base64url'));
+        return {
+          hash: verified.indepHash.toString('base64url'),
+          txs: verified.txs.map((t) => t.toString('base64url')),
+        };
       }
       const json = (body ?? {}) as Record<string, unknown>;
-      if (json.indep_hash !== hash) throw new Error('served another block');
+      if (typeof json.indep_hash !== 'string') throw new Error('no indep_hash');
       if (!Array.isArray(json.txs)) throw new Error('no txs');
-      return (json.txs as unknown[]).map(String);
+      return {
+        hash: json.indep_hash,
+        txs: (json.txs as unknown[]).map(String),
+      };
     };
-    const agreed = (survey: Survey<string[]>) => {
-      if (recomputed) return survey.answers[0]?.value;
+    /** The header `need` machines agree on (one, for a recomputed one of the index's hash). */
+    const agreed = (
+      survey: Survey<{ hash: string; txs: string[] }>,
+      need: number,
+    ) => {
       const groups = new Map<string, Set<string>>();
       for (const a of survey.answers) {
         const key = JSON.stringify(a.value);
         groups.set(key, (groups.get(key) ?? new Set()).add(a.machine));
       }
       for (const [key, machines] of groups) {
-        if (machines.size >= confirm) return JSON.parse(key) as string[];
+        if (machines.size >= need) {
+          return JSON.parse(key) as { hash: string; txs: string[] };
+        }
       }
       return undefined;
     };
-    for (const path of [`/block/hash/${hash}`, `/block/height/${height}`]) {
-      let survey: Survey<string[]>;
-      try {
-        survey = await pool.survey(path, parse, {
-          enough: (s) => agreed(s) !== undefined,
-        });
-      } catch {
-        continue;
-      }
-      const list = agreed(survey);
-      if (list === undefined) continue;
-      const how = recomputed
-        ? 'its header recomputed to the index hash'
-        : `the same list from ${confirm} machines`;
-      return list.includes(id.toString('base64url'))
+    const listing = (txs: string[], how: string) =>
+      txs.includes(id.toString('base64url'))
         ? {
-            verdict: 'listed',
+            verdict: 'listed' as const,
             reason: `its block at ${height} lists it (${how})`,
           }
         : {
-            verdict: 'absent',
+            verdict: 'absent' as const,
             reason: `its block at ${height} does not list it (${how})`,
           };
+    // By the index's own hash.
+    let byHash: Survey<{ hash: string; txs: string[] }> | undefined;
+    try {
+      byHash = await pool.survey(
+        `/block/hash/${hash}`,
+        (body) => {
+          const header = parse(body);
+          if (header.hash !== hash) throw new Error('served another block');
+          return header;
+        },
+        {
+          enough: (s) => agreed(s, recomputed ? 1 : confirm) !== undefined,
+        },
+      );
+    } catch {
+      byHash = undefined;
+    }
+    const mine =
+      byHash === undefined
+        ? undefined
+        : agreed(byHash, recomputed ? 1 : confirm);
+    if (mine !== undefined) {
+      return listing(
+        mine.txs,
+        recomputed
+          ? 'its header recomputed to the index hash'
+          : `the same list from ${confirm} machines`,
+      );
+    }
+    // By height: the chain's block there, agreed by `confirm` machines.
+    let byHeight: Survey<{ hash: string; txs: string[] }> | undefined;
+    try {
+      byHeight = await pool.survey(`/block/height/${height}`, parse, {
+        enough: (s) => agreed(s, confirm) !== undefined,
+      });
+    } catch {
+      byHeight = undefined;
+    }
+    const chain =
+      byHeight === undefined ? undefined : agreed(byHeight, confirm);
+    if (chain !== undefined) {
+      const how = `the block at ${height} from ${confirm} machines${recomputed ? ', its header recomputed' : ''}`;
+      if (chain.hash === hash) return listing(chain.txs, how);
+      // No source has the index's block, and the chain's at that height
+      // is another: the index's block is not the chain's.
+      if (
+        byHash !== undefined &&
+        heardOnlyAbsence(byHash) &&
+        machinesOf(byHash.absent) >= confirm
+      ) {
+        return {
+          verdict: 'wrongBlock',
+          reason: `the index's block at ${height} is not the chain's: every source was heard, none has a block with its hash ${hash}, and ${how} is ${chain.hash}`,
+        };
+      }
     }
     return {
       verdict: 'unknown',
@@ -770,7 +861,7 @@ export async function runSample(
           if (size * confirm > left) {
             if (kind === 'all') summary.txsOverBudget += 1;
             else summary.format1OverBudget += 1;
-            const header = await judgeTxHeader(pool, tx, confirm);
+            const header = await judgeTxHeader(pool, tx, confirm, membership);
             settle(height, id, { ...header, answers: 0 });
             return;
           }
