@@ -59,6 +59,10 @@ export async function buildCoreDb(
      * the SHA-256 of the signature. The signatures are kept in a
      * `test_signatures` table, not in `stable_transactions`, as a gateway
      * that does not keep them would hold them; `chainNode` serves both.
+     * Below the 2.0 fork, transactions are format 1, signed over the plain
+     * concatenation with their data (kept beside the signature, served as
+     * a node serves a format-1 transaction's), and block hashes are not
+     * recomputable, as on the chain.
      */
     verifiable?: boolean;
     /** The weave size the anchor block sits at, for the chain's era. */
@@ -84,11 +88,13 @@ export async function buildCoreDb(
     VALUES (?, ?, ?, ?, ?, ?, '1', '2', 3, ?, '4', ?, ?, 1, 10, 1, 10, ?, ?, ?, 0)`);
   if (verifiable) {
     db.exec(
-      'CREATE TABLE test_signatures (id BLOB PRIMARY KEY, signature BLOB NOT NULL)',
+      'CREATE TABLE test_signatures (id BLOB PRIMARY KEY, signature BLOB NOT NULL, data BLOB)',
     );
   }
   const insertSignature = verifiable
-    ? db.prepare('INSERT INTO test_signatures (id, signature) VALUES (?, ?)')
+    ? db.prepare(
+        'INSERT INTO test_signatures (id, signature, data) VALUES (?, ?, ?)',
+      )
     : undefined;
   /**
    * Inserts a block row. A verifiable chain's `indep_hash` (the second
@@ -99,7 +105,7 @@ export async function buildCoreDb(
       const [height, indep, previous, nonce, hash, timestamp, rewardAddr] =
         values as [number, Buffer, Buffer, Buffer, Buffer, number, Buffer];
       let indepHash = indep;
-      if (verifiable) {
+      if (verifiable && height >= FORK_2_0) {
         const [blockSize, weaveSize, merkle, txRoot] = values.slice(7) as [
           number,
           number,
@@ -221,22 +227,34 @@ export async function buildCoreDb(
         Buffer.from(t === 0 ? 'Content-Type' : `Name-${t}`),
         Buffer.from(t === 0 ? 'text/plain' : `value-${h}-${i}-${t}`),
       ]);
+      // A format-1 transaction's data, which its signature covers.
+      const data =
+        format === 1 ? Buffer.alloc(dataSize, (h + i) % 251) : undefined;
       // A transaction's id is the SHA-256 of its signature; a verifiable
-      // chain's is a real signature over its fields (format 2).
+      // chain's is a real signature over its fields.
       const signature = verifiable
         ? crypto.sign(
             'sha256',
-            deepHash([
-              Buffer.from('2'),
-              modulus,
-              Buffer.alloc(0),
-              Buffer.from('0'),
-              Buffer.from('42'),
-              lastTx,
-              tagRows,
-              Buffer.from(String(dataSize)),
-              dataRoot,
-            ]),
+            format === 1
+              ? Buffer.concat([
+                  modulus,
+                  data as Buffer,
+                  Buffer.from('0'),
+                  Buffer.from('42'),
+                  lastTx,
+                  ...tagRows.flat(),
+                ])
+              : deepHash([
+                  Buffer.from('2'),
+                  modulus,
+                  Buffer.alloc(0),
+                  Buffer.from('0'),
+                  Buffer.from('42'),
+                  lastTx,
+                  tagRows,
+                  Buffer.from(String(dataSize)),
+                  dataRoot,
+                ]),
             {
               key: testKey().privateKey,
               padding: crypto.constants.RSA_PKCS1_PSS_PADDING,
@@ -252,6 +270,7 @@ export async function buildCoreDb(
             ? crypto.createHash('sha256').update(signature).digest()
             : random(32),
         signature,
+        data,
         lastTx,
         tagRows,
         format,
@@ -311,7 +330,9 @@ export async function buildCoreDb(
         h * 10 + tx.bti,
         verifiable ? null : tx.signature,
       );
-      if (tx.signature !== null) insertSignature?.run(tx.id, tx.signature);
+      if (tx.signature !== null) {
+        insertSignature?.run(tx.id, tx.signature, tx.data ?? null);
+      }
       // Tag 0 is the Content-Type the row's content_type is stored from, as
       // an indexer would derive it; a band derives it the same way.
       for (let t = 0; t < 2; t++) {

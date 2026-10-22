@@ -196,13 +196,30 @@ export function chainNode(
           block('indep_hash', Buffer.from(m[1], 'base64url')),
         );
       }
+      // A transaction's field, as `GET /tx/{id}/{field}` answers it.
+      const field = /^\/tx\/([A-Za-z0-9_-]+)\/(format|data_size)$/.exec(path);
+      if (field !== null) {
+        const row = db
+          .prepare(
+            `SELECT t.format, t.data_size FROM stable_transactions t
+             JOIN test_signatures s ON s.id = t.id WHERE t.id = ?`,
+          )
+          .get(Buffer.from(field[1], 'base64url')) as
+          | { format: number; data_size: number }
+          | undefined;
+        if (row === undefined) return tamper(path, { status: 404 });
+        return tamper(path, {
+          status: 200,
+          body: field[2] === 'format' ? row.format : String(row.data_size),
+        });
+      }
       m = /^\/tx\/([A-Za-z0-9_-]+)$/.exec(path);
       if (m !== null) {
         const id = Buffer.from(m[1], 'base64url');
         const row = db
           .prepare(
             `SELECT t.format, t.target, t.quantity, t.reward, t.last_tx,
-                    t.data_size, t.data_root, s.signature
+                    t.data_size, t.data_root, s.signature, s.data
              FROM stable_transactions t JOIN test_signatures s ON s.id = t.id
              WHERE t.id = ?`,
           )
@@ -216,6 +233,7 @@ export function chainNode(
               data_size: number;
               data_root: Buffer | null;
               signature: Buffer;
+              data: Buffer | null;
             }
           | undefined;
         if (row === undefined) return tamper(path, { status: 404 });
@@ -240,6 +258,8 @@ export function chainNode(
             tags: tags.map((t) => ({ name: b64(t.name), value: b64(t.value) })),
             data_size: String(row.data_size),
             data_root: row.format === 2 ? b64(row.data_root) : '',
+            // A format-1 transaction is served with its data.
+            ...(row.format === 1 ? { data: b64(row.data) } : {}),
             signature: b64(row.signature),
           },
         });

@@ -37,6 +37,8 @@ const worker = (
     invocation: ['cli.js'],
     // The bands directory is there unless a test says otherwise.
     statDir: async () => ({}),
+    // Never resolved over the network in a test.
+    countMachines: async () => 2,
     ...extra,
   });
 
@@ -358,6 +360,59 @@ describe('L1BandImportWorker after a refusal (round 2, F)', () => {
           /bands directory does not exist/.test(i.message),
       ),
       JSON.stringify(seen),
+    );
+  });
+});
+
+describe('L1BandImportWorker and its sample sources (round 3)', () => {
+  it('G4: a fill whose sample could not be read is retried at the next interval, not backed off', async () => {
+    let runs = 0;
+    let clock = 1_000_000;
+    const subject = worker(
+      async () => {
+        runs += 1;
+        return {
+          code: 1,
+          summary: {
+            refused: 'the sample could not be read',
+            refusal: 'unreadable',
+          },
+          tail: '',
+        };
+      },
+      0,
+      {
+        listDir: async () => ['l1-h0-99-aaaaaaaa-000000000000'],
+        now: () => clock,
+      },
+    );
+    await subject.runOnce();
+    clock += 1;
+    await subject.runOnce();
+    assert.equal(runs, 2);
+  });
+
+  it('I3: warns once when the sample sources are fewer than two machines', async () => {
+    const seen: Array<{ level: string; message: string }> = [];
+    const record = (info: (typeof seen)[number]) => seen.push(info);
+    log.on('data', record);
+    try {
+      const subject = worker(async () => ({ code: 0, tail: '' }), 0, {
+        sampleFrom: ['http://a.test', 'http://b.test'],
+        countMachines: async () => 1,
+      });
+      await subject.runOnce();
+      await subject.runOnce();
+    } finally {
+      log.off('data', record);
+    }
+    assert.equal(
+      seen.filter(
+        (i) =>
+          i.level === 'warn' &&
+          /fewer than two distinct machines/.test(i.message),
+      ).length,
+      1,
     );
   });
 });

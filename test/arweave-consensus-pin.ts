@@ -428,7 +428,7 @@ export const CONSENSUS_PINS: ConsensusPin[] = [
     startsWith: 'verify_malleability2(Args) ->',
     lines: 30,
     mirrors:
-      'tx-signature.ts consensusProblem: a format-1 target is 32 bytes with a quantity and empty without, from 2.4',
+      'tx-signature.ts consensusProblem: a format-1 target is 32 bytes with a quantity and empty without, from block 2.4',
     sha256: '1f8ce48f88513ff7304b77a9418fcfebe1ad419b685cefadf474feb8b40a6905',
   },
   {
@@ -436,7 +436,7 @@ export const CONSENSUS_PINS: ConsensusPin[] = [
     startsWith: 'verify_target_length(TX, Height) ->',
     lines: 9,
     mirrors:
-      'tx-signature.ts consensusProblem: target length by quantity, from 2.4',
+      'tx-signature.ts consensusProblem: target length by quantity, in blocks above 2.4 (Height = H - 1)',
     sha256: '7702bb39c9cf138b0a31289ce46a359c412f781d70be114c2f18c49c9ef6c3dd',
   },
   {
@@ -444,8 +444,57 @@ export const CONSENSUS_PINS: ConsensusPin[] = [
     startsWith: 'tx_field_size_limit_v1(TX, Height, Denomination) ->',
     lines: 24,
     mirrors:
-      'tx-signature.ts consensusProblem: a format-1 anchor is at most 48 bytes from 1.8, 32 before',
+      'tx-signature.ts consensusProblem: a format-1 anchor is at most 48 bytes in blocks above 1.8 (Height = H - 1), 32 before; data at most TX_DATA_SIZE_LIMIT',
     sha256: 'ef0cb1247f8f067e466e0ef0049cf0dd17c33b1c3862fd5f4c24434afa50baa4',
+  },
+  {
+    file: 'apps/arweave/src/ar_node_utils.erl',
+    startsWith:
+      'validate_block(txs, {NewB = #block{ timestamp = Timestamp, height = Height, txs = TXs },',
+    lines: 9,
+    mirrors:
+      "tx-signature.ts consensusProblem and the ECDSA gate: block H's transactions are validated with Height = H - 1, so `Height >= Fork` rules start at block Fork + 1",
+    sha256: '44235898ed3a47822790e55789abc4e4a2bd13b92f99cfa5e81c11c05688705f',
+  },
+  {
+    file: 'apps/arweave/src/ar_tx.erl',
+    startsWith: 'verify_malleability(Args) ->',
+    lines: 14,
+    mirrors:
+      'tx-signature.ts consensusProblem: the malleability rule from block 2.4 (`Height + 1`), format 1 with no denomination only',
+    sha256: 'bb09f5d3f7fa4b1c0545b87f7bb914cc0cb73de5305ad5a54fd123f04c165b29',
+  },
+  {
+    file: 'apps/arweave/src/ar_tx.erl',
+    startsWith: 'verify_signature_type(#tx{ format = 2 } = TX, Height) ->',
+    lines: 9,
+    mirrors:
+      'tx-signature.ts verifyIndexedTx: an ECDSA owner only on format 2, in blocks above the 2.9 fork',
+    sha256: '49b1369544b757be954b608cc8c7963b8b77db68e93ffe8f1cef21c9e8ba7f11',
+  },
+  {
+    file: 'apps/arweave/include/ar.hrl',
+    startsWith: '-define(TX_DATA_SIZE_LIMIT,',
+    lines: 1,
+    mirrors:
+      'tx-signature.ts V1_DATA_SIZE_LIMIT: no format-1 transaction carries more than 10 MiB',
+    sha256: 'e07c0045b4e96c6f89c915dbbaef98d8bea94c309b321d72ed2ddd38e88d321b',
+  },
+  {
+    file: 'apps/arweave/src/ar_http_iface_middleware.erl',
+    startsWith: 'is_hidden_v1_denomination0_tx(TX) ->',
+    lines: 12,
+    mirrors:
+      'sample.ts judgeTx: GET /tx hides some real format-1 transactions without a denomination (be18c1be), so a 404 never refutes a format-1 draw',
+    sha256: 'bd9cc0a62578a93015d1f3b7b0729cde01408a0772544925cab9cf92268701f1',
+  },
+  {
+    file: 'apps/arweave/src/ar_storage.erl',
+    startsWith: 'is_v1_denomination0_local_tx(TX) ->',
+    lines: 17,
+    mirrors:
+      'sample.ts judgeTx: the second way a node hides a format-1 transaction without a denomination',
+    sha256: '431033be3bca35516a96aa15add2dd1da39c75812f819d9cd8e8595419095e21',
   },
   {
     file: 'apps/arweave/src/ar_tx.erl',

@@ -381,6 +381,8 @@ describe('round 2: import never removes what was there (A)', () => {
           coreDb: core,
           anchorFrom: 'http://a.test,http://b.test',
           allowUnverifiedFormat1: true,
+          // Only the format-1 draw (the uniform one waived explicitly).
+          allowUnsampled: true,
           sampleBlocks: '0',
           sampleTxs: '0',
           sampleFormat1: '5',
