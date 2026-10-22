@@ -186,6 +186,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     true on a failed publication. `detects` ignored unreadable draws. The
     worker re-verified the same refused bands every interval; it now backs
     off until they change.
+  - A third round found false refutations and more fail-opens, all fixed.
+    Two sources answering 404 while a third that holds the item was busy
+    refuted an honest index; absence now refutes only when every source
+    was heard. A 404 refuted a format-1 transaction, though Arweave nodes
+    now hide some real ones from `GET /tx`; it no longer does.
+    `--anchor-min 1` let one machine refute; at least two are now needed,
+    and the sample warns when its sources are fewer. A sample that could
+    not be read was reported as refuting the bands; it is now
+    `refusal: "unreadable"`, and the worker retries it at the normal
+    interval (`l1_band_import_runs_total{result="unreadable"}`).
+    Transactions below the 2.0 fork were never sampled; they now are.
+    `--sample-txs 0` (and `--sample-format1 0` over accepted format-1
+    blocks) imported without `--allow-unsampled`. A draw whose owner key
+    the index lacked was never asked about. A format-1 transaction past
+    the 10 MiB limit, or relabelled and past the byte budget, passed as
+    unreadable. A block an unfinished import wrote vouched for the band
+    below it. A fill cleared rows outside the unfinished run it redid. The
+    disk check ignored the write-ahead log of a band written over held
+    rows. The default sample sources included gateways marked
+    `trusted: false`, and a redirect could make one machine count as two.
+    Fork gates on transaction rules were one block early, as the chain
+    validates a block's transactions with the height of the block below.
 
   Gateways with `L1_BAND_IMPORT_ENABLED=true` now refuse today's `l1-3`
   bands below height 2,000,000 unless `L1_BAND_IMPORT_ALLOW_UNVERIFIED=true`.

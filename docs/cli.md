@@ -322,8 +322,13 @@ Before a band's first row reaches SQLite, both modes check it:
    size, `tx_root`, link and size — is checked by the same keyed sample of
    headers and signatures as `index-l1-verify` (`--sample-blocks`,
    `--sample-txs`, `--sample-format1`, from the `--anchor-from` sources).
-   Without sources the run is refused unless `--allow-unsampled`, and then
-   none of that is checked against the chain.
+   Without sources, with `--sample-txs 0`, or with `--sample-format1 0`
+   while blocks whose `tx_root` cannot be recomputed are accepted, the run
+   is refused unless `--allow-unsampled`, and then that part is not
+   checked against the chain. A sample that refutes the band refuses it
+   ("the sample refutes the bands"); one that could not be read (too many
+   draws unanswered) refuses it as `refusal: "unreadable"` — an outage, not
+   evidence, and the next run tries again.
 5. **What nothing binds is refused unless accepted.** Blocks below the 2.0
    fork (`--allow-unbound`); blocks whose transactions or owners' keys the
    band lacks (`--allow-incomplete`); post-2.0 blocks holding a format-1
@@ -398,7 +403,8 @@ the next run, although its blocks are already there. The gateway's worker
 runs a fill every `L1_BAND_IMPORT_INTERVAL_SECONDS` (default 600), so a run
 that stops is retried and new bands are filled as they arrive; a run with
 nothing to fill writes nothing to `core.db`. Its runs are counted in
-`l1_band_import_runs_total{result}` (`filled`, `idle`, `failed`), with
+`l1_band_import_runs_total{result}` (`filled`, `idle`, `failed`,
+`deferred`, `unreadable`), with
 `l1_band_import_rows_total` and `l1_band_import_uncovered_heights`. A run
 that refuses a band, or cannot read the bands directory, counts as
 `failed`. The one quiet case is a bands directory that was never created
@@ -406,9 +412,13 @@ that refuses a band, or cannot read the bands directory, counts as
 and logs why (a warning when the parent directory is missing too, or after
 six runs). A refused fill is not re-verified every interval: the worker
 waits, twice as long each time (up to a day), until the bands directory
-changes, counting `deferred`. The worker anchors and samples against
-`L1_BAND_IMPORT_SAMPLE_FROM` (by default the trusted node and trusted
-gateways), passes `--allow-unbound --allow-unverified-format1` only with
+changes, counting `deferred`. A fill refused only because its sample could
+not be read is a warning, counted `unreadable`, and tried again at the
+normal interval. The worker anchors and samples against
+`L1_BAND_IMPORT_SAMPLE_FROM` (by default the trusted node and the trusted
+gateways not marked `trusted: false`), and warns at its first run when
+those resolve to fewer than two distinct machines, since then the sample
+can refute and attest nothing. It passes `--allow-unbound --allow-unverified-format1` only with
 `L1_BAND_IMPORT_ALLOW_UNVERIFIED=true` (never `--allow-incomplete`), and
 `--allow-unsampled` only with `L1_BAND_IMPORT_ALLOW_UNSAMPLED=true`.
 
@@ -489,7 +499,7 @@ underneath.
 | `--allow-unbound` | Import pre-2.0 blocks |
 | `--allow-incomplete` | Import blocks whose transactions or owners' keys the band lacks |
 | `--allow-unverified-format1` | Import post-2.0 blocks whose `tx_root` cannot be recomputed (a format-1 transaction with data) |
-| `--allow-unsampled` | Import with no sample (no `--anchor-from`, or every `--sample-*` 0) |
+| `--allow-unsampled` | Import with no sample (no `--anchor-from`), or with `--sample-txs 0`, or with `--sample-format1 0` over accepted `txRootFormat1` blocks |
 | `--sample-blocks`, `--sample-txs`, `--sample-format1`, `--seed`, `--concurrency` | The sample, as `index-l1-verify` |
 | `--read-timeout` | Milliseconds each read from a source may take (default 30000) |
 | `--spill-max` | The most the check's DuckDB may spill, as a DuckDB size (default 128GB) |
@@ -688,15 +698,25 @@ Arweave's rules passes every self-check. What ties it to the real chain:
   stores them), so the command draws a keyed uniform sample: headers of
   `--sample-blocks` blocks (default 1000) across the range, fetched by the
   index's own hash (`/block/hash/H`), recomputed, and compared field by
-  field, by height and by transaction order; `--sample-txs` transactions
-  per band (default 1000; per 100,000 heights of a `core.db`), each
-  fetched (`/tx/{id}`) and checked against its signature over the segment
-  rebuilt from the index's columns, the id as the signature's SHA-256; and
-  `--sample-format1` format-1 transactions per band (default 200) drawn from
-  blocks whose `tx_root` cannot be recomputed, which catches a format-2
-  transaction relabelled format 1 to escape `tx_root`. A format-1
-  transaction with data is signed over its data, fetched with it, within
-  1 GB per band; past that it is left unread.
+  field, by height and by transaction order (post-2.0 heights only: below
+  the fork no header recomputes, and a range wholly below it lists
+  `sample_blocks` in `skipped`); `--sample-txs` transactions per band
+  (default 1000; per 100,000 heights of a `core.db`) drawn over the whole
+  range, pre-2.0 included, each fetched (`/tx/{id}`) and checked against
+  its signature over the segment rebuilt from the index's columns, the id
+  as the signature's SHA-256; and `--sample-format1` format-1 transactions
+  per band (default 200) drawn from blocks whose `tx_root` cannot be
+  recomputed, which catches a format-2 transaction relabelled format 1 to
+  escape `tx_root`. A draw whose owner key the index lacks is fetched all
+  the same: a signature hashing to its id shows the id is real, and its
+  fields are then attested. A format-1 transaction with data is signed
+  over its data, which every machine asked sends in full: one budget of
+  1 GB per band covers both transaction draws and counts every copy.
+  Past it a draw is left unverified (`txsOverBudget`,
+  `format1OverBudget`), but its format and data size are still compared
+  (`/tx/{id}/format`, `/tx/{id}/data_size`). A format-1 transaction with
+  more than 10 MiB of data was never valid and is refuted from the index
+  alone.
 
   **What a signature proves.** For an RSA format-2 transaction (and a
   format-1 one with a denomination) the segment is a deep hash, so a
@@ -707,17 +727,26 @@ Arweave's rules passes every self-check. What ties it to the real chain:
   transaction without a denomination, whose segment is a plain
   concatenation, so the boundaries between quantity and reward, anchor and
   tags, tag names and values are unsigned (the consensus rules that fix
-  some of them — canonical decimals, target length, anchor length, no
-  format 1 from 2,000,000 — are checked). For those the fields must be the
-  same from `--anchor-min` distinct machines: such draws are counted as
-  `txsAttested`, the sources' word, not a proof.
+  some of them — canonical decimals, target length, anchor length, data at
+  most 10 MiB, no format 1 from 2,000,000 — are checked, each from the
+  block the chain applies it: a block's transactions are validated with
+  the height of the block below it). For those the fields must be the
+  same from `--anchor-min` distinct machines (never fewer than two): such
+  draws are counted as `txsAttested`, the sources' word, not a proof.
 
   **Verdicts.** A recomputed header, or a verifying signature, proves
-  itself: one source decides. A refutation on a source's word — every
-  source lacking the block or transaction, answers that do not verify,
-  fields that differ — needs `--anchor-min` distinct machines saying so; a
-  single lying source makes a draw unreadable, never a failure. More than
-  20% of a sample unreadable fails it. `sample.detects` says what a pass
+  itself: one source decides. A refutation on a source's word — answers
+  that do not verify, fields that differ — needs `--anchor-min` distinct
+  machines saying so, and never fewer than two: a single lying source
+  makes a draw unreadable, never a failure, and with sources that resolve
+  to one machine the sample says so in `warnings`. Absence refutes only
+  when every source was heard, none answered, and that many machines said
+  404: one busy source may hold what the others lack. A 404 never refutes
+  a format-1 transaction, because since Arweave be18c1be (2026-08-31)
+  nodes deliberately hide some real format-1 transactions without a
+  denomination from `GET /tx`. More than 20% of any one kind of draw
+  (blocks, transactions, format-1) unreadable fails the sample as
+  unreadable, each kind listing its own unreadable draws. `sample.detects` says what a pass
   means: the share of forged rows that would have been caught with 95%
   probability, counting every unreadable draw as possibly forged (in the
   weakest band, for transactions). A forgery confined to fewer rows may
@@ -725,8 +754,11 @@ Arweave's rules passes every self-check. What ties it to the real chain:
 
 What two agreeing sources mean depends on who they are. Two ar.io gateways
 both route `/block/` to their operators' chosen Arweave nodes, so their
-agreement is those choices agreeing, not two independent nodes. The result
-names each source and the address it was counted as.
+agreement is those choices agreeing, not two independent nodes; two
+gateways proxying one upstream count as two machines. A source that
+redirects is not followed (it counts as unheard), so a redirect cannot make
+one machine answer for two. The result names each source and the address
+it was counted as.
 
 **What it cannot bind at all under the `l1-3` layout** is reported in
 `unbound`, by class, and fails the run unless accepted:
@@ -872,10 +904,11 @@ One shape in both views:
     "txRootFormat1": { "blocks": 101, "heights": [1900123, "…"], "reason": "…" }
   },
   "sample": {
-    "seed": 7,
+    "seed": 7, "machines": 2, "confirm": 2,
     "blocksDrawn": 1000, "blocksChecked": 1000, "blocksUnreadable": 0,
     "txsDrawn": 1000, "txsChecked": 997, "txsAttested": 3, "txsUnreadable": 0, "txsOverBudget": 0,
-    "format1Drawn": 200, "format1Checked": 200, "format1Unreadable": 0,
+    "format1Drawn": 200, "format1Checked": 200, "format1Unreadable": 0, "format1OverBudget": 0,
+    "empty": [], "warnings": [],
     "detects": ["…"]
   },
   "skipped": ["tag_orphans", "publication"],

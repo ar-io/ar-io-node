@@ -519,8 +519,8 @@ the index lacks). Each fails the run unless accepted (`--allow-unbound`,
 whose fields its signature does not settle (an ECDSA transaction, whose
 owner is recovered from the signature; a format-1 transaction without a
 denomination, whose signed segment does not mark where one field ends and
-the next begins), checked instead as the same fields answered by at least
-two distinct machines. The sources' word, not a proof: counted as
+the next begins; one whose owner key the index lacks), checked instead as
+the same fields answered by at least two distinct machines. The sources' word, not a proof: counted as
 `txsAttested`.
 
 <a id="hash-2-0-of-1-0"></a> **2.0 hash of a 1.0 block** — What Arweave
