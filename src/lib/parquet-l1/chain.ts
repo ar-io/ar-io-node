@@ -7,8 +7,10 @@
 
 /**
  * Checks of L1 rows against the chain's own consensus fields, from the rows
- * alone: the checks an exporter runs on its own band before publishing, and
- * an importer on a band it is given.
+ * alone: the rules the judge (`judge.ts`) applies for every reader — the
+ * verifier, the importer before it writes, and the exporter before it
+ * publishes. On their own they show only that rows agree with each other;
+ * an anchor (`anchor.ts`) is what ties them to the chain.
  *
  * - **Block links:** each block's `previous_block` is its predecessor's
  *   `indep_hash`.
@@ -18,13 +20,17 @@
  *   94,998; then `SHA-384(prev ‖ indep_hash[h-1])` to 422,249; at 422,250 a
  *   seed from the 2.0 transition (not rebuildable from stored fields, so not
  *   checked); from 422,251, `SHA-384(prev ‖ deepHash([indep_hash[h-1],
- *   weave_size[h-1], tx_root[h-1]]))`. With the tip anchored, this binds
- *   every block hash, and from the 2.0 fork every block's weave size and
- *   transaction root.
+ *   weave_size[h-1], tx_root[h-1]]))`. With the top block anchored — its
+ *   header recomputed (`block-hash.ts`) and equal to the row — this binds
+ *   every post-2.0 block's hash, weave size and transaction root beneath
+ *   it. Below the fork it binds no weave size, and the hashes it links
+ *   cannot be recomputed, so pre-2.0 blocks are reported unbound.
  * - **`tx_root`:** recomputed from a block's transactions (format, id, data
  *   size and data root), sorted as Arweave sorts them, with the 2.5 fork's
- *   padding. A block with a format-1 transaction carrying data is skipped:
- *   its data root comes from data the index doesn't store.
+ *   padding. A block with a format-1 transaction carrying data cannot be
+ *   recomputed ({@link computeTxRoot} returns undefined without a supplied
+ *   data root): its data root comes from data the index doesn't store, and
+ *   the judge reports the block unbound, never as passing.
  *
  * All verified against Arweave mainnet rows (2026-09-30 and 2026-10-02).
  */
@@ -35,9 +41,9 @@ import {
   generateLeaves,
 } from 'arweave/node/lib/merkle.js';
 
-export const FORK_1_6 = 95_000;
-export const FORK_2_0 = 422_250;
-export const FORK_2_5 = 812_970;
+import { deepHash, FORK_1_6, FORK_2_0, FORK_2_5 } from './block-hash.js';
+
+export { FORK_1_6, FORK_2_0, FORK_2_5 };
 const CHUNK = 256 * 1024;
 
 export interface ChainBlock {
@@ -85,19 +91,6 @@ const sha384 = (...parts: Buffer[]) => {
   for (const part of parts) hash.update(part);
   return hash.digest();
 };
-
-/** Arweave's deep hash of a list of binaries. */
-function deepHash(item: Buffer | Buffer[]): Buffer {
-  if (Array.isArray(item)) {
-    let acc = sha384(Buffer.from('list'), Buffer.from(String(item.length)));
-    for (const part of item) acc = sha384(acc, deepHash(part));
-    return acc;
-  }
-  return sha384(
-    sha384(Buffer.from('blob'), Buffer.from(String(item.length))),
-    sha384(item),
-  );
-}
 
 const empty = (value: Buffer | null) => value === null || value.length === 0;
 
