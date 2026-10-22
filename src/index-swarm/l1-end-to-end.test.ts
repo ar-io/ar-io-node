@@ -269,8 +269,11 @@ describe('L1 bands, from a publisher into a subscribing gateway', () => {
     }
   });
 
-  it('leaves an index that index-l1-verify passes', async () => {
-    const result = (await indexL1VerifyCLICommand({ coreDb }, { log })) as {
+  it('leaves an index that index-l1-verify passes (unanchored: the test chain is not Arweave)', async () => {
+    const result = (await indexL1VerifyCLICommand(
+      { coreDb, allowUnanchored: true },
+      { log },
+    )) as {
       ok: boolean;
       heightRange: [number, number];
       checks: unknown;

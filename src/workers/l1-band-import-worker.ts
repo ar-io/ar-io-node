@@ -5,6 +5,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import { ChildProcess, spawn } from 'node:child_process';
+import * as fsp from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import winston from 'winston';
 
@@ -142,6 +143,16 @@ export const spawnFill: FillRunner = (args, onLog, register) =>
  * once history is complete; it keeps running so a
  * hole that appears later, or the publisher's next tip band, is filled.
  *
+ * Every range is verified before a row of it is written
+ * (`verifyBeforeImport`): the band checked whole, and bound to the chain by
+ * the block this gateway holds above it. Blocks that cannot be bound — below
+ * the 2.0 fork, or holding a format-1 transaction with data, which is every
+ * `l1-3` band below height 2,000,000 — are refused unless `allowUnverified`
+ * (`L1_BAND_IMPORT_ALLOW_UNVERIFIED`) accepts them. A run that fails or is
+ * refused counts as `failed`, never `idle`. The one quiet case is a bands
+ * directory that was never created (nothing installed yet, on a new
+ * gateway): `idle`, with the reason logged.
+ *
  * A child process rather than a call. The import reads Parquet through
  * DuckDB, whose native code has crashed before, and a crash there must cost
  * one run, not the gateway. It also keeps the import's SQLite page cache
@@ -154,6 +165,8 @@ export class L1BandImportWorker {
   private intervalMs: number;
   private firstRunDelayMs: number;
   private runFill: FillRunner;
+  private bandsDir: string;
+  private statDir: (dir: string) => Promise<unknown>;
   private timer: NodeJS.Timeout | undefined;
   private child: ChildProcess | undefined;
   private running: Promise<unknown> | undefined;
@@ -168,6 +181,8 @@ export class L1BandImportWorker {
     firstRunDelayMs = 60_000,
     runFill = spawnFill,
     invocation = cliInvocation(),
+    allowUnverified = false,
+    statDir = (dir: string) => fsp.stat(dir),
   }: {
     log: winston.Logger;
     coreDbPath: string;
@@ -178,11 +193,20 @@ export class L1BandImportWorker {
     firstRunDelayMs?: number;
     runFill?: FillRunner;
     invocation?: string[];
+    /**
+     * Fill from blocks the checks cannot bind (`--allow-unbound
+     * --allow-unverified-format1`): `L1_BAND_IMPORT_ALLOW_UNVERIFIED`.
+     */
+    allowUnverified?: boolean;
+    /** Injected in tests: how the bands directory is looked at. */
+    statDir?: (dir: string) => Promise<unknown>;
   }) {
     this.log = log.child({ class: 'L1BandImportWorker' });
     this.intervalMs = intervalMs;
     this.firstRunDelayMs = firstRunDelayMs;
     this.runFill = runFill;
+    this.bandsDir = bandsDir;
+    this.statDir = statDir;
     this.args = [
       ...invocation,
       'index-l1-import',
@@ -193,6 +217,9 @@ export class L1BandImportWorker {
       coreDbPath,
       '--cache-mib',
       String(cacheMib),
+      ...(allowUnverified
+        ? ['--allow-unbound', '--allow-unverified-format1']
+        : []),
     ];
   }
 
@@ -230,6 +257,23 @@ export class L1BandImportWorker {
     // A worker that was never started is stopped too; only one stopped
     // while this run was going was shut down under it.
     const wasRunning = !this.stopped;
+    // A bands directory never created is a gateway with nothing installed
+    // yet: idle, said once a run. Any other error reading it is the fill's
+    // to report, and fails the run.
+    try {
+      await this.statDir(this.bandsDir);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        metrics.l1BandImportRunsTotal.inc({ result: 'idle' });
+        this.log.info(
+          'No bands installed yet: the bands directory does not exist',
+          {
+            bandsDir: this.bandsDir,
+          },
+        );
+        return undefined;
+      }
+    }
     try {
       const result = await this.runFill(
         this.args,

@@ -1725,6 +1725,17 @@ export const L1_BAND_IMPORT_INTERVAL_SECONDS = +env.varOrDefault(
   '600',
 );
 
+/**
+ * Fill from blocks the import's checks cannot bind to the chain: pre-2.0
+ * blocks and post-2.0 blocks holding a format-1 transaction with data,
+ * which today's `l1-3` bands carry no witnesses for (every band below
+ * height 2,000,000). Off by default, so those bands are refused; on, they
+ * are filled with their other checks passed, and the run logs what it
+ * accepted.
+ */
+export const L1_BAND_IMPORT_ALLOW_UNVERIFIED =
+  env.varOrDefault('L1_BAND_IMPORT_ALLOW_UNVERIFIED', 'false') === 'true';
+
 /** SQLite page cache for a fill run, in MiB, in a process of its own. */
 export const L1_BAND_IMPORT_CACHE_MIB = +env.varOrDefault(
   'L1_BAND_IMPORT_CACHE_MIB',

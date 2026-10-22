@@ -279,8 +279,11 @@ case "${COMMAND}" in
     if [[ "${COMMAND}" == "index-l1-verify" ]] && has_arg --bands-dir && ! has_arg --core-db; then
       mount_spill "${DATA_PATH}"
     fi
-    rewrite_paths --bands-dir --core-db
-    # --data-from and --anchor-from may name http://core:4000.
+    # --publication binds index-l1-verify's bands to a signed publication,
+    # given as a file (rewritten like the others) or a URL (left alone).
+    rewrite_paths --bands-dir --core-db --publication
+    # --data-from, --anchor-from and --registry-url may name
+    # http://core:4000.
     join_gateway_network
     ;;
   *)

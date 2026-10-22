@@ -21,7 +21,11 @@ import {
 
 const log = createTestLogger({ suite: 'L1BandImportWorker' });
 
-const worker = (runFill: FillRunner, firstRunDelayMs = 0) =>
+const worker = (
+  runFill: FillRunner,
+  firstRunDelayMs = 0,
+  extra: Partial<ConstructorParameters<typeof L1BandImportWorker>[0]> = {},
+) =>
   new L1BandImportWorker({
     log,
     coreDbPath: 'data/sqlite/core.db',
@@ -31,6 +35,9 @@ const worker = (runFill: FillRunner, firstRunDelayMs = 0) =>
     firstRunDelayMs,
     runFill,
     invocation: ['cli.js'],
+    // The bands directory is there unless a test says otherwise.
+    statDir: async () => ({}),
+    ...extra,
   });
 
 describe('cliInvocation', () => {
@@ -119,6 +126,57 @@ describe('L1BandImportWorker', () => {
       '--cache-mib',
       '256',
     ]);
+  });
+
+  it('passes the allow flags only when unverified bands are accepted', async () => {
+    let seen: string[] = [];
+    await worker(
+      async (args) => {
+        seen = args;
+        return { code: 0, summary: { filled: 0 }, tail: '' };
+      },
+      0,
+      { allowUnverified: true },
+    ).runOnce();
+    assert.deepEqual(seen.slice(-2), [
+      '--allow-unbound',
+      '--allow-unverified-format1',
+    ]);
+  });
+
+  it('is idle without running the fill when the bands directory was never created', async () => {
+    let ran = false;
+    const summary = await worker(
+      async () => {
+        ran = true;
+        return { code: 0, tail: '' };
+      },
+      0,
+      {
+        statDir: async () => {
+          throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+        },
+      },
+    ).runOnce();
+    assert.equal(summary, undefined);
+    assert.equal(ran, false);
+  });
+
+  it('runs the fill (which then fails) when the bands directory cannot be read (C F4)', async () => {
+    let ran = false;
+    await worker(
+      async () => {
+        ran = true;
+        return { code: 1, tail: 'EACCES\n' };
+      },
+      0,
+      {
+        statDir: async () => {
+          throw Object.assign(new Error('denied'), { code: 'EACCES' });
+        },
+      },
+    ).runOnce();
+    assert.equal(ran, true, 'a fill run reports it, as failed');
   });
 
   it('reports what a run filled', async () => {

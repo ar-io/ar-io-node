@@ -13,8 +13,8 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import Sqlite from 'better-sqlite3';
 import type { Database } from 'duckdb-async';
 
-import { exportL1Band } from '../../index-export/kinds/parquet-l1/export.js';
 import { buildCoreDb } from '../../../test/parquet-l1-core-db.js';
+import { exportBands } from '../../../test/parquet-l1-bands.js';
 import { createTestLogger } from '../../../test/test-logger.js';
 import {
   CLEAR_SQL,
@@ -339,23 +339,11 @@ describe('runFill', () => {
     await fsp.mkdir(bandsDir);
     await fsp.mkdir(workDir);
     await buildCoreDb(sourceDb, FIRST, 31);
-    for (const [from, to] of [
+    await exportBands(sourceDb, bandsDir, [
       [FIRST, FIRST + 9],
       [FIRST + 10, FIRST + 19],
       [FIRST + 20, FIRST + 29],
-    ]) {
-      const out = await exportL1Band({
-        coreDbPath: sourceDb,
-        workDir,
-        from,
-        to,
-      });
-      await fsp.rename(
-        out.dir,
-        path.join(bandsDir, `l1-h${from}-${to}-f5b1208c-${'0'.repeat(12)}`),
-      );
-      await fsp.rm(path.dirname(out.dir), { recursive: true, force: true });
-    }
+    ]);
     bands = await readBands(bandsDir);
     const { Database } = await import('duckdb-async');
     duck = await Database.create(':memory:');
@@ -559,20 +547,30 @@ describe('runFill', () => {
     assert.deepEqual(run.outcomes, []);
   });
 
-  it('treats a missing band directory as no bands yet', async () => {
+  it('refuses a band directory that cannot be read, rather than finding nothing (C F4)', async () => {
     await gatewayHolds(FIRST + 20, FIRST + 29);
-    const run = await runFill({
-      db,
-      duck,
-      bandsDir: path.join(dir, 'not-there'),
-      log,
-    });
-    assert.deepEqual(run.outcomes, []);
-    assert.deepEqual(run.uncovered, [[0, FIRST + 19]]);
+    await assert.rejects(
+      runFill({ db, duck, bandsDir: path.join(dir, 'not-there'), log }),
+      { code: 'ENOENT' },
+    );
   });
 
   it('fills beneath a gateway that has only unflushed blocks', async () => {
-    newBlock(db, FIRST + 30);
+    // The gateway's first block, not yet flushed: the chain's own block
+    // above the bands, which binds them.
+    const chain = new Sqlite(sourceDb, { readonly: true });
+    const row = chain
+      .prepare('SELECT * FROM stable_blocks WHERE height = ?')
+      .get(FIRST + 30) as Record<string, unknown>;
+    chain.close();
+    db.prepare(
+      `INSERT INTO new_blocks (indep_hash, height, previous_block, nonce, hash,
+         block_timestamp, diff, last_retarget, reward_pool, block_size,
+         weave_size, hash_list_merkle, tx_root, tx_count, missing_tx_count)
+       VALUES (@indep_hash, @height, @previous_block, @nonce, @hash,
+         @block_timestamp, @diff, @last_retarget, @reward_pool, @block_size,
+         @weave_size, @hash_list_merkle, @tx_root, @tx_count, 0)`,
+    ).run(row);
     const run = await runFill({ db, duck, bandsDir, log, batchRows: 4 });
     assert.equal(run.ceiling, FIRST + 29);
     assert.equal(run.outcomes.length, 3);
