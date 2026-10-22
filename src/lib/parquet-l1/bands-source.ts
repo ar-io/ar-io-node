@@ -17,6 +17,7 @@ import * as path from 'node:path';
 import { BLOCK_ROW_COLUMNS, type L1BlockRow } from './anchor.js';
 import type { L1BandOnDisk } from './bands-dir.js';
 import type { JudgeBlockRow, L1Judge } from './judge.js';
+import type { IndexedTx } from './tx-signature.js';
 import {
   groupWindow,
   type DrawnTx,
@@ -243,33 +244,32 @@ export class BandsSource implements L1Source {
       const id = asBuffer(r.id) ?? Buffer.alloc(0);
       const height = Number(r.height);
       const owner = asBuffer(r.public_modulus);
-      if (owner === null) {
-        out.push({ id, height, problem: 'no wallet row for its owner' });
-        continue;
-      }
       const tags = (await this.duck.all(
         `SELECT tag_name, tag_value FROM read_parquet(${fileOf(band, 'tags')})
          WHERE height = ${height} AND id = from_hex('${id.toString('hex')}')
          ORDER BY tag_index`,
       )) as Array<{ tag_name: unknown; tag_value: unknown }>;
-      out.push({
-        tx: {
-          id,
-          height,
-          format: Number(r.format),
-          owner,
-          target: asBuffer(r.target),
-          quantity: String(r.quantity),
-          reward: String(r.reward),
-          anchor: asBuffer(r.anchor) ?? Buffer.alloc(0),
-          tags: tags.map(
-            (t) =>
-              [asBuffer(t.tag_name), asBuffer(t.tag_value)] as [Buffer, Buffer],
-          ),
-          data_size: String(r.data_size),
-          data_root: asBuffer(r.data_root),
-        },
-      });
+      const tx: IndexedTx = {
+        id,
+        height,
+        format: Number(r.format),
+        owner: owner ?? Buffer.alloc(0),
+        target: asBuffer(r.target),
+        quantity: String(r.quantity),
+        reward: String(r.reward),
+        anchor: asBuffer(r.anchor) ?? Buffer.alloc(0),
+        tags: tags.map(
+          (t) =>
+            [asBuffer(t.tag_name), asBuffer(t.tag_value)] as [Buffer, Buffer],
+        ),
+        data_size: String(r.data_size),
+        data_root: asBuffer(r.data_root),
+      };
+      out.push(
+        owner === null
+          ? { id, height, problem: 'no wallet row for its owner', partial: tx }
+          : { tx },
+      );
     }
     return out;
   }

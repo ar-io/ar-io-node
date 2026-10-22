@@ -293,6 +293,12 @@ export async function runL1Verify(
       skipped.push('sample_txs');
       accepted.push('--sample-txs 0');
     }
+    if (
+      (options.sample.format1PerStratum ?? options.sample.txsPerStratum) <= 0
+    ) {
+      skipped.push('sample_format1');
+      accepted.push('--sample-format1 0');
+    }
   }
   if (options.pool !== undefined && options.sample !== undefined) {
     try {
@@ -304,7 +310,10 @@ export async function runL1Verify(
       );
       checks.push(out.check);
       sample = out.summary;
-      assurance.push(...out.summary.detects);
+      // Asked for, but nothing of the range could be drawn (every block
+      // below the 2.0 fork, where no header recomputes).
+      skipped.push(...out.summary.empty);
+      assurance.push(...out.summary.warnings, ...out.summary.detects);
     } catch (error) {
       checks.push({
         name: 'sample',

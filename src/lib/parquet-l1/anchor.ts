@@ -343,12 +343,16 @@ export function quoteLongIntegers(text: string): string {
 /**
  * A `fetch` for {@link ArweaveNodePool} whose `json()` keeps long integers
  * exact ({@link quoteLongIntegers}): what anchors and samples fetch with.
+ *
+ * Redirects are refused (a failed request, so the source is unheard): the
+ * pool counts machines by the address of each source's own name, and a
+ * redirect would let one machine answer for two.
  */
 export const exactJsonFetch = (async (
   url: string,
   init: { signal: AbortSignal; headers?: Record<string, string> },
 ) => {
-  const response = await fetch(url, init);
+  const response = await fetch(url, { ...init, redirect: 'error' });
   return {
     status: response.status,
     ok: response.ok,

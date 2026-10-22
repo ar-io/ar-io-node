@@ -64,6 +64,12 @@ import {
 export const FORK_1_8 = 269_510;
 /** Arweave's 2.9.6 fork (`ar_fork:height_2_9_6`): no format-1 transaction at or above it. */
 export const FORK_2_9_6 = 2_000_000;
+/**
+ * The most data a format-1 transaction may carry (`?TX_DATA_SIZE_LIMIT`,
+ * `tx_field_size_limit_v1`): 10 MiB since 2019-05, 6,000,000 bytes before,
+ * so a larger one was never valid at any height.
+ */
+export const V1_DATA_SIZE_LIMIT = 10 * 1024 * 1024;
 
 /** A transaction as an index holds it, with its owner's key and its tags in order. */
 export interface IndexedTx {
@@ -144,29 +150,58 @@ export function needsAttestation(tx: IndexedTx, fetched: FetchedTx): boolean {
  * undefined (`ar_tx.erl`: `verify_target_length`, `verify_malleability2`,
  * `tx_field_size_limit_v1`, and the 2.9.6 fork's end of format 1). These
  * fix field boundaries a format-1 signature leaves open.
+ *
+ * Fork gates are applied as the chain applies them. A block's
+ * transactions are validated with the height of the block below it
+ * (`ar_node_utils:validate_block(txs, …)` passes `Height - 1`), so a rule
+ * gated `Height >= Fork` starts at block `Fork + 1`, and one gated
+ * `Height + 1 >= Fork` at block `Fork`. `denomination` is the signed one,
+ * where known: a format-1 transaction with a denomination is exempt from
+ * the malleability rule.
  */
-export function consensusProblem(tx: IndexedTx): string | undefined {
+export function consensusProblem(
+  tx: IndexedTx,
+  { denomination = 0n }: { denomination?: bigint } = {},
+): string | undefined {
   const decimal = /^(0|[1-9]\d*)$/;
   if (!decimal.test(tx.quantity))
     return `quantity ${tx.quantity} is not canonical decimal`;
   if (!decimal.test(tx.reward))
     return `reward ${tx.reward} is not canonical decimal`;
+  if (!/^(0|[1-9]\d*)$/.test(tx.data_size))
+    return `data_size ${tx.data_size} is not canonical decimal`;
+  // `do_verify`: `Height + 1 >= height_2_9_6()`.
   if (tx.format === 1 && tx.height >= FORK_2_9_6) {
     return `a format-1 transaction at ${tx.height}, at or above the 2.9.6 fork`;
   }
+  if (tx.format === 1 && BigInt(tx.data_size) > BigInt(V1_DATA_SIZE_LIMIT)) {
+    return `a format-1 transaction with ${tx.data_size} bytes of data, past the ${V1_DATA_SIZE_LIMIT}-byte limit format 1 always had`;
+  }
   const target = tx.target?.length ?? 0;
   const positive = BigInt(tx.quantity) > 0n;
-  if (tx.height >= FORK_2_4) {
+  // `verify_target_length`: `Height >= height_2_4()`.
+  if (tx.height - 1 >= FORK_2_4) {
     if (!((!positive && target <= 32) || target === 32)) {
       return `a ${target}-byte target with quantity ${tx.quantity}`;
-    }
-    if (tx.format === 1 && !positive && target > 0) {
-      return 'a format-1 transaction with a target and no quantity (malleable)';
     }
   } else if (target > 32) {
     return `a ${target}-byte target`;
   }
-  if (tx.format === 1 && tx.anchor.length > (tx.height >= FORK_1_8 ? 48 : 32)) {
+  // `verify_malleability`: `Height + 1 >= height_2_4()`, format 1 with no
+  // denomination only.
+  if (tx.format === 1 && denomination === 0n && tx.height >= FORK_2_4) {
+    if (positive && target !== 32) {
+      return `a format-1 transaction with quantity ${tx.quantity} and a ${target}-byte target (malleable)`;
+    }
+    if (!positive && target > 0) {
+      return 'a format-1 transaction with a target and no quantity (malleable)';
+    }
+  }
+  // `tx_field_size_limit_v1`: `Height >= height_1_8()`.
+  if (
+    tx.format === 1 &&
+    tx.anchor.length > (tx.height - 1 >= FORK_1_8 ? 48 : 32)
+  ) {
     return `a ${tx.anchor.length}-byte anchor`;
   }
   return undefined;
@@ -319,7 +354,9 @@ export function verifyIndexedTx(tx: IndexedTx, fetched: FetchedTx): TxVerdict {
       reason: `format ${tx.format} in the index, ${fetched.format} signed`,
     };
   }
-  const broken = consensusProblem(tx);
+  const broken = consensusProblem(tx, {
+    denomination: fetched.denomination,
+  });
   if (broken !== undefined) {
     return {
       ok: false,
@@ -352,11 +389,13 @@ export function verifyIndexedTx(tx: IndexedTx, fetched: FetchedTx): TxVerdict {
   let verified: boolean;
   try {
     if (tx.owner.length === ECDSA_KEY_BYTES) {
-      if (tx.height < FORK_2_9 || tx.format !== 2) {
+      // `verify_signature_type`: `Height >= height_2_9()`, with the
+      // height of the block below.
+      if (tx.height - 1 < FORK_2_9 || tx.format !== 2) {
         return {
           ok: false,
           kind: 'mismatch',
-          reason: `an ECDSA owner on a format-${tx.format} transaction at ${tx.height}, which the chain accepts only for format 2 from the 2.9 fork`,
+          reason: `an ECDSA owner on a format-${tx.format} transaction at ${tx.height}, which the chain accepts only for format 2 in blocks above the 2.9 fork`,
         };
       }
       const key = crypto.createPublicKey({

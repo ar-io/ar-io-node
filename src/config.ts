@@ -1739,17 +1739,35 @@ export const L1_BAND_IMPORT_ALLOW_UNVERIFIED =
 /**
  * Where the fill anchors and samples (`--anchor-from`): comma-separated
  * gateways or Arweave nodes serving /block/ and /tx/. By default this
- * gateway's trusted node and trusted gateways. The sample's refutations
- * and source-attested fields need two distinct machines among them.
+ * gateway's trusted node and the trusted gateways not marked
+ * `trusted: false`. The sample's refutations and source-attested fields
+ * need two distinct machines among them; the worker warns at its first
+ * run when they resolve to fewer.
  */
-export const L1_BAND_IMPORT_SAMPLE_FROM = (
-  env.varOrUndefined('L1_BAND_IMPORT_SAMPLE_FROM') ??
-  [TRUSTED_NODE_URL, ...Object.keys(TRUSTED_GATEWAYS_URLS)].join(',')
-)
-  .split(',')
-  .map((url) => url.trim())
-  .filter((url) => url.length > 0)
-  .filter((url, i, all) => all.indexOf(url) === i);
+export function l1BandImportSampleSources(
+  explicit: string | undefined,
+  trustedNodeUrl: string,
+  trustedGateways: Record<string, { trusted?: boolean }>,
+): string[] {
+  return (
+    explicit ??
+    [
+      trustedNodeUrl,
+      ...Object.entries(trustedGateways)
+        .filter(([, config]) => config.trusted !== false)
+        .map(([url]) => url),
+    ].join(',')
+  )
+    .split(',')
+    .map((url) => url.trim())
+    .filter((url) => url.length > 0)
+    .filter((url, i, all) => all.indexOf(url) === i);
+}
+export const L1_BAND_IMPORT_SAMPLE_FROM = l1BandImportSampleSources(
+  env.varOrUndefined('L1_BAND_IMPORT_SAMPLE_FROM'),
+  TRUSTED_NODE_URL,
+  TRUSTED_GATEWAYS_URLS,
+);
 
 /**
  * Fill with no sample of headers and signatures: transaction ids, their

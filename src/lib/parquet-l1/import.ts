@@ -85,11 +85,34 @@ export interface ImportOutcome {
   heights?: [number, number];
   result: 'imported' | 'refused';
   reason?: string;
+  /** For a refusal: `unreadable` when only the sample could not be read ({@link ImportRefused}). */
+  refusal?: 'refused' | 'unreadable';
   rows?: number;
   missingTransactions?: number;
   /** What the check before writing found (bound by, accepted, unbound, sample). */
   check?: ImportCheck;
   seconds: number;
+}
+
+const refusalOf = (error: unknown): 'refused' | 'unreadable' =>
+  error instanceof ImportRefused ? error.kind : 'refused';
+
+/** The parts of `[from, to]` none of `ranges` covers, in order. */
+export function uncoveredBy(
+  from: number,
+  to: number,
+  ranges: ReadonlyArray<readonly [number, number]>,
+): Array<[number, number]> {
+  const out: Array<[number, number]> = [];
+  let next = from;
+  for (const [a, b] of [...ranges].sort((x, y) => x[0] - y[0])) {
+    if (b < next || a > to) continue;
+    if (a > next) out.push([next, a - 1]);
+    next = Math.max(next, b + 1);
+    if (next > to) break;
+  }
+  if (next <= to) out.push([next, to]);
+  return out;
 }
 
 /** A band on disk the run had no use for, and why. */
@@ -102,7 +125,19 @@ export interface SkippedBand {
     | 'above_the_requested_range';
 }
 
-export class ImportRefused extends Error {}
+/**
+ * Why a band was not written. `unreadable`: the sample could not be read
+ * (too many draws unanswered: an outage, not evidence against the band),
+ * so a caller may simply try again later; `refused`: anything else.
+ */
+export class ImportRefused extends Error {
+  constructor(
+    message: string,
+    readonly kind: 'refused' | 'unreadable' = 'refused',
+  ) {
+    super(message);
+  }
+}
 
 const spec = (name: string) =>
   PARQUET_L1_TABLES.find((t) => t.name === name) as TableSpec;
@@ -354,7 +389,11 @@ export const BYTES_PER_ROW = 300;
 /**
  * Free bytes an import keeps back beyond its estimate: the write-ahead log
  * a band in flight builds (1.9 GB at the largest band's chunk size), and
- * room for the gateway to start afterwards.
+ * room for the gateway to start afterwards. A band written over heights
+ * that already hold rows goes in one transaction, so its whole size is in
+ * the log at once; that is added per such band ({@link assertDiskSpace}'s
+ * `walRows`: measured 38 MB of log for 140,000 rows written over held
+ * rows, against 6.8 MB fresh).
  */
 export const DISK_HEADROOM_BYTES = 4 * 1024 ** 3;
 
@@ -376,6 +415,7 @@ export async function assertDiskSpace(
     bytesPerRow = BYTES_PER_ROW,
     headroom = DISK_HEADROOM_BYTES,
     rows: estimatedRows,
+    walRows,
   }: {
     log: Logger;
     statfs?: (path: string) => Promise<{ bsize: number; bavail: number }>;
@@ -383,6 +423,8 @@ export async function assertDiskSpace(
     headroom?: number;
     /** Rows the run will write, where that is not every row of `steps`. */
     rows?: number;
+    /** Rows written in one transaction each (bands over held rows): their log is kept whole. */
+    walRows?: number;
   },
 ): Promise<void> {
   const rows =
@@ -393,7 +435,7 @@ export async function assertDiskSpace(
         Object.values(step.band.tables).reduce((n, table) => n + table.rows, 0),
       0,
     );
-  const needed = rows * bytesPerRow + headroom;
+  const needed = (rows + (walRows ?? 0)) * bytesPerRow + headroom;
   let free: number;
   try {
     const stat = await statfs(path.dirname(path.resolve(coreDbPath)));
@@ -905,13 +947,28 @@ function buildsOn(lower: HeldBlock, upper: HeldBlock): string | undefined {
  * Whether the block the gateway holds at `height` may vouch for a band
  * beneath it: a block the gateway indexed itself (no imported range covers
  * it), or one an import wrote bound `anchored` or `held` with nothing
- * accepted. A range written unanchored, with gaps accepted, or before
- * bindings were recorded vouches for nothing.
+ * accepted. A range written unanchored, with gaps accepted, before
+ * bindings were recorded, or by an import that never finished vouches for
+ * nothing.
  */
 function heldBlockVouches(
   db: Sqlite.Database,
   height: number,
 ): string | undefined {
+  // An import that never finished (it crashed, or was refused part way
+  // online) left rows whose binding was never recorded: they vouch for
+  // nothing until it is redone.
+  const unfinished = db
+    .prepare(
+      `SELECT band_id FROM parquet_l1_imports
+       WHERE completed_at IS NULL AND height_from <= ? AND height_to >= ?
+       LIMIT 1`,
+    )
+    .pluck()
+    .get(height, height) as string | undefined;
+  if (unfinished !== undefined) {
+    return `an import of ${unfinished} covering it never finished`;
+  }
   const rows = db
     .prepare(
       `SELECT band_id, binding, accepted FROM parquet_l1_imports
@@ -1100,18 +1157,67 @@ export async function verifyBeforeImport(
     (a) => !a.startsWith('not anchored') && !a.startsWith('no sample'),
   );
   let sample: SampleSummary | undefined;
-  if (verification.pool !== undefined && verification.sample !== undefined) {
+  const options = verification.sample;
+  if (verification.pool !== undefined && options !== undefined) {
+    // A half-skipped sample is a skipped one, for the half. Without the
+    // transaction draw, nothing checks transaction ids or fields; without
+    // the format-1 draw, nothing catches a transaction relabelled into
+    // blocks whose tx_root is accepted unverified.
+    const format1 = options.format1PerStratum ?? options.txsPerStratum;
+    const gaps: Array<[string, string, string | undefined]> = [];
+    if (options.blocks <= 0) {
+      gaps.push(['sample_blocks', '--sample-blocks 0', undefined]);
+    }
+    if (options.txsPerStratum <= 0) {
+      gaps.push([
+        'sample_txs',
+        '--sample-txs 0',
+        'transaction ids and every transaction field would be unchecked',
+      ]);
+    }
+    if (format1 <= 0) {
+      gaps.push([
+        'sample_format1',
+        '--sample-format1 0',
+        out.unbound.txRootFormat1 !== undefined
+          ? 'a transaction relabelled format 1 in the blocks accepted with --allow-unverified-format1 would be unchecked'
+          : undefined,
+      ]);
+    }
+    const unchecked = gaps.flatMap(([, , why]) =>
+      why === undefined ? [] : [why],
+    );
+    if (unchecked.length > 0 && allow.unsampled !== true) {
+      throw new ImportRefused(
+        `the sample asked for leaves part of the bands unchecked (${gaps.map(([, flag]) => flag).join(', ')}): ${unchecked.join('; ')}; sample it, or --allow-unsampled`,
+      );
+    }
+    for (const [name, flag] of gaps) {
+      skipped.push(name);
+      binding.accepted.push(flag);
+    }
+    if (unchecked.length > 0) binding.accepted.push('--allow-unsampled');
     const drawn = await runSample(
       source,
       verification.pool,
       { from, to },
-      verification.sample,
+      options,
     );
-    if (!drawn.check.ok) {
+    if (drawn.refuted) {
       throw refuse('the sample refutes the bands', [drawn.check]);
     }
+    if (!drawn.check.ok) {
+      throw new ImportRefused(
+        `the sample could not be read, so the bands are not written yet (an outage is not a refutation; the next run tries again): ${drawn.check.failures
+          ?.slice(0, 3)
+          .map((f) => f.found)
+          .join('; ')}`,
+        'unreadable',
+      );
+    }
     sample = drawn.summary;
-    assurance.push(...drawn.summary.detects);
+    skipped.push(...drawn.summary.empty);
+    assurance.push(...drawn.summary.warnings, ...drawn.summary.detects);
   } else if (allow.unsampled === true) {
     binding.accepted.push('--allow-unsampled');
     skipped.push('sample');
@@ -1120,7 +1226,7 @@ export async function verifyBeforeImport(
     );
   } else {
     throw new ImportRefused(
-      `no sample can be drawn (no --anchor-from, or --sample-blocks 0 --sample-txs 0): transaction ids, their order and every transaction field would be unchecked; give sources, or --allow-unsampled`,
+      `no sample can be drawn (no --anchor-from): transaction ids, their order and every transaction field would be unchecked; give sources, or --allow-unsampled`,
     );
   }
   return {
@@ -1550,13 +1656,17 @@ export async function importBand(
   // then written as one transaction, so a failure leaves them exactly as
   // they were (the gateway's own rows, or a band imported before); online,
   // only rows an earlier unfinished run left may be replaced.
-  const overlaps = (a: number, b: number) =>
-    leftovers.some(([x, y]) => x <= b && y >= a);
   const preexisting = insert.anyRows.get(from, to, from, to, from, to) === 1;
-  if (preexisting && online && !overlaps(from, to)) {
-    throw new ImportRefused(
-      `heights ${from}-${to} already hold rows the gateway indexed: a fill writes only heights it lacks`,
-    );
+  if (preexisting && online) {
+    // Only an earlier unfinished run's heights may hold rows: every part of
+    // the range outside them must be empty.
+    for (const [a, b] of uncoveredBy(from, to, leftovers)) {
+      if (insert.anyRows.get(a, b, a, b, a, b) === 1) {
+        throw new ImportRefused(
+          `heights ${a}-${b} already hold rows that no unfinished import left: a fill writes only heights the gateway lacks`,
+        );
+      }
+    }
   }
   const whole = preexisting && !online;
   const commitAt = whole ? Number.POSITIVE_INFINITY : commitEvery;
@@ -1802,7 +1912,19 @@ export async function runImport({
         'the block importer rewinds across a gap; close it before starting the gateway',
     });
   }
-  await assertDiskSpace(db.name, planned, { log, ...disk });
+  // A band over heights that already hold rows is one transaction: the
+  // log holds all of it at once.
+  const holdsRows = db.prepare(
+    `SELECT EXISTS (SELECT 1 FROM stable_blocks WHERE height BETWEEN ? AND ?)
+       OR EXISTS (SELECT 1 FROM stable_transactions WHERE height BETWEEN ? AND ?)`,
+  );
+  const walRows = planned.reduce((sum, step) => {
+    const [a, b] = step.band.heightRange;
+    return (holdsRows.pluck().get(a, b, a, b) as number) === 1
+      ? sum + Object.values(step.band.tables).reduce((n, t) => n + t.rows, 0)
+      : sum;
+  }, 0);
+  await assertDiskSpace(db.name, planned, { log, walRows, ...disk });
 
   const outcomes: ImportOutcome[] = [];
   let haveTo = progress.haveTo;
@@ -1852,6 +1974,7 @@ export async function runImport({
         heightRange: run[0].band.heightRange,
         result: 'refused',
         reason,
+        refusal: refusalOf(error),
         seconds: (Date.now() - started) / 1000,
       };
       onBand?.(outcome);
@@ -1896,6 +2019,7 @@ export async function runImport({
         ...base,
         result: 'refused',
         reason: error instanceof Error ? error.message : String(error),
+        refusal: refusalOf(error),
         seconds: (Date.now() - started) / 1000,
       };
       outcomes.push(outcome);
@@ -2106,6 +2230,7 @@ export async function runFill({
         ...base,
         result: 'refused',
         reason: error instanceof Error ? error.message : String(error),
+        refusal: refusalOf(error),
         seconds: (Date.now() - started) / 1000,
       };
       outcomes.push(outcome);

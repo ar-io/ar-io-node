@@ -24,10 +24,14 @@ export interface L1Stratum {
   to: number;
 }
 
-/** A transaction drawn for the signature sample, or why the index cannot give it whole. */
+/**
+ * A transaction drawn for the signature sample, or why the index cannot
+ * give it whole — with what it does hold (`partial`, its owner key empty),
+ * so the draw is still asked about and its fields compared.
+ */
 export type DrawnTx =
   | { tx: IndexedTx }
-  | { id: Buffer; height: number; problem: string };
+  | { id: Buffer; height: number; problem: string; partial?: IndexedTx };
 
 export interface L1Source {
   /** Judges every block of `[from, to]` in height order, `window` heights per read. */
@@ -54,7 +58,7 @@ export interface L1Source {
     n: number,
     from: number,
     to: number,
-    /** Draw only format-1 transactions with data, of blocks at or above the 2.0 fork. */
+    /** Draw only format-1 transactions with data (the caller keeps `from` at or above the 2.0 fork). */
     filter?: { format1Unbound?: boolean },
   ): Promise<DrawnTx[]>;
 }

@@ -10,7 +10,15 @@ import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import winston from 'winston';
 
+import { ArweaveNodePool } from '../lib/onchain/arweave-nodes.js';
 import * as metrics from '../metrics.js';
+
+/** Distinct machines a list of sources resolves to, as the sample counts them. */
+async function distinctMachines(urls: string[]): Promise<number> {
+  const pool = new ArweaveNodePool({ urls });
+  await pool.ready();
+  return new Set(pool.urls.map((u) => pool.addressOf(u))).size;
+}
 
 /** What one fill run reported, as `index-l1-import --fill` prints it. */
 export interface FillSummary {
@@ -19,6 +27,8 @@ export interface FillSummary {
   rows?: number;
   uncovered?: Array<[number, number]>;
   refused?: string;
+  /** `unreadable`: only the sample could not be read (an outage); `refused`: anything else. */
+  refusal?: 'refused' | 'unreadable';
 }
 
 /** The outcome of running the fill command once. */
@@ -180,6 +190,9 @@ export class L1BandImportWorker {
    * not re-verified every interval: it waits, twice as long each time,
    * until the directory changes.
    */
+  private readonly sampleFrom: string[];
+  private readonly countMachines: (urls: string[]) => Promise<number>;
+  private sourcesChecked = false;
   private refused:
     | { entries: string; until: number; backoffMs: number }
     | undefined;
@@ -206,6 +219,7 @@ export class L1BandImportWorker {
     listDir = (dir: string) => fsp.readdir(dir),
     now = Date.now,
     maxBackoffMs = 24 * 3600 * 1000,
+    countMachines = distinctMachines,
   }: {
     log: winston.Logger;
     coreDbPath: string;
@@ -236,7 +250,11 @@ export class L1BandImportWorker {
     now?: () => number;
     /** The longest a refused fill waits before it is tried again unchanged. */
     maxBackoffMs?: number;
+    /** Injected in tests: how many distinct machines the sample sources are. */
+    countMachines?: (urls: string[]) => Promise<number>;
   }) {
+    this.sampleFrom = sampleFrom;
+    this.countMachines = countMachines;
     this.log = log.child({ class: 'L1BandImportWorker' });
     this.intervalMs = intervalMs;
     this.firstRunDelayMs = firstRunDelayMs;
@@ -292,9 +310,41 @@ export class L1BandImportWorker {
     }, delayMs);
   }
 
+  /**
+   * Once, at the first run: whether the sample sources are at least the
+   * two distinct machines a refutation or an attestation needs. With fewer
+   * the sample can prove draws, never refute or attest them, so it reads
+   * as unreadable rather than as a check.
+   */
+  private async checkSources(): Promise<void> {
+    if (this.sourcesChecked) return;
+    this.sourcesChecked = true;
+    if (this.sampleFrom.length === 0) {
+      this.log.warn(
+        'No sample sources (L1_BAND_IMPORT_SAMPLE_FROM): every fill is refused unless L1_BAND_IMPORT_ALLOW_UNSAMPLED=true',
+      );
+      return;
+    }
+    try {
+      const machines = await this.countMachines(this.sampleFrom);
+      if (machines < 2) {
+        this.log.warn(
+          'The L1 band import sample sources are fewer than two distinct machines: the sample cannot refute or attest anything, so fills will wait as unreadable. Add a source to L1_BAND_IMPORT_SAMPLE_FROM',
+          { sources: this.sampleFrom, machines },
+        );
+      }
+    } catch (error) {
+      this.log.warn('Could not resolve the L1 band import sample sources', {
+        sources: this.sampleFrom,
+        error: (error as Error).message,
+      });
+    }
+  }
+
   /** Runs the fill once; never throws. */
   async runOnce(): Promise<FillSummary | undefined> {
     const started = Date.now();
+    await this.checkSources();
     // A worker that was never started is stopped too; only one stopped
     // while this run was going was shut down under it.
     const wasRunning = !this.stopped;
@@ -373,6 +423,19 @@ export class L1BandImportWorker {
         metrics.l1BandImportUncoveredHeights.set(
           summary.uncovered.reduce((sum, [a, b]) => sum + (b - a + 1), 0),
         );
+      }
+      if (result.code !== 0 && summary?.refusal === 'unreadable') {
+        // The sample's sources could not be read: an outage, not evidence
+        // against the bands. Tried again at the normal interval, unchanged.
+        metrics.l1BandImportRunsTotal.inc({ result: 'unreadable' });
+        this.log.warn(
+          'Fill waits: its sample could not be read; the next run tries again',
+          {
+            reason: summary.refused,
+            seconds: Math.round((Date.now() - started) / 1000),
+          },
+        );
+        return summary;
       }
       if (result.code !== 0) {
         metrics.l1BandImportRunsTotal.inc({ result: 'failed' });

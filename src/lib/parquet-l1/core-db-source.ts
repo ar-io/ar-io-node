@@ -24,6 +24,7 @@ import Sqlite from 'better-sqlite3';
 import { BLOCK_ROW_COLUMNS, type L1BlockRow } from './anchor.js';
 import type { JudgeBlockRow, L1Judge } from './judge.js';
 import { L1_SPAN, l1RangeOf } from './layout.js';
+import type { IndexedTx } from './tx-signature.js';
 import { drawByKey } from '../index-band/draw.js';
 import {
   groupWindow,
@@ -269,26 +270,31 @@ export class CoreDbSource implements L1Source {
     );
     return drawn.map(([h, i]) => {
       const r = row.get(h, i) as Record<string, any>;
-      if (r.public_modulus === null || r.public_modulus === undefined) {
-        return { id: r.id, height: h, problem: 'no wallet row for its owner' };
-      }
-      return {
-        tx: {
-          id: r.id,
-          height: r.height,
-          format: r.format,
-          owner: r.public_modulus,
-          target: r.target,
-          quantity: String(r.quantity),
-          reward: String(r.reward),
-          anchor: r.last_tx,
-          tags: (tags.all(r.id) as Array<{ name: Buffer; value: Buffer }>).map(
-            (t) => [t.name, t.value] as [Buffer, Buffer],
-          ),
-          data_size: String(r.data_size ?? ''),
-          data_root: r.data_root,
-        },
+      const missing =
+        r.public_modulus === null || r.public_modulus === undefined;
+      const tx: IndexedTx = {
+        id: r.id,
+        height: r.height,
+        format: r.format,
+        owner: missing ? Buffer.alloc(0) : r.public_modulus,
+        target: r.target,
+        quantity: String(r.quantity),
+        reward: String(r.reward),
+        anchor: r.last_tx,
+        tags: (tags.all(r.id) as Array<{ name: Buffer; value: Buffer }>).map(
+          (t) => [t.name, t.value] as [Buffer, Buffer],
+        ),
+        data_size: String(r.data_size ?? ''),
+        data_root: r.data_root,
       };
+      return missing
+        ? {
+            id: r.id,
+            height: h,
+            problem: 'no wallet row for its owner',
+            partial: tx,
+          }
+        : { tx };
     });
   }
 }

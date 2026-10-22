@@ -257,7 +257,9 @@ export async function indexL1ImportCLICommand(
           0,
         ),
         uncovered: run.uncovered,
-        ...(refused !== undefined ? { refused: refused.reason } : {}),
+        ...(refused !== undefined
+          ? { refused: refused.reason, refusal: refused.refusal ?? 'refused' }
+          : {}),
         ranges: run.outcomes.map(describe),
         seconds: Math.round((Date.now() - started) / 100) / 10,
       };
@@ -300,7 +302,9 @@ export async function indexL1ImportCLICommand(
         heightRange: b.heightRange,
         reason: b.reason,
       })),
-      ...(refused !== undefined ? { refused: refused.reason } : {}),
+      ...(refused !== undefined
+        ? { refused: refused.reason, refusal: refused.refusal ?? 'refused' }
+        : {}),
       bands: run.outcomes.map(describe),
       seconds: Math.round((Date.now() - started) / 100) / 10,
     };
