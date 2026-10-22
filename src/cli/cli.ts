@@ -179,7 +179,7 @@ makeCommand<IndexL1ImportCLIOptions>({
 makeCommand<IndexL1VerifyCLIOptions>({
   name: 'index-l1-verify',
   description:
-    "Check this gateway's L1 index against the weave size the chain commits to",
+    'Check an L1 index (a core.db, or a directory of parquet-l1 bands) against the chain: anchored, judged block by block, and sampled; fails on what it cannot bind unless an --allow-* flag accepts it',
   options: indexL1VerifyOptions,
   action: async (options) =>
     (await indexL1VerifyCommands()).indexL1VerifyCLICommand(options, {
@@ -192,10 +192,16 @@ makeCommand<IndexL1VerifyCLIOptions>({
     'Example:',
     '  ar-io-node index-l1-verify --core-db data/sqlite/core.db',
     '',
-    'Read-only, so the gateway can stay up. Below the 2.0 fork a block',
-    'grew the weave by exactly its transactions, and the first post-2.0',
-    'block commits the running total, so one trusted block hash pins the',
-    'size of every transaction beneath it. Exits 1 if a check fails.',
+    '  ar-io-node index-l1-verify --core-db data/sqlite/core.db \\',
+    '    --anchor-from https://<gateway-a>,https://<gateway-b>',
+    '',
+    'Read-only, so the gateway can stay up. The top block is fetched from',
+    'every --anchor-from source and its hash recomputed from its fields;',
+    'the hash_list_merkle recurrence then binds each post-2.0 block hash,',
+    'weave size and tx_root below it, and a keyed sample of headers and',
+    'signatures checks what nothing else binds. Pre-2.0 blocks and blocks',
+    'holding a format-1 transaction with data are reported unbound. Exits 1',
+    'if a check fails or something unbound is not accepted.',
     CONTRACT,
   ].join('\n'),
 );

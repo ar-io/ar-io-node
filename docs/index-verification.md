@@ -17,7 +17,7 @@ failure, the full result on stderr and exit 1.
 | Index                            | Holds                                                                       | Check it with                                                                               | Proves                                                                                                                                                                                                        | Does not prove                                                                                                                                                               |
 | -------------------------------- | --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `root-tx-index` (CDB64)          | each data item's root transaction and offsets                               | [`index-band-verify`](cli.md#index-band-verify)                                             | sampled entries' headers sit at their recorded offsets, in their root transactions                                                                                                                            | entries not sampled; root-only entries' roots                                                                                                                                |
-| `parquet-l1`                     | blocks, L1 transactions, their tags and owners                              | [`index-l1-verify`](cli.md#index-l1-verify), then [`index-l1-audit`](cli.md#index-l1-audit) | every block's place in the chain, against the weave size the chain commits to; every block's `tx_root` rebuilt from its transactions; lookups. `index-l1-audit` closes the v1-transaction gap `tx_root` can't | that a transaction id is in the block (`tx_root` doesn't bind ids; the audit checks each v1 id against its signature)                                                        |
+| `parquet-l1`                     | blocks, L1 transactions, their tags and owners                              | [`index-l1-verify`](cli.md#index-l1-verify), then [`index-l1-audit`](cli.md#index-l1-audit) | with `--anchor-from`: the top block, its header recomputed and served by two machines, equals the index; from there, every post-2.0 block's hash, weave size and `tx_root` (through `hash_list_merkle`), its links and sizes, and its transactions' sizes and data roots (`tx_root` rebuilt); every table, file and lookup against `band.json` (and, with `--publication`, against what the publisher signed); every row non-null, placed, counted and owned; a keyed sample of headers and signatures. `index-l1-audit` closes the v1-transaction gap `tx_root` can't | blocks it reports `unbound` (failing unless accepted): under `l1-3`, every block below the 2.0 fork, and post-2.0 blocks holding a format-1 transaction with data; without `--anchor-from`, anything about the chain (it fails unless `--allow-unanchored`); transaction ids, their order, every transaction field and the block fields the recurrence doesn't carry, except for the share of forged rows `sample.detects` states |
 | `parquet-l2` (e.g. `ardrive-l2`) | the ANS-104 data items one selection takes, with tags, owners and locations | [`index-l2-verify`](cli.md#index-l2-verify) | that the bands agree with themselves: every id against its contents, the set has no overlaps or holes, every file's shape, every table row by row, every required value, every location's layout and parent link, tags and keys against items, every item against the selection, the lookups; with `--publication`, that every file is the one its publisher signed; with an L1 index, that every root is mined where its items say; a sample of locations against the chain | without `--publication`, who published the bands (the id is a 48-bit digest, a name, not a signature); that every item the selection should take is there (completeness is the publisher's to show, by comparing against its source; see [Reproducing a band](#reproducing-a-band)) |
 
 ## Reading from the chain: `--arweave-nodes`
@@ -273,7 +273,7 @@ the node's own `data/indexes/installed/parquet-l1`, else
 `data/indexes/published/parquet-l1`, is used where it exists, and a band it
 does not cover is listed in `mined.uncovered` and in `minedPartial` as
 `{ bands: [...], count: n }`, and `skipped` then includes `mined`;
-`--l1-bands-dir none` uses none. This trusts the L1 index, so check it first with `index-l1-verify`.
+`--l1-bands-dir none` uses none. This trusts the L1 index, so check it first with `index-l1-verify --anchor-from …`, and read its `unbound` and `assurance`: block order and transaction ids are bound there only by its sample, and blocks it reports unbound (or that a pass accepted with `--allow-*`) are not bound at all.
 `mined` is in `skipped` whenever an L1 index does not cover every band: Arweave
 nodes placing the sampled roots in blocks is reported in `assurance` and
 `onchain.roots.checks`, not as `mined`, which finds every root. Through
@@ -365,8 +365,10 @@ or diff the two bands' rows, not just their ids.
 For `root-tx-index` bands, `index-export --once --resettle[=full]` re-checks and
 replaces frozen bands whose sources changed (see
 [index-export.md](index-export.md)). For `parquet-l1`, see
-[`index-l1-verify`](cli.md#index-l1-verify) and
-[`index-l1-import`](cli.md#index-l1-import).
+[`index-l1-verify`](cli.md#index-l1-verify) (its `unbound`, `accepted` and
+`assurance` say what a pass rests on) and
+[`index-l1-import`](cli.md#index-l1-import), which runs the same checks
+before it writes.
 
 ## For agents
 

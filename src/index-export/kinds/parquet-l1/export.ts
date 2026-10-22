@@ -47,6 +47,11 @@ import {
 import { RowDigest } from '../../../lib/parquet/digest.js';
 import { LookupDescription } from '../../../lib/parquet/lookups.js';
 import { writeBandLookups } from '../../../lib/parquet-l1/lookups.js';
+import { BandsSource } from '../../../lib/parquet-l1/bands-source.js';
+import { L1Judge } from '../../../lib/parquet-l1/judge.js';
+
+/** Heights the exporter judges its own band in per read. */
+const JUDGE_WINDOW = 10_000;
 import {
   BAND_FILE,
   BandTag,
@@ -589,6 +594,33 @@ export async function exportL1Band({
       }
       throw error;
     });
+    // The band as written, judged by the code every consumer runs
+    // (`index-l1-verify --bands-dir`, the importer): publisher and
+    // consumer cannot drift on what a right band is.
+    const judged = await withBandWriter(staging, async (duck) => {
+      const judge = new L1Judge(from, to);
+      await new BandsSource(duck, [{ id: 'staged', dir: bandDir, band }]).judge(
+        judge,
+        from,
+        to,
+        JUDGE_WINDOW,
+      );
+      return judge.finish().checks.filter((c) => !c.ok);
+    });
+    if (judged.length > 0) {
+      throw new L1CheckError(
+        `the band fails the checks its consumers run: ${judged
+          .map(
+            (c) =>
+              `${c.name} (${(c.failures ?? [])
+                .slice(0, 3)
+                .map((f) => `${f.height}: ${f.found}`)
+                .join('; ')})`,
+          )
+          .join('; ')}`,
+        'judge',
+      );
+    }
     await fs.writeFile(path.join(bandDir, BAND_FILE), serializeBandFile(band));
     await writePublisherFacts(bandDir, {
       ...(supersedes.length > 0 ? { supersedes } : {}),

@@ -79,11 +79,19 @@ const INTEGER_TYPES = new Set([
   'UBIGINT',
 ]);
 
+/**
+ * A whole-number decimal (`DECIMAL(p,0)`), such as an L1 band's quantity
+ * and reward: DuckDB casts it to its digits with no point, which is what
+ * {@link RowDigest} writes for the decimal text a reader hands it.
+ */
+const WHOLE_DECIMAL = /^DECIMAL\(\d{1,2},0\)$/;
+
 const encodable = (type: string) =>
   type === 'BLOB' ||
   type === 'VARCHAR' ||
   type === 'BOOLEAN' ||
-  INTEGER_TYPES.has(type);
+  INTEGER_TYPES.has(type) ||
+  WHOLE_DECIMAL.test(type);
 
 /** Types whose order DuckDB and the JavaScript comparisons agree on. */
 const orderable = (type: string) => type === 'BLOB' || INTEGER_TYPES.has(type);
@@ -105,8 +113,9 @@ function encodeSql(column: ColumnSpec): string {
   } else if (column.type === 'BOOLEAN') {
     value = `CASE WHEN ${c} THEN '010000000131' ELSE '010000000130' END`;
   } else {
-    // An integer as its decimal digits, as RowDigest writes a number or
-    // bigint: CAST gives the canonical form (no sign for 0, no padding).
+    // An integer (or a whole-number decimal) as its decimal digits, as
+    // RowDigest writes a number, bigint or decimal text: CAST gives the
+    // canonical form (no sign for 0, no padding, no point).
     const text = `CAST(${c} AS VARCHAR)`;
     value = `'01' || ${length8(`length(${text})`)} || hex(${text})`;
   }

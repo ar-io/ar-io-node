@@ -216,6 +216,6 @@ CREATE TABLE parquet_l1_imports (
   rows_imported INTEGER,
   started_at INTEGER NOT NULL,
   completed_at INTEGER
-);
+, binding TEXT, accepted TEXT);
 CREATE INDEX parquet_l1_imports_height_from_idx
   ON parquet_l1_imports (height_from);

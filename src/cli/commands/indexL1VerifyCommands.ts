@@ -6,8 +6,12 @@
  */
 
 /**
- * `index-l1-verify`: check a gateway's L1 index against the weave size the
- * chain commits to, and against itself.
+ * `index-l1-verify`: check an L1 index — a gateway's `core.db`, or a
+ * directory of `parquet-l1` bands — against the chain: anchored at its top
+ * block (recomputed from the block's own fields, from at least two distinct
+ * machines), judged block by block, and sampled where nothing else binds.
+ * Fails closed: what it cannot bind is listed and fails the run unless an
+ * `--allow-*` flag accepts it. See `src/lib/parquet-l1/verify.ts`.
  *
  * Read-only, so it is safe to run while the gateway is up.
  */
@@ -19,21 +23,33 @@ import Sqlite from 'better-sqlite3';
 import type { Database } from 'duckdb-async';
 import { Logger } from 'winston';
 
+import crypto from 'node:crypto';
+
+import type { GatewayRegistry } from '../../index-swarm/gateway-registry.js';
 import {
-  AnchorAnswer,
-  anchorHeights,
-  checkAnchors,
-  checkTxRoots,
+  ArweaveNodePool,
+  type FetchLike,
+  parseNodeUrls,
+} from '../../lib/onchain/arweave-nodes.js';
+import {
   chooseRange,
   stableHeightRange,
-  verifyRange,
+  verifyCoreDb,
   VerifyRefused,
-  type VerifyCheck,
-  type VerifyFailure,
 } from '../../lib/parquet-l1/verify.js';
-import { verifyBands } from '../../lib/parquet-l1/verify-bands.js';
+import {
+  BandsRefused,
+  verifyBands,
+} from '../../lib/parquet-l1/verify-bands.js';
+import type {
+  L1Allowances,
+  L1VerifyReport,
+} from '../../lib/parquet-l1/verify-run.js';
+import { exactJsonFetch } from '../../lib/parquet-l1/anchor.js';
+import type { SampleOptions } from '../../lib/parquet-l1/sample.js';
 import type { IndexL1VerifyCLIOptions, JsonSerializable } from '../types.js';
 import { requiredStringFromOptions } from '../utils.js';
+import { resolvePublication } from './index-publication-options.js';
 
 /**
  * The most a check may spill unless `--spill-max` says otherwise. The lookup
@@ -91,6 +107,8 @@ export async function openBandsDuck(
     spillMax?: string;
     /** Injected in tests: the bytes free under the temp root. */
     freeBytes?: (dir: string) => Promise<number>;
+    /** Space always left free under the spill (default {@link SPILL_RESERVE_BYTES}). */
+    reserveBytes?: number;
   } = {},
 ): Promise<{
   duck: Database;
@@ -128,7 +146,7 @@ export async function openBandsDuck(
     Math.min(
       spillBytes(spillMax),
       Math.floor(freeBytes * SPILL_FREE_SHARE),
-      freeBytes - SPILL_RESERVE_BYTES,
+      freeBytes - (options.reserveBytes ?? SPILL_RESERVE_BYTES),
     ),
   );
   const prefix = options.prefix ?? 'ar-io-node-l1-verify-';
@@ -239,313 +257,331 @@ export async function openBandsDuck(
   };
 }
 
-/** Checks a directory of bands, with no database involved. */
-async function verifyBandsCLI(
-  options: IndexL1VerifyCLIOptions,
-  log: Logger,
-  freeBytes?: (dir: string) => Promise<number>,
-): Promise<JsonSerializable> {
-  const bandsDir = options.bandsDir as string;
-  const whole = (value: string | undefined, flag: string) => {
-    if (value === undefined) return undefined;
-    const n = Number(value);
-    if (!Number.isSafeInteger(n) || n < 0) {
-      throw new VerifyRefused(`${flag} must be a whole height, 0 or above`);
-    }
-    return n;
-  };
-  const session = await openBandsDuck({
-    ...(options.spillMax !== undefined ? { spillMax: options.spillMax } : {}),
-    ...(freeBytes !== undefined ? { freeBytes } : {}),
-  });
-  const { duck } = session;
-  try {
-    // The lookup check spills; with nothing to spill into it would fail
-    // in DuckDB and report sound bands as unreadable. Refuse first.
-    if (options.skipLookups !== true && session.spillCapBytes === 0) {
-      throw new VerifyRefused(
-        `no room to spill under ${path.dirname(session.spill)}: ${(session.freeBytes / 2 ** 30).toFixed(1)} GiB free, less the ${(SPILL_RESERVE_BYTES / 2 ** 30).toFixed(1)} GiB a run always leaves. Free space there, point TMPDIR elsewhere, or --skip-lookups`,
-      );
-    }
-    for (const dir of session.removedStale) {
-      log.warn('Removed a spill folder a killed run left', { dir });
-    }
-    log.info('Checking bands', { bandsDir, spill: session.spill });
-    const out = await verifyBands(duck, bandsDir, {
-      ...(whole(options.from, '--from') !== undefined
-        ? { from: whole(options.from, '--from') as number }
-        : {}),
-      ...(whole(options.to, '--to') !== undefined
-        ? { to: whole(options.to, '--to') as number }
-        : {}),
-      txRoot: options.skipTxRoot !== true,
-      lookups: options.skipLookups !== true,
-    });
-    log.info('Checked bands', { ok: out.ok, blocks: out.blocks });
-    const answer = {
-      bandsDir: out.bandsDir,
-      bands: out.bands.length,
-      heightRange: out.heightRange,
-      blocks: out.blocks,
-      txRootChecked: out.txRootChecked,
-      txRootSkipped: out.txRootSkipped,
-      merkleChecked: out.merkleChecked,
-      merkleSkipped: out.merkleSkipped,
-      accountingChecked: out.accountingChecked,
-      accountingSkipped: out.accountingSkipped,
-      lookupsChecked: out.lookupsChecked,
-      lookupsSkipped: out.lookupsSkipped,
-      ok: out.ok,
-      checks: out.checks.map((c: VerifyCheck) => ({
-        name: c.name,
-        ok: c.ok,
-        detail: c.detail,
-        ...(c.failures !== undefined
-          ? {
-              failures: c.failures.map((f: VerifyFailure) => ({
-                height: f.height,
-                found: f.found,
-                expected: f.expected,
-              })),
-            }
-          : {}),
-        ...(c.more !== undefined ? { more: c.more } : {}),
-      })),
-      seconds: Math.round(out.seconds * 10) / 10,
-    };
-    if (!out.ok) throw answer;
-    return answer;
-  } finally {
-    await session.close();
+/** Blocks drawn for the header sample by default. */
+export const DEFAULT_SAMPLE_BLOCKS = 1000;
+/** Transactions drawn per band for the signature sample by default. */
+export const DEFAULT_SAMPLE_TXS = 1000;
+/**
+ * Format-1 transactions drawn per band, from blocks whose tx_root cannot be
+ * recomputed, by default: what catches a format-2 transaction relabelled.
+ */
+export const DEFAULT_SAMPLE_FORMAT1 = 200;
+/**
+ * Bytes of format-1 data a band's signature sample may fetch, counting
+ * every machine's copy: a band of 1,000 draws at two copies measured about
+ * 1.22 GB (200000-299999), so this leaves room to spare.
+ */
+export const DEFAULT_SAMPLE_V1_BYTES = 4e9;
+/** Sample fetches in flight by default. */
+export const DEFAULT_SAMPLE_CONCURRENCY = 8;
+/** How long one read from a source may take by default. */
+export const DEFAULT_READ_TIMEOUT_MS = 30_000;
+
+const whole = (value: string | undefined, flag: string): number | undefined => {
+  if (value === undefined) return undefined;
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) {
+    throw new VerifyRefused(`${flag} must be a whole number, 0 or above`);
   }
+  return parsed;
+};
+
+/** `--spill-reserve-gb` in bytes, or the default. */
+export function spillReserveBytes(value: string | undefined): number {
+  if (value === undefined) return SPILL_RESERVE_BYTES;
+  const gb = Number(value);
+  if (!Number.isFinite(gb) || gb < 0) {
+    throw new VerifyRefused('--spill-reserve-gb must be a number, 0 or above');
+  }
+  return gb * 1e9;
 }
 
 export interface IndexL1VerifyDeps {
   log: Logger;
   /** Injected in tests: the bytes free under the spill directory. */
   freeBytes?: (dir: string) => Promise<number>;
-  /** Asks one source for a block's identity hash; injected in tests. */
-  fetchIndepHash?: (
-    url: string,
-    height: number,
-    timeoutMs: number,
-  ) => Promise<string>;
+  /** Injected in tests: how sources are fetched from (`/block/…`, `/tx/…`). */
+  fetch?: FetchLike;
+  /** Injected in tests: every address a source's host name resolves to. */
+  lookupAll?: (host: string) => Promise<string[]>;
+  /** Injected in tests: the registry `--registry-url` reads. */
+  registry?: GatewayRegistry;
+  /** Injected in tests: the time a publication's expiry is judged at. */
+  now?: () => number;
 }
-
-/** How long one source gets to answer before it counts as unreachable. */
-export const ANCHOR_TIMEOUT_MS = 10_000;
 
 /**
- * Asks one source for a block's identity hash. Any Arweave node or
- * gateway serves `/block/height/N`; raw nodes on port 1984 are a
- * different implementation from this one, which is what makes their
- * agreement worth having.
+ * The sources `--anchor-from` names, as a pool that counts machines, not
+ * names; undefined without any.
  */
-async function httpIndepHash(
-  url: string,
-  height: number,
-  timeoutMs: number,
-): Promise<string> {
-  const stop = AbortSignal.timeout(timeoutMs);
-  const response = await fetch(
-    `${url.replace(/\/+$/, '')}/block/height/${height}`,
-    { signal: stop },
-  );
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  const body = (await response.json()) as { indep_hash?: unknown };
-  if (typeof body.indep_hash !== 'string' || body.indep_hash.length === 0) {
-    throw new Error('no indep_hash in the response');
+export function anchorPool(
+  options: { anchorFrom?: string; readTimeout?: string },
+  deps: Pick<IndexL1VerifyDeps, 'fetch' | 'lookupAll'>,
+  Refused: new (message: string) => Error = VerifyRefused,
+): ArweaveNodePool | undefined {
+  const given = options.anchorFrom?.trim() ?? '';
+  if (given === '') return undefined;
+  let urls: string[];
+  try {
+    urls = parseNodeUrls(given);
+  } catch (error) {
+    throw new Refused(`--anchor-from: ${(error as Error).message}`);
   }
-  return body.indep_hash;
+  return new ArweaveNodePool({
+    urls,
+    timeoutMs:
+      whole(options.readTimeout, '--read-timeout') ?? DEFAULT_READ_TIMEOUT_MS,
+    // Long integers kept exact, or some headers could not be recomputed.
+    fetch: deps.fetch ?? exactJsonFetch,
+    ...(deps.lookupAll !== undefined ? { lookupAll: deps.lookupAll } : {}),
+    dedupeByAddress: true,
+  });
 }
 
-const height = (
+/** The sample a run draws: none without sources, or with every count 0. */
+export function sampleOptions(
+  options: {
+    sampleBlocks?: string;
+    sampleTxs?: string;
+    sampleFormat1?: string;
+    seed?: string;
+    concurrency?: string;
+  },
+  pool: ArweaveNodePool | undefined,
+  confirm: number,
+): SampleOptions | undefined {
+  const blocks =
+    whole(options.sampleBlocks, '--sample-blocks') ?? DEFAULT_SAMPLE_BLOCKS;
+  const txs = whole(options.sampleTxs, '--sample-txs') ?? DEFAULT_SAMPLE_TXS;
+  const format1 =
+    whole(options.sampleFormat1, '--sample-format1') ?? DEFAULT_SAMPLE_FORMAT1;
+  if (pool === undefined || (blocks === 0 && txs === 0 && format1 === 0)) {
+    return undefined;
+  }
+  return {
+    seed: whole(options.seed, '--seed') ?? crypto.randomInt(2 ** 31),
+    blocks,
+    txsPerStratum: txs,
+    format1PerStratum: format1,
+    v1BytesPerStratum: DEFAULT_SAMPLE_V1_BYTES,
+    concurrency:
+      whole(options.concurrency, '--concurrency') ?? DEFAULT_SAMPLE_CONCURRENCY,
+    confirm,
+  };
+}
+
+/** What the `--allow-*` flags accept. */
+export function allowances(options: {
+  allowUnanchored?: boolean;
+  allowUnbound?: boolean;
+  allowIncomplete?: boolean;
+  allowUnverifiedFormat1?: boolean;
+}): L1Allowances {
+  return {
+    unanchored: options.allowUnanchored === true,
+    unbound: options.allowUnbound === true,
+    incomplete: options.allowIncomplete === true,
+    unverifiedFormat1: options.allowUnverifiedFormat1 === true,
+  };
+}
+
+/**
+ * `--anchor-min`, at least 2 (the default): one machine never anchors an
+ * index, as it never refutes or attests a draw.
+ */
+export function anchorMin(
   value: string | undefined,
-  flag: string,
-): number | undefined => {
-  if (value === undefined) return undefined;
-  const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed < 0) {
-    throw new VerifyRefused(`${flag} must be a whole height, 0 or above`);
+  Refused: new (message: string) => Error = VerifyRefused,
+): number {
+  const n = value === undefined ? 2 : Number(value);
+  if (!Number.isInteger(n) || n < 2) {
+    throw new Refused('--anchor-min must be a whole number of at least 2');
   }
-  return parsed;
-};
+  return n;
+}
 
-export async function indexL1VerifyCLICommand(
-  options: IndexL1VerifyCLIOptions,
-  { log, fetchIndepHash = httpIndepHash, freeBytes }: IndexL1VerifyDeps,
-): Promise<JsonSerializable> {
-  // Bands are the consumer's view: a directory of them can be checked
-  // with no gateway and no `core.db`, which is the whole point of the
-  // format being content-addressed and signed.
-  if (
-    options.bandsDir !== undefined &&
-    options.bandsDir.length > 0 &&
-    options.coreDb === undefined
-  ) {
-    return verifyBandsCLI(options, log, freeBytes);
-  }
-  const coreDb = requiredStringFromOptions(options, 'coreDb');
-  const wantFrom = height(options.from, '--from');
-  const wantTo = height(options.to, '--to');
-  // Deduplicated, and trailing slashes removed first, or the same node
-  // listed twice satisfies --anchor-min on its own — which is precisely
-  // the single point of trust the anchor exists to remove.
-  const sources = [
-    ...new Set(
-      (options.anchorFrom ?? '')
-        .split(',')
-        .map((url) => url.trim().replace(/\/+$/, ''))
-        .filter((url) => url.length > 0),
-    ),
-  ];
-  const minSources =
-    options.anchorMin === undefined ? 2 : Number(options.anchorMin);
-  if (!Number.isInteger(minSources) || minSources < 1) {
-    throw new VerifyRefused('--anchor-min must be a positive whole number');
-  }
-
-  let db: Sqlite.Database;
-  try {
-    db = new Sqlite(coreDb, { readonly: true, fileMustExist: true });
-  } catch (error) {
-    throw new VerifyRefused(
-      `Cannot open ${coreDb}: ${(error as Error).message}`,
-    );
-  }
-  try {
-    const held = stableHeightRange(db);
-    if (held === undefined) {
-      throw new VerifyRefused(`${coreDb} holds no stable blocks to check`);
-    }
-    const [from, to] = chooseRange(held, {
-      ...(wantFrom !== undefined ? { from: wantFrom } : {}),
-      ...(wantTo !== undefined ? { to: wantTo } : {}),
-    });
-    log.info('Checking the L1 index', { coreDb, from, to });
-    const result = verifyRange(db, { from, to });
-
-    // Separate because it is the only check that reads every
-    // transaction rather than a sum over them, so it costs minutes
-    // where the rest cost seconds. Skipped on request for a quick pass.
-    let txRoots = { checked: 0, skipped: 0, seconds: 0 };
-    if (options.skipTxRoot !== true) {
-      const began = Date.now();
-      const out = await checkTxRoots(db, { from, to });
-      result.checks.push(out.check);
-      result.ok = result.ok && out.check.ok;
-      txRoots = {
-        checked: out.checked,
-        skipped: out.skipped,
-        seconds: (Date.now() - began) / 1000,
-      };
-      log.info('Recomputed tx_root', txRoots);
-    }
-
-    // Everything above is the index agreeing with itself. This is the
-    // only part that asks anyone else, and it is what turns the chain
-    // binding into a statement about the real Arweave chain.
-    let anchors: AnchorAnswer[] = [];
-    if (sources.length > 0) {
-      const wanted = anchorHeights(from, to);
-      const hashes = db.prepare(
-        'SELECT indep_hash FROM stable_blocks WHERE height = ?',
-      );
-      const ours = new Map<number, string>();
-      for (const h of wanted) {
-        const row = hashes.get(h) as { indep_hash: Buffer | null } | undefined;
-        if (row?.indep_hash != null) {
-          ours.set(h, row.indep_hash.toString('base64url'));
-        }
-      }
-      anchors = (
-        await Promise.all(
-          wanted.flatMap((h) =>
-            sources.map(async (url): Promise<AnchorAnswer> => {
-              try {
-                return {
-                  url,
-                  height: h,
-                  indepHash: await fetchIndepHash(url, h, ANCHOR_TIMEOUT_MS),
-                };
-              } catch (error) {
-                return { url, height: h, error: (error as Error).message };
-              }
-            }),
-          ),
-        )
-      ).flat();
-      const check = checkAnchors(ours, anchors, minSources);
-      result.checks.push(check);
-      result.ok = result.ok && check.ok;
-      log.info('Asked for anchors', {
-        heights: wanted,
-        sources: sources.length,
-        answered: anchors.filter((a) => a.indepHash !== undefined).length,
-      });
-    }
-    log.info('Checked the L1 index', {
-      ok: result.ok,
-      blocks: result.blocks,
-      seconds: Math.round(result.seconds),
-    });
-    const answer = {
-      coreDb,
-      heightRange: result.heightRange,
-      blocks: result.blocks,
-      anchored: result.anchored,
-      ...(result.anchorHeight !== undefined
-        ? { anchorHeight: result.anchorHeight }
-        : {}),
-      ...(result.weaveSize !== undefined
-        ? { weaveSize: result.weaveSize, accountedFor: result.accountedFor }
-        : {}),
-      txRootChecked: txRoots.checked,
-      txRootSkipped: txRoots.skipped,
-      txRootSeconds: Math.round(txRoots.seconds * 10) / 10,
-      merkleChecked: result.merkleChecked,
-      merkleSkipped: result.merkleSkipped,
-      accountingChecked: result.accountingChecked,
-      accountingSkipped: result.accountingSkipped,
-      ok: result.ok,
-      ...(anchors.length > 0
+/** A report as the command prints it: the checks' failures trimmed to their fields. */
+function printable(report: L1VerifyReport): Record<string, unknown> {
+  return {
+    ...report,
+    seconds: Math.round(report.seconds * 10) / 10,
+    checks: report.checks.map((c) => ({
+      name: c.name,
+      ok: c.ok,
+      detail: c.detail,
+      ...(c.failures !== undefined
         ? {
-            anchorSources: anchors.map((a) => ({
-              url: a.url,
-              height: a.height,
-              ...(a.indepHash !== undefined ? { indepHash: a.indepHash } : {}),
-              ...(a.error !== undefined ? { error: a.error } : {}),
+            failures: c.failures.map((f) => ({
+              height: f.height,
+              found: f.found,
+              expected: f.expected,
             })),
           }
         : {}),
-      checks: result.checks.map((c) => ({
-        name: c.name,
-        ok: c.ok,
-        detail: c.detail,
-        ...(c.failures !== undefined
+      ...(c.more !== undefined ? { more: c.more } : {}),
+    })),
+  };
+}
+
+export async function indexL1VerifyCLICommand(
+  options: IndexL1VerifyCLIOptions,
+  deps: IndexL1VerifyDeps,
+): Promise<JsonSerializable> {
+  const { log } = deps;
+  const wantFrom = whole(options.from, '--from');
+  const wantTo = whole(options.to, '--to');
+  const min = anchorMin(options.anchorMin);
+  const pool = anchorPool(options, deps);
+  const sample = sampleOptions(options, pool, min);
+  const accepted =
+    pool !== undefined && sample === undefined
+      ? ['--sample-blocks 0 --sample-txs 0']
+      : [];
+  const common = {
+    txRoot: options.skipTxRoot !== true,
+    ...(pool !== undefined ? { pool } : {}),
+    anchorMin: min,
+    ...(sample !== undefined ? { sample } : {}),
+    allow: allowances(options),
+    accepted,
+  };
+
+  const bandsMode =
+    options.bandsDir !== undefined &&
+    options.bandsDir.length > 0 &&
+    options.coreDb === undefined;
+  if (!bandsMode && options.publication !== undefined) {
+    throw new VerifyRefused(
+      '--publication binds bands: give --bands-dir, not --core-db',
+    );
+  }
+
+  let report: Record<string, unknown>;
+  let ok: boolean;
+  if (bandsMode) {
+    const bandsDir = options.bandsDir as string;
+    // A directory that was named must be there and readable: a run that
+    // reads nothing proves nothing.
+    try {
+      const stat = await fsp.stat(bandsDir);
+      if (!stat.isDirectory()) throw new Error('not a directory');
+      await fsp.readdir(bandsDir);
+    } catch (error) {
+      throw new VerifyRefused(
+        `--bands-dir ${bandsDir}: ${(error as NodeJS.ErrnoException).code ?? (error as Error).message}`,
+      );
+    }
+    const timeoutMs =
+      whole(options.readTimeout, '--read-timeout') ?? DEFAULT_READ_TIMEOUT_MS;
+    const publication = await resolvePublication(
+      options,
+      {
+        log,
+        timeoutMs,
+        ...(deps.registry !== undefined ? { registry: deps.registry } : {}),
+      },
+      VerifyRefused,
+    );
+    const session = await openBandsDuck({
+      ...(options.spillMax !== undefined ? { spillMax: options.spillMax } : {}),
+      ...(deps.freeBytes !== undefined ? { freeBytes: deps.freeBytes } : {}),
+      reserveBytes: spillReserveBytes(options.spillReserveGb),
+    });
+    try {
+      // The lookup check spills; with nothing to spill into it would fail
+      // in DuckDB and report sound bands as unreadable. Refuse first.
+      if (options.skipLookups !== true && session.spillCapBytes === 0) {
+        throw new VerifyRefused(
+          `no room to spill under ${path.dirname(session.spill)}: ${(session.freeBytes / 2 ** 30).toFixed(1)} GiB free, less the ${(spillReserveBytes(options.spillReserveGb) / 2 ** 30).toFixed(1)} GiB a run always leaves. Free space there, point TMPDIR elsewhere, lower --spill-reserve-gb, or --skip-lookups`,
+        );
+      }
+      for (const dir of session.removedStale) {
+        log.warn('Removed a spill folder a killed run left', { dir });
+      }
+      log.info('Checking bands', { bandsDir, spill: session.spill });
+      let out;
+      try {
+        out = await verifyBands(session.duck, bandsDir, {
+          ...common,
+          ...(wantFrom !== undefined ? { from: wantFrom } : {}),
+          ...(wantTo !== undefined ? { to: wantTo } : {}),
+          lookups: options.skipLookups !== true,
+          ...(publication !== undefined
+            ? {
+                publication: {
+                  document: publication.document,
+                  publisherKey: publication.publisherKey,
+                  ...(publication.index !== undefined
+                    ? { index: publication.index }
+                    : {}),
+                  ...(publication.keyFrom !== undefined
+                    ? { keyFrom: publication.keyFrom }
+                    : {}),
+                  ...(options.allowExpired === true
+                    ? { allowExpired: true }
+                    : {}),
+                  ...(deps.now !== undefined ? { now: deps.now } : {}),
+                },
+              }
+            : {}),
+        });
+      } catch (error) {
+        if (error instanceof BandsRefused) {
+          throw new VerifyRefused(error.message);
+        }
+        throw error;
+      }
+      log.info('Checked bands', { ok: out.ok, blocks: out.blocks });
+      ok = out.ok;
+      const { bands, ...rest } = out;
+      report = {
+        mode: 'bands-dir',
+        ...printable(rest as unknown as L1VerifyReport),
+        bands: bands.length,
+        bandIds: bands.map((b) => b.id),
+        ...(publication !== undefined
           ? {
-              failures: c.failures.map((f) => ({
-                height: f.height,
-                found: f.found,
-                expected: f.expected,
-              })),
+              publication: {
+                ...(out.publication ?? {}),
+                source: publication.source,
+              },
             }
           : {}),
-        ...(c.more !== undefined ? { more: c.more } : {}),
-      })),
-      // Everything, not just the streamed pass: tx_root runs outside
-      // `verifyRange`'s own timer and dominates a whole-chain run, so
-      // reporting that pass alone understated the cost tenfold.
-      seconds: Math.round((result.seconds + txRoots.seconds) * 10) / 10,
-      streamedPassSeconds: Math.round(result.seconds * 10) / 10,
-    };
-    // A failed check has to fail the command. `runCommand` prints a
-    // thrown result on stderr and exits 1; returning it would print the
-    // same JSON and exit 0, and a script would read a broken index as a
-    // good one.
-    if (!result.ok) throw answer;
-    return answer;
-  } finally {
-    db.close();
+      };
+    } finally {
+      await session.close();
+    }
+  } else {
+    const coreDb = requiredStringFromOptions(options, 'coreDb');
+    let db: Sqlite.Database;
+    try {
+      db = new Sqlite(coreDb, { readonly: true, fileMustExist: true });
+    } catch (error) {
+      throw new VerifyRefused(
+        `Cannot open ${coreDb}: ${(error as Error).message}`,
+      );
+    }
+    try {
+      const held = stableHeightRange(db);
+      if (held === undefined) {
+        throw new VerifyRefused(`${coreDb} holds no stable blocks to check`);
+      }
+      const [from, to] = chooseRange(held, {
+        ...(wantFrom !== undefined ? { from: wantFrom } : {}),
+        ...(wantTo !== undefined ? { to: wantTo } : {}),
+      });
+      log.info('Checking the L1 index', { coreDb, from, to });
+      const out = await verifyCoreDb(db, { ...common, from, to });
+      ok = out.ok;
+      report = { mode: 'core-db', coreDb, ...printable(out) };
+    } finally {
+      db.close();
+    }
   }
+  log.info('Checked the L1 index', { ok, seconds: report.seconds });
+  // A failed check has to fail the command. `runCommand` prints a thrown
+  // result on stderr and exits 1; returning it would print the same JSON
+  // and exit 0, and a script would read a broken index as a good one.
+  if (!ok) throw report;
+  return report as JsonSerializable;
 }

@@ -482,17 +482,62 @@ band's [lookup files](#lookup-file); it serves no gateway route.
 <a id="l1-audit"></a> **L1 Audit** — Checking the [`tx_root`](#tx-root) of
 blocks an index cannot check alone, with `ar-io-node index-l1-audit`. A
 format-1 transaction's `tx_root` leaf is the root of its data, which an index
-does not store, so about 13% of post-fork blocks need the data fetched. Ids
+does not store, so 208,812 of the 1,604,083 post-fork blocks in the
+published bands (none from height 2,000,000) need the data fetched. Ids
 are checked against the signatures they must be the SHA-256 of. Samples
 rather than sweeps, and the data source need not be trusted.
 
-<a id="l1-verify"></a> **L1 Verify** — Checking an L1 index against the
-weave size the chain commits to, with `ar-io-node index-l1-verify`. Below
-the 2.0 fork a block grew the weave by exactly its transactions'
-`data_size`, and the first post-2.0 block commits the running total, so
-one trusted block hash pins the size of every transaction beneath it.
-Proves nothing was invented, dropped or resized; does not prove which
-pre-2.0 block a transaction belonged to.
+<a id="l1-verify"></a> **L1 Verify** — Checking an L1 index (a `core.db`
+or a directory of bands) against the chain, with `ar-io-node
+index-l1-verify`: an [anchor](#l1-anchor) at the top block, the
+`hash_list_merkle` recurrence binding every post-2.0 block's hash, weave
+size and `tx_root` beneath it, a judge of every row, and a keyed sample of
+headers and signatures for what nothing else binds (transaction ids, their
+order and fields). It fails closed: what it cannot bind is reported
+[unbound](#l1-unbound) and fails the run unless an `--allow-*` flag
+accepts it.
+
+<a id="l1-anchor"></a> **Anchor (L1)** — The block an L1 verification
+binds to the real chain: fetched from at least two distinct machines (names
+sharing a resolved address count once), its identity hash recomputed from
+its own header fields for every era from the 2.0 fork (**anchor
+recomputation**, so a source cannot pair the real hash with fabricated
+fields), all agreeing, and equal to the index's row and transaction ids.
+Two gateways agreeing means their operators' upstream nodes agree, not two
+independent nodes.
+
+<a id="l1-unbound"></a> **Unbound (L1 verification)** — Blocks an L1
+verification could not bind, reported by class with the first heights and
+a reason, never passed silently: `pre20` (below the 2.0 fork, whose hash
+needs the full wallet list), `txRootFormat1` (a post-2.0 block holding a
+format-1 transaction with data, whose `tx_root` needs that data's root),
+`incomplete` (a link whose transaction, or a transaction whose owner's key,
+the index lacks). Each fails the run unless accepted (`--allow-unbound`,
+`--allow-unverified-format1`, `--allow-incomplete`, one flag per class).
+
+<a id="l1-attested"></a> **Attested (L1 sample)** — A sampled transaction
+whose fields its signature does not settle (an ECDSA transaction, whose
+owner is recovered from the signature; a format-1 transaction without a
+denomination, whose signed segment does not mark where one field ends and
+the next begins; one whose owner key the index lacks), checked instead as
+the same fields answered by at least two distinct machines. The sources' word, not a proof: counted as
+`txsAttested`.
+
+<a id="hash-2-0-of-1-0"></a> **2.0 hash of a 1.0 block** — What Arweave
+uses in place of a pre-2.0 block's hash, which needs the full wallet list
+to recompute: the 2.0–2.4 identity-hash rule applied to the 1.0 header with
+`tx_root` set to the block's 2.0 transition root and its transaction ids
+sorted. Arweave ships all 422,250 of them in `genesis_data/hash_list_1_0`
+(SHA-256 `d161502a13e64fa49bcb2425420bcdcd6a4407e488aca3e14ba254f16418ca6f`,
+pinned by `test/arweave-consensus-pin.ts`). Checking an index against it
+needs a [witness](#witness) per block with transactions; the verifier does
+not check it yet.
+
+<a id="witness"></a> **Witness (untrusted input)** — A value a verifier
+needs but the index does not hold, supplied by anyone: a pre-2.0 block's
+transition `tx_root`, a format-1 transaction's data root. It needs no
+trust, because a wrong one changes a hash it must reproduce (SHA-384
+preimage and collision resistance).
 
 <a id="fold"></a> **Fold** — Building a band from an earlier band's entries
 plus newer rows from the index, so entries the index has since dropped (such

@@ -322,17 +322,30 @@ characters), not its band id: the name comes from the files, so publishers
 of the same files agree on it. The folder's `band.json` says which heights
 it holds.
 
-To check what arrived against the chain's own commitments, run
-[`index-l1-verify`](cli.md#index-l1-verify) over the folder. It needs no
-gateway and no key, only a core image from release 85 or later (release 84
-and earlier have no `index-l1-verify`):
+To check what arrived against the chain, first rename each folder to its
+band id (the item's `ario:band`): a band's name is its identity, and
+[`index-l1-verify`](cli.md#index-l1-verify) and the importer refuse a folder
+not named for what it holds. Then run `index-l1-verify` over the folder.
+It needs no gateway, only a core image with this release's verifier.
+`--anchor-from` binds the bands to the chain (without it the run says it is
+not anchored, and fails unless `--allow-unanchored`), and `--publication`
+binds them to what their publisher signed:
 
 ```bash
-IMAGE=ghcr.io/ar-io/ar-io-core:latest   # release 85 or later
+IMAGE=ghcr.io/ar-io/ar-io-core:latest
 docker run --rm -u "$(id -u):$(id -g)" -v "$HOME/arweave-l1:/bands:ro" \
   -w /app --entrypoint /nodejs/bin/node "$IMAGE" \
-  /app/dist/cli/cli.js index-l1-verify --bands-dir /bands
+  /app/dist/cli/cli.js index-l1-verify --bands-dir /bands \
+  --anchor-from https://<gateway one>,https://<gateway two> \
+  --publication https://<publisher gateway>/ar-io/indexes/publication.json \
+  --publisher-key <the publisher's observer address>
 ```
+
+Today's `l1-3` bands report every block below the 2.0 fork, and the
+post-2.0 blocks holding a format-1 transaction with data (none from
+height 2,000,000), as `unbound`: read the result's `unbound` and
+`assurance`, and pass `--allow-unbound --allow-unverified-format1` only if
+that is enough for your use.
 
 Then query it where it lies, for example with DuckDB:
 
@@ -344,7 +357,9 @@ FROM read_parquet('~/arweave-l1/*/blocks.parquet');
 To load it into a gateway's `core.db` with
 [`index-l1-import`](cli.md#index-l1-import), rename each folder to its band
 id (the item's `ario:band`) first: the importer keys its ledger on band ids
-and passes over any other folder. A gateway is better served by the
+and refuses a folder that is not named for what it holds. A folder with no
+`band.json` (a retired copy, or one not finished arriving) is ignored and
+listed, never read. A gateway is better served by the
 index-swarm sidecar, which installs bands under their ids itself.
 
 ### Keeping up with the L1 index
@@ -612,7 +627,8 @@ files, so a transaction in it is found only by a scan.
 pointers, so a wallet's bytes stored and a tag's count need no table read.
 They carry the same trust as the tables: each file's digest is signed in
 the publication, and anyone can recompute them from the tables
-(`ar-io-node index-l1-verify --bands-dir` does).
+(`ar-io-node index-l1-verify --bands-dir` does, and checks each file is in
+its key order, which the `l1-3` digests alone do not show).
 
 A lookup file's `rowDigest` is taken as a table's, over its rows in the
 order of its "Sorted by" columns. In an `l1-3` band that order compares

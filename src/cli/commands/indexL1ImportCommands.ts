@@ -24,14 +24,29 @@ import {
   applyImportPragmas,
   ImportOutcome,
   ImportRefused,
+  type ImportVerification,
   runFill,
   runImport,
 } from '../../lib/parquet-l1/import.js';
+import { VerifyRefused } from '../../lib/parquet-l1/checks.js';
 import type { IndexL1ImportCLIOptions, JsonSerializable } from '../types.js';
 import { requiredStringFromOptions } from '../utils.js';
+import type { FetchLike } from '../../lib/onchain/arweave-nodes.js';
+import {
+  allowances,
+  anchorMin,
+  anchorPool,
+  openBandsDuck,
+  sampleOptions,
+  spillReserveBytes,
+} from './indexL1VerifyCommands.js';
 
 export interface IndexL1ImportDeps {
   log: Logger;
+  /** Injected in tests: how anchor sources are fetched from. */
+  fetch?: FetchLike;
+  /** Injected in tests: every address a source's host name resolves to. */
+  lookupAll?: (host: string) => Promise<string[]>;
 }
 
 /**
@@ -44,7 +59,10 @@ export const DEFAULT_CACHE_MIB = 1024;
 /** How long `--fill` waits for the gateway to release the write lock. */
 export const FILL_BUSY_TIMEOUT_MS = 60_000;
 
-/** DuckDB's spill directories beside `core.db`, one per run. */
+/**
+ * DuckDB's spill folders beside `core.db`, one per run; a folder a killed
+ * run left is removed once its heartbeat is a day old (`openBandsDuck`).
+ */
 const SPILL_PREFIX = '.duckdb-import-';
 
 /**
@@ -72,18 +90,10 @@ export function takeImportLock(coreDb: string): Sqlite.Database {
   return lock;
 }
 
-/** Removes the spill directories runs that were killed left behind. */
-async function removeStaleSpills(dir: string): Promise<void> {
-  for (const name of await fsp.readdir(dir)) {
-    if (name.startsWith(SPILL_PREFIX) || name === '.duckdb-import-tmp') {
-      await fsp.rm(path.join(dir, name), { recursive: true, force: true });
-    }
-  }
-}
-
 /** One band or range of a run, as the CLI contract reports it. */
 function describe(o: ImportOutcome) {
   return {
+    id: o.id,
     heightRange: o.heightRange,
     ...(o.heights !== undefined ? { heights: o.heights } : {}),
     result: o.result,
@@ -91,14 +101,47 @@ function describe(o: ImportOutcome) {
     // the JSON the CLI contract promises.
     ...(o.rows !== undefined ? { rows: o.rows } : {}),
     ...(o.reason !== undefined ? { reason: o.reason } : {}),
+    // What bound the heights before they were written, what was accepted,
+    // what is left unbound or unchecked, and what the sample detects.
+    ...(o.check !== undefined
+      ? {
+          boundBy: o.check.boundBy,
+          binding: o.check.binding.kind,
+          accepted: o.check.accepted,
+          unbound: JSON.parse(
+            JSON.stringify(o.check.unbound),
+          ) as JsonSerializable,
+          skipped: o.check.skipped,
+          assurance: o.check.assurance,
+          ...(o.check.sample !== undefined
+            ? {
+                sample: JSON.parse(
+                  JSON.stringify(o.check.sample),
+                ) as JsonSerializable,
+              }
+            : {}),
+        }
+      : {}),
     seconds: Math.round(o.seconds),
   };
 }
 
 export async function indexL1ImportCLICommand(
   options: IndexL1ImportCLIOptions,
-  { log }: IndexL1ImportDeps,
+  deps: IndexL1ImportDeps,
 ): Promise<JsonSerializable> {
+  const { log } = deps;
+  const pool = anchorPool(options, deps, ImportRefused);
+  // Checked before the database, lock and spill folder are opened, so a
+  // bad option leaves nothing held.
+  const min = anchorMin(options.anchorMin, ImportRefused);
+  let sample: ReturnType<typeof sampleOptions>;
+  try {
+    sample = sampleOptions(options, pool, min);
+  } catch (error) {
+    if (error instanceof VerifyRefused) throw new ImportRefused(error.message);
+    throw error;
+  }
   const bandsDir = requiredStringFromOptions(options, 'bandsDir');
   const coreDb = requiredStringFromOptions(options, 'coreDb');
   const maxBands =
@@ -153,19 +196,43 @@ export async function indexL1ImportCLICommand(
 
   // Without a temp directory DuckDB sorts entirely in memory whatever
   // `memory_limit` says, as the Parquet exporter's own comment records.
-  // Spill beside the database, not into the container's layer, in a
-  // directory of this run's own.
-  let spill: string | undefined;
-  const { Database } = await import('duckdb-async');
-  const duck = await Database.create(':memory:');
+  // The spill goes beside the database, in a folder of this run's own,
+  // capped by the free space there (`openBandsDuck`), and is removed
+  // however the run ends.
+  let session: Awaited<ReturnType<typeof openBandsDuck>>;
   try {
-    // Holding the lock, no other run is using a spill directory here: any
-    // left over is from a run that was killed, and goes.
-    await removeStaleSpills(path.dirname(coreDb));
-    spill = await fsp.mkdtemp(path.join(path.dirname(coreDb), SPILL_PREFIX));
-    await duck.exec(
-      `SET memory_limit = '1GB'; SET threads = 2; SET temp_directory = '${spill.replace(/'/g, "''")}'; SET max_temp_directory_size = '16GB'; SET autoinstall_known_extensions = false; SET autoload_known_extensions = false;`,
-    );
+    session = await openBandsDuck({
+      tmpRoot: path.dirname(coreDb),
+      prefix: SPILL_PREFIX,
+      ...(options.spillMax !== undefined ? { spillMax: options.spillMax } : {}),
+      reserveBytes: spillReserveBytes(options.spillReserveGb),
+    });
+  } catch (error) {
+    db.close();
+    lock.close();
+    throw error;
+  }
+  const duck = session.duck;
+  const verification: ImportVerification = {
+    ...(pool !== undefined ? { pool } : {}),
+    anchorMin: min,
+    allow: {
+      ...allowances(options),
+      unsampled: options.allowUnsampled === true,
+    },
+    ...(sample !== undefined ? { sample } : {}),
+  };
+  try {
+    // The directory named must be readable: one that is not is an error,
+    // never "nothing to import".
+    try {
+      const stat = await fsp.stat(bandsDir);
+      if (!stat.isDirectory()) throw new Error('not a directory');
+    } catch (error) {
+      throw new ImportRefused(
+        `--bands-dir ${bandsDir}: ${(error as NodeJS.ErrnoException).code ?? (error as Error).message}`,
+      );
+    }
     if (fill) {
       log.info('Filling', { coreDb, cacheMib });
       const run = await runFill({
@@ -173,6 +240,7 @@ export async function indexL1ImportCLICommand(
         duck,
         bandsDir,
         log,
+        verification,
         ...(maxBands !== undefined ? { limit: maxBands } : {}),
         ...(from !== undefined ? { from } : {}),
         ...(to !== undefined ? { to } : {}),
@@ -198,7 +266,9 @@ export async function indexL1ImportCLICommand(
           0,
         ),
         uncovered: run.uncovered,
-        ...(refused !== undefined ? { refused: refused.reason } : {}),
+        ...(refused !== undefined
+          ? { refused: refused.reason, refusal: refused.refusal ?? 'refused' }
+          : {}),
         ranges: run.outcomes.map(describe),
         seconds: Math.round((Date.now() - started) / 100) / 10,
       };
@@ -211,6 +281,7 @@ export async function indexL1ImportCLICommand(
       duck,
       bandsDir,
       log,
+      verification,
       ...(maxBands !== undefined ? { limit: maxBands } : {}),
       ...(from !== undefined ? { from } : {}),
       ...(to !== undefined ? { to } : {}),
@@ -235,11 +306,14 @@ export async function indexL1ImportCLICommand(
         0,
       ),
       ...(run.holes.length > 0 ? { holes: run.holes } : {}),
+      ...(run.republished.length > 0 ? { republished: run.republished } : {}),
       skipped: run.skipped.map((b) => ({
         heightRange: b.heightRange,
         reason: b.reason,
       })),
-      ...(refused !== undefined ? { refused: refused.reason } : {}),
+      ...(refused !== undefined
+        ? { refused: refused.reason, refusal: refused.refusal ?? 'refused' }
+        : {}),
       bands: run.outcomes.map(describe),
       seconds: Math.round((Date.now() - started) / 100) / 10,
     };
@@ -249,10 +323,7 @@ export async function indexL1ImportCLICommand(
     if (refused !== undefined) throw answer;
     return answer;
   } finally {
-    await duck.close();
-    if (spill !== undefined) {
-      await fsp.rm(spill, { recursive: true, force: true });
-    }
+    await session.close();
     db.pragma('locking_mode = NORMAL');
     db.close();
     lock.close();

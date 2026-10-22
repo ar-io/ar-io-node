@@ -61,10 +61,26 @@ export interface IndexL1ImportCLIOptions extends GlobalCLIOptions {
   cacheMib?: string;
   from?: string;
   to?: string;
+  anchorFrom?: string;
+  anchorMin?: string;
+  allowUnanchored?: boolean;
+  allowUnbound?: boolean;
+  allowUnverifiedFormat1?: boolean;
+  allowIncomplete?: boolean;
+  allowUnsampled?: boolean;
+  sampleBlocks?: string;
+  sampleTxs?: string;
+  sampleFormat1?: string;
+  seed?: string;
+  concurrency?: string;
+  readTimeout?: string;
+  spillMax?: string;
+  spillReserveGb?: string;
 }
 
 export interface IndexL1VerifyCLIOptions extends GlobalCLIOptions {
   spillMax?: string;
+  spillReserveGb?: string;
   coreDb?: string;
   bandsDir?: string;
   skipTxRoot?: boolean;
@@ -73,6 +89,21 @@ export interface IndexL1VerifyCLIOptions extends GlobalCLIOptions {
   to?: string;
   anchorFrom?: string;
   anchorMin?: string;
+  allowUnanchored?: boolean;
+  allowUnbound?: boolean;
+  allowUnverifiedFormat1?: boolean;
+  allowIncomplete?: boolean;
+  sampleBlocks?: string;
+  sampleTxs?: string;
+  sampleFormat1?: string;
+  seed?: string;
+  concurrency?: string;
+  readTimeout?: string;
+  publication?: string;
+  publisherKey?: string;
+  registryUrl?: string;
+  index?: string;
+  allowExpired?: boolean;
 }
 
 export interface IndexL2VerifyCLIOptions extends GlobalCLIOptions {

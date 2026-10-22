@@ -15,6 +15,8 @@ import * as path from 'node:path';
 import type { Database } from 'duckdb-async';
 
 import {
+  digestLookupInFileOrder,
+  LookupOrderError,
   LookupDescription,
   TableFiles,
   verifyLookup,
@@ -62,7 +64,15 @@ export async function writeBandLookups(
 }
 
 /**
- * Checks every lookup a band declares against its `band.json` and its tables.
+ * Checks every lookup a band declares against its `band.json` and its tables,
+ * and that each file is in its key order.
+ *
+ * `l1-3` declares its lookup digests in `legacy-text` order, which re-sorts
+ * the file before digesting it, so a file whose rows are all there but out
+ * of order (one a reader's binary search over its row groups would miss
+ * keys in) would match its digest. The file is first read as it is, each
+ * row checked to come after the one before in the key's numeric order —
+ * one streaming pass, no sort — and only then are the digests compared.
  *
  * @returns what is wrong, by file, empty when every lookup matches.
  */
@@ -79,15 +89,21 @@ export async function verifyBandLookups(
       problems.push(`${spec.file}: not described in the band`);
       continue;
     }
+    const file = path.join(bandDir, spec.file);
+    try {
+      await digestLookupInFileOrder(duck, spec, file);
+    } catch (error) {
+      problems.push(
+        error instanceof LookupOrderError
+          ? error.message
+          : `${spec.file}: could not be read (${(error as Error).message})`,
+      );
+      continue;
+    }
     problems.push(
-      ...(await verifyLookup(
-        duck,
-        spec,
-        path.join(bandDir, spec.file),
-        tables,
-        declared,
-        { order: PARQUET_L1_LOOKUP_DIGEST_ORDER },
-      )),
+      ...(await verifyLookup(duck, spec, file, tables, declared, {
+        order: PARQUET_L1_LOOKUP_DIGEST_ORDER,
+      })),
     );
   }
   return problems;

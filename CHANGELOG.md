@@ -4,6 +4,152 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased]
+
+### Added
+
+- **`index-l1-verify` and `index-l1-import` options to bind and to accept.**
+  `index-l1-verify` takes `--sample-blocks`, `--sample-txs`, `--seed`,
+  `--concurrency`, `--read-timeout`, `--allow-unanchored`,
+  `--allow-unbound`, `--allow-unverified-format1`, `--spill-reserve-gb`, and
+  with `--bands-dir` `--publication`, `--publisher-key`, `--registry-url`,
+  `--index` and `--allow-expired`; its result has one shape in both views
+  (`anchor`, `unbound`, `sample`, `skipped`, `accepted`, `assurance`).
+  Both take `--allow-incomplete` (blocks whose transactions or owners'
+  keys the index lacks, no longer under `--allow-unbound`) and
+  `--sample-format1` (format-1 transactions drawn from blocks whose
+  `tx_root` cannot be recomputed, default 200).
+  `index-l1-import` takes `--anchor-from`, `--anchor-min`, the `--allow-*`
+  flags, `--allow-unsampled`, the `--sample-*` options, `--seed`,
+  `--concurrency`, `--read-timeout`, `--spill-max` and
+  `--spill-reserve-gb`, and reports per band what bound it, what it
+  accepted, what is unbound or skipped, the sample and the assurance. New
+  env vars `L1_BAND_IMPORT_ALLOW_UNVERIFIED` (default false; not
+  `--allow-incomplete`), `L1_BAND_IMPORT_SAMPLE_FROM` (default the trusted
+  node and trusted gateways) and `L1_BAND_IMPORT_ALLOW_UNSAMPLED` (default
+  false). A core migration adds `binding` and `accepted` to
+  `parquet_l1_imports`. See [docs/cli.md](docs/cli.md#index-l1-verify).
+
+### Fixed
+
+- **`index-l1-verify` and `index-l1-import` could pass, or write, an L1
+  index that was not the chain's; both now fail closed.** Three audits
+  (2026-10-22) found ways through. Fixed:
+  - The anchor compared only the top block's hash: a fabricated chain
+    under the real top hash passed with two sources agreeing, a NULL hash
+    at the anchor height compared nothing, the same machine under two
+    names counted twice, and without `--anchor-from` the result still
+    said `anchored: true`. Each source's header is now fetched whole, its
+    hash recomputed from its own fields (every era from the 2.0 fork), at
+    least two distinct machines must agree, and the index's row and
+    transaction ids must equal it. Without an anchor the run says
+    `anchored: false` and fails unless `--allow-unanchored`.
+  - Blocks holding a format-1 transaction with data were skipped from
+    `tx_root` and counted as passing, and pre-2.0 blocks (whose hash
+    cannot be recomputed) were described as bound by the anchor. Both are
+    now reported in `unbound` and fail unless `--allow-unverified-format1`
+    or `--allow-unbound` accepts them. Every published `l1-3` band below
+    height 2,000,000 holds such blocks.
+  - Transaction ids, their order, and every transaction field were bound
+    by nothing. Positions, counts, tags and owners are now checked against
+    the links and wallets, and a keyed uniform sample of block headers and
+    transaction signatures (`--sample-blocks`, `--sample-txs`) checks the
+    rest, with the share of forged rows it would catch stated in `sample`.
+  - `--bands-dir` read rows by a glob (so retired copies, second
+    generations and stray directories were read, and sound sets failed),
+    read only blocks and a few transaction columns, never checked
+    `band.json`'s row counts and digests, column layouts, lookup file
+    order, rows outside a band, band names, or a publication, silently
+    dropped an unreadable edge band, clamped `--from`/`--to`, and ignored
+    `--anchor-*`. Each band is now read by its own paths and checked whole,
+    with `--publication` binding, and the anchor and sample run as for
+    `--core-db`.
+  - NULLs were read as zero or passed. They now fail `nulls`.
+  - The import checked nothing against the chain: `--fill` spliced any
+    band beneath held blocks, and the worker's fill did the same. Every
+    band is now checked before a row is written, and bound by the block the
+    gateway holds above it or by `--anchor-from`. A band refused part way
+    with the gateway stopped left its rows behind and reported no hole; it
+    is now cleared, and `holes` read from what the database holds. A band
+    id's digest was never checked and a republished band was skipped as
+    imported; both are now checked. A missing or unreadable bands
+    directory made `--fill` exit 0; it is now an error, and the worker
+    counts it `failed`.
+  - The default `core.db` range stopped at the 2.0 fork; it is now the
+    whole held range.
+  - A second review round found more, all fixed. A refused import deleted
+    rows the gateway held before it (its own, or a republished band's);
+    it now removes only what it committed, and over held rows writes one
+    transaction. A republished band outside `--from`/`--to` was imported.
+    The import and fill drew no sample, so forged transaction fields
+    passed; they now sample and refuse without one unless
+    `--allow-unsampled`. A range imported unanchored or accepting a gap
+    vouched for bands below it; the ledger now records each range's
+    binding. Invented transaction ids no source holds came back
+    unreadable rather than failing; one lying source could fail a run.
+    An ECDSA transaction's fields, and a format-1 transaction's field
+    boundaries, are not bound by its signature; they are now checked
+    against two machines' answers (`txsAttested`) and the consensus rules
+    (canonical decimals, target and anchor lengths, no format 1 from
+    height 2,000,000). A sampled header at another height passed.
+    `--allow-unbound` also accepted incomplete blocks. A format-2
+    transaction relabelled format 1 escaped `tx_root` unsampled. The first
+    block's link and size were never checked. A tag row filed under a
+    transaction id at another height passed `tag_count`. A band whose
+    `band.json` was removed silently shrank the set. `publisherBound` was
+    true on a failed publication. `detects` ignored unreadable draws. The
+    worker re-verified the same refused bands every interval; it now backs
+    off until they change.
+  - A third round found false refutations and more fail-opens, all fixed.
+    Two sources answering 404 while a third that holds the item was busy
+    refuted an honest index; absence now refutes only when every source
+    was heard. A 404 refuted a format-1 transaction, though Arweave nodes
+    now hide some real ones from `GET /tx`; it no longer does.
+    `--anchor-min 1` let one machine refute a draw, or anchor the index on
+    its own; `--anchor-min` now refuses anything below 2, and the sample warns when its sources are fewer. A sample that could
+    not be read was reported as refuting the bands; it is now
+    `refusal: "unreadable"`, and the worker retries it at the normal
+    interval (`l1_band_import_runs_total{result="unreadable"}`).
+    Transactions below the 2.0 fork were never sampled; they now are.
+    `--sample-txs 0` (and `--sample-format1 0` over accepted format-1
+    blocks) imported without `--allow-unsampled`. A draw whose owner key
+    the index lacked was never asked about. A format-1 transaction past
+    the 10 MiB limit, or relabelled and past the byte budget, passed as
+    unreadable. A block an unfinished import wrote vouched for the band
+    below it. A fill cleared rows outside the unfinished run it redid. The
+    disk check ignored the write-ahead log of a band written over held
+    rows. The default sample sources included gateways marked
+    `trusted: false`, and a redirect could make one machine count as two.
+    Fork gates on transaction rules were one block early, as the chain
+    validates a block's transactions with the height of the block below.
+  - A fourth round found a false refusal of real mainnet data and more,
+    all fixed. RSA-PSS signatures were checked by OpenSSL, which is
+    stricter than Arweave's `rsa_pss:verify` and rejected real mined
+    transactions (`SnN5f1fBk3hD-_PSnFBFDze-kMBU-NFIKYWvrTEQWTo` at
+    1,602,352); they are now checked by a port of Arweave's own rule (and
+    its pre-2.4 legacy form), pinned. A source whose signatures did not
+    verify could stop a survey early, and refuted draws were counted as
+    proven (now `txsRefuted`, `format1Refuted`). Invented format-1 ids
+    passed as possibly hidden; their block is now asked whether it lists
+    them. The unreadable cap applied over the whole range, so an
+    unreadable band passed beside readable ones; it now applies per band.
+    A draw lacking its owner key was attested whatever owner the index
+    named; the owner address is now compared. The format-1 byte budget is
+    now 4 GB a band. The import refuses sources fewer than two machines
+    up front, treats an anchor nobody answered as an outage, settles
+    unfinished ledger rows that later imports covered (a range of another
+    grid spanning two bands was redone for ever), and its disk check
+    counts `missing_transactions` too. The worker backs off a fill whose
+    sources could not be read, up to two hours.
+  - A fifth round: an invented format-1 id past the byte budget was never
+    checked against its block, and one in a block the chain does not have
+    stayed unreadable; both are now refuted. Real pre-2.4 (legacy RSA-PSS)
+    and ECDSA transactions are now in the tests.
+
+  Gateways with `L1_BAND_IMPORT_ENABLED=true` now refuse today's `l1-3`
+  bands below height 2,000,000 unless `L1_BAND_IMPORT_ALLOW_UNVERIFIED=true`.
+  See [docs/cli.md](docs/cli.md#index-l1-verify).
+
 ## [Release 86] - 2026-10-22
 
 This is an **urgent, recommended release** focused on **the Node.js

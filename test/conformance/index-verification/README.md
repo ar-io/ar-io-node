@@ -3,16 +3,18 @@
 The executable form of the rules in
 [docs/index-verification.md](../../../docs/index-verification.md): a set of
 cases, each a set of `parquet-l2` bands (with, as the case says, a signed
-publication or an L1 index) or a script of Arweave node answers, with the
-verdict a verifier MUST give. Every attack and probe found against
-`index-l2-verify` is a case here, beside honest cases that MUST verify,
+publication or an L1 index), a set of `parquet-l1` bands (with, as the case
+says, a signed publication or scripted Arweave answers for its anchor and
+samples), or a script of Arweave node answers, with the verdict a verifier
+MUST give. Every attack and probe found against `index-l2-verify` and
+`index-l1-verify` is a case here, beside honest cases that MUST verify,
 including honest data seen through faulty nodes.
 
 | Verdict    | Means |
 | ---------- | ----- |
 | `verified` | every check that ran passed (`ok: true`) |
 | `refuted`  | something was proven wrong: a check failed, or the set or publication was refused outright (`refused`) |
-| `unknown`  | nothing was proven wrong, but not enough could be checked: an on-chain check that did not pass with no entry wrong (too many unchecked, nothing verified, or nothing drawn) |
+| `unknown`  | nothing was proven wrong, but not enough could be checked: an on-chain check that did not pass with no entry wrong (too many unchecked, nothing verified, or nothing drawn); for L1, see "L1 verdicts" |
 
 `expect.failing` is the exact set of checks that fail: no more, no fewer.
 On-chain cases may pin what a pass is stated to mean:
@@ -46,7 +48,8 @@ build what it describes as specified
 below, run your verifier, and compare your verdict, failing checks and
 reason with `expect`. A conforming implementation gives the same for every
 case. Common fields: `id`, `description`, `tampered` (what was changed from
-an honest set), `kind` (`bands` or `onchain`), `expect`.
+an honest set), `kind` (`bands`, `onchain`, `l1-bands` or `l1-anchor`),
+`expect`.
 
 ### `kind: "bands"`: building the bands
 
@@ -311,6 +314,117 @@ nodes, with these pool semantics:
 The verdict is `verified` when the check passes; `refuted` when any entry is
 wrong; `unknown` otherwise (none wrong, and too many unchecked, or none ok,
 or nothing drawn).
+
+### `kind: "l1-bands"` and `kind: "l1-anchor"`: L1 bands
+
+`cases/l1-bands.json` and `cases/l1-anchor.json`. Both start from one honest
+chain and its bands; `l1-bands` cases tamper with the bands (and, with
+`publication`, bind them to a signed publication); `l1-anchor` cases also
+anchor and sample them against scripted Arweave nodes. `l1-harness.ts` is
+this implementation's builder.
+
+**The honest chain.** 21 blocks, heights 1,899,999 to 1,900,019 (the 2.9
+era), as `test/parquet-l1-core-db.ts` builds them with `verifiable: true`:
+
+- height `h` holds `h mod 4` transactions, all format 2, with
+  `data_size` 1000, 2000, 3000 by `block_transaction_index`, a random 32-byte
+  `data_root` and `last_tx`, quantity `500000000000000000`, reward `42`, no
+  target, and two tags (`Content-Type: text/plain`, then
+  `Name-1: value-<h>-<index>-1`);
+- every transaction is signed by one RSA key (RSA-PSS, SHA-256, salt 32)
+  over its v2 segment (`deep_hash(["2", owner, target, quantity, reward,
+  last_tx, tags, data_size, data_root])`); its id is the SHA-256 of the
+  signature; the signature is not in the band (as on mainnet), only served;
+- the weave grows by each block's raw `data_size` (`padded: false`); each
+  block's `tx_root`, `hash_list_merkle` and `previous_block` follow
+  Arweave's rules from the block below; difficulty `1`, cumulative `2`,
+  `last_retarget` 3, reward pool `4`, USD rates `1/10`, no wallet list;
+- each block's `indep_hash` is the hash of a 2.9-era header built from its
+  stored fields, with the fields no index stores (VDF, proofs, block
+  signature, reward key of 512 bytes) filler derived from the height
+  (`syntheticHeader` in `test/parquet-l1-headers.ts`), so the header
+  recomputes as `ar_block` computes it.
+
+It is exported by the real exporter as two bands, heights 1,900,000 to
+1,900,009 and 1,900,010 to 1,900,019, each named by its real id
+(`l1-h<from>-<to>-<tag>-<digest>`) for one publisher wallet. Bands are
+referred to by index (`band`: 0 is the lower).
+
+**`ops`** change the bands before signing, **`after`** after it, in order:
+
+| op | change |
+| -- | ------ |
+| `republish` | every table rewritten in its order, band.json's rows and digests recomputed, the lookups rebuilt and described, the directory renamed to the id they give: a malicious publisher's self-consistent band |
+| `rewrite` | a table replaced by `select` over `SRC` (its rows), layout columns kept |
+| `setFormat` | the transaction at `height`, `bti` given `format` |
+| `nullCell` | `column` of `table` set NULL where `where` |
+| `dropLink` | the link at `height`, `bti` removed |
+| `moveTx` | a block's transactions reversed in `block_transaction_index`; with `links`, its links too |
+| `editBlockField` | `column` of the block at `height` set to the SQL `value` |
+| `inventTx` | a format-2, zero-size transaction appended to the block at `height`, linked, `tx_count` raised |
+| `editTag` | every tag with `tag_index` 1 at `height` given the value `forged` |
+| `setQuantity` | every transaction at `height` given `quantity` |
+| `forgeWallet` | every wallet's key replaced with `0xDEAD` |
+| `dropWallet` | the wallets table emptied |
+| `strayRow` | a table's rows duplicated `shift` heights up |
+| `dropColumn` | a table rewritten with only the columns in `keep` |
+| `reorderLookup` | a lookup rewritten in descending key order, row groups of 2 |
+| `relookup` | the lookups rebuilt from the (tampered) tables and described in band.json, the table digests left |
+| `writeFile`, `removeFile`, `truncate` (to half), `appendByte` | a band's `file` |
+| `renameDir` | the band's directory renamed `name`; `RENAME_DIGEST` keeps the name with digest `000000000000` |
+| `swapGeneration` | two installed generations `<id>~a` and `<id>~b` (the newer); with `differ`, `~b` holds a forged tag, republished under the old id |
+| `retireCopy` | a copy `<id>~retired` with no band.json, as a retired band is left |
+| `strayDir` | a directory `stray` holding only a copy of the band's `blocks.parquet` |
+| `removeBand` | the band's directory removed |
+| `rechain` | every block hash below the top replaced, each `previous_block` and `hash_list_merkle` rebuilt to match, every band republished: a fabricated chain under the real top hash |
+
+**`publication`** (`{}`, or `{ "omit": [band…] }`) is a publication of
+index `parquet-l1` (kind `parquet-l1`), sequence 7, issued
+2026-10-20T00:00:00Z, expiring 2099-01-01T00:00:00Z, by the bands'
+publisher wallet, listing each band (but those omitted) with every file but
+dot-files by name, size and SHA-256, signed by a fresh Ed25519 key given as
+the publisher key.
+
+**`options`**: `from`, `to`, `lookups` (false: skipped), `allowUnanchored`,
+`allowUnbound`, `allowIncomplete`, `allowUnverifiedFormat1`, `anchorMin`
+(default 2), and `sample` (`{ blocks, txs, format1? }`: headers drawn over
+the range, signatures drawn per band, format-1 transactions drawn per band
+from blocks whose `tx_root` cannot be recomputed; seed 1, a format-1 byte
+budget of 1 MB). `publisherBound` is true only when the publication check
+passed. `l1-bands` cases give no
+nodes, so they are unanchored and pass only with `allowUnanchored`.
+
+**`nodes`** (`l1-anchor`): each `{ name, answer }` is a source at
+`http://<name>.test`, answering `/block/height/N`, `/block/hash/H` and
+`/tx/{id}` (every field and the signature) from the honest chain, as `answer` says: `honest`; `missing`
+(404 for everything); `otherBlock` (`/block/height/N` answered with the
+block at `N - 1`); `alteredUnhashed` (block headers with `weave_size` one
+higher, `indep_hash` unchanged); `rehashedMerkle` (block headers whose
+`hash_list_merkle` is the SHA-384 of the real one and whose `indep_hash` is
+recomputed to match, the same from every such node); `unreachable` (the
+connection fails). Each name resolves to an address of its own, except
+those grouped in **`shared`** (`[["a", "b"]]`: one address for both).
+
+`expect` may also give `anchored`, `duplicates` (installed copies read
+once), `ignored` (entries passed over unread) and `unbound` (the unbound
+classes reported: `pre20`, `txRootFormat1`, `incomplete`).
+
+#### L1 verdicts
+
+`verified` when the result is `ok: true` (gaps the options accept, listed
+in `accepted`, included). `refuted` when the set is refused outright
+(`refused`) or any failing check shows the index wrong. `unknown` when
+every failing check only leaves something unestablished:
+
+- `unbound`: blocks nothing binds, not accepted;
+- `anchor`, unless the index is shown wrong by it: not anchored because no
+  source was given, too few distinct machines answered with a header that
+  recomputes, or the sources disagree or served headers that do not
+  recompute. The anchor refutes when an agreed, recomputed header differs
+  from the index's row or transaction ids (`mismatches`), or when the index
+  holds no block, or no `indep_hash`, at the anchor height;
+- `sample`, when every failure is a share of draws that could not be read;
+  a drawn header or signature that contradicts the index refutes.
 
 ## Changing verification code
 
