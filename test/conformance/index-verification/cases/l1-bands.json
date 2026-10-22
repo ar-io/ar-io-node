@@ -1,0 +1,673 @@
+[
+  {
+    "id": "l1-bands-honest",
+    "description": "Two sound bands of a verifiable chain, checked without an anchor, which is accepted",
+    "tampered": "nothing",
+    "kind": "l1-bands",
+    "options": {
+      "allowUnanchored": true
+    },
+    "expect": {
+      "verdict": "verified",
+      "failing": []
+    }
+  },
+  {
+    "id": "l1-bands-unanchored",
+    "description": "Two sound bands checked with no anchor source and no --allow-unanchored",
+    "tampered": "nothing (no anchor)",
+    "kind": "l1-bands",
+    "expect": {
+      "verdict": "unknown",
+      "check": "anchor",
+      "failing": [
+        "anchor"
+      ],
+      "anchored": false
+    }
+  },
+  {
+    "id": "l1-bands-wallets-links",
+    "description": "A2: a wallet's key replaced and every link dropped, band.json left as published",
+    "tampered": "wallets.public_modulus, block_transactions emptied",
+    "kind": "l1-bands",
+    "options": {
+      "allowUnanchored": true
+    },
+    "ops": [
+      {
+        "op": "forgeWallet",
+        "band": 0
+      },
+      {
+        "op": "rewrite",
+        "band": 0,
+        "table": "block_transactions",
+        "select": "SELECT * FROM SRC WHERE false"
+      }
+    ],
+    "expect": {
+      "verdict": "refuted",
+      "check": "tables",
+      "failing": [
+        "tables",
+        "position",
+        "tx_count",
+        "wallets"
+      ]
+    }
+  },
+  {
+    "id": "l1-bands-tags-relookup",
+    "description": "A3: a tag value forged and the lookups rebuilt and described to match, the table digests left",
+    "tampered": "tags.tag_value, lookups rebuilt",
+    "kind": "l1-bands",
+    "options": {
+      "allowUnanchored": true
+    },
+    "ops": [
+      {
+        "op": "editTag",
+        "band": 0,
+        "height": 1900003
+      },
+      {
+        "op": "relookup",
+        "band": 0
+      }
+    ],
+    "expect": {
+      "verdict": "refuted",
+      "check": "tables",
+      "failing": [
+        "tables"
+      ]
+    }
+  },
+  {
+    "id": "l1-bands-unreadable-edge",
+    "description": "A4: the top band's band.json does not parse",
+    "tampered": "band.json of the top band",
+    "kind": "l1-bands",
+    "options": {
+      "allowUnanchored": true
+    },
+    "ops": [
+      {
+        "op": "writeFile",
+        "band": 1,
+        "file": "band.json",
+        "text": "{not json"
+      }
+    ],
+    "expect": {
+      "verdict": "refuted",
+      "check": "files",
+      "failing": [
+        "files"
+      ]
+    }
+  },
+  {
+    "id": "l1-bands-range-beyond",
+    "description": "A5: --from and --to asked beyond the bands",
+    "tampered": "nothing (heights asked for that no band holds)",
+    "kind": "l1-bands",
+    "options": {
+      "allowUnanchored": true,
+      "from": 0,
+      "to": 99999999
+    },
+    "expect": {
+      "verdict": "refuted",
+      "check": "coverage",
+      "failing": [
+        "coverage",
+        "contiguous"
+      ]
+    }
+  },
+  {
+    "id": "l1-bands-lookup-order",
+    "description": "A6: a lookup file rewritten out of its key order, every row kept",
+    "tampered": "lookup_tx_id.parquet row order",
+    "kind": "l1-bands",
+    "options": {
+      "allowUnanchored": true
+    },
+    "ops": [
+      {
+        "op": "reorderLookup",
+        "band": 0,
+        "lookup": "tx_id"
+      }
+    ],
+    "expect": {
+      "verdict": "refuted",
+      "check": "lookups",
+      "failing": [
+        "lookups"
+      ]
+    }
+  },
+  {
+    "id": "l1-bands-rows-outside",
+    "description": "A7: blocks and transactions duplicated 5,000 heights above the band, outside every band",
+    "tampered": "blocks, transactions",
+    "kind": "l1-bands",
+    "options": {
+      "allowUnanchored": true,
+      "lookups": false
+    },
+    "ops": [
+      {
+        "op": "strayRow",
+        "band": 0,
+        "table": "transactions",
+        "shift": 5000
+      },
+      {
+        "op": "strayRow",
+        "band": 0,
+        "table": "blocks",
+        "shift": 5000
+      }
+    ],
+    "expect": {
+      "verdict": "refuted",
+      "check": "tables",
+      "failing": [
+        "tables"
+      ]
+    }
+  },
+  {
+    "id": "l1-bands-format1-flip",
+    "description": "A8: a format-2 transaction with data relabelled format 1, republished so every digest matches",
+    "tampered": "transactions.format, republished",
+    "kind": "l1-bands",
+    "options": {
+      "allowUnanchored": true
+    },
+    "ops": [
+      {
+        "op": "setFormat",
+        "band": 0,
+        "height": 1900003,
+        "bti": 0,
+        "format": 1
+      },
+      {
+        "op": "republish",
+        "band": 0
+      }
+    ],
+    "expect": {
+      "verdict": "unknown",
+      "check": "unbound",
+      "failing": [
+        "unbound"
+      ],
+      "unbound": [
+        "txRootFormat1"
+      ]
+    }
+  },
+  {
+    "id": "l1-bands-format1-flip-accepted",
+    "description": "A8: the same relabelled band, format-1 blocks accepted (--allow-unverified-format1): the gap is accepted, not hidden",
+    "tampered": "transactions.format, republished",
+    "kind": "l1-bands",
+    "options": {
+      "allowUnanchored": true,
+      "allowUnverifiedFormat1": true
+    },
+    "ops": [
+      {
+        "op": "setFormat",
+        "band": 0,
+        "height": 1900003,
+        "bti": 0,
+        "format": 1
+      },
+      {
+        "op": "republish",
+        "band": 0
+      }
+    ],
+    "expect": {
+      "verdict": "verified",
+      "failing": [],
+      "unbound": [
+        "txRootFormat1"
+      ]
+    }
+  },
+  {
+    "id": "l1-bands-columns-dropped",
+    "description": "A9: transactions.parquet holds 8 of its 17 columns",
+    "tampered": "transactions.parquet columns",
+    "kind": "l1-bands",
+    "options": {
+      "allowUnanchored": true
+    },
+    "ops": [
+      {
+        "op": "dropColumn",
+        "band": 0,
+        "table": "transactions",
+        "keep": [
+          "id",
+          "block_transaction_index",
+          "height",
+          "format",
+          "data_size",
+          "data_root",
+          "owner_address",
+          "target"
+        ]
+      }
+    ],
+    "expect": {
+      "verdict": "refuted",
+      "check": "schema",
+      "failing": [
+        "schema",
+        "contiguous",
+        "rows"
+      ]
+    }
+  },
+  {
+    "id": "l1-bands-null-top-hash",
+    "description": "A10: NULL indep_hash on the top block, republished",
+    "tampered": "blocks.indep_hash, republished",
+    "kind": "l1-bands",
+    "options": {
+      "allowUnanchored": true
+    },
+    "ops": [
+      {
+        "op": "nullCell",
+        "band": 1,
+        "table": "blocks",
+        "column": "indep_hash",
+        "where": "height = 1900019"
+      },
+      {
+        "op": "republish",
+        "band": 1
+      }
+    ],
+    "expect": {
+      "verdict": "refuted",
+      "check": "nulls",
+      "failing": [
+        "nulls"
+      ]
+    }
+  },
+  {
+    "id": "l1-bands-null-tx-fields",
+    "description": "A10: NULL format on a one-transaction block, republished",
+    "tampered": "transactions.format, republished",
+    "kind": "l1-bands",
+    "options": {
+      "allowUnanchored": true,
+      "lookups": false
+    },
+    "ops": [
+      {
+        "op": "nullCell",
+        "band": 0,
+        "table": "transactions",
+        "column": "format",
+        "where": "height = 1900001"
+      },
+      {
+        "op": "republish",
+        "band": 0
+      }
+    ],
+    "expect": {
+      "verdict": "refuted",
+      "check": "nulls",
+      "failing": [
+        "nulls"
+      ]
+    }
+  },
+  {
+    "id": "l1-bands-two-generations",
+    "description": "A11: two installed generations of one band with the same tables",
+    "tampered": "nothing (a second copy, <id>~a and <id>~b)",
+    "kind": "l1-bands",
+    "options": {
+      "allowUnanchored": true
+    },
+    "ops": [
+      {
+        "op": "swapGeneration",
+        "band": 0
+      }
+    ],
+    "expect": {
+      "verdict": "verified",
+      "failing": [],
+      "duplicates": 1
+    }
+  },
+  {
+    "id": "l1-bands-generations-differ",
+    "description": "Two installed copies of one band id holding different tables: neither is read",
+    "tampered": "<id>~b's tags, republished under the old id",
+    "kind": "l1-bands",
+    "options": {
+      "allowUnanchored": true
+    },
+    "ops": [
+      {
+        "op": "swapGeneration",
+        "band": 0,
+        "differ": true
+      }
+    ],
+    "expect": {
+      "verdict": "refuted",
+      "check": "files",
+      "failing": [
+        "files"
+      ]
+    }
+  },
+  {
+    "id": "l1-bands-stray-dir",
+    "description": "A12: a stray directory holding a copy of a band's blocks, with no band.json",
+    "tampered": "a directory beside the bands",
+    "kind": "l1-bands",
+    "options": {
+      "allowUnanchored": true
+    },
+    "ops": [
+      {
+        "op": "strayDir",
+        "band": 0
+      }
+    ],
+    "expect": {
+      "verdict": "verified",
+      "failing": [],
+      "ignored": 1
+    }
+  },
+  {
+    "id": "l1-bands-retired-copy",
+    "description": "C F5: a retired copy (band.json unlinked, files kept) beside the live band",
+    "tampered": "<id>~retired",
+    "kind": "l1-bands",
+    "options": {
+      "allowUnanchored": true
+    },
+    "ops": [
+      {
+        "op": "retireCopy",
+        "band": 0
+      }
+    ],
+    "expect": {
+      "verdict": "verified",
+      "failing": [],
+      "ignored": 1
+    }
+  },
+  {
+    "id": "l1-bands-renamed",
+    "description": "A13: one band's directory names other heights, the other is not a band id",
+    "tampered": "directory names",
+    "kind": "l1-bands",
+    "options": {
+      "allowUnanchored": true
+    },
+    "ops": [
+      {
+        "op": "renameDir",
+        "band": 1,
+        "name": "not-a-band-id"
+      },
+      {
+        "op": "renameDir",
+        "band": 0,
+        "name": "l1-h5-7-00000000-000000000000"
+      }
+    ],
+    "expect": {
+      "verdict": "refuted",
+      "check": "identity",
+      "failing": [
+        "identity"
+      ]
+    }
+  },
+  {
+    "id": "l1-bands-wrong-digest",
+    "description": "C F2: a band's name carries a digest its tables do not give",
+    "tampered": "directory name's digest",
+    "kind": "l1-bands",
+    "options": {
+      "allowUnanchored": true
+    },
+    "ops": [
+      {
+        "op": "renameDir",
+        "band": 0,
+        "name": "RENAME_DIGEST"
+      }
+    ],
+    "expect": {
+      "verdict": "refuted",
+      "check": "identity",
+      "failing": [
+        "identity"
+      ]
+    }
+  },
+  {
+    "id": "l1-bands-truncated",
+    "description": "C F6: transactions.parquet cut in half",
+    "tampered": "transactions.parquet",
+    "kind": "l1-bands",
+    "options": {
+      "allowUnanchored": true
+    },
+    "ops": [
+      {
+        "op": "truncate",
+        "band": 0,
+        "file": "transactions.parquet"
+      }
+    ],
+    "expect": {
+      "verdict": "refuted",
+      "check": "schema",
+      "failing": [
+        "schema",
+        "contiguous",
+        "rows"
+      ]
+    }
+  },
+  {
+    "id": "l1-bands-invented-tx",
+    "description": "An invented, linked, zero-size transaction, republished",
+    "tampered": "transactions, block_transactions, blocks.tx_count, republished",
+    "kind": "l1-bands",
+    "options": {
+      "allowUnanchored": true,
+      "lookups": false
+    },
+    "ops": [
+      {
+        "op": "inventTx",
+        "band": 0,
+        "height": 1900003
+      },
+      {
+        "op": "republish",
+        "band": 0
+      }
+    ],
+    "expect": {
+      "verdict": "refuted",
+      "check": "tx_root",
+      "failing": [
+        "tx_root"
+      ]
+    }
+  },
+  {
+    "id": "l1-bands-reordered-unlinked",
+    "description": "B F3: a block's transactions reordered, its links not, republished",
+    "tampered": "transactions.block_transaction_index, republished",
+    "kind": "l1-bands",
+    "options": {
+      "allowUnanchored": true
+    },
+    "ops": [
+      {
+        "op": "moveTx",
+        "band": 0,
+        "height": 1900003
+      },
+      {
+        "op": "republish",
+        "band": 0
+      }
+    ],
+    "expect": {
+      "verdict": "refuted",
+      "check": "position",
+      "failing": [
+        "position"
+      ]
+    }
+  },
+  {
+    "id": "l1-bands-weave-forged",
+    "description": "A block's weave_size raised by one, republished",
+    "tampered": "blocks.weave_size, republished",
+    "kind": "l1-bands",
+    "options": {
+      "allowUnanchored": true
+    },
+    "ops": [
+      {
+        "op": "editBlockField",
+        "band": 0,
+        "height": 1900005,
+        "column": "weave_size",
+        "value": "weave_size + 1"
+      },
+      {
+        "op": "republish",
+        "band": 0
+      }
+    ],
+    "expect": {
+      "verdict": "refuted",
+      "check": "block_size",
+      "failing": [
+        "hash_list_merkle",
+        "block_size",
+        "weave_accounting"
+      ]
+    }
+  },
+  {
+    "id": "l1-bands-publication",
+    "description": "Sound bands bound to their publisher's signed publication",
+    "tampered": "nothing",
+    "kind": "l1-bands",
+    "options": {
+      "allowUnanchored": true
+    },
+    "publication": {},
+    "expect": {
+      "verdict": "verified",
+      "failing": [],
+      "publisherBound": true
+    }
+  },
+  {
+    "id": "l1-bands-publication-file-changed",
+    "description": "A tag forged after the publication was signed",
+    "tampered": "tags.parquet after signing",
+    "kind": "l1-bands",
+    "options": {
+      "allowUnanchored": true
+    },
+    "publication": {},
+    "after": [
+      {
+        "op": "editTag",
+        "band": 0,
+        "height": 1900003
+      }
+    ],
+    "expect": {
+      "verdict": "refuted",
+      "check": "publication",
+      "failing": [
+        "publication",
+        "tables",
+        "lookups"
+      ],
+      "publisherBound": true
+    }
+  },
+  {
+    "id": "l1-bands-publication-band-missing",
+    "description": "A band the publication lists is not in the directory",
+    "tampered": "the top band removed after signing",
+    "kind": "l1-bands",
+    "options": {
+      "allowUnanchored": true
+    },
+    "publication": {},
+    "after": [
+      {
+        "op": "removeBand",
+        "band": 1
+      }
+    ],
+    "expect": {
+      "verdict": "refuted",
+      "check": "publication",
+      "failing": [
+        "publication"
+      ],
+      "publisherBound": true
+    }
+  },
+  {
+    "id": "l1-bands-publication-unlisted",
+    "description": "A band the publication does not list",
+    "tampered": "the publication omits the top band",
+    "kind": "l1-bands",
+    "options": {
+      "allowUnanchored": true
+    },
+    "publication": {
+      "omit": [
+        1
+      ]
+    },
+    "expect": {
+      "verdict": "refuted",
+      "check": "publication",
+      "failing": [
+        "publication"
+      ],
+      "publisherBound": true
+    }
+  }
+]

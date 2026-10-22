@@ -114,7 +114,7 @@ export interface Case {
   id: string;
   description: string;
   tampered: string;
-  kind: 'bands' | 'onchain';
+  kind: 'bands' | 'onchain' | 'l1-bands' | 'l1-anchor';
   expect: CaseExpect;
   [field: string]: unknown;
 }

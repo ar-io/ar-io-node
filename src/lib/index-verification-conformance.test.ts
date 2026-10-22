@@ -24,6 +24,7 @@ import {
   runOnchainCase,
   scratch,
 } from '../../test/conformance/index-verification/harness.js';
+import { runL1Case } from '../../test/conformance/index-verification/l1-harness.js';
 
 const cases: Case[] = await loadCases();
 
@@ -66,6 +67,40 @@ describe('index-verification conformance', () => {
           assert.ok(failing.includes(c.expect.check));
         }
       };
+      if (c.kind === 'l1-bands' || c.kind === 'l1-anchor') {
+        const result = await runL1Case(duck, root, c);
+        assert.equal(
+          result.verdict,
+          c.expect.verdict,
+          `${c.description}: failing ${result.failing.join(', ')}${result.refused !== undefined ? ` (${result.refused})` : ''}`,
+        );
+        expectFailing(result.failing);
+        if (c.expect.publisherBound !== undefined) {
+          assert.equal(result.publisherBound, c.expect.publisherBound);
+        }
+        const listed = c.expect as {
+          duplicates?: number;
+          ignored?: number;
+          anchored?: boolean;
+          unbound?: string[];
+        };
+        if (listed.duplicates !== undefined) {
+          assert.equal(result.result?.duplicates.length, listed.duplicates);
+        }
+        if (listed.ignored !== undefined) {
+          assert.equal(result.result?.ignored.length, listed.ignored);
+        }
+        if (listed.anchored !== undefined) {
+          assert.equal(result.result?.anchored, listed.anchored);
+        }
+        if (listed.unbound !== undefined) {
+          assert.deepEqual(
+            Object.keys(result.result?.unbound ?? {}).sort(),
+            [...listed.unbound].sort(),
+          );
+        }
+        return;
+      }
       if (c.kind === 'onchain') {
         const result = await runOnchainCase(c);
         assert.equal(result.verdict, c.expect.verdict, c.description);
