@@ -1,5 +1,6 @@
-ARG NODE_VERSION=20.19.6
-ARG NODE_VERSION_SHORT=20
+# Keep in step with .nvmrc. The runtime stage copies this exact binary, so
+# this pin is the Node version the image ships.
+ARG NODE_VERSION=22.23.4
 
 # Toolchain plus the manifests, shared by both dependency stages. Nothing here
 # depends on source, so editing src/ leaves every layer below this cached.
@@ -51,8 +52,14 @@ FROM deps AS builder
 COPY . .
 RUN yarn build
 
-# Runtime
-FROM gcr.io/distroless/nodejs${NODE_VERSION_SHORT}-debian12
+# Runtime. Distroless `cc` plus the node binary from the pinned build image,
+# rather than `distroless/nodejsNN`: that tag floats and trails Node security
+# releases (on 2026-10-22, the day after the CVE-2026-111497 fix shipped, it
+# still carried 22.22.0 / 24.14.0). Copying the binary makes NODE_VERSION the
+# version that runs. /nodejs/bin/node keeps the distroless path that
+# docker-entrypoint.sh, healthcheck.sh, compose and tools/ already use.
+FROM gcr.io/distroless/cc-debian12
+COPY --from=base /usr/local/bin/node /nodejs/bin/node
 WORKDIR /app
 
 # Add sh and mkdir for scripts
