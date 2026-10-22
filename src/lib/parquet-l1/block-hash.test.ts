@@ -17,6 +17,7 @@ import {
   hashListMerkleSeed,
   verifyHeader,
 } from './block-hash.js';
+import { quoteLongIntegers } from './anchor.js';
 import { ChainBlock, nextHashListMerkle } from './chain.js';
 
 /**
@@ -132,6 +133,31 @@ describe('verifyHeader', () => {
     const json = header(422250);
     json.height = 422249;
     assert.throws(() => verifyHeader(json), /below the 2.0 fork/);
+  });
+
+  it('recomputes a header that writes a long integer bare, read exactly', () => {
+    // As some headers write reward_pool (12775001414748366 at 600,581).
+    const json = header(2000000);
+    const text = JSON.stringify(json).replace(
+      `"reward_pool":"${json.reward_pool}"`,
+      `"reward_pool":${json.reward_pool}`,
+    );
+    assert.ok(BigInt(json.reward_pool) > BigInt(Number.MAX_SAFE_INTEGER));
+    // Parsed as a double it is rounded, and refused rather than misread.
+    assert.throws(() => verifyHeader(JSON.parse(text)), /reward_pool/);
+    assert.equal(
+      verifyHeader(JSON.parse(quoteLongIntegers(text))).indepHash.toString(
+        'base64url',
+      ),
+      json.indep_hash,
+    );
+    // A digit run inside a string is left alone.
+    assert.equal(
+      quoteLongIntegers(
+        '{"a":"x 12345678901234567 y","b":[12345678901234567]}',
+      ),
+      '{"a":"x 12345678901234567 y","b":["12345678901234567"]}',
+    );
   });
 
   it('refuses malformed values rather than reading them loosely', () => {

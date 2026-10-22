@@ -42,6 +42,7 @@ import {
   verifyBands,
 } from '../../lib/parquet-l1/verify-bands.js';
 import type { L1VerifyReport } from '../../lib/parquet-l1/verify-run.js';
+import { exactJsonFetch } from '../../lib/parquet-l1/anchor.js';
 import type { SampleOptions } from '../../lib/parquet-l1/sample.js';
 import type { IndexL1VerifyCLIOptions, JsonSerializable } from '../types.js';
 import { requiredStringFromOptions } from '../utils.js';
@@ -318,7 +319,8 @@ export function anchorPool(
     urls,
     timeoutMs:
       whole(options.readTimeout, '--read-timeout') ?? DEFAULT_READ_TIMEOUT_MS,
-    ...(deps.fetch !== undefined ? { fetch: deps.fetch } : {}),
+    // Long integers kept exact, or some headers could not be recomputed.
+    fetch: deps.fetch ?? exactJsonFetch,
     ...(deps.lookupAll !== undefined ? { lookupAll: deps.lookupAll } : {}),
     dedupeByAddress: true,
   });

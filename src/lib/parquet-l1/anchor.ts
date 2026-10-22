@@ -316,3 +316,34 @@ export async function anchorBlock(
     problems,
   };
 }
+
+/**
+ * JSON text with every integer literal of 16 or more digits quoted, so it
+ * parses to its exact digits rather than the nearest double. Some headers
+ * write a whole number past 2^53 bare (`"reward_pool":12775001414748366` at
+ * 600,581, for one), and a header whose fields were rounded cannot be
+ * recomputed: {@link verifyHeader} reads a decimal string exactly.
+ *
+ * Only integer literals in value position are touched: a digit run inside
+ * a string is preceded by a quote or another character, never by `:`, `[`
+ * or `,` and whitespace.
+ */
+export function quoteLongIntegers(text: string): string {
+  return text.replace(/([:[,]\s*)(-?\d{16,})(?=\s*[,}\]])/g, '$1"$2"');
+}
+
+/**
+ * A `fetch` for {@link ArweaveNodePool} whose `json()` keeps long integers
+ * exact ({@link quoteLongIntegers}): what anchors and samples fetch with.
+ */
+export const exactJsonFetch = (async (
+  url: string,
+  init: { signal: AbortSignal; headers?: Record<string, string> },
+) => {
+  const response = await fetch(url, init);
+  return {
+    status: response.status,
+    ok: response.ok,
+    json: async () => JSON.parse(quoteLongIntegers(await response.text())),
+  };
+}) as import('../onchain/arweave-nodes.js').FetchLike;
