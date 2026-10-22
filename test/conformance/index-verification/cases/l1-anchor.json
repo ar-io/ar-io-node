@@ -482,5 +482,134 @@
         "sample"
       ]
     }
+  },
+  {
+    "id": "l1-anchor-r2-top-band-file-removed",
+    "description": "Round 2 (judge R3): the top band's band.json removed, its directory still named as the band: the set must not shrink silently",
+    "tampered": "band.json removed from the band named as such",
+    "kind": "l1-anchor",
+    "nodes": [
+      {
+        "name": "a",
+        "answer": "honest"
+      },
+      {
+        "name": "b",
+        "answer": "honest"
+      }
+    ],
+    "options": {
+      "sample": {
+        "blocks": 2,
+        "txs": 2
+      }
+    },
+    "ops": [
+      {
+        "op": "removeFile",
+        "band": 1,
+        "file": "band.json"
+      }
+    ],
+    "expect": {
+      "verdict": "refuted",
+      "check": "files",
+      "failing": [
+        "files"
+      ]
+    }
+  },
+  {
+    "id": "l1-anchor-r2-incomplete-not-allow-unbound",
+    "description": "Round 2 (judge R5, D1): --allow-unbound accepts pre-2.0 blocks only, not a post-2.0 block with a dropped transaction",
+    "tampered": "a transaction and its tags dropped beside its link, republished",
+    "kind": "l1-anchor",
+    "nodes": [
+      {
+        "name": "a",
+        "answer": "honest"
+      },
+      {
+        "name": "b",
+        "answer": "honest"
+      }
+    ],
+    "options": {
+      "allowUnbound": true,
+      "sample": {
+        "blocks": 0,
+        "txs": 0
+      }
+    },
+    "ops": [
+      {
+        "op": "rewrite",
+        "band": 0,
+        "table": "tags",
+        "select": "SELECT * FROM SRC WHERE NOT (height = 1900003 AND id IN (SELECT id FROM SRC WHERE tag_value = 'value-1900003-0-1'::BLOB))"
+      },
+      {
+        "op": "rewrite",
+        "band": 0,
+        "table": "transactions",
+        "select": "SELECT * FROM SRC WHERE NOT (height = 1900003 AND block_transaction_index = 0)"
+      },
+      {
+        "op": "republish",
+        "band": 0
+      }
+    ],
+    "expect": {
+      "verdict": "unknown",
+      "failing": [
+        "unbound"
+      ],
+      "unbound": [
+        "incomplete"
+      ]
+    }
+  },
+  {
+    "id": "l1-anchor-r2-format1-flip-sampled",
+    "description": "Round 2 (judge R6, D3): under --allow-unverified-format1 a format-2 transaction relabelled format 1 is caught by the format-1 draw",
+    "tampered": "transactions.format flipped to 1 beside a forged data_root, republished",
+    "kind": "l1-anchor",
+    "nodes": [
+      {
+        "name": "a",
+        "answer": "honest"
+      },
+      {
+        "name": "b",
+        "answer": "honest"
+      }
+    ],
+    "options": {
+      "allowUnverifiedFormat1": true,
+      "sample": {
+        "blocks": 0,
+        "txs": 0,
+        "format1": 5
+      }
+    },
+    "ops": [
+      {
+        "op": "rewrite",
+        "band": 0,
+        "table": "transactions",
+        "select": "SELECT * REPLACE (CASE WHEN height = 1900003 AND block_transaction_index = 0 THEN 1::UTINYINT ELSE format END AS format, CASE WHEN height = 1900003 AND block_transaction_index = 2 THEN from_hex(repeat('ab', 32)) ELSE data_root END AS data_root) FROM SRC"
+      },
+      {
+        "op": "republish",
+        "band": 0
+      }
+    ],
+    "expect": {
+      "verdict": "refuted",
+      "check": "sample",
+      "failing": [
+        "sample"
+      ]
+    }
   }
 ]

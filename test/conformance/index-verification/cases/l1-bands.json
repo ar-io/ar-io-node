@@ -621,7 +621,7 @@
         "tables",
         "lookups"
       ],
-      "publisherBound": true
+      "publisherBound": false
     }
   },
   {
@@ -645,7 +645,7 @@
       "failing": [
         "publication"
       ],
-      "publisherBound": true
+      "publisherBound": false
     }
   },
   {
@@ -667,7 +667,33 @@
       "failing": [
         "publication"
       ],
-      "publisherBound": true
+      "publisherBound": false
+    }
+  },
+  {
+    "id": "l1-bands-r2-publication-extra-byte",
+    "description": "Round 2 (judge R4, E3): a file changed after the publication was signed: the binding failed, so publisherBound is false",
+    "tampered": "one byte appended to band.json after signing",
+    "kind": "l1-bands",
+    "publication": {},
+    "after": [
+      {
+        "op": "appendByte",
+        "band": 0,
+        "file": "band.json"
+      }
+    ],
+    "options": {
+      "allowUnanchored": true
+    },
+    "expect": {
+      "verdict": "refuted",
+      "check": "publication",
+      "publisherBound": false,
+      "failing": [
+        "files",
+        "publication"
+      ]
     }
   }
 ]

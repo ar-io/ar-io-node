@@ -592,9 +592,10 @@ export async function runL1Case(
     lookups?: boolean;
     allowUnanchored?: boolean;
     allowUnbound?: boolean;
+    allowIncomplete?: boolean;
     allowUnverifiedFormat1?: boolean;
     anchorMin?: number;
-    sample?: { blocks: number; txs: number };
+    sample?: { blocks: number; txs: number; format1?: number };
   };
   const nodes = (c.nodes ?? []) as Array<{ name: string; answer: string }>;
   const shared = (c.shared ?? []) as string[][];
@@ -634,6 +635,9 @@ export async function runL1Case(
               seed: 1,
               blocks: options.sample.blocks,
               txsPerStratum: options.sample.txs,
+              ...(options.sample.format1 !== undefined
+                ? { format1PerStratum: options.sample.format1 }
+                : {}),
               v1BytesPerStratum: 1e6,
               concurrency: 2,
             },
@@ -642,6 +646,7 @@ export async function runL1Case(
       allow: {
         unanchored: options.allowUnanchored === true,
         unbound: options.allowUnbound === true,
+        incomplete: options.allowIncomplete === true,
         unverifiedFormat1: options.allowUnverifiedFormat1 === true,
       },
       ...(publication !== undefined ? { publication } : {}),

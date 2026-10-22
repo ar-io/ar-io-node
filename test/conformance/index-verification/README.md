@@ -386,14 +386,17 @@ dot-files by name, size and SHA-256, signed by a fresh Ed25519 key given as
 the publisher key.
 
 **`options`**: `from`, `to`, `lookups` (false: skipped), `allowUnanchored`,
-`allowUnbound`, `allowUnverifiedFormat1`, `anchorMin` (default 2), and
-`sample` (`{ blocks, txs }`: headers drawn over the range, signatures drawn
-per band; seed 1, a format-1 byte budget of 1 MB). `l1-bands` cases give no
+`allowUnbound`, `allowIncomplete`, `allowUnverifiedFormat1`, `anchorMin`
+(default 2), and `sample` (`{ blocks, txs, format1? }`: headers drawn over
+the range, signatures drawn per band, format-1 transactions drawn per band
+from blocks whose `tx_root` cannot be recomputed; seed 1, a format-1 byte
+budget of 1 MB). `publisherBound` is true only when the publication check
+passed. `l1-bands` cases give no
 nodes, so they are unanchored and pass only with `allowUnanchored`.
 
 **`nodes`** (`l1-anchor`): each `{ name, answer }` is a source at
 `http://<name>.test`, answering `/block/height/N`, `/block/hash/H` and
-`/tx/{id}` from the honest chain, as `answer` says: `honest`; `missing`
+`/tx/{id}` (every field and the signature) from the honest chain, as `answer` says: `honest`; `missing`
 (404 for everything); `otherBlock` (`/block/height/N` answered with the
 block at `N - 1`); `alteredUnhashed` (block headers with `weave_size` one
 higher, `indep_hash` unchanged); `rehashedMerkle` (block headers whose
