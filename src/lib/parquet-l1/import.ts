@@ -2012,7 +2012,7 @@ export async function runImport({
   await assertDiskSpace(db.name, planned, { log, walRows, ...disk });
 
   const outcomes: ImportOutcome[] = [];
-  let haveTo = progress.haveTo;
+  const haveTo = progress.haveTo;
   // Every planned band, checked whole and bound to the chain, before the
   // first row is written: each contiguous run of the plan is checked as
   // one, and bound once, at its top (a republished band is a run of its
@@ -2088,8 +2088,6 @@ export async function runImport({
         ...(commitEvery !== undefined ? { commitEvery } : {}),
         ...(check !== undefined ? { binding: check.binding } : {}),
       });
-      // A republished band may lie below what is held: never lower haveTo.
-      haveTo = Math.max(haveTo, entry.band.heightRange[1]);
       const outcome: ImportOutcome = {
         ...base,
         result: 'imported',
@@ -2115,7 +2113,9 @@ export async function runImport({
     }
   }
   return {
-    haveTo,
+    // Read back, not tracked: finishing an interrupted band below held
+    // blocks raises the trustworthy top past that band.
+    haveTo: readProgress(db).haveTo,
     // What the database holds now, not what the plan meant it to: a band
     // refused part way was cleared, and leaves its heights missing.
     holes: remainingHoles(heldRuns(db), []),

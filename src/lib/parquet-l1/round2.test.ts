@@ -252,6 +252,24 @@ describe('round 2: import never removes what was there (A)', () => {
     assert.equal(out.haveTo, first.haveTo);
   });
 
+  it('finishing an interrupted band below what is held reports the held top as haveTo', async () => {
+    holdBlock(source, core, F + 30);
+    const bands = await exportBands(source, bandsDir, [
+      [F, F + 9],
+      [F + 10, F + 19],
+      [F + 20, F + 29],
+    ]);
+    const first = await run({ from: F });
+    const db = new Sqlite(core);
+    db.prepare(
+      'UPDATE parquet_l1_imports SET completed_at = NULL WHERE band_id = ?',
+    ).run(bands[1].id);
+    db.close();
+    const out = await run({});
+    assert.equal(out.outcomes.at(-1)?.result, 'imported');
+    assert.equal(out.haveTo, first.haveTo);
+  });
+
   it('A7 (import F7): a republished band outside --from/--to is not imported', () => {
     const band = (id: string, from: number, to: number): ImportableBand => ({
       id,
