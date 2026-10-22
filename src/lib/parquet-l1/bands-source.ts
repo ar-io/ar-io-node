@@ -218,6 +218,7 @@ export class BandsSource implements L1Source {
     n: number,
     from: number,
     to: number,
+    filter: { format1Unbound?: boolean } = {},
   ): Promise<DrawnTx[]> {
     const band = this.bands.find((b) => b.id === stratum.id);
     if (band === undefined || n <= 0) return [];
@@ -233,7 +234,7 @@ export class BandsSource implements L1Source {
        FROM read_parquet(${fileOf(band, 'transactions')}, file_row_number = true) t
        LEFT JOIN read_parquet(${fileOf(band, 'wallets')}) w
          ON w.address = t.owner_address
-       WHERE t.height BETWEEN ${lo} AND ${hi}
+       WHERE t.height BETWEEN ${lo} AND ${hi}${filter.format1Unbound === true ? ' AND t.format = 1 AND t.data_size > 0' : ''}
        ORDER BY sha256(concat('${key}', ':', t.file_row_number::VARCHAR)), t.file_row_number
        LIMIT ${n}`,
     )) as Array<Record<string, unknown>>;

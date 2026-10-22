@@ -417,6 +417,38 @@ export const CONSENSUS_PINS: ConsensusPin[] = [
   },
   {
     file: 'apps/arweave/src/ar_tx.erl',
+    startsWith: 'do_verify(#tx{ format = 1 } = TX, Args, VerifySignature) ->',
+    lines: 15,
+    mirrors:
+      'judge.ts and tx-signature.ts: no format-1 transaction at or above the 2.9.6 fork (2,000,000)',
+    sha256: 'f9c31df9d422f7da072130b8897f667dfe47fcd423b8db7b30b4ff0c702a3727',
+  },
+  {
+    file: 'apps/arweave/src/ar_tx.erl',
+    startsWith: 'verify_malleability2(Args) ->',
+    lines: 30,
+    mirrors:
+      'tx-signature.ts consensusProblem: a format-1 target is 32 bytes with a quantity and empty without, from 2.4',
+    sha256: '1f8ce48f88513ff7304b77a9418fcfebe1ad419b685cefadf474feb8b40a6905',
+  },
+  {
+    file: 'apps/arweave/src/ar_tx.erl',
+    startsWith: 'verify_target_length(TX, Height) ->',
+    lines: 9,
+    mirrors:
+      'tx-signature.ts consensusProblem: target length by quantity, from 2.4',
+    sha256: '7702bb39c9cf138b0a31289ce46a359c412f781d70be114c2f18c49c9ef6c3dd',
+  },
+  {
+    file: 'apps/arweave/src/ar_tx.erl',
+    startsWith: 'tx_field_size_limit_v1(TX, Height, Denomination) ->',
+    lines: 24,
+    mirrors:
+      'tx-signature.ts consensusProblem: a format-1 anchor is at most 48 bytes from 1.8, 32 before',
+    sha256: 'ef0cb1247f8f067e466e0ef0049cf0dd17c33b1c3862fd5f4c24434afa50baa4',
+  },
+  {
+    file: 'apps/arweave/src/ar_tx.erl',
     startsWith: 'signature_data_segment_v2(TX) ->',
     lines: 20,
     mirrors:

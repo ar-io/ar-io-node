@@ -21,7 +21,7 @@ import type { ArweaveNodePool } from '../onchain/arweave-nodes.js';
 import { anchorBlock, type AnchorResult } from './anchor.js';
 import { FORK_2_0 } from './block-hash.js';
 import { addFailure, type VerifyCheck } from './checks.js';
-import { L1Judge, type JudgeUnbound } from './judge.js';
+import { L1Judge, type JudgeBlockRow, type JudgeUnbound } from './judge.js';
 import { runSample, type SampleOptions, type SampleSummary } from './sample.js';
 import type { L1Source } from './source.js';
 
@@ -32,8 +32,10 @@ export const WINDOW = 10_000;
 export interface L1Allowances {
   /** `--allow-unanchored`: no anchor, or one that could not be bound. */
   unanchored?: boolean;
-  /** `--allow-unbound`: pre-2.0 blocks, and blocks with missing transactions. */
+  /** `--allow-unbound`: pre-2.0 blocks. */
   unbound?: boolean;
+  /** `--allow-incomplete`: blocks whose transactions or owners' keys the index lacks. */
+  incomplete?: boolean;
   /** `--allow-unverified-format1`: blocks whose tx_root needs a v1 data root. */
   unverifiedFormat1?: boolean;
 }
@@ -130,7 +132,20 @@ export async function runL1Verify(
   const started = Date.now();
   const { from, to } = options;
   const allow = options.allow ?? {};
-  const judge = new L1Judge(from, to, { txRoot: options.txRoot !== false });
+  // The block below the range, when the index holds it, so the first block
+  // is judged (its link, merkle, size and accounting) like the rest.
+  let prior: Awaited<ReturnType<L1Source['blockAt']>>;
+  try {
+    prior = from > 0 ? await source.blockAt(from - 1) : undefined;
+  } catch {
+    prior = undefined;
+  }
+  const judge = new L1Judge(from, to, {
+    txRoot: options.txRoot !== false,
+    ...(prior !== undefined
+      ? { prior: { ...prior, tx_count: null } as JudgeBlockRow }
+      : {}),
+  });
   await source.judge(judge, from, to, options.window ?? WINDOW);
   for (const f of options.judgeFailures ?? []) {
     judge.fail(f.check, f.height, f.found, f.expected);
@@ -138,6 +153,10 @@ export async function runL1Verify(
   const judged = judge.finish();
   const checks: VerifyCheck[] = [...(options.checks ?? []), ...judged.checks];
   const skipped = [...(options.skipped ?? [])];
+  // Without the block below, the first block's link and size are the base
+  // of the walk, bound by nothing.
+  const firstUnbound = from > 0 && prior === undefined;
+  if (firstUnbound) skipped.push('first_block_link');
   const accepted = [...(options.accepted ?? [])];
   const assurance = [...(options.assurance ?? [])];
   if (options.txRoot === false) {
@@ -237,7 +256,7 @@ export async function runL1Verify(
     checks.push(anchorCheck);
     assurance.push(
       `anchored at ${anchorReport?.height ?? to}: ${anchorReport?.machines ?? 0} distinct machines agreed on a header whose hash was recomputed from its fields, and the index equals it. Agreement means the sources' upstream nodes agree: two gateways proxying /block/ to their operators' chosen Arweave nodes are not two independent nodes.`,
-      `every block from the 2.0 fork up to the anchor has its indep_hash, weave_size and tx_root bound to the chain through the hash_list_merkle recurrence, and its previous_block and block_size through the links and the weave; its other fields, its transaction ids and their order, and every transaction field are bound only by the sample`,
+      `every block from the 2.0 fork up to the anchor has its indep_hash, weave_size and tx_root bound to the chain through the hash_list_merkle recurrence, and its previous_block and block_size through the links and the weave${firstUnbound ? ` (except the first, ${from}: the block below it is not in the index, so its previous_block and block_size are bound by nothing — 'first_block_link' skipped)` : ''}; its other fields, its transaction ids and their order, and every transaction field are bound only by the sample`,
     );
   } else if (allow.unanchored === true && !refuted) {
     if (!skipped.includes('anchor')) skipped.push('anchor');
@@ -264,6 +283,17 @@ export async function runL1Verify(
 
   // The samples.
   let sample: SampleSummary | undefined;
+  if (options.sample !== undefined) {
+    // A half-skipped sample is a skipped one, for the half.
+    if (options.sample.blocks <= 0) {
+      skipped.push('sample_blocks');
+      accepted.push('--sample-blocks 0');
+    }
+    if (options.sample.txsPerStratum <= 0) {
+      skipped.push('sample_txs');
+      accepted.push('--sample-txs 0');
+    }
+  }
   if (options.pool !== undefined && options.sample !== undefined) {
     try {
       const out = await runSample(
@@ -305,7 +335,7 @@ export async function runL1Verify(
   };
   const classes: Array<[keyof JudgeUnbound, boolean, string]> = [
     ['pre20', allow.unbound === true, '--allow-unbound'],
-    ['incomplete', allow.unbound === true, '--allow-unbound'],
+    ['incomplete', allow.incomplete === true, '--allow-incomplete'],
     [
       'txRootFormat1',
       allow.unverifiedFormat1 === true,

@@ -6,6 +6,7 @@
  */
 import { ChildProcess, spawn } from 'node:child_process';
 import * as fsp from 'node:fs/promises';
+import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import winston from 'winston';
 
@@ -159,6 +160,9 @@ export const spawnFill: FillRunner = (args, onLog, register) =>
  * and DuckDB's memory out of the gateway's heap, and its synchronous
  * SQLite writes off the gateway's event loop.
  */
+/** Runs without a bands directory before the worker says so as a warning. */
+export const MISSING_RUNS_BEFORE_WARNING = 6;
+
 export class L1BandImportWorker {
   private log: winston.Logger;
   private args: string[];
@@ -167,6 +171,20 @@ export class L1BandImportWorker {
   private runFill: FillRunner;
   private bandsDir: string;
   private statDir: (dir: string) => Promise<unknown>;
+  private listDir: (dir: string) => Promise<string[]>;
+  private now: () => number;
+  private maxBackoffMs: number;
+  /**
+   * The last refusal: the directory's entries then (band ids carry their
+   * digest), and when to try again. A fill refused for the same bands is
+   * not re-verified every interval: it waits, twice as long each time,
+   * until the directory changes.
+   */
+  private refused:
+    | { entries: string; until: number; backoffMs: number }
+    | undefined;
+  /** Runs in a row that found no bands directory. */
+  private missingRuns = 0;
   private timer: NodeJS.Timeout | undefined;
   private child: ChildProcess | undefined;
   private running: Promise<unknown> | undefined;
@@ -183,6 +201,11 @@ export class L1BandImportWorker {
     invocation = cliInvocation(),
     allowUnverified = false,
     statDir = (dir: string) => fsp.stat(dir),
+    sampleFrom = [],
+    allowUnsampled = false,
+    listDir = (dir: string) => fsp.readdir(dir),
+    now = Date.now,
+    maxBackoffMs = 24 * 3600 * 1000,
   }: {
     log: winston.Logger;
     coreDbPath: string;
@@ -200,6 +223,19 @@ export class L1BandImportWorker {
     allowUnverified?: boolean;
     /** Injected in tests: how the bands directory is looked at. */
     statDir?: (dir: string) => Promise<unknown>;
+    /**
+     * Sources the fill anchors and samples against (`--anchor-from`):
+     * `L1_BAND_IMPORT_SAMPLE_FROM`. Without any, every fill is refused
+     * unless `allowUnsampled`.
+     */
+    sampleFrom?: string[];
+    /** Fill with no sample (`--allow-unsampled`): `L1_BAND_IMPORT_ALLOW_UNSAMPLED`. */
+    allowUnsampled?: boolean;
+    /** Injected in tests: the bands directory's entries. */
+    listDir?: (dir: string) => Promise<string[]>;
+    now?: () => number;
+    /** The longest a refused fill waits before it is tried again unchanged. */
+    maxBackoffMs?: number;
   }) {
     this.log = log.child({ class: 'L1BandImportWorker' });
     this.intervalMs = intervalMs;
@@ -207,6 +243,9 @@ export class L1BandImportWorker {
     this.runFill = runFill;
     this.bandsDir = bandsDir;
     this.statDir = statDir;
+    this.listDir = listDir;
+    this.now = now;
+    this.maxBackoffMs = maxBackoffMs;
     this.args = [
       ...invocation,
       'index-l1-import',
@@ -220,6 +259,8 @@ export class L1BandImportWorker {
       ...(allowUnverified
         ? ['--allow-unbound', '--allow-unverified-format1']
         : []),
+      ...(sampleFrom.length > 0 ? ['--anchor-from', sampleFrom.join(',')] : []),
+      ...(allowUnsampled ? ['--allow-unsampled'] : []),
     ];
   }
 
@@ -262,18 +303,50 @@ export class L1BandImportWorker {
     // to report, and fails the run.
     try {
       await this.statDir(this.bandsDir);
+      this.missingRuns = 0;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        this.missingRuns += 1;
         metrics.l1BandImportRunsTotal.inc({ result: 'idle' });
-        this.log.info(
+        // Nothing installed yet is normal on a new gateway; a missing
+        // installed/ directory too, or a directory missing run after run,
+        // is more likely a misconfigured path.
+        const parentMissing = await this.statDir(path.dirname(this.bandsDir))
+          .then(() => false)
+          .catch(() => true);
+        const level =
+          parentMissing || this.missingRuns >= MISSING_RUNS_BEFORE_WARNING
+            ? 'warn'
+            : 'info';
+        this.log[level](
           'No bands installed yet: the bands directory does not exist',
           {
             bandsDir: this.bandsDir,
+            parentMissing,
+            runs: this.missingRuns,
           },
         );
         return undefined;
       }
     }
+    let entries = '';
+    try {
+      entries = (await this.listDir(this.bandsDir)).sort().join('\n');
+    } catch {
+      entries = '';
+    }
+    if (
+      this.refused !== undefined &&
+      this.refused.entries === entries &&
+      this.now() < this.refused.until
+    ) {
+      metrics.l1BandImportRunsTotal.inc({ result: 'deferred' });
+      this.log.debug('Fill deferred: the same bands were refused last time', {
+        retryAt: new Date(this.refused.until).toISOString(),
+      });
+      return undefined;
+    }
+
     try {
       const result = await this.runFill(
         this.args,
@@ -303,6 +376,13 @@ export class L1BandImportWorker {
       }
       if (result.code !== 0) {
         metrics.l1BandImportRunsTotal.inc({ result: 'failed' });
+        if (summary?.refused !== undefined) {
+          const same = this.refused?.entries === entries;
+          const backoffMs = same
+            ? Math.min(this.maxBackoffMs, (this.refused?.backoffMs ?? 0) * 2)
+            : this.intervalMs;
+          this.refused = { entries, backoffMs, until: this.now() + backoffMs };
+        }
         if (wasRunning && this.stopped) {
           this.log.info('Fill interrupted by shutdown; the next run redoes it');
         } else {
@@ -314,6 +394,7 @@ export class L1BandImportWorker {
         }
         return summary;
       }
+      this.refused = undefined;
       const filled = (summary?.filled ?? 0) > 0;
       metrics.l1BandImportRunsTotal.inc({ result: filled ? 'filled' : 'idle' });
       this.log[filled ? 'info' : 'debug']('Fill finished', {

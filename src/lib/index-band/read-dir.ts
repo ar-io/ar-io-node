@@ -91,6 +91,7 @@ export async function readBandsDir<B>(
     missingBandFile = 'problem',
     maxBandFileBytes,
     readSupersedes,
+    bandFileRequired = () => false,
   }: {
     bandFile: string;
     parse: (text: string) => B;
@@ -100,6 +101,12 @@ export async function readBandsDir<B>(
     maxBandFileBytes?: number;
     /** The bands a band's publisher says it replaces (its `.publisher.json`). */
     readSupersedes?: (dir: string) => Promise<string[] | undefined>;
+    /**
+     * Under `missingBandFile: 'ignore'`, entries that must hold a band file
+     * all the same (one named exactly as a band, which no retired copy is):
+     * without one they are a problem, not ignored.
+     */
+    bandFileRequired?: (entry: string) => boolean;
   },
 ): Promise<BandDirListing<B>> {
   const names = (await fs.readdir(bandsDir)).sort();
@@ -144,7 +151,7 @@ export async function readBandsDir<B>(
     } catch (error) {
       if (await isGone(dir)) listing.vanished.push(entry);
       else if (errorCode(error) === 'ENOENT') {
-        if (missingBandFile === 'ignore') {
+        if (missingBandFile === 'ignore' && !bandFileRequired(entry)) {
           listing.ignored.push({
             entry,
             reason: `no ${bandFile}: a retired copy or not a band`,

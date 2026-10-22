@@ -579,6 +579,8 @@ export const l1BandImportWorker = config.L1_BAND_IMPORT_ENABLED
       intervalMs: config.L1_BAND_IMPORT_INTERVAL_SECONDS * 1000,
       cacheMib: config.L1_BAND_IMPORT_CACHE_MIB,
       allowUnverified: config.L1_BAND_IMPORT_ALLOW_UNVERIFIED,
+      sampleFrom: config.L1_BAND_IMPORT_SAMPLE_FROM,
+      allowUnsampled: config.L1_BAND_IMPORT_ALLOW_UNSAMPLED,
     })
   : undefined;
 

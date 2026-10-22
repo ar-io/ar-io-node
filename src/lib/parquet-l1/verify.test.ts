@@ -107,21 +107,24 @@ describe('verifyCoreDb', () => {
     assert.notEqual(result.weaveGrowth, result.weaveSize);
   });
 
-  it("does not count the transactions of the range's first block", async () => {
+  it("judges the range's first block against the block below it when the index holds it (D4)", async () => {
     const result = await run(FIRST + 1, TOP);
-    const above = db
+    const counted = db
       .prepare(
-        'SELECT SUM(data_size) FROM stable_transactions WHERE height > ? AND height <= ?',
+        'SELECT SUM(data_size) FROM stable_transactions WHERE height >= ? AND height <= ?',
       )
       .pluck()
       .get(FIRST + 1, TOP) as number;
-    assert.equal(result.accountedFor, String(above));
+    assert.equal(result.accountedFor, String(counted));
     assert.equal(result.ok, true);
+    assert.ok(!result.skipped.includes('first_block_link'));
   });
 
   it('rebuilds the hash_list_merkle recurrence over the whole range', async () => {
     const result = await run();
+    // LOW is the fixture's lowest block: nothing below it to judge it by.
     assert.equal(result.merkleChecked, TOP - LOW);
+    assert.ok(result.skipped.includes('first_block_link'));
     assert.equal(check(result, 'hash_list_merkle')?.ok, true);
   });
 

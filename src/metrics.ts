@@ -2378,7 +2378,7 @@ export const manifestResolutionDurationSeconds = new promClient.Histogram({
  */
 export const l1BandImportRunsTotal = new promClient.Counter({
   name: 'l1_band_import_runs_total',
-  help: 'L1 band import worker runs, by result (filled, idle, failed)',
+  help: 'L1 band import worker runs, by result (filled, idle, failed, deferred: a refused fill waiting for its bands to change)',
   labelNames: ['result'] as const,
 });
 

@@ -54,6 +54,8 @@ export interface L1Source {
     n: number,
     from: number,
     to: number,
+    /** Draw only format-1 transactions with data, of blocks at or above the 2.0 fork. */
+    filter?: { format1Unbound?: boolean },
   ): Promise<DrawnTx[]>;
 }
 

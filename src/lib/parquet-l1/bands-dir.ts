@@ -13,7 +13,9 @@
  *   files' paths.
  * - A directory without one is ignored and listed (`ignored`), never read:
  *   a retired copy (the index-swarm sidecar unlinks `band.json` first and
- *   sweeps the files later) or a stray directory. So is a non-directory.
+ *   sweeps the files later, and names its copies `<id>~<generation>`) or a
+ *   stray directory. So is a non-directory. A directory named exactly as a
+ *   band id without one is a problem: it is the band, unreadable.
  * - A `band.json` that is there and cannot be read or parsed is a problem,
  *   named: an unreadable band at the edge of a set must not quietly shrink
  *   it.
@@ -100,6 +102,11 @@ export async function readL1Bands(bandsDir: string): Promise<L1BandsListing> {
     missingBandFile: 'ignore',
     maxBandFileBytes: MAX_BAND_FILE_BYTES,
     readSupersedes: async (dir) => (await readPublisherFacts(dir))?.supersedes,
+    // A directory named exactly as a band (no installed generation) is a
+    // band: a retired copy carries its generation. Without its band.json
+    // it is an unreadable band, not something to pass over, or a set
+    // could shrink silently by losing one.
+    bandFileRequired: (entry) => L1_BAND_ID.test(entry),
   });
   const problems = [...listing.problems];
   const duplicates: string[] = [];

@@ -145,7 +145,7 @@ export async function buildCoreDb(
     block_transaction_index, format, last_tx, owner_address, target, quantity,
     reward, data_size, data_root, content_type, tag_count, offset, indexed_at,
     signature)
-    VALUES (?, ?, ?, ?, ?, ?, NULL, '500000000000000000', '42', ?, ?, 'text/plain', ?, ?, 5, ?)`);
+    VALUES (?, ?, ?, ?, ?, ?, NULL, '0', '42', ?, ?, 'text/plain', ?, ?, 5, ?)`);
   const insertTagName = db.prepare(
     'INSERT OR IGNORE INTO tag_names (hash, name) VALUES (?, ?)',
   );
@@ -230,7 +230,7 @@ export async function buildCoreDb(
               Buffer.from('2'),
               modulus,
               Buffer.alloc(0),
-              Buffer.from('500000000000000000'),
+              Buffer.from('0'),
               Buffer.from('42'),
               lastTx,
               tagRows,

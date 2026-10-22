@@ -80,20 +80,25 @@ export class CoreDbSource implements L1Source {
               t.data_root, t.owner_address, t.tag_count,
               (t.quantity IS NULL OR t.reward IS NULL OR t.last_tx IS NULL) AS null_amounts,
               g.n, g.mn, g.mx, g.d,
+              (g.n IS NOT NULL AND (g.lh <> t.height OR g.hh <> t.height
+                OR g.lb <> t.block_transaction_index
+                OR g.hb <> t.block_transaction_index)) AS misplaced,
               (w.address IS NOT NULL AND w.public_modulus IS NOT NULL) AS owner_known,
               w.public_modulus AS modulus
        FROM stable_transactions t
        LEFT JOIN (
-         SELECT transaction_id, height, block_transaction_index,
+         SELECT transaction_id,
                 COUNT(*) AS n, MIN(transaction_tag_index) AS mn,
                 MAX(transaction_tag_index) AS mx,
-                COUNT(DISTINCT transaction_tag_index) AS d
+                COUNT(DISTINCT transaction_tag_index) AS d,
+                MIN(height) AS lh, MAX(height) AS hh,
+                MIN(block_transaction_index) AS lb,
+                MAX(block_transaction_index) AS hb
          FROM stable_transaction_tags
          WHERE transaction_id IN
            (SELECT id FROM stable_transactions WHERE height BETWEEN ? AND ?)
-         GROUP BY transaction_id, height, block_transaction_index
-       ) g ON g.transaction_id = t.id AND g.height = t.height
-          AND g.block_transaction_index = t.block_transaction_index
+         GROUP BY transaction_id
+       ) g ON g.transaction_id = t.id
        LEFT JOIN wallets w ON w.address = t.owner_address
        WHERE t.height BETWEEN ? AND ?
        ORDER BY t.height, t.block_transaction_index`,
@@ -131,6 +136,9 @@ export class CoreDbSource implements L1Source {
                 min: r.mn ?? null,
                 max: r.mx ?? null,
                 distinct: r.d ?? 0,
+                // Read by id alone, as GraphQL reads them: a tag row under
+                // this id at another height or position is served with it.
+                misplaced: r.misplaced === 1 ? 1 : 0,
               },
               ownerKnown: r.owner_known === 1,
             };
@@ -231,6 +239,7 @@ export class CoreDbSource implements L1Source {
     n: number,
     from: number,
     to: number,
+    filter: { format1Unbound?: boolean } = {},
   ): Promise<DrawnTx[]> {
     const lo = Math.max(stratum.from, from);
     const hi = Math.min(stratum.to, to);
@@ -240,7 +249,8 @@ export class CoreDbSource implements L1Source {
     const positions = this.db
       .prepare(
         `SELECT height, block_transaction_index FROM stable_transactions
-         WHERE height BETWEEN ? AND ? ORDER BY height, block_transaction_index`,
+         WHERE height BETWEEN ? AND ?${filter.format1Unbound === true ? ' AND format = 1 AND data_size > 0' : ''}
+         ORDER BY height, block_transaction_index`,
       )
       .raw()
       .iterate(lo, hi) as IterableIterator<[number, number]>;

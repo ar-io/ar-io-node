@@ -132,6 +132,14 @@ export function compareHeaderWithBlock(
       out.push({ field, index: String(mine), chain: String(theirs) });
     }
   };
+  // A header fetched by hash can be another height's: the row claims this one.
+  if (header.height !== row.height) {
+    out.push({
+      field: 'height',
+      index: String(row.height),
+      chain: String(header.height),
+    });
+  }
   blob('indep_hash', row.indep_hash, header.indepHash);
   blob('previous_block', row.previous_block, header.previousBlock);
   blob('nonce', row.nonce, header.nonce);

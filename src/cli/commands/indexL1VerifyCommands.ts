@@ -41,7 +41,10 @@ import {
   BandsRefused,
   verifyBands,
 } from '../../lib/parquet-l1/verify-bands.js';
-import type { L1VerifyReport } from '../../lib/parquet-l1/verify-run.js';
+import type {
+  L1Allowances,
+  L1VerifyReport,
+} from '../../lib/parquet-l1/verify-run.js';
 import { exactJsonFetch } from '../../lib/parquet-l1/anchor.js';
 import type { SampleOptions } from '../../lib/parquet-l1/sample.js';
 import type { IndexL1VerifyCLIOptions, JsonSerializable } from '../types.js';
@@ -258,6 +261,11 @@ export async function openBandsDuck(
 export const DEFAULT_SAMPLE_BLOCKS = 1000;
 /** Transactions drawn per band for the signature sample by default. */
 export const DEFAULT_SAMPLE_TXS = 1000;
+/**
+ * Format-1 transactions drawn per band, from blocks whose tx_root cannot be
+ * recomputed, by default: what catches a format-2 transaction relabelled.
+ */
+export const DEFAULT_SAMPLE_FORMAT1 = 200;
 /** Bytes of format-1 data a band's signature sample may fetch. */
 export const DEFAULT_SAMPLE_V1_BYTES = 1e9;
 /** Sample fetches in flight by default. */
@@ -326,6 +334,53 @@ export function anchorPool(
   });
 }
 
+/** The sample a run draws: none without sources, or with every count 0. */
+export function sampleOptions(
+  options: {
+    sampleBlocks?: string;
+    sampleTxs?: string;
+    sampleFormat1?: string;
+    seed?: string;
+    concurrency?: string;
+  },
+  pool: ArweaveNodePool | undefined,
+  confirm: number,
+): SampleOptions | undefined {
+  const blocks =
+    whole(options.sampleBlocks, '--sample-blocks') ?? DEFAULT_SAMPLE_BLOCKS;
+  const txs = whole(options.sampleTxs, '--sample-txs') ?? DEFAULT_SAMPLE_TXS;
+  const format1 =
+    whole(options.sampleFormat1, '--sample-format1') ?? DEFAULT_SAMPLE_FORMAT1;
+  if (pool === undefined || (blocks === 0 && txs === 0 && format1 === 0)) {
+    return undefined;
+  }
+  return {
+    seed: whole(options.seed, '--seed') ?? crypto.randomInt(2 ** 31),
+    blocks,
+    txsPerStratum: txs,
+    format1PerStratum: format1,
+    v1BytesPerStratum: DEFAULT_SAMPLE_V1_BYTES,
+    concurrency:
+      whole(options.concurrency, '--concurrency') ?? DEFAULT_SAMPLE_CONCURRENCY,
+    confirm,
+  };
+}
+
+/** What the `--allow-*` flags accept. */
+export function allowances(options: {
+  allowUnanchored?: boolean;
+  allowUnbound?: boolean;
+  allowIncomplete?: boolean;
+  allowUnverifiedFormat1?: boolean;
+}): L1Allowances {
+  return {
+    unanchored: options.allowUnanchored === true,
+    unbound: options.allowUnbound === true,
+    incomplete: options.allowIncomplete === true,
+    unverifiedFormat1: options.allowUnverifiedFormat1 === true,
+  };
+}
+
 /** `--anchor-min`, at least 1 (default 2). */
 export function anchorMin(value: string | undefined): number {
   const n = value === undefined ? 2 : Number(value);
@@ -367,22 +422,7 @@ export async function indexL1VerifyCLICommand(
   const wantTo = whole(options.to, '--to');
   const min = anchorMin(options.anchorMin);
   const pool = anchorPool(options, deps);
-  const sampleBlocks =
-    whole(options.sampleBlocks, '--sample-blocks') ?? DEFAULT_SAMPLE_BLOCKS;
-  const sampleTxs =
-    whole(options.sampleTxs, '--sample-txs') ?? DEFAULT_SAMPLE_TXS;
-  const sample: SampleOptions | undefined =
-    pool !== undefined && (sampleBlocks > 0 || sampleTxs > 0)
-      ? {
-          seed: whole(options.seed, '--seed') ?? crypto.randomInt(2 ** 31),
-          blocks: sampleBlocks,
-          txsPerStratum: sampleTxs,
-          v1BytesPerStratum: DEFAULT_SAMPLE_V1_BYTES,
-          concurrency:
-            whole(options.concurrency, '--concurrency') ??
-            DEFAULT_SAMPLE_CONCURRENCY,
-        }
-      : undefined;
+  const sample = sampleOptions(options, pool, min);
   const accepted =
     pool !== undefined && sample === undefined
       ? ['--sample-blocks 0 --sample-txs 0']
@@ -392,11 +432,7 @@ export async function indexL1VerifyCLICommand(
     ...(pool !== undefined ? { pool } : {}),
     anchorMin: min,
     ...(sample !== undefined ? { sample } : {}),
-    allow: {
-      unanchored: options.allowUnanchored === true,
-      unbound: options.allowUnbound === true,
-      unverifiedFormat1: options.allowUnverifiedFormat1 === true,
-    },
+    allow: allowances(options),
     accepted,
   };
 

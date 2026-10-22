@@ -35,6 +35,7 @@ import {
   PREDECESSOR_HAS_NO_MERKLE,
 } from './chain.js';
 import { addFailure, VerifyCheck } from './checks.js';
+import { FORK_2_9_6 } from './tx-signature.js';
 import type { L1BlockRow } from './anchor.js';
 
 /**
@@ -69,7 +70,14 @@ export interface JudgeTx {
   /** The link (`block_transactions`) at this transaction's height and index, or null. */
   link: Buffer | null;
   /** The transaction's tag rows: how many, and their `tag_index` range and distinct count. */
-  tags: { n: number; min: number | null; max: number | null; distinct: number };
+  tags: {
+    n: number;
+    min: number | null;
+    max: number | null;
+    distinct: number;
+    /** Rows under its id at another height or position (a reader by id serves them). */
+    misplaced?: number;
+  };
   /** Whether a wallet row holds the owner's key. */
   ownerKnown: boolean;
 }
@@ -110,7 +118,7 @@ export interface JudgeUnbound {
 export const PRE20_REASON =
   "a pre-2.0 block's hash commits to the full wallet list, so it cannot be recomputed; its fields are bound only through the 2.0 hash list or the 2.0 seed fold, which need each block's transition tx_root, a witness this layout does not carry";
 export const FORMAT1_REASON =
-  'format-1 transaction with data and no v1_data_root: its data root comes from data the index does not hold, so the block tx_root cannot be recomputed';
+  'format-1 transaction with data and no v1_data_root: its data root comes from data the index does not hold, so the block tx_root cannot be recomputed, and every field of every transaction in the block (not only the format-1 ones) is bound only by the sample (a format-2 transaction relabelled format 1 moves its block here; the format-1 draw is what catches that). Closing it needs the v1 data roots, a later layout';
 export const INCOMPLETE_REASON =
   "the index lacks a transaction a link names (so tx_root and the weave accounting cannot be checked) or an owner's key (so its signature cannot be)";
 
@@ -192,9 +200,20 @@ export class L1Judge {
       txRoot?: boolean;
       /** Moved only by tests and chains whose forks are elsewhere. */
       forkHeight?: number;
+      /**
+       * The index's block below `from`, when it holds one: the first
+       * block is then judged against it like every other (its link,
+       * `hash_list_merkle`, `block_size` and weave accounting) rather than
+       * being the unjudged base.
+       */
+      prior?: JudgeBlockRow;
     } = {},
   ) {
     this.seedFold = from === 0 ? Buffer.alloc(0) : undefined;
+    if (options.prior !== undefined) {
+      this.previous = options.prior;
+      this.totals.weaveBase = big(options.prior.weave_size) ?? undefined;
+    }
     const check = (name: string, detail: string): VerifyCheck => ({
       name,
       ok: true,
@@ -419,6 +438,10 @@ export class L1Judge {
         missing.push(`${at} format (${String(tx.format)})`);
       } else if (tx.format === 2 && h < this.forkHeight) {
         missing.push(`${at} format 2 below the 2.0 fork`);
+      } else if (tx.format === 1 && h >= FORK_2_9_6) {
+        // `ar_tx:do_verify`: the 2.9.6 fork rejects every format-1
+        // transaction from its height on.
+        missing.push(`${at} format 1 at or above the 2.9.6 fork`);
       }
       if (big(tx.data_size) === null) missing.push(`${at} data_size`);
       if (tx.owner_address === null) missing.push(`${at} owner_address`);
@@ -475,11 +498,12 @@ export class L1Judge {
       const { n, min, max, distinct } = tx.tags;
       const ok =
         tx.tag_count === n &&
+        (tx.tags.misplaced ?? 0) === 0 &&
         (n === 0 || (min === 0 && max === n - 1 && distinct === n));
       if (!ok) {
         addFailure(this.checks.tags, {
           height: h,
-          found: `transaction ${b64(tx.id)}: tag_count ${String(tx.tag_count)}, ${n} tag rows indexed ${String(min)}-${String(max)} (${distinct} distinct)`,
+          found: `transaction ${b64(tx.id)}: tag_count ${String(tx.tag_count)}, ${n} tag rows indexed ${String(min)}-${String(max)} (${distinct} distinct)${(tx.tags.misplaced ?? 0) > 0 ? `, ${String(tx.tags.misplaced)} of them at another height or position` : ''}`,
           expected: 'tag_count tag rows, indexed 0 to tag_count-1',
         });
       }

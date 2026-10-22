@@ -162,7 +162,10 @@ describe('index-l1-import fails closed', () => {
     const duck: Database = await D.create(':memory:');
     try {
       // The gateway already holds the top band.
-      await importBand(db, duck, bands[2], { log });
+      await importBand(db, duck, bands[2], {
+        log,
+        binding: { kind: 'anchored', accepted: [] },
+      });
       // The second band's tags file is swapped after the check and before
       // it is written (bands live on a shared volume): its rows no longer
       // hold, part way through the band, after blocks and transactions
@@ -173,6 +176,7 @@ describe('index-l1-import fails closed', () => {
         bandsDir,
         log,
         from: FIRST,
+        verification: { allow: { unsampled: true } },
         commitEvery: 5,
         batchRows: 3,
         onBand: (outcome) => {
@@ -222,12 +226,15 @@ describe('index-l1-import fails closed', () => {
     );
     await fsp.chmod(bandsDir, 0o000);
     await assert.rejects(
-      indexL1ImportCLICommand({ bandsDir, coreDb: core, fill: true }, { log }),
+      indexL1ImportCLICommand(
+        { bandsDir, coreDb: core, fill: true, allowUnsampled: true },
+        { log },
+      ),
       /EACCES/,
     );
     await fsp.chmod(bandsDir, 0o755);
     const filled = (await indexL1ImportCLICommand(
-      { bandsDir, coreDb: core, fill: true },
+      { bandsDir, coreDb: core, fill: true, allowUnsampled: true },
       { log },
     )) as Record<string, any>;
     assert.equal(filled.filled, 1, 'and fills once it can read it');
@@ -239,7 +246,7 @@ describe('index-l1-import fails closed', () => {
     await buildCoreDb(other, FIRST, 10, { padded: false });
     await exportBands(other, bandsDir, [[FIRST, FIRST + 9]]);
     const out = (await indexL1ImportCLICommand(
-      { bandsDir, coreDb: core, fill: true },
+      { bandsDir, coreDb: core, fill: true, allowUnsampled: true },
       { log },
     ).catch((answer) => answer)) as Record<string, any>;
     assert.equal(out.filled, 0);

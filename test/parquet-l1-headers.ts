@@ -201,13 +201,47 @@ export function chainNode(
         const id = Buffer.from(m[1], 'base64url');
         const row = db
           .prepare(
-            'SELECT t.format, s.signature FROM stable_transactions t JOIN test_signatures s ON s.id = t.id WHERE t.id = ?',
+            `SELECT t.format, t.target, t.quantity, t.reward, t.last_tx,
+                    t.data_size, t.data_root, s.signature
+             FROM stable_transactions t JOIN test_signatures s ON s.id = t.id
+             WHERE t.id = ?`,
           )
-          .get(id) as { format: number; signature: Buffer } | undefined;
+          .get(id) as
+          | {
+              format: number;
+              target: Buffer | null;
+              quantity: string;
+              reward: string;
+              last_tx: Buffer;
+              data_size: number;
+              data_root: Buffer | null;
+              signature: Buffer;
+            }
+          | undefined;
         if (row === undefined) return tamper(path, { status: 404 });
+        const tags = db
+          .prepare(
+            `SELECT n.name, v.value FROM stable_transaction_tags g
+             JOIN tag_names n ON n.hash = g.tag_name_hash
+             JOIN tag_values v ON v.hash = g.tag_value_hash
+             WHERE g.transaction_id = ? ORDER BY g.transaction_tag_index`,
+          )
+          .all(id) as Array<{ name: Buffer; value: Buffer }>;
+        // As a node answers /tx/{id}: every field, tags by name and value.
         return tamper(path, {
           status: 200,
-          body: { id: m[1], format: row.format, signature: b64(row.signature) },
+          body: {
+            id: m[1],
+            format: row.format,
+            target: b64(row.target),
+            quantity: String(row.quantity),
+            reward: String(row.reward),
+            last_tx: b64(row.last_tx),
+            tags: tags.map((t) => ({ name: b64(t.name), value: b64(t.value) })),
+            data_size: String(row.data_size),
+            data_root: row.format === 2 ? b64(row.data_root) : '',
+            signature: b64(row.signature),
+          },
         });
       }
       return tamper(path, { status: 404 });

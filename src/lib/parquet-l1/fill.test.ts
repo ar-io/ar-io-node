@@ -27,8 +27,12 @@ import {
   missingRanges,
   planFill,
   readBands,
-  runFill,
+  runFill as runFillStrict,
 } from './import.js';
+
+/** The test chains are not Arweave's: no sources to sample from. */
+const runFill = (args: Parameters<typeof runFillStrict>[0]) =>
+  runFillStrict({ verification: { allow: { unsampled: true } }, ...args });
 
 const log = createTestLogger({ suite: 'parquet-l1 fill' });
 const FIRST = 1_900_000;

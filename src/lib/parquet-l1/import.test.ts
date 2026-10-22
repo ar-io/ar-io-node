@@ -46,7 +46,10 @@ import { l1BandId } from '../../index-export/kinds/parquet-l1/kind.js';
  * the refusals.
  */
 const runImport = (args: Parameters<typeof runImportStrict>[0]) =>
-  runImportStrict({ verification: { allow: { unanchored: true } }, ...args });
+  runImportStrict({
+    verification: { allow: { unanchored: true, unsampled: true } },
+    ...args,
+  });
 
 const log = createTestLogger({ suite: 'parquet-l1 import' });
 const FIRST = 1_900_000;
@@ -779,8 +782,10 @@ describe('readBands', () => {
   it('reads a directory of bands lowest first, ignoring what has no band file', async () => {
     await write(id(100_000, 199_999), [100_000, 199_999]);
     await write(id(0, 99_999), [0, 99_999]);
-    // A retired copy, or a directory not finished arriving: never read.
-    await fsp.mkdir(path.join(dir, id(200_000, 299_999)));
+    // A retired copy (the sidecar names its copies with a generation),
+    // or a stray directory: never read.
+    await fsp.mkdir(path.join(dir, `${id(200_000, 299_999)}~old`));
+    await fsp.mkdir(path.join(dir, 'stray'));
     assert.deepEqual(
       (await readBands(dir)).map((b) => b.band.heightRange),
       [
@@ -788,6 +793,12 @@ describe('readBands', () => {
         [100_000, 199_999],
       ],
     );
+  });
+
+  it('refuses a directory named as a band with no band file: the band, unreadable (E2)', async () => {
+    await write(id(0, 99_999), [0, 99_999]);
+    await fsp.mkdir(path.join(dir, id(100_000, 199_999)));
+    await assert.rejects(readBands(dir), /no band\.json/);
   });
 
   it('reads one copy of a band the sidecar installed twice', async () => {

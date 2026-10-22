@@ -101,7 +101,7 @@ describe('indexL1ImportCLICommand', () => {
       path.join(bandsDir, `${id}${GENERATION_SEPARATOR}${'a'.repeat(12)}`),
     );
     const result = (await indexL1ImportCLICommand(
-      { bandsDir, coreDb, allowUnanchored: true },
+      { bandsDir, coreDb, allowUnanchored: true, allowUnsampled: true },
       { log },
     )) as Record<string, unknown>;
     assert.equal(result.imported, 1);
@@ -135,7 +135,7 @@ describe('indexL1ImportCLICommand', () => {
       db.close();
     }
     const result = (await indexL1ImportCLICommand(
-      { bandsDir, coreDb, fill: true },
+      { bandsDir, coreDb, fill: true, allowUnsampled: true },
       { log },
     )) as Record<string, unknown>;
     assert.equal(result.mode, 'fill');
@@ -161,7 +161,13 @@ describe('indexL1ImportCLICommand', () => {
       for (const fill of [false, true]) {
         await assert.rejects(
           indexL1ImportCLICommand(
-            { bandsDir, coreDb, fill, allowUnanchored: true },
+            {
+              bandsDir,
+              coreDb,
+              fill,
+              allowUnanchored: true,
+              allowUnsampled: true,
+            },
             { log },
           ),
           /Another import or fill is running/,
@@ -172,7 +178,7 @@ describe('indexL1ImportCLICommand', () => {
     }
     // Released with the process that held it, or here with its handle.
     const result = (await indexL1ImportCLICommand(
-      { bandsDir, coreDb, allowUnanchored: true },
+      { bandsDir, coreDb, allowUnanchored: true, allowUnsampled: true },
       { log },
     )) as Record<string, unknown>;
     assert.equal(result.imported, 1);
@@ -186,7 +192,7 @@ describe('indexL1ImportCLICommand', () => {
     const old = new Date(Date.now() - 2 * 24 * 3600 * 1000);
     await fsp.utimes(stale, old, old);
     await indexL1ImportCLICommand(
-      { bandsDir, coreDb, allowUnanchored: true },
+      { bandsDir, coreDb, allowUnanchored: true, allowUnsampled: true },
       { log },
     );
     assert.equal(fs.existsSync(stale), false);
@@ -198,11 +204,11 @@ describe('indexL1ImportCLICommand', () => {
 
   it('does nothing the second time', async () => {
     await indexL1ImportCLICommand(
-      { bandsDir, coreDb, allowUnanchored: true },
+      { bandsDir, coreDb, allowUnanchored: true, allowUnsampled: true },
       { log },
     );
     const again = (await indexL1ImportCLICommand(
-      { bandsDir, coreDb, allowUnanchored: true },
+      { bandsDir, coreDb, allowUnanchored: true, allowUnsampled: true },
       { log },
     )) as Record<string, unknown>;
     assert.equal(again.imported, 0);
@@ -218,7 +224,13 @@ describe('indexL1ImportCLICommand', () => {
     ]);
 
     const result = (await indexL1ImportCLICommand(
-      { bandsDir, coreDb, maxBands: '1', allowUnanchored: true },
+      {
+        bandsDir,
+        coreDb,
+        maxBands: '1',
+        allowUnanchored: true,
+        allowUnsampled: true,
+      },
       { log },
     )) as Record<string, unknown>;
     assert.equal(result.imported, 1);
@@ -227,7 +239,7 @@ describe('indexL1ImportCLICommand', () => {
     // ever seen: --max-bands has to be what left it, not a name the
     // reader passed over.
     const next = (await indexL1ImportCLICommand(
-      { bandsDir, coreDb, allowUnanchored: true },
+      { bandsDir, coreDb, allowUnanchored: true, allowUnsampled: true },
       { log },
     )) as Record<string, unknown>;
     assert.equal(
@@ -254,7 +266,7 @@ describe('indexL1ImportCLICommand', () => {
     let thrown: Record<string, unknown> | undefined;
     try {
       await indexL1ImportCLICommand(
-        { bandsDir, coreDb, allowUnanchored: true },
+        { bandsDir, coreDb, allowUnanchored: true, allowUnsampled: true },
         { log },
       );
     } catch (error) {
@@ -286,7 +298,13 @@ describe('indexL1ImportCLICommand', () => {
 
   it('imports with an explicit cache size', async () => {
     const result = (await indexL1ImportCLICommand(
-      { bandsDir, coreDb, cacheMib: '16', allowUnanchored: true },
+      {
+        bandsDir,
+        coreDb,
+        cacheMib: '16',
+        allowUnanchored: true,
+        allowUnsampled: true,
+      },
       { log },
     )) as Record<string, unknown>;
     assert.equal(result.imported, 1);

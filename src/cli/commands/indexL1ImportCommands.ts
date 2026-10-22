@@ -32,9 +32,11 @@ import type { IndexL1ImportCLIOptions, JsonSerializable } from '../types.js';
 import { requiredStringFromOptions } from '../utils.js';
 import type { FetchLike } from '../../lib/onchain/arweave-nodes.js';
 import {
+  allowances,
   anchorMin,
   anchorPool,
   openBandsDuck,
+  sampleOptions,
   spillReserveBytes,
 } from './indexL1VerifyCommands.js';
 
@@ -90,6 +92,7 @@ export function takeImportLock(coreDb: string): Sqlite.Database {
 /** One band or range of a run, as the CLI contract reports it. */
 function describe(o: ImportOutcome) {
   return {
+    id: o.id,
     heightRange: o.heightRange,
     ...(o.heights !== undefined ? { heights: o.heights } : {}),
     result: o.result,
@@ -97,6 +100,27 @@ function describe(o: ImportOutcome) {
     // the JSON the CLI contract promises.
     ...(o.rows !== undefined ? { rows: o.rows } : {}),
     ...(o.reason !== undefined ? { reason: o.reason } : {}),
+    // What bound the heights before they were written, what was accepted,
+    // what is left unbound or unchecked, and what the sample detects.
+    ...(o.check !== undefined
+      ? {
+          boundBy: o.check.boundBy,
+          binding: o.check.binding.kind,
+          accepted: o.check.accepted,
+          unbound: JSON.parse(
+            JSON.stringify(o.check.unbound),
+          ) as JsonSerializable,
+          skipped: o.check.skipped,
+          assurance: o.check.assurance,
+          ...(o.check.sample !== undefined
+            ? {
+                sample: JSON.parse(
+                  JSON.stringify(o.check.sample),
+                ) as JsonSerializable,
+              }
+            : {}),
+        }
+      : {}),
     seconds: Math.round(o.seconds),
   };
 }
@@ -178,14 +202,16 @@ export async function indexL1ImportCLICommand(
     throw error;
   }
   const duck = session.duck;
+  const min = anchorMin(options.anchorMin);
+  const sample = sampleOptions(options, pool, min);
   const verification: ImportVerification = {
     ...(pool !== undefined ? { pool } : {}),
-    anchorMin: anchorMin(options.anchorMin),
+    anchorMin: min,
     allow: {
-      unanchored: options.allowUnanchored === true,
-      unbound: options.allowUnbound === true,
-      unverifiedFormat1: options.allowUnverifiedFormat1 === true,
+      ...allowances(options),
+      unsampled: options.allowUnsampled === true,
     },
+    ...(sample !== undefined ? { sample } : {}),
   };
   try {
     // The directory named must be readable: one that is not is an error,

@@ -305,3 +305,59 @@ describe('spawnFill', () => {
     assert.deepEqual(result.summary, { filled: 0, refused: 'bad band' });
   });
 });
+
+describe('L1BandImportWorker after a refusal (round 2, F)', () => {
+  it('F1: does not re-verify the same refused bands every interval, and retries once they change', async () => {
+    let runs = 0;
+    let clock = 1_000_000;
+    let entries = ['l1-h0-99-aaaaaaaa-000000000000'];
+    const subject = worker(
+      async () => {
+        runs += 1;
+        return {
+          code: 1,
+          summary: { filled: 0, refused: 'unbound' },
+          tail: '',
+        };
+      },
+      0,
+      { listDir: async () => entries, now: () => clock },
+    );
+    await subject.runOnce();
+    await subject.runOnce();
+    assert.equal(runs, 1, 'the second run waits');
+    clock += 60_000 + 1;
+    await subject.runOnce();
+    assert.equal(runs, 2, 'after the interval it tries again');
+    await subject.runOnce();
+    clock += 60_000 + 1;
+    await subject.runOnce();
+    assert.equal(runs, 2, 'refused again: it now waits twice as long');
+    entries = ['l1-h0-99-aaaaaaaa-111111111111'];
+    await subject.runOnce();
+    assert.equal(runs, 3, 'a changed band is tried at once');
+  });
+
+  it('F2: warns when the bands directory and its parent are both missing', async () => {
+    const seen: Array<{ level: string; message: string }> = [];
+    const record = (info: (typeof seen)[number]) => seen.push(info);
+    log.on('data', record);
+    try {
+      await worker(async () => ({ code: 0, tail: '' }), 0, {
+        statDir: async () => {
+          throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+        },
+      }).runOnce();
+    } finally {
+      log.off('data', record);
+    }
+    assert.ok(
+      seen.some(
+        (i) =>
+          i.level === 'warn' &&
+          /bands directory does not exist/.test(i.message),
+      ),
+      JSON.stringify(seen),
+    );
+  });
+});

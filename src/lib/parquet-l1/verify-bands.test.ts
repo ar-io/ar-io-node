@@ -186,17 +186,19 @@ describe('verifyBands', () => {
       assert.equal(bands.ok, true, JSON.stringify(bands.checks));
       for (const key of [
         'blocks',
-        'merkleChecked',
         'merkleSkipped',
-        'accountingChecked',
         'accountingSkipped',
         'txRootChecked',
         'weaveSize',
-        'weaveGrowth',
-        'accountedFor',
       ] as const) {
         assert.equal(bands[key], sqlite[key], key);
       }
+      // core.db holds the block below the range, so its first block is
+      // judged against it there; the bands start at FIRST, so not here.
+      assert.equal(sqlite.merkleChecked, bands.merkleChecked + 1);
+      assert.equal(sqlite.accountingChecked, bands.accountingChecked + 1);
+      assert.ok(bands.skipped.includes('first_block_link'));
+      assert.ok(!sqlite.skipped.includes('first_block_link'));
       // Every check the judge runs, with the same verdict.
       const verdicts = (r: { checks: Array<{ name: string; ok: boolean }> }) =>
         Object.fromEntries(r.checks.map((c) => [c.name, c.ok]));
@@ -231,7 +233,8 @@ describe('verifyBands', () => {
         sqlite.accountingSkipped > 0,
         'the fixture is past the threshold',
       );
-      assert.equal(bands.accountingSkipped, sqlite.accountingSkipped);
+      // core.db judges its first block against the one below (D4).
+      assert.equal(bands.accountingSkipped + 1, sqlite.accountingSkipped);
       assert.equal(bands.accountingChecked, sqlite.accountingChecked);
       assert.equal(bands.ok, sqlite.ok);
     } finally {

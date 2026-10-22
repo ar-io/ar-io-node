@@ -66,6 +66,13 @@ export interface IndexL1ImportCLIOptions extends GlobalCLIOptions {
   allowUnanchored?: boolean;
   allowUnbound?: boolean;
   allowUnverifiedFormat1?: boolean;
+  allowIncomplete?: boolean;
+  allowUnsampled?: boolean;
+  sampleBlocks?: string;
+  sampleTxs?: string;
+  sampleFormat1?: string;
+  seed?: string;
+  concurrency?: string;
   readTimeout?: string;
   spillMax?: string;
   spillReserveGb?: string;
@@ -85,8 +92,10 @@ export interface IndexL1VerifyCLIOptions extends GlobalCLIOptions {
   allowUnanchored?: boolean;
   allowUnbound?: boolean;
   allowUnverifiedFormat1?: boolean;
+  allowIncomplete?: boolean;
   sampleBlocks?: string;
   sampleTxs?: string;
+  sampleFormat1?: string;
   seed?: string;
   concurrency?: string;
   readTimeout?: string;

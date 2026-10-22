@@ -511,7 +511,8 @@ export async function verifyBands(
     duplicates: listing.duplicates,
     ignored: listing.ignored,
     vanished: listing.vanished,
-    publisherBound: bound !== undefined,
+    // Bound only when every band and file was as signed.
+    publisherBound: bound !== undefined && publicationCheck.ok,
     ...(bound !== undefined
       ? {
           publication: {

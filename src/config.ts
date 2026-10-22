@@ -1736,6 +1736,28 @@ export const L1_BAND_IMPORT_INTERVAL_SECONDS = +env.varOrDefault(
 export const L1_BAND_IMPORT_ALLOW_UNVERIFIED =
   env.varOrDefault('L1_BAND_IMPORT_ALLOW_UNVERIFIED', 'false') === 'true';
 
+/**
+ * Where the fill anchors and samples (`--anchor-from`): comma-separated
+ * gateways or Arweave nodes serving /block/ and /tx/. By default this
+ * gateway's trusted node and trusted gateways. The sample's refutations
+ * and source-attested fields need two distinct machines among them.
+ */
+export const L1_BAND_IMPORT_SAMPLE_FROM = (
+  env.varOrUndefined('L1_BAND_IMPORT_SAMPLE_FROM') ??
+  [TRUSTED_NODE_URL, ...Object.keys(TRUSTED_GATEWAYS_URLS)].join(',')
+)
+  .split(',')
+  .map((url) => url.trim())
+  .filter((url) => url.length > 0)
+  .filter((url, i, all) => all.indexOf(url) === i);
+
+/**
+ * Fill with no sample of headers and signatures: transaction ids, their
+ * order and every transaction field then go unchecked. Off by default.
+ */
+export const L1_BAND_IMPORT_ALLOW_UNSAMPLED =
+  env.varOrDefault('L1_BAND_IMPORT_ALLOW_UNSAMPLED', 'false') === 'true';
+
 /** SQLite page cache for a fill run, in MiB, in a process of its own. */
 export const L1_BAND_IMPORT_CACHE_MIB = +env.varOrDefault(
   'L1_BAND_IMPORT_CACHE_MIB',

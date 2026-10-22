@@ -105,8 +105,7 @@ export const optionMap = {
   },
   toHeight: {
     alias: '--to <height>',
-    description:
-      'Highest block height to check. For an index reaching below the 2.0 fork, defaults to the fork (422250) or the highest held if lower; for one starting at or above it, to the highest held',
+    description: 'Highest block height to check. Defaults to the highest held',
   },
   verifyBandsDir: {
     alias: '--bands-dir <path>',
@@ -151,12 +150,27 @@ export const optionMap = {
   allowUnbound: {
     alias: '--allow-unbound',
     description:
-      'Pass with blocks nothing binds: pre-2.0 blocks (their hashes cannot be recomputed and the layout carries no transition tx_root witnesses), and blocks whose transactions the index lacks. Listed in unbound either way',
+      'Pass with pre-2.0 blocks, which nothing binds: their hashes cannot be recomputed and the layout carries no transition tx_root witnesses. Listed in unbound.pre20 either way',
   },
   allowUnverifiedFormat1: {
     alias: '--allow-unverified-format1',
     description:
       'Pass with post-2.0 blocks whose tx_root could not be recomputed because they hold a format-1 transaction with data (the layout carries no v1 data roots). Listed in unbound.txRootFormat1 either way',
+  },
+  allowIncomplete: {
+    alias: '--allow-incomplete',
+    description:
+      "Pass with blocks the index holds only part of: a transaction a link names, or an owner's key, missing (an exporter publishes a tip band like this). Listed in unbound.incomplete either way",
+  },
+  allowUnsampled: {
+    alias: '--allow-unsampled',
+    description:
+      'Write with no sample of headers and signatures (no --anchor-from, or every --sample-* 0): transaction ids, their order and every transaction field are then unchecked against the chain',
+  },
+  sampleFormat1: {
+    alias: '--sample-format1 <n>',
+    description:
+      'Format-1 transactions drawn per band from blocks whose tx_root cannot be recomputed, checked against the chain (default 200; 0 to skip): what catches a format-2 transaction relabelled format 1. Needs --anchor-from',
   },
   sampleBlocks: {
     alias: '--sample-blocks <n>',
@@ -372,7 +386,14 @@ export const indexL1ImportOptions: CommanderOption[] = [
   optionMap.anchorMin,
   optionMap.allowUnanchored,
   optionMap.allowUnbound,
+  optionMap.allowIncomplete,
   optionMap.allowUnverifiedFormat1,
+  optionMap.allowUnsampled,
+  optionMap.sampleBlocks,
+  optionMap.sampleTxs,
+  optionMap.sampleFormat1,
+  optionMap.sampleSeed,
+  optionMap.sampleConcurrency,
   optionMap.readTimeout,
   optionMap.spillMax,
   optionMap.spillReserveGb,
@@ -391,9 +412,11 @@ export const indexL1VerifyOptions: CommanderOption[] = [
   optionMap.anchorMin,
   optionMap.allowUnanchored,
   optionMap.allowUnbound,
+  optionMap.allowIncomplete,
   optionMap.allowUnverifiedFormat1,
   optionMap.sampleBlocks,
   optionMap.sampleTxs,
+  optionMap.sampleFormat1,
   optionMap.sampleSeed,
   optionMap.sampleConcurrency,
   optionMap.readTimeout,

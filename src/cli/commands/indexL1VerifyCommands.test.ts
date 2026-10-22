@@ -291,7 +291,7 @@ describe('indexL1VerifyCLICommand', () => {
     assert.deepEqual(failing(result), ['sample']);
     assert.match(
       JSON.stringify(result.checks.find((c: any) => c.name === 'sample')),
-      /does not verify over the index/,
+      /does not verify over the index|breaks consensus/,
     );
   });
 
