@@ -61,7 +61,6 @@
  *   `onChainRootSource` proves every byte against the chain).
  */
 import crypto from 'node:crypto';
-import { createReadStream } from 'node:fs';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { SIG_CONFIG } from '@dha-team/arbundles';
@@ -73,15 +72,7 @@ import {
   RootSourceFactory,
   type UncheckedReason,
 } from '../index-band/verify.js';
-import { publicKeyFromSolanaAddress } from '../httpsig.js';
-import {
-  type BandDescriptor,
-  type IndexEntry,
-  type IndexPublication,
-  parseIndexPublicationDocument,
-  supersededBands,
-  verifyIndexPublication,
-} from '../index-publication.js';
+import { type BandDescriptor, supersededBands } from '../index-publication.js';
 import { checkParquetFile } from '../parquet/check.js';
 import {
   type BandOnDisk as L1BandOnDisk,
@@ -89,7 +80,14 @@ import {
   readBandDirectory as readL1BandDirectory,
   readPublisherFacts,
 } from '../parquet-l1/layout.js';
-import { addFailure, type VerifyCheck } from '../parquet-l1/verify.js';
+import { addFailure, type VerifyCheck } from '../parquet-l1/checks.js';
+import {
+  detectableFraction,
+  drawSeed,
+  seededRandom,
+} from '../index-band/draw.js';
+
+export { detectableFraction, drawSeed, seededRandom };
 import {
   BAND_FILE,
   bandFiles,
@@ -107,6 +105,30 @@ import type { LookupSpec } from '../parquet/lookups.js';
 import { bandTableFiles, verifyBandLookups } from './lookups.js';
 import { selectionDuckDb } from './selection.js';
 import { digestL2Table, L2TableError } from './tables.js';
+import { isGone, readBandsDir } from '../index-band/read-dir.js';
+import {
+  boundPublication as bindPublication,
+  type PublicationOptions,
+  sha256File,
+} from '../index-band/publication-binding.js';
+
+/**
+ * The publication's entry for the `parquet-l2` index, its signature
+ * checked against the key given.
+ *
+ * @throws L2BandsRefused when it does not bind.
+ */
+function boundPublication(
+  options: L2PublicationOptions,
+  bandIds: string[],
+  publisher: string | undefined,
+): ReturnType<typeof bindPublication> {
+  try {
+    return bindPublication(options, 'parquet-l2', bandIds, publisher);
+  } catch (error) {
+    throw new L2BandsRefused((error as Error).message);
+  }
+}
 
 /** Bands listed in `minedPartial`; the rest are counted. */
 export const MAX_PARTIAL_LISTED = 50;
@@ -156,26 +178,8 @@ export interface L2OnChainOptions {
   deadlineMs?: number;
 }
 
-export interface L2PublicationOptions {
-  /** The signed publication document, as served or as written. */
-  document: string | Buffer;
-  /**
-   * The key that must have signed it: the publisher's registered observer
-   * address (base58), given by the operator or read from the registry.
-   */
-  publisherKey: string;
-  /** The index's name in it, when it lists more than one `parquet-l2` index. */
-  index?: string;
-  /** Accept a publication past its `expiresAt` (default: refused). */
-  allowExpired?: boolean;
-  /**
-   * Where the key came from, when not from the operator: a registry the
-   * run trusted for it, said in `assurance` and `publication.keyFrom`.
-   */
-  keyFrom?: string;
-  /** Injected in tests: the time expiry is judged at. */
-  now?: () => number;
-}
+/** A signed publication to bind the bands to (`publication-binding.ts`). */
+export type L2PublicationOptions = PublicationOptions;
 
 export interface L2VerifyOptions {
   /** Check only bands inside these heights. */
@@ -371,92 +375,38 @@ function signatureLengthsSql(): string {
   return `CASE signature_type ${cases.join(' ')} ELSE true END`;
 }
 
-const errorCode = (error: unknown): string | undefined =>
-  (error as { code?: unknown })?.code as string | undefined;
-
 const messageOf = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
-
-/** Whether a path is gone: ENOENT, and ENOENT again on a second look. */
-async function isGone(file: string): Promise<boolean> {
-  const first = await fs.lstat(file).then(
-    () => false,
-    (error) => errorCode(error) === 'ENOENT',
-  );
-  if (!first) return false;
-  return fs.lstat(file).then(
-    () => false,
-    (error) => errorCode(error) === 'ENOENT',
-  );
-}
 
 /**
  * The bands in a directory: each entry holding a `band.json`, symlinks
  * followed. Installed bands' directories carry a generation
  * (`<id>~<generation>`). Entries starting with `.` are skipped. Any other
  * entry that is not a band that can be read whole is a problem, named; an
- * entry that disappeared while it was read is `vanished`.
+ * entry that disappeared while it was read is `vanished`. Shared with the
+ * L1 verifier and importer (`readBandsDir`).
  */
 export async function readL2BandsDir(bandsDir: string): Promise<{
   bands: L2BandOnDisk[];
   problems: L2DirProblem[];
   vanished: string[];
 }> {
-  const names = (await fs.readdir(bandsDir)).sort();
-  const bands: L2BandOnDisk[] = [];
-  const problems: L2DirProblem[] = [];
-  const vanished: string[] = [];
-  for (const entry of names) {
-    if (entry.startsWith('.')) continue;
-    const dir = path.join(bandsDir, entry);
-    const problem = (text: string) => problems.push({ entry, problem: text });
-    // stat follows a symlink: a band reached through one is a band.
-    let stat;
-    try {
-      stat = await fs.stat(dir);
-    } catch (error) {
-      if (await isGone(dir)) vanished.push(entry);
-      else problem(`unreadable: ${errorCode(error) ?? messageOf(error)}`);
-      continue;
-    }
-    if (!stat.isDirectory()) {
-      problem('not a directory');
-      continue;
-    }
-    let text: string;
-    try {
-      text = await fs.readFile(path.join(dir, BAND_FILE), 'utf8');
-    } catch (error) {
-      if (await isGone(dir)) vanished.push(entry);
-      else if (errorCode(error) === 'ENOENT') problem(`no ${BAND_FILE}`);
-      else
-        problem(
-          `${BAND_FILE} unreadable: ${errorCode(error) ?? messageOf(error)}`,
-        );
-      continue;
-    }
-    let band: ParquetL2Band;
-    try {
-      band = parseBandFile(text);
-    } catch (error) {
-      problem(`${BAND_FILE} is not an l2 band file: ${messageOf(error)}`);
-      continue;
-    }
-    let supersedes: string[] | undefined;
-    try {
-      supersedes = (await readPublisherFacts(dir))?.supersedes;
-    } catch (error) {
-      // A claim that can't be read is no claim, and a fault of the band.
-      problem(`.publisher.json unreadable: ${messageOf(error)}`);
-    }
-    bands.push({
-      dir,
-      id: entry.split('~')[0],
-      band,
-      ...(supersedes !== undefined ? { supersedes } : {}),
-    });
-  }
-  return { bands, problems, vanished };
+  const listing = await readBandsDir(bandsDir, {
+    bandFile: BAND_FILE,
+    parse: parseBandFile,
+    label: 'l2',
+    readSupersedes: async (dir) => (await readPublisherFacts(dir))?.supersedes,
+  });
+  return {
+    bands: listing.bands.map((b) => ({
+      dir: b.dir,
+      id: b.id,
+      band: b.band,
+      ...(b.supersedes !== undefined ? { supersedes: b.supersedes } : {}),
+    })),
+    problems: listing.problems,
+    vanished: listing.vanished,
+  };
 }
 
 /** A band id's publisher tag, or undefined when it is not an l2 band id. */
@@ -595,159 +545,6 @@ export function onchainAssurance(
   }
   const p = Math.ceil(detectableFraction(n, 0.95, maxUnchecked) * 100);
   return `on chain, ${perBand} located items drawn uniformly per band${fewestDrawn < perBand ? ` (${fewestDrawn} in the band with fewest)` : ''}, none replaced${maxUnchecked > 0 ? `, up to ${maxUnchecked} allowed unchecked, which are treated as possibly fabricated (a fabricated item behind data nobody can read comes back unchecked)` : ''}: a band in which ${p}% or more of the located items are fabricated would have been caught with 95% probability; smaller fractions may not be (unlocated items are not checked on chain at all)`;
-}
-
-/**
- * The key of one band's draw (a stratum of it: 0 for the uniform draw, 1 for
- * the nested top-up): sha256(`<run seed>|<band id>|<stratum>`) as 64
- * lowercase hex digits, so every band's draw is its own and no band's can be
- * steered by choosing its place or its neighbours.
- */
-export function drawSeed(
-  seed: number,
-  bandId: string,
-  stratum: number,
-): string {
-  return crypto
-    .createHash('sha256')
-    .update(`${seed}|${bandId}|${stratum}`)
-    .digest('hex');
-}
-
-/**
- * The smallest share p of fabricated located items at which a band of `n`
- * drawn entries, up to `k` of them allowed unchecked, passes at most
- * `1 - confidence` of the time. A fabricated item behind data nobody can
- * read comes back unchecked, not wrong, so the band passes when at most k
- * drawn items are fabricated: P(Bin(n, p) <= k) = sum over i <= k of
- * C(n, i) p^i (1 - p)^(n - i). For k = 0 that is (1 - p)^n, so
- * p = 1 - (1 - confidence)^(1/n): 20 drawn, 14%. Otherwise found by
- * bisection (the probability falls as p rises). 1 when nothing is bounded
- * (k >= n).
- */
-export function detectableFraction(
-  n: number,
-  confidence = 0.95,
-  k = 0,
-): number {
-  if (n <= 0 || k >= n) return 1;
-  if (k <= 0) return 1 - (1 - confidence) ** (1 / n);
-  const passes = (p: number) => {
-    let term = (1 - p) ** n; // i = 0
-    let sum = term;
-    for (let i = 1; i <= k; i += 1) {
-      term *= ((n - i + 1) / i) * (p / (1 - p));
-      sum += term;
-    }
-    return sum;
-  };
-  let lo = 0;
-  let hi = 1;
-  for (let step = 0; step < 60; step += 1) {
-    const mid = (lo + hi) / 2;
-    if (passes(mid) <= 1 - confidence) hi = mid;
-    else lo = mid;
-  }
-  return hi;
-}
-
-/** A seeded PRNG (mulberry32) giving numbers in [0, 1). */
-export function seededRandom(seed: number): () => number {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-/** SHA-256 of a file, streamed. */
-async function sha256File(file: string): Promise<string> {
-  const hash = crypto.createHash('sha256');
-  for await (const chunk of createReadStream(file)) hash.update(chunk);
-  return hash.digest('hex');
-}
-
-/**
- * The publication's entry for this index, its signature checked against
- * the key given: the key the publisher's gateway record names.
- *
- * @throws L2BandsRefused when the document doesn't verify, or names no
- *   single `parquet-l2` index to bind to.
- */
-function boundPublication(
-  options: L2PublicationOptions,
-  bandIds: string[],
-  publisher: string | undefined,
-): { publication: IndexPublication; entry: IndexEntry } {
-  let parsed;
-  try {
-    parsed = parseIndexPublicationDocument(options.document);
-  } catch (error) {
-    throw new L2BandsRefused(`the publication is not one: ${messageOf(error)}`);
-  }
-  const { publication, signed } = parsed;
-  const signature = publication.signature;
-  if (signature === undefined) {
-    throw new L2BandsRefused('the publication is not signed');
-  }
-  if (signature.keyId !== options.publisherKey) {
-    throw new L2BandsRefused(
-      `the publication is signed by ${signature.keyId}, not the publisher's key ${options.publisherKey}`,
-    );
-  }
-  let key;
-  try {
-    key = publicKeyFromSolanaAddress(options.publisherKey);
-  } catch (error) {
-    throw new L2BandsRefused(
-      `the publisher key is not an address: ${messageOf(error)}`,
-    );
-  }
-  const verified = verifyIndexPublication(signed, key);
-  if (!verified.ok) {
-    throw new L2BandsRefused(
-      `the publication's signature does not verify: ${verified.reason}`,
-    );
-  }
-  const now = (options.now ?? Date.now)();
-  if (
-    Date.parse(publication.expiresAt) < now &&
-    options.allowExpired !== true
-  ) {
-    throw new L2BandsRefused(
-      `the publication expired at ${publication.expiresAt} (sequence ${publication.sequence}, issued ${publication.issuedAt}): fetch a current one, or --allow-expired`,
-    );
-  }
-  if (publisher !== undefined && publication.publisher !== publisher) {
-    throw new L2BandsRefused(
-      `the publication is ${publication.publisher}'s, not ${publisher}'s`,
-    );
-  }
-  const candidates = publication.indexes.filter(
-    (entry) =>
-      entry.kind === 'parquet-l2' &&
-      (options.index === undefined || entry.name === options.index),
-  );
-  const holding = candidates.filter((entry) =>
-    entry.bands.some((band) => bandIds.includes(band.id)),
-  );
-  const entry =
-    candidates.length === 1
-      ? candidates[0]
-      : holding.length === 1
-        ? holding[0]
-        : undefined;
-  if (entry === undefined) {
-    throw new L2BandsRefused(
-      candidates.length === 0
-        ? `the publication lists no parquet-l2 index${options.index !== undefined ? ` named ${options.index}` : ''}`
-        : 'the publication lists more than one parquet-l2 index holding these bands: name one (--index)',
-    );
-  }
-  return { publication, entry };
 }
 
 /** Something a band's check found, applied to the result in band order. */

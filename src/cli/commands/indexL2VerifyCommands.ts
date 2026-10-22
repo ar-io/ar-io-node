@@ -17,19 +17,11 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { Logger } from 'winston';
 
-import {
-  type GatewayRegistry,
-  CoreGatewayRegistry,
-} from '../../index-swarm/gateway-registry.js';
+import { type GatewayRegistry } from '../../index-swarm/gateway-registry.js';
 import {
   gatewayRootSource,
   type RootSourceFactory,
 } from '../../lib/index-band/verify.js';
-import {
-  INDEX_PUBLICATION_MAX_BYTES,
-  parseIndexPublication,
-  readPublicationBody,
-} from '../../lib/index-publication.js';
 import {
   ArweaveNodePool,
   DEFAULT_ARWEAVE_NODE_URLS,
@@ -44,6 +36,7 @@ import { verifyL2Bands } from '../../lib/parquet-l2/verify-bands.js';
 import type { IndexL2VerifyCLIOptions, JsonSerializable } from '../types.js';
 import { requiredStringFromOptions } from '../utils.js';
 import { openBandsDuck, SPILL_RESERVE_BYTES } from './indexL1VerifyCommands.js';
+import { resolvePublication } from './index-publication-options.js';
 
 /** Items per band read on chain when `--onchain` is not given. */
 export const DEFAULT_ONCHAIN_PER_BAND = 20;
@@ -167,37 +160,6 @@ export function urlList(value: string | undefined): string[] | undefined {
   }
 }
 
-/** A publication document from a file or a URL, at most its size cap. */
-async function readPublication(
-  where: string,
-  timeoutMs: number,
-): Promise<Buffer> {
-  if (/^https?:\/\//i.test(where)) {
-    const response = await fetch(where, {
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-    if (!response.ok) {
-      throw new L2VerifyRefused(
-        `--publication: HTTP ${response.status} from ${where}`,
-      );
-    }
-    return readPublicationBody(response).catch((error: Error) => {
-      throw new L2VerifyRefused(`--publication: ${error.message}`);
-    });
-  }
-  const { size } = await fsp.stat(where).catch((error) => {
-    throw new L2VerifyRefused(
-      `--publication: cannot read ${where}: ${(error as Error).message}`,
-    );
-  });
-  if (size > INDEX_PUBLICATION_MAX_BYTES) {
-    throw new L2VerifyRefused(
-      `--publication is over ${INDEX_PUBLICATION_MAX_BYTES} bytes`,
-    );
-  }
-  return fsp.readFile(where);
-}
-
 const isDirectory = (dir: string) =>
   fsp.stat(dir).then(
     (s) => s.isDirectory(),
@@ -305,92 +267,11 @@ export async function indexL2VerifyCLICommand(
       '--gateway-url and --arweave-nodes are exclusive',
     );
   }
-  if (options.publication === undefined) {
-    for (const [flag, value] of [
-      ['--publisher-key', options.publisherKey],
-      ['--registry-url', options.registryUrl],
-      ['--index', options.index],
-      ['--allow-expired', options.allowExpired === true ? 'yes' : undefined],
-    ] as const) {
-      if (value !== undefined) {
-        throw new L2VerifyRefused(`${flag} is only for --publication`);
-      }
-    }
-  } else if (
-    (options.publisherKey === undefined) ===
-    (options.registryUrl === undefined && injectedRegistry === undefined)
-  ) {
-    throw new L2VerifyRefused(
-      "--publication needs the publisher's key: one of --publisher-key or --registry-url",
-    );
-  }
-
-  // The publication, and the key it must be signed with: given, or the one
-  // the publisher's gateway record names.
-  let publication:
-    | {
-        document: Buffer;
-        publisherKey: string;
-        index?: string;
-        source: string;
-        keyFrom?: string;
-      }
-    | undefined;
-  if (options.publication !== undefined) {
-    const document = await readPublication(options.publication, timeoutMs);
-    let publisherKey = options.publisherKey;
-    if (publisherKey === undefined) {
-      let wallet: string;
-      try {
-        wallet = parseIndexPublication(document).publisher;
-      } catch (error) {
-        throw new L2VerifyRefused(
-          `--publication is not a publication: ${(error as Error).message}`,
-        );
-      }
-      let registry: GatewayRegistry;
-      if (injectedRegistry !== undefined) {
-        registry = injectedRegistry;
-      } else {
-        const core = new CoreGatewayRegistry({
-          log,
-          coreUrl: options.registryUrl as string,
-          // Long enough that the lookup below reuses the read made here.
-          ttlMs: 10 * 60_000,
-          timeoutMs,
-        });
-        // lookup() answers undefined both when the publisher is not
-        // registered and when the registry could not be read; read it
-        // first so a registry that is down is named as the cause.
-        try {
-          await core.list();
-        } catch (error) {
-          throw new L2VerifyRefused(
-            `could not read the registry at ${options.registryUrl as string} (/ar-io/peers): ${(error as Error).message}`,
-          );
-        }
-        registry = core;
-      }
-      const record = await registry.lookup(wallet);
-      if (record === undefined) {
-        throw new L2VerifyRefused(
-          `the registry has no gateway ${wallet} to read the publication's key from`,
-        );
-      }
-      publisherKey = record.observerAddress;
-    }
-    publication = {
-      document,
-      publisherKey,
-      source: options.publication,
-      ...(options.publisherKey === undefined
-        ? {
-            keyFrom: `the registry at ${options.registryUrl ?? 'the injected registry'}`,
-          }
-        : {}),
-      ...(options.index !== undefined ? { index: options.index } : {}),
-    };
-  }
+  const publication = await resolvePublication(
+    options,
+    { log, timeoutMs, registry: injectedRegistry },
+    L2VerifyRefused,
+  );
 
   const l1 = await l1Index(bandsDir, options.l1BandsDir);
 
