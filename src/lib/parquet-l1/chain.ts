@@ -41,10 +41,79 @@ import {
   generateLeaves,
 } from 'arweave/node/lib/merkle.js';
 
-import { deepHash, FORK_1_6, FORK_2_0, FORK_2_5 } from './block-hash.js';
+import {
+  deepHash,
+  foldBlockIndexEntry,
+  FORK_1_6,
+  FORK_2_0,
+  FORK_2_5,
+} from './block-hash.js';
 
-export { FORK_1_6, FORK_2_0, FORK_2_5 };
+export { FORK_1_6, FORK_2_0, FORK_2_5, foldBlockIndexEntry };
 const CHUNK = 256 * 1024;
+
+/**
+ * The 2.0 seed fold — `ar_unbalanced_merkle:block_index_to_merkle_root`
+ * over the block-index entries `[indep_hash, weave_size, transition
+ * tx_root]` of heights 0 to `h`, genesis first, from empty
+ * ({@link foldBlockIndexEntry}) — at fixed heights below the 2.0 fork.
+ *
+ * The fold at 422,249 is block 422,250's `hash_list_merkle` (the 2.0 seed;
+ * `ar_block.erl` at 28df6bd5), so it binds every pre-2.0 block's hash,
+ * weave size and transition `tx_root`. A band set that holds block 422,250
+ * reaches that binding through the block itself; these pins give it to a
+ * band set that does not — any `l1-4` band below the fork, alone — by
+ * checking its fold where it crosses one, so a band whose fold reaches a
+ * pin is bound to the chain as much as one reaching block 422,250.
+ *
+ * Computed 2026-10-23 from Arweave's own per-height entries: the 2.0
+ * checkpoint it committed (`d43ba2b9^:apps/arweave/priv/fork_2_0_checkpoint`,
+ * heights 0 to 399,999, SHA-256 {@link FORK_2_0_CHECKPOINT_SHA256}) and
+ * nodes' `GET /block_index/{from}/{to}` (`X-Block-Format: 3`) for 400,000
+ * to 422,249. The fold at 422,249 equals block 422,250's
+ * `hash_list_merkle` as two gateways served it, so every entry, and every
+ * pin below, is the chain's. `fork-2-0-pins.test.ts` recomputes the first
+ * four from the checkpoint whenever an Arweave checkout is at hand.
+ */
+export const FORK_2_0_FOLD_PINS: ReadonlyMap<number, Buffer> = new Map(
+  (
+    [
+      [
+        99_999,
+        '3uxEfY2W3pKx5lqRvvksHCVczmZy0mtU6vY-aDELGlzgP6JAdLeztd3ib6bk-ddq',
+      ],
+      [
+        199_999,
+        'MTYJHNVyj5NO5Vgwm7kPrmE1hMD4lQge_LE9WG3nUmlPRStx39oF5uibHBD4mF3d',
+      ],
+      [
+        299_999,
+        '5fyunSDM_5oMnjyt9M0ZB5XKpW5ZjmrvJu7rrC5Yn1nUzfJ1xeN8x8-Y_I_mVB-i',
+      ],
+      [
+        399_999,
+        '1s-ckibn5_evNgrs82K8d_J4byo8xc3GKV0rQK4uw_Iwp0Oia-Xstp5yAfXYH7Nk',
+      ],
+      [
+        FORK_2_0 - 1,
+        'akSjDrBKPuepJMOhO_S9C-iFp5zn9Glv57HGdN_WPqEToWC0Ukb37Gzs4PDA7oLU',
+      ],
+    ] as Array<[number, string]>
+  ).map(([height, fold]) => [height, Buffer.from(fold, 'base64url')]),
+);
+
+/**
+ * SHA-256 of Arweave's 2.0 checkpoint file (`apps/arweave/priv/
+ * fork_2_0_checkpoint` at `d43ba2b9^`, git blob b1de1ed6): a JSON list,
+ * newest first, of `{tx_root, weave_size, hash}` for heights 399,999 down
+ * to 0. The exporter reads transition `tx_root`s from it; what it reads is
+ * checked against the band and the pins all the same.
+ */
+export const FORK_2_0_CHECKPOINT_SHA256 =
+  '714be0bc10087e12f16a92124436f886e4d3afce7b8c9c81cba284798db044d4';
+
+/** The heights {@link FORK_2_0_CHECKPOINT_SHA256}'s file covers: 0 to this. */
+export const FORK_2_0_CHECKPOINT_TOP = 399_999;
 
 export interface ChainBlock {
   height: number;
