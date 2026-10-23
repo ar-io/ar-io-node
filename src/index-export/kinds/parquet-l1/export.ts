@@ -49,6 +49,12 @@ import { LookupDescription } from '../../../lib/parquet/lookups.js';
 import { writeBandLookups } from '../../../lib/parquet-l1/lookups.js';
 import { BandsSource } from '../../../lib/parquet-l1/bands-source.js';
 import { L1Judge } from '../../../lib/parquet-l1/judge.js';
+import {
+  buildBandWitnesses,
+  checkBandWitnesses,
+  WitnessInputs,
+  WitnessRefused,
+} from '../../../lib/parquet-l1/witnesses.js';
 
 /** Heights the exporter judges its own band in per read. */
 const JUDGE_WINDOW = 10_000;
@@ -59,11 +65,13 @@ import {
   canonicalDataRoot,
   canonicalTxRoot,
   firstTagValue,
+  PARQUET_L1_LOOKUPS_SCHEMA,
   PARQUET_L1_SCHEMA,
   PARQUET_L1_TABLES,
   ParquetL1Band,
   serializeBandFile,
   TableSpec,
+  witnessesOf,
   writePublisherFacts,
 } from '../../../lib/parquet-l1/layout.js';
 
@@ -94,8 +102,19 @@ export interface L1ExportResult {
   /** Bytes of scratch at its peak, and of the finished band. */
   scratchBytes: number;
   bandBytes: number;
+  /**
+   * Why the band was written without witnesses (`l1-3`), when it was: its
+   * witness inputs lacked what it needs, or contradicted the chain. The
+   * witness step adds them later, in place.
+   */
+  witnessesRefused?: string;
   seconds: number;
 }
+
+/** Witness inputs that have nothing: a band needing none still gets its (empty) witnesses. */
+export const NO_WITNESS_INPUTS: WitnessInputs = {
+  v1Roots: async () => new Map(),
+};
 
 const table = (name: string): TableSpec =>
   PARQUET_L1_TABLES.find((t) => t.name === name) as TableSpec;
@@ -259,6 +278,8 @@ export async function exportL1Band({
   supersedes = [],
   windowHeights = EXPORT_WINDOW_HEIGHTS,
   requireComplete = false,
+  witnessInputs = NO_WITNESS_INPUTS,
+  witnessMaxMissing = 0,
 }: {
   coreDbPath: string;
   workDir: string;
@@ -273,6 +294,10 @@ export async function exportL1Band({
    * a whole band is never rebuilt, so it waits rather than keep a gap.
    */
   requireComplete?: boolean;
+  /** Where the band's witnesses come from (`witness-inputs.ts`). */
+  witnessInputs?: WitnessInputs;
+  /** v1 data roots the band may lack and still be given witnesses. */
+  witnessMaxMissing?: number;
 }): Promise<L1ExportResult> {
   const started = Date.now();
   const staging = await fs.mkdtemp(path.join(workDir, '.band-build-l1-'));
@@ -571,11 +596,43 @@ export async function exportL1Band({
     if (topTimestamp === undefined) {
       throw new L1CheckError(`no block ${to} to date the band by`);
     }
+    // Witnesses, built in a directory of their own and moved in only when
+    // the chain confirmed every one: a band without them is written as
+    // `l1-3`, and the witness step adds them later.
+    const witnessDir = path.join(staging, 'witnesses');
+    await fs.mkdir(witnessDir);
+    let witnesses: ParquetL1Band['witnesses'];
+    let witnessesRefused: string | undefined;
+    try {
+      witnesses = (
+        await withBandWriter(staging, (duck) =>
+          buildBandWitnesses(
+            duck,
+            bandDir,
+            { heightRange: [from, to] },
+            witnessDir,
+            witnessInputs,
+            { maxMissing: witnessMaxMissing },
+          ),
+        )
+      ).witnesses;
+      for (const spec of witnessesOf(PARQUET_L1_SCHEMA, [from, to])) {
+        await fs.rename(
+          path.join(witnessDir, spec.file),
+          path.join(bandDir, spec.file),
+        );
+      }
+    } catch (error) {
+      if (!(error instanceof WitnessRefused)) throw error;
+      witnessesRefused = error.message;
+    }
+    await fs.rm(witnessDir, { recursive: true, force: true });
     // Only what the rows determine, so any publisher of them writes these
     // bytes; what is this publisher's own goes beside the band.
     const band: ParquetL1Band = {
       version: 1,
-      schema: PARQUET_L1_SCHEMA,
+      schema:
+        witnesses !== undefined ? PARQUET_L1_SCHEMA : PARQUET_L1_LOOKUPS_SCHEMA,
       heightRange: [from, to],
       tables: Object.fromEntries(
         [...scratch.values()].map((file) => [
@@ -584,6 +641,7 @@ export async function exportL1Band({
         ]),
       ),
       lookups,
+      ...(witnesses !== undefined ? { witnesses } : {}),
       createdAt: bandTime(topTimestamp),
     };
     // Refuse to publish a band whose files every subscriber would refuse.
@@ -598,7 +656,15 @@ export async function exportL1Band({
     // (`index-l1-verify --bands-dir`, the importer): publisher and
     // consumer cannot drift on what a right band is.
     const judged = await withBandWriter(staging, async (duck) => {
-      const judge = new L1Judge(from, to);
+      const judge = new L1Judge(from, to, { witnesses: true });
+      for (const problem of await checkBandWitnesses(duck, bandDir, band)) {
+        judge.fail(
+          'witnesses',
+          problem.height,
+          problem.found,
+          problem.expected,
+        );
+      }
       await new BandsSource(duck, [{ id: 'staged', dir: bandDir, band }]).judge(
         judge,
         from,
@@ -636,6 +702,7 @@ export async function exportL1Band({
       strayTransactions,
       scratchBytes,
       bandBytes: await directoryBytes(bandDir),
+      ...(witnessesRefused !== undefined ? { witnessesRefused } : {}),
       seconds: (Date.now() - started) / 1000,
     };
   } catch (error) {

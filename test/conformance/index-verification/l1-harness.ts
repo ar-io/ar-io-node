@@ -18,6 +18,12 @@
  * exporter as two bands of 10 heights, named by their real ids. Each case
  * works on its own copy of the bands; the chain a scripted node serves is
  * always the honest one.
+ *
+ * Cases with `chain: "pre20"` start instead from a chain below the 2.0
+ * fork (`honestPre20`): one band of the 20 heights below 422,250, given
+ * its `l1-4` witnesses by the real builder, and judged against that
+ * chain's own pinned folds (`foldPins`), since its blocks are not
+ * mainnet's.
  */
 import crypto from 'node:crypto';
 import * as fs from 'node:fs/promises';
@@ -33,11 +39,17 @@ import {
 import { ArweaveNodePool } from '../../../src/lib/onchain/arweave-nodes.js';
 import { VerifyRefused } from '../../../src/lib/parquet-l1/checks.js';
 import {
+  BAND_FILE,
+  FORK_2_0_WITNESS,
   PARQUET_L1_LOOKUPS,
+  PARQUET_L1_WITNESSES,
   parseBandFile,
   serializeBandFile,
+  V1_DATA_ROOTS_WITNESS,
+  witnessesOf,
 } from '../../../src/lib/parquet-l1/layout.js';
 import { writeBandLookups } from '../../../src/lib/parquet-l1/lookups.js';
+import { digestBandTable } from '../../../src/lib/parquet-l1/read.js';
 import {
   BandsRefused,
   type BandsVerifyResult,
@@ -47,6 +59,7 @@ import {
   exportBands,
   republish,
   rewriteTable,
+  witnessTestBand,
 } from '../../parquet-l1-bands.js';
 import { buildCoreDb } from '../../parquet-l1-core-db.js';
 import {
@@ -60,6 +73,8 @@ import {
 import type { Case, Verdict } from './harness.js';
 import {
   type ChainBlock,
+  foldBlockIndexEntry,
+  FORK_2_0,
   nextHashListMerkle,
 } from '../../../src/lib/parquet-l1/chain.js';
 
@@ -98,6 +113,73 @@ export function honestL1(root: string): Promise<Honest> {
     return { root: dir, coreDb, bandsDir, publisher };
   })();
   return honest;
+}
+
+/** The pre-2.0 chain's band: the 20 heights below the 2.0 fork. */
+export const PRE20_FIRST = FORK_2_0 - 20;
+
+interface HonestPre20 extends Honest {
+  /** The chain's own pinned folds: the seed below the band, and the fold through its top. */
+  pins: Map<number, Buffer>;
+}
+let honestPre20Promise: Promise<HonestPre20> | undefined;
+
+/**
+ * The pre-2.0 chain and its one band, witnessed, built once per run: 20
+ * blocks of format-1 transactions signed over their data
+ * (`buildCoreDb({ verifiable: true })` below the fork), exported by the
+ * real exporter (as `l1-3`: no pin below its first height), then given its
+ * witnesses by the real builder (`witnessTestBand`), the chain's v1 roots
+ * taken from the data its transactions sign. Its 2.0 seed fold starts from
+ * `SHA-384("pre20")` below the band; the fold through 422,249 is what its
+ * blocks and their transition roots give. Those two are the chain's pins.
+ */
+export function honestPre20(
+  root: string,
+  duck: Database,
+): Promise<HonestPre20> {
+  honestPre20Promise ??= (async () => {
+    const dir = path.join(root, 'l1-honest-pre20');
+    await fs.mkdir(dir, { recursive: true });
+    const coreDb = path.join(dir, 'core.db');
+    const bandsDir = path.join(dir, 'bands');
+    const publisher = getSolanaAddress(
+      crypto.generateKeyPairSync('ed25519').publicKey,
+    );
+    await buildCoreDb(coreDb, PRE20_FIRST, 20, {
+      padded: false,
+      verifiable: true,
+    });
+    const [exported] = await exportBands(
+      coreDb,
+      bandsDir,
+      [[PRE20_FIRST, FORK_2_0 - 1]],
+      publisher,
+    );
+    const pins = await witnessTestBand(duck, coreDb, exported.dir);
+    return { root: dir, coreDb, bandsDir, publisher, pins };
+  })();
+  return honestPre20Promise;
+}
+
+/** Rewrites one of a band's witness files with `select` over `SRC`, its columns kept. */
+async function rewriteWitness(
+  duck: Database,
+  dir: string,
+  name: string,
+  select: string,
+): Promise<void> {
+  const spec = PARQUET_L1_WITNESSES.find((w) => w.name === name);
+  if (spec === undefined) throw new Error(`no witness ${name}`);
+  const file = path.join(dir, spec.file);
+  const cols = spec.columns.map((c) => `"${c.name}"`).join(', ');
+  await duck.exec(
+    `CREATE OR REPLACE TABLE src AS SELECT * FROM read_parquet('${file}')`,
+  );
+  await duck.exec(
+    `COPY (SELECT ${cols} FROM (${select.replace(/\bSRC\b/g, 'src')})) TO '${file}.x' (FORMAT PARQUET)`,
+  );
+  await fs.rename(`${file}.x`, file);
 }
 
 /** One change to a case's bands, applied in order (see README.md). */
@@ -393,6 +475,105 @@ async function apply(
     case 'removeBand':
       await fs.rm(dir, { recursive: true });
       return;
+    case 'witnessV1': {
+      // A v1 data root for the transaction at `height`, `bti`: its own
+      // data_root (`leaf`, which its tx_root leaf holds) or another
+      // (`random`). Unless `keepDataRoot`, its data_root is then cleared,
+      // as a band holds a format-1 transaction's.
+      const [row] = (await duck.all(
+        `SELECT id, data_root FROM read_parquet('${path.join(dir, 'transactions.parquet')}')
+         WHERE height = ${h} AND block_transaction_index = ${op.bti as number}`,
+      )) as Array<{ id: Uint8Array; data_root: Uint8Array | null }>;
+      const id = Buffer.from(row.id).toString('hex');
+      const root =
+        op.root === 'random'
+          ? crypto.randomBytes(32).toString('hex')
+          : Buffer.from(row.data_root as Uint8Array).toString('hex');
+      await rewriteWitness(
+        duck,
+        dir,
+        V1_DATA_ROOTS_WITNESS.name,
+        `SELECT * FROM SRC UNION ALL SELECT ${h}::UBIGINT, from_hex('${id}'), from_hex('${root}')`,
+      );
+      if (op.keepDataRoot !== true) {
+        await rewriteTable(
+          duck,
+          dir,
+          'transactions',
+          `SELECT * REPLACE (CASE WHEN height = ${h} AND block_transaction_index = ${op.bti as number} THEN NULL ELSE data_root END AS data_root) FROM SRC`,
+        );
+      }
+      return;
+    }
+    case 'editWitness':
+      await rewriteWitness(
+        duck,
+        dir,
+        op.witness as string,
+        op.select as string,
+      );
+      return;
+    case 'forgeTransitionRoot': {
+      // The transition tx_root at `height` replaced, and every fold from
+      // there rebuilt on it: a self-consistent witness of another root.
+      const file = path.join(dir, FORK_2_0_WITNESS.file);
+      const rows = (await duck.all(
+        `SELECT w.height, w.tx_root, w.fold, b.indep_hash, CAST(b.weave_size AS VARCHAR) AS weave_size
+         FROM read_parquet('${file}') w
+         JOIN read_parquet('${path.join(dir, 'blocks.parquet')}') b ON b.height = w.height
+         ORDER BY w.height`,
+      )) as Array<Record<string, any>>;
+      const at = rows.findIndex((r) => Number(r.height) === h);
+      let fold = Buffer.from(rows[at - 1].fold);
+      const values: string[] = [];
+      for (const [i, r] of rows.entries()) {
+        let txRoot = Buffer.from(r.tx_root);
+        let rowFold = Buffer.from(r.fold);
+        if (i >= at) {
+          if (i === at) txRoot = crypto.randomBytes(32);
+          fold = foldBlockIndexEntry(fold, {
+            indep_hash: Buffer.from(r.indep_hash),
+            weave_size: r.weave_size,
+            tx_root: txRoot,
+          });
+          rowFold = fold;
+        }
+        values.push(
+          `(${Number(r.height)}::UBIGINT, from_hex('${txRoot.toString('hex')}'), from_hex('${rowFold.toString('hex')}'))`,
+        );
+      }
+      await rewriteWitness(
+        duck,
+        dir,
+        FORK_2_0_WITNESS.name,
+        `SELECT * FROM (VALUES ${values.join(', ')}) v(height, tx_root, fold)`,
+      );
+      return;
+    }
+    case 'dropWitnesses': {
+      // The band as l1-3: no witness files, none described.
+      const file = path.join(dir, BAND_FILE);
+      const band = parseBandFile(await fs.readFile(file, 'utf8'));
+      for (const spec of witnessesOf(band.schema, band.heightRange)) {
+        await fs.rm(path.join(dir, spec.file));
+      }
+      const { witnesses: _w, ...rest } = band;
+      void _w;
+      await fs.writeFile(file, serializeBandFile({ ...rest, schema: 'l1-3' }));
+      return;
+    }
+    case 'redescribeWitness': {
+      // A witness's rows and digest in band.json as its file now is.
+      const spec = PARQUET_L1_WITNESSES.find((w) => w.name === op.witness);
+      if (spec === undefined)
+        throw new Error(`no witness ${String(op.witness)}`);
+      const file = path.join(dir, BAND_FILE);
+      const band = parseBandFile(await fs.readFile(file, 'utf8'));
+      const { rows, rowDigest } = await digestBandTable(duck, dir, spec);
+      band.witnesses = { ...band.witnesses, [spec.name]: { rows, rowDigest } };
+      await fs.writeFile(file, serializeBandFile(band));
+      return;
+    }
     default:
       throw new Error(`unknown l1 op ${op.op}`);
   }
@@ -514,9 +695,12 @@ export async function buildL1Case(
   dir: string;
   bandsDir: string;
   coreDb: string;
+  /** The chain's own pinned folds, for a chain that is not mainnet's below the 2.0 fork. */
+  foldPins?: Map<number, Buffer>;
   publication?: NonNullable<Parameters<typeof verifyBands>[2]>['publication'];
 }> {
-  const base = await honestL1(root);
+  const pre20 = c.chain === 'pre20' ? await honestPre20(root, duck) : undefined;
+  const base: Honest = pre20 ?? (await honestL1(root));
   const dir = await fs.mkdtemp(path.join(root, `${c.id}-`));
   const bandsDir = path.join(dir, 'bands');
   await fs.cp(base.bandsDir, bandsDir, { recursive: true });
@@ -571,6 +755,7 @@ export async function buildL1Case(
     dir,
     bandsDir,
     coreDb: base.coreDb,
+    ...(pre20 !== undefined ? { foldPins: pre20.pins } : {}),
     ...(publication !== undefined ? { publication } : {}),
   };
 }
@@ -581,7 +766,7 @@ export async function runL1Case(
   root: string,
   c: Case,
 ): Promise<L1CaseResult> {
-  const { dir, bandsDir, coreDb, publication } = await buildL1Case(
+  const { dir, bandsDir, coreDb, publication, foldPins } = await buildL1Case(
     duck,
     root,
     c,
@@ -650,6 +835,7 @@ export async function runL1Case(
         unverifiedFormat1: options.allowUnverifiedFormat1 === true,
       },
       ...(publication !== undefined ? { publication } : {}),
+      ...(foldPins !== undefined ? { foldPins } : {}),
     });
     const failing = result.checks.filter((x) => !x.ok).map((x) => x.name);
     const verdict: Verdict = result.ok

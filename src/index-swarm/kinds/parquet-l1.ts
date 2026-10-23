@@ -32,14 +32,15 @@ import {
   bandFiles,
   bandSupersedes,
   isL1BandRange,
+  knownBandFiles,
   L1_SPAN,
   L1_SUB_SPAN,
   lookupsOf,
   MAX_BAND_FILE_BYTES,
-  PARQUET_L1_SCHEMAS,
   PARQUET_L1_TABLES,
   parseBandFile,
   ParquetL1Band,
+  witnessesOf,
 } from '../../lib/parquet-l1/layout.js';
 import { sha256File } from '../../lib/sha256-file.js';
 import {
@@ -59,7 +60,7 @@ import {
 export const PARQUET_L1_KIND = 'parquet-l1';
 
 /** Every file name a band of any layout this build reads may hold. */
-const KNOWN_FILES = new Set(PARQUET_L1_SCHEMAS.flatMap((s) => bandFiles(s)));
+const KNOWN_FILES = knownBandFiles();
 
 async function readBandFile(dir: string): Promise<ParquetL1Band> {
   const file = path.join(dir, BAND_FILE);
@@ -98,7 +99,7 @@ export class ParquetL1Kind implements ArtifactKind {
     // older band.json (a derive interrupted before its rename) is not yet
     // part of the band, and is left out.
     const files: BandFile[] = await Promise.all(
-      bandFiles(band.schema).map((name) =>
+      bandFiles(band.schema, band.heightRange).map((name) =>
         limit(async () => {
           const filePath = path.join(dir, name);
           const stat = await fs.stat(filePath).catch(() => undefined);
@@ -141,7 +142,7 @@ export class ParquetL1Kind implements ArtifactKind {
     }
     // Then exactly the files of the layout its band.json names.
     const declared = await readBandFile(dir);
-    const expected = bandFiles(declared.schema);
+    const expected = bandFiles(declared.schema, declared.heightRange);
     if (
       names.length !== expected.length ||
       names.some((name, i) => name !== expected[i])
@@ -200,6 +201,13 @@ export class ParquetL1Kind implements ArtifactKind {
         await checkParquetFile(db, path.join(dir, spec.file), {
           columns: spec.columns,
           rows: described.lookups?.[spec.name]?.rows,
+        });
+      }
+      // And witnesses: their columns, and the rows their band says.
+      for (const spec of witnessesOf(described.schema, described.heightRange)) {
+        await checkParquetFile(db, path.join(dir, spec.file), {
+          columns: spec.columns,
+          rows: described.witnesses?.[spec.name]?.rows,
         });
       }
     } finally {

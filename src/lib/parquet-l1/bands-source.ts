@@ -16,6 +16,11 @@ import * as path from 'node:path';
 
 import { BLOCK_ROW_COLUMNS, type L1BlockRow } from './anchor.js';
 import type { L1BandOnDisk } from './bands-dir.js';
+import {
+  FORK_2_0_WITNESS,
+  V1_DATA_ROOTS_WITNESS,
+  witnessesOf,
+} from './layout.js';
 import type { JudgeBlockRow, L1Judge } from './judge.js';
 import type { IndexedTx } from './tx-signature.js';
 import {
@@ -107,7 +112,7 @@ export class BandsSource implements L1Source {
   }
 
   private async window(
-    band: Pick<L1BandOnDisk, 'dir'>,
+    band: Pick<L1BandOnDisk, 'dir' | 'band'>,
     lo: number,
     hi: number,
   ): Promise<WindowRows> {
@@ -145,7 +150,43 @@ export class BandsSource implements L1Source {
        WHERE height BETWEEN ${lo} AND ${hi}
        ORDER BY height, block_transaction_index`,
     )) as Array<Record<string, unknown>>;
+    // Witnesses, by the band's layout: a file a band of its layout lacks
+    // fails the files check, and reading it fails the band's rows here.
+    const declared = witnessesOf(band.band.schema, band.band.heightRange);
+    let witnesses: WindowRows['witnesses'];
+    if (declared.length > 0) {
+      const at = (file: string) => sql(path.join(band.dir, file));
+      const v1 = (await this.duck.all(
+        `SELECT height, id, data_root FROM read_parquet(${at(V1_DATA_ROOTS_WITNESS.file)})
+         WHERE height BETWEEN ${lo} AND ${hi} AND id IS NOT NULL AND data_root IS NOT NULL
+         ORDER BY height, id`,
+      )) as Array<Record<string, unknown>>;
+      const fork20 = declared.includes(FORK_2_0_WITNESS)
+        ? ((await this.duck.all(
+            `SELECT height, tx_root, fold FROM read_parquet(${at(FORK_2_0_WITNESS.file)})
+             WHERE height BETWEEN ${lo} AND ${hi} AND tx_root IS NOT NULL AND fold IS NOT NULL
+             ORDER BY height`,
+          )) as Array<Record<string, unknown>>)
+        : undefined;
+      witnesses = {
+        v1: v1.map((r) => ({
+          height: Number(r.height),
+          id: asBuffer(r.id) as Buffer,
+          data_root: asBuffer(r.data_root) as Buffer,
+        })),
+        ...(fork20 !== undefined
+          ? {
+              fork20: fork20.map((r) => ({
+                height: Number(r.height),
+                tx_root: asBuffer(r.tx_root) as Buffer,
+                fold: asBuffer(r.fold) as Buffer,
+              })),
+            }
+          : {}),
+      };
+    }
     return {
+      ...(witnesses !== undefined ? { witnesses } : {}),
       blocks: blocks.map(blockRow),
       txs: txs.map((r) => ({
         height: Number(r.height),

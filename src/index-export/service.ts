@@ -81,12 +81,15 @@ import {
   L1Outcome,
   L1PublishedBand,
   L1Step,
+  L1WitnessOutcome,
   planL1,
   planL1Derive,
   planL1Normalize,
+  planL1Witness,
   runL1Derive,
   runL1Normalize,
   runL1Step,
+  runL1Witness,
 } from './kinds/parquet-l1/kind.js';
 import { deriveL2Bands, L2LiveBand } from './kinds/parquet-l2/bands.js';
 import type { L2IndexConfig } from './kinds/parquet-l2/config.js';
@@ -239,6 +242,8 @@ export interface RunReport {
    * every publisher of their rows writes it.
    */
   l1Normalized?: L1NormalizeOutcome[];
+  /** Published `parquet-l1` bands whose witnesses were added in place (`l1-4`). */
+  l1Witnessed?: L1WitnessOutcome[];
   gateUrl: string;
   /** Disk the run's builds needed together (each step's scratch and band). */
   peakBytes: number;
@@ -329,6 +334,7 @@ export function runResult(report: RunReport): string {
     ...(report.l1Steps ?? []),
     ...(report.l1Derived ?? []),
     ...(report.l1Normalized ?? []),
+    ...(report.l1Witnessed ?? []),
     ...(report.l2 ?? []).flatMap((index) => [
       ...index.steps,
       ...(index.derived ?? []),
@@ -1371,6 +1377,7 @@ export class ExportService {
       // wait hours for builds.
       await this.normalizeL1Files(report, workDir, dryRun);
       await this.deriveL1Lookups(report, workDir, dryRun);
+      await this.witnessL1Bands(report, workDir, dryRun);
       // The budget is the builds': it starts after the derive.
       const started = this.now();
       const heights = coreHeights(config.coreDbPath);
@@ -1443,6 +1450,9 @@ export class ExportService {
           ...(this.lock !== undefined
             ? { stillHeld: async () => this.lock?.held() ?? false }
             : {}),
+          ...(config.l1Witness !== undefined
+            ? { witness: config.l1Witness }
+            : {}),
         });
         report.l1Steps.push(outcome);
         report.peakBytes +=
@@ -1476,6 +1486,58 @@ export class ExportService {
       log.error('L1 export stopped', { error: message });
     }
     await this.deriveL1Lookups(report, workDir, dryRun);
+    await this.witnessL1Bands(report, workDir, dryRun);
+  }
+
+  /**
+   * Adds witnesses to every published band with current tables and
+   * lookups but none (`l1-3`), in place, keeping its id: built from the
+   * witness inputs and checked against the chain before the band is
+   * touched (`runL1Witness`). Reads no `core.db`. Called after the lookups
+   * are derived, before the builds and after them; each band once a run.
+   * A band whose witnesses cannot be had or confirmed is left as it is
+   * and tried again next run.
+   */
+  private async witnessL1Bands(
+    report: RunReport,
+    workDir: string,
+    dryRun: boolean,
+  ): Promise<void> {
+    const { config, log } = this.deps;
+    try {
+      const state = indexState(await loadState(this.stateFile), L1_INDEX);
+      const confirmed = new Set(
+        Object.entries(state.layoutConfirmed ?? {})
+          .filter(([, rules]) => rules === PARQUET_L1_TABLE_RULES)
+          .map(([id]) => id),
+      );
+      const bands = await deriveL1Bands(config.l1PublishDir, config.publisher);
+      const handled = new Set((report.l1Witnessed ?? []).map((d) => d.id));
+      const due = planL1Witness(bands, confirmed).filter(
+        (b) => !handled.has(b.id),
+      );
+      if (due.length === 0) return;
+      await assertSameFilesystem(workDir, config.l1PublishDir);
+      report.l1Witnessed ??= [];
+      for (const band of due) {
+        report.l1Witnessed.push(
+          await runL1Witness(band, {
+            workDir,
+            dryRun,
+            log,
+            witness: config.l1Witness ?? { nodes: [], maxMissing: 0 },
+            ...(this.lock !== undefined
+              ? { stillHeld: async () => this.lock?.held() ?? false }
+              : {}),
+          }),
+        );
+      }
+      recordL1Bands(await deriveL1Bands(config.l1PublishDir, config.publisher));
+    } catch (error) {
+      log.error('L1 witnesses not added', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   /**

@@ -17,6 +17,7 @@ import {
   bandFiles,
   bandTime,
   PARQUET_L1_LOOKUPS,
+  PARQUET_L1_LOOKUPS_SCHEMA,
   PARQUET_L1_SCHEMA,
   PARQUET_L1_TABLES,
   readPublisherFacts,
@@ -135,7 +136,15 @@ describe('exportL1Band', () => {
       supersedes: [],
       windowHeights: 7,
     });
-    assert.equal(result.band.schema, 'l1-3');
+    // A band no format-1 data and no height below the 2.0 fork: its
+    // witnesses are built from nothing, so it is written as l1-4.
+    assert.equal(result.band.schema, 'l1-4');
+    assert.deepEqual(result.band.witnesses, {
+      v1_data_roots: {
+        rows: 0,
+        rowDigest: crypto.createHash('sha256').digest('hex'),
+      },
+    });
     const lookups = result.band.lookups ?? {};
     assert.deepEqual(Object.keys(lookups).sort(), ['tag', 'tx_id', 'wallet']);
     // One tx_id row per transaction; a wallet row per signer and per
@@ -519,7 +528,7 @@ describe('exportL1Band', () => {
     // Every file of the band is the same, so the torrent is: one infohash,
     // one swarm for both publishers.
     const torrentOf = async (dir: string) => {
-      const names = bandFiles(PARQUET_L1_SCHEMA);
+      const names = bandFiles(PARQUET_L1_SCHEMA, a.band.heightRange);
       const files = await Promise.all(
         names.map(async (name) => {
           const bytes = await fsp.readFile(path.join(dir, name));
@@ -643,7 +652,10 @@ describe('exportL1Band below the 2.0 fork', () => {
         `${table.name} digest`,
       );
     }
-    assert.equal(a.band.schema, PARQUET_L1_SCHEMA);
+    // A test chain below the fork reaches no pinned 2.0 seed fold, so its
+    // band is written without witnesses, as l1-3.
+    assert.equal(a.band.schema, PARQUET_L1_LOOKUPS_SCHEMA);
+    assert.match(a.witnessesRefused ?? '', /no pinned/);
   });
 });
 

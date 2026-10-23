@@ -61,6 +61,13 @@ export interface L1RunOptions {
   assurance?: string[];
   /** Flags the caller accepted something with. */
   accepted?: string[];
+  /**
+   * The chain's 2.0 seed folds, for a test chain; mainnet's
+   * (`FORK_2_0_FOLD_PINS`) otherwise. Never from a command line.
+   */
+  foldPins?: ReadonlyMap<number, Buffer>;
+  /** Report the judge's `witnesses` check: the source reads `l1-4` bands. */
+  witnesses?: boolean;
   /** Failures the caller found in rows the judge does not walk (wallets, stray tags), under the judge's check names. */
   judgeFailures?: Array<{
     check: Parameters<L1Judge['fail']>[0];
@@ -102,6 +109,8 @@ export interface L1VerifyReport {
   accountingChecked: number;
   accountingSkipped: number;
   txRootChecked: number;
+  /** Pre-2.0 blocks a witnessed 2.0 seed fold binds to the chain (`l1-4`). */
+  foldBound: number;
   checks: VerifyCheck[];
   seconds: number;
 }
@@ -142,6 +151,8 @@ export async function runL1Verify(
   }
   const judge = new L1Judge(from, to, {
     txRoot: options.txRoot !== false,
+    ...(options.foldPins !== undefined ? { foldPins: options.foldPins } : {}),
+    ...(options.witnesses === true ? { witnesses: true } : {}),
     ...(prior !== undefined
       ? { prior: { ...prior, tx_count: null } as JudgeBlockRow }
       : {}),
@@ -151,6 +162,7 @@ export async function runL1Verify(
     judge.fail(f.check, f.height, f.found, f.expected);
   }
   const judged = judge.finish();
+  const t0 = judged.totals;
   const checks: VerifyCheck[] = [...(options.checks ?? []), ...judged.checks];
   const skipped = [...(options.skipped ?? [])];
   // Without the block below, the first block's link and size are the base
@@ -281,6 +293,12 @@ export async function runL1Verify(
     }
   }
 
+  if (t0.foldBound > 0) {
+    assurance.push(
+      `${t0.foldBound} pre-2.0 blocks have their indep_hash, weave_size and transition tx_root bound to the chain through the witnessed 2.0 seed fold, which reaches a value the chain fixes (a fold pinned in this build, or block 422,250's hash_list_merkle, itself bound as the blocks above it are); their transactions' data sizes and data roots through the transition tx_root, recomputed`,
+    );
+  }
+
   // The samples.
   let sample: SampleSummary | undefined;
   if (options.sample !== undefined) {
@@ -395,6 +413,7 @@ export async function runL1Verify(
     accountingChecked: t.accountingChecked,
     accountingSkipped: t.accountingSkipped,
     txRootChecked: t.txRootChecked,
+    foldBound: t.foldBound,
     checks,
     seconds: (Date.now() - started) / 1000,
   };

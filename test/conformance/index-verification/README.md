@@ -317,7 +317,8 @@ or nothing drawn).
 
 ### `kind: "l1-bands"` and `kind: "l1-anchor"`: L1 bands
 
-`cases/l1-bands.json` and `cases/l1-anchor.json`. Both start from one honest
+`cases/l1-bands.json`, `cases/l1-anchor.json` and `cases/l1-witness.json`
+(layout `l1-4`'s witnesses, both kinds). They start from one honest
 chain and its bands; `l1-bands` cases tamper with the bands (and, with
 `publication`, bind them to a signed publication); `l1-anchor` cases also
 anchor and sample them against scripted Arweave nodes. `l1-harness.ts` is
@@ -348,7 +349,23 @@ era), as `test/parquet-l1-core-db.ts` builds them with `verifiable: true`:
 It is exported by the real exporter as two bands, heights 1,900,000 to
 1,900,009 and 1,900,010 to 1,900,019, each named by its real id
 (`l1-h<from>-<to>-<tag>-<digest>`) for one publisher wallet. Bands are
-referred to by index (`band`: 0 is the lower).
+referred to by index (`band`: 0 is the lower). They are layout `l1-4`: no
+transaction is format 1, so each band's `witness_v1_data_roots` is empty.
+
+**The pre-2.0 chain** (`chain: "pre20"`). 21 blocks, heights 422,229 to
+422,249, built the same way below the 2.0 fork: `h mod 4` format-1
+transactions of `data_size` 1000, 2000, 3000, each with data
+`(h + index) mod 251` repeated, signed by the same key (as
+`test/parquet-l1-core-db.ts` signs a format-1 transaction; no case here
+checks a signature); block hashes are random (no pre-2.0 hash
+recomputes). It is exported as one band, heights 422,230 to 422,249,
+and given its `l1-4` witnesses: each format-1 transaction's v1 data root
+from its data (Arweave's `chunk_binary`), each block's transition
+`tx_root` from its transactions, and the 2.0 seed fold from
+`SHA-384("pre20")` below the band. The chain is not mainnet's, so the
+verifier is given **its pinned folds** in place of mainnet's: that seed at
+422,229 and the fold through 422,249. A conforming implementation takes
+those two as its pins for these cases and no other.
 
 **`ops`** change the bands before signing, **`after`** after it, in order:
 
@@ -377,6 +394,11 @@ referred to by index (`band`: 0 is the lower).
 | `strayDir` | a directory `stray` holding only a copy of the band's `blocks.parquet` |
 | `removeBand` | the band's directory removed |
 | `rechain` | every block hash below the top replaced, each `previous_block` and `hash_list_merkle` rebuilt to match, every band republished: a fabricated chain under the real top hash |
+| `witnessV1` | a `witness_v1_data_roots` row for the transaction at `height`, `bti`: `root: "leaf"` its own `data_root` (what its `tx_root` leaf holds), `"random"` 32 random bytes; then its `data_root` set NULL unless `keepDataRoot` |
+| `editWitness` | a witness file (`witness`: `v1_data_roots` or `fork_2_0`) replaced by `select` over `SRC` (its rows), its columns kept |
+| `redescribeWitness` | the witness's rows and digest in `band.json` set to what its file now holds, in its order |
+| `forgeTransitionRoot` | the `witness_fork_2_0` `tx_root` at `height` replaced with 32 random bytes, and every `fold` from there recomputed on it |
+| `dropWitnesses` | the band made `l1-3`: its witness files removed and `band.json` rewritten without them |
 
 **`publication`** (`{}`, or `{ "omit": [band…] }`) is a publication of
 index `parquet-l1` (kind `parquet-l1`), sequence 7, issued
@@ -407,7 +429,8 @@ those grouped in **`shared`** (`[["a", "b"]]`: one address for both).
 
 `expect` may also give `anchored`, `duplicates` (installed copies read
 once), `ignored` (entries passed over unread) and `unbound` (the unbound
-classes reported: `pre20`, `txRootFormat1`, `incomplete`).
+classes reported: `pre20`, `txRootFormat1`, `incomplete`). `republish`
+also re-sorts and re-describes the band's witness files.
 
 #### L1 verdicts
 

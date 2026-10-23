@@ -773,8 +773,9 @@ export async function runSample(
   }
 
   // Transactions: a keyed uniform draw per stratum over the whole range,
-  // and a draw from the format-1 transactions of post-2.0 blocks tx_root
-  // does not cover. One byte budget per stratum, for both.
+  // and a draw from the post-2.0 format-1 transactions with data, which
+  // tx_root binds (with a witnessed root) or does not (without one), but
+  // never as format 1. One byte budget per stratum, for both.
   const budgets = new Map<string, number>();
   const draws: Array<{
     kind: 'all' | 'format1';
@@ -889,7 +890,7 @@ export async function runSample(
   }
   if (summary.format1Drawn > 0) {
     summary.detects.push(
-      `format-1 transactions of blocks whose tx_root is not recomputed: ${summary.format1Drawn} drawn, ${summary.format1Checked} checked, ${summary.format1Unreadable} unreadable; in the weakest band, ${Math.ceil(worst.format1 * 1000) / 10}% or more of them relabelled or forged would have been caught with 95% probability. Every other field of those blocks' transactions is bound only by the uniform draw above; closing them needs the v1 data roots (a later layout)`,
+      `format-1 transactions with data, from the 2.0 fork: ${summary.format1Drawn} drawn, ${summary.format1Checked} checked, ${summary.format1Unreadable} unreadable; in the weakest band, ${Math.ceil(worst.format1 * 1000) / 10}% or more of them relabelled or forged would have been caught with 95% probability (a witnessed v1 data root binds a format-1 transaction's size and root, not that it is format 1: a format-2 transaction relabelled with its own root passes tx_root). In a block whose v1 roots no witness gives (unbound.txRootFormat1), every other field of its transactions is bound only by the uniform draw above`,
     );
   }
 

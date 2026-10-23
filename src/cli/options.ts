@@ -150,12 +150,12 @@ export const optionMap = {
   allowUnbound: {
     alias: '--allow-unbound',
     description:
-      'Pass with pre-2.0 blocks, which nothing binds: their hashes cannot be recomputed and the layout carries no transition tx_root witnesses. Listed in unbound.pre20 either way',
+      "Pass with pre-2.0 blocks that nothing binds: their hashes cannot be recomputed, and no witnessed 2.0 seed fold (an l1-4 band's witness_fork_2_0) reaches a value the chain fixes for them (every one with --core-db or an l1-3 band). Listed in unbound.pre20 either way",
   },
   allowUnverifiedFormat1: {
     alias: '--allow-unverified-format1',
     description:
-      'Pass with post-2.0 blocks whose tx_root could not be recomputed because they hold a format-1 transaction with data (the layout carries no v1 data roots). Listed in unbound.txRootFormat1 either way',
+      'Pass with blocks whose tx_root could not be recomputed because they hold a format-1 transaction with data whose v1 data root no witness gives (every one with --core-db or an l1-3 band). Listed in unbound.txRootFormat1 either way',
   },
   allowIncomplete: {
     alias: '--allow-incomplete',
@@ -170,7 +170,7 @@ export const optionMap = {
   sampleFormat1: {
     alias: '--sample-format1 <n>',
     description:
-      'Format-1 transactions drawn per band from blocks whose tx_root cannot be recomputed, checked against the chain (default 200; 0 to skip): what catches a format-2 transaction relabelled format 1. Needs --anchor-from',
+      'Format-1 transactions with data drawn per band from the 2.0 fork, checked against the chain (default 200; 0 to skip): what catches a format-2 transaction relabelled format 1, which a witnessed root does not. Needs --anchor-from',
   },
   sampleBlocks: {
     alias: '--sample-blocks <n>',

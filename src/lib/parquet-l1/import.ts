@@ -21,8 +21,10 @@
  * and that block was synced from the gateway's own nodes), or, with none,
  * by a network anchor (`--anchor-from`). It must also build on the block
  * held below it. Blocks the checks cannot bind (`unbound`: below the 2.0
- * fork, or holding a format-1 transaction with data) are refused unless
- * accepted (`--allow-unbound`, `--allow-unverified-format1`).
+ * fork, or holding a format-1 transaction with data, where the band
+ * carries no `l1-4` witness for them) are refused unless accepted
+ * (`--allow-unbound`, `--allow-unverified-format1`). An `l1-4` band's
+ * witnesses bind both, so a whole chain of them imports with no flag.
  *
  * A band replaces its own height range, and is recorded in
  * `parquet_l1_imports` before its rows are written and completed after
@@ -918,6 +920,12 @@ export interface ImportVerification {
   };
   /** The sample drawn from the bands before writing; needs `pool`. */
   sample?: SampleOptions;
+  /**
+   * The chain's 2.0 seed folds, for a test chain below the 2.0 fork;
+   * mainnet's (`FORK_2_0_FOLD_PINS`) otherwise. Never from a command line
+   * or the environment.
+   */
+  foldPins?: ReadonlyMap<number, Buffer>;
 }
 
 type HeldBlock = Pick<
@@ -1114,6 +1122,9 @@ export async function verifyBeforeImport(
     lookups: false,
     // Anchored here, below, against what core.db holds.
     allow: { ...allow, unanchored: true },
+    ...(verification.foldPins !== undefined
+      ? { foldPins: verification.foldPins }
+      : {}),
   });
   const failing = out.checks.filter((c) => !c.ok);
   const refuse = (what: string, checks: VerifyCheck[]) =>

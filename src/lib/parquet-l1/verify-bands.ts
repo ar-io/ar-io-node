@@ -54,8 +54,10 @@ import {
   idHeightRange,
   lookupsOf,
   PARQUET_L1_TABLES,
+  witnessesOf,
 } from './layout.js';
 import { verifyBandLookups } from './lookups.js';
+import { checkBandWitnesses } from './witnesses.js';
 import { digestBandTable } from './read.js';
 import {
   runL1Verify,
@@ -363,13 +365,17 @@ export async function verifyBands(
           }
         }
       }
-      const wanted = bandFiles(band.schema);
+      const wanted = bandFiles(band.schema, band.heightRange);
       if (present.join(',') !== wanted.join(',')) {
         at(files, `holds ${present.join(', ')}`, wanted.join(', '));
         continue;
       }
       let shapeOk = true;
-      for (const spec of [...PARQUET_L1_TABLES, ...lookupsOf(band.schema)]) {
+      for (const spec of [
+        ...PARQUET_L1_TABLES,
+        ...lookupsOf(band.schema),
+        ...witnessesOf(band.schema, band.heightRange),
+      ]) {
         try {
           await checkParquetFile(duck, `${dir}/${spec.file}`, {
             columns: spec.columns,
@@ -448,6 +454,15 @@ export async function verifyBands(
           expected: 'every tag belongs to a transaction at its height',
         });
       }
+      // Witnesses, as files: what they say about the chain is the judge's.
+      for (const problem of await checkBandWitnesses(duck, dir, band)) {
+        judgeFailures.push({
+          check: 'witnesses',
+          height: problem.height,
+          found: `${id}: ${problem.found}`,
+          expected: problem.expected,
+        });
+      }
       if (options.lookups !== false) {
         if (lookupsOf(band.schema).length === 0) {
           lookupsSkipped += 1;
@@ -507,6 +522,7 @@ export async function verifyBands(
     accepted,
     assurance,
     judgeFailures,
+    witnesses: true,
   });
   return {
     ...report,
