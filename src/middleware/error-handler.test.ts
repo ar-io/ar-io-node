@@ -9,6 +9,7 @@ import { strict as assert } from 'node:assert';
 import express, { Request, Response, RequestHandler } from 'express';
 import { default as request } from 'supertest';
 
+import { setRequestSignal } from './abort-signal.js';
 import { createErrorHandlerMiddleware } from './error-handler.js';
 import { createTestLogger } from '../../test/test-logger.js';
 
@@ -47,7 +48,7 @@ describe('createErrorHandlerMiddleware', () => {
     const app = buildApp((req, _res, next) => {
       const controller = new AbortController();
       controller.abort();
-      req.signal = controller.signal;
+      setRequestSignal(req, controller.signal);
       // A disconnect can surface downstream as any error shape, e.g. the
       // chunk source's generic "all peers failed".
       next(
