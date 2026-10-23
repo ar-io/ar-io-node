@@ -573,7 +573,7 @@ hashes the chain fixes, so it needs no trust in whoever wrote them.
 | File | One row per | Columns | Sorted by |
 |---|---|---|---|
 | `witness_v1_data_roots.parquet` | Format-1 transaction with `data_size > 0` (none from the 2.9.6 fork) | `height` UBIGINT, `id` BLOB (32), `data_root` BLOB (32) | `height, id` |
-| `witness_fork_2_0.parquet` | Height below 422,250 (only in a band holding one) | `height` UBIGINT, `tx_root` BLOB (empty, or 32), `fold` BLOB (48) | `height` |
+| `witness_fork_2_0.parquet` | Height below 422,250 (only in a band holding one) | `height` UBIGINT, `tx_root` BLOB (empty, or 32), `fold` BLOB (48), `h2` BLOB (48) | `height` |
 
 - **`data_root`** is the v1 data root as Arweave computes it
   (`ar_tx:chunk_binary`: 256 KiB chunks, the remainder last, no
@@ -605,14 +605,40 @@ hashes the chain fixes, so it needs no trust in whoever wrote them.
 
   The first four fold out of Arweave's own 2.0 checkpoint
   (`apps/arweave/priv/fork_2_0_checkpoint` at the parent of Arweave commit
-  d43ba2b9, SHA-256 `714be0bc…44d4`); anyone can recompute them. So a
-  history band below the fork is bound alone, its fold running from the
-  pin below it to the pin at its top.
+  d43ba2b9, SHA-256 `714be0bc…44d4`); anyone can recompute them.
+- **`h2`** is the block's "2.0 hash": Arweave's 2.0–2.4 `indep_hash` rule
+  applied to its 1.0 header, with `tx_root` set to the transition root,
+  its transaction ids sorted, block tags empty and the default proof of
+  access (`ar_header_sync:download_block`). It covers every header field
+  the fold does not (timestamp, `last_retarget`, both difficulties, nonce,
+  `hash`, reward address, reward pool, `wallet_list`, `hash_list_merkle`)
+  and the transaction ids. Arweave ships every one in
+  `genesis_data/hash_list_1_0` (SHA-256 `d161502a…ca6f`) and checks each
+  pre-2.0 header a node syncs against it. A verifier recomputes it from the
+  band's own fields (an empty `reward_addr` read as `unclaimed`) and
+  requires it equal, and folds them, `SHA-384(fold ‖ h2)` from empty, to
+  the fold of `hash_list_1_0` pinned at the same heights:
+
+  | Height | Fold of the 2.0 hashes (base64url) |
+  |---|---|
+  | 99,999 | `tP4Ss_y8j-c6EPNQDFd-STooBLOy4B-dxTmWwdK-wzgQ04RhmVbVWw7fu_Bk2ip-` |
+  | 199,999 | `iNz57dW3y_JZUB3kvSFLCfLUunVnLM76LJixac82_83jD2kBWQTS7DbljA59ebQU` |
+  | 299,999 | `4HRV8yVq8rxRfqaS6g6ml6TZFxCBu0Y77V-pLGEqTlJ8WaJ4ZNP3p-wzJUeukUvi` |
+  | 399,999 | `GuZEzEU_BOTJa44c88OMw8lJvDoFELyzxLY4ljverSJBZVprRd06lDdd8K8UOJDM` |
+  | 422,249 | `Fznt4jqwgcOvFiFxtt05_vT7p9A3aE9FJPalyfkIfjBjOv3vC9Ay8AdbQZuJAH2r` |
+
+  Those fields are bound to Arweave's checkpoint, not to a hash the chain's
+  own blocks reach.
+
+A run of pre-2.0 blocks is bound once both folds reach their pins, so a
+history band below the fork is bound alone, its folds running from the
+pins below it to the pins at its top.
 
 A row for anything else (a transaction that is not format 1 with data at
 its height, a height outside the band or at or above the fork), a repeated
-row, a row out of order or malformed, or a file that does not digest to
-`band.json`, fails the band. A missing row is allowed, and honest: the
+row, a row out of order or malformed, a file that does not digest to
+`band.json`, or a format-1 transaction whose `data_root` column is not
+NULL, fails the band. A missing row is allowed, and honest: the
 block (and, below the fork, the run of blocks whose fold passes through it)
 stays `unbound`. A band whose witnesses its publisher could not confirm is
 published as `l1-3` instead.

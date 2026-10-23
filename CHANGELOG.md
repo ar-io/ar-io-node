@@ -22,9 +22,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `hash_list_merkle` or a fold pinned in this build (heights 99,999,
   199,999, 299,999, 399,999, 422,249; the first four recomputed by a test
   from Arweave's own 2.0 checkpoint, the last equal to block 422,250's
-  `hash_list_merkle`). A block whose witness is missing stays in its
-  `unbound` class. A new `witnesses` check covers the files; the result
-  gains `foldBound`. Block 422,250's `hash_list_merkle` is now checked
+  `hash_list_merkle`). Every other pre-2.0 header field, and the
+  transaction ids, are bound through each block's "2.0 hash"
+  (`witness_fork_2_0.h2`), recomputed from the band's fields and folded to
+  pins of Arweave's `genesis_data/hash_list_1_0`: Arweave-checkpointed
+  rather than chain-bound, and said so. A pre-2.0 block is bound only when
+  both folds reach their pins. Under `l1-4` a format-1 transaction's
+  `data_root` column must be NULL. A block whose witness is missing stays
+  in its `unbound` class. New `witnesses` and `hash_list_1_0` checks; the
+  result gains `foldBound` and `format1Txs`.
+- `--sample-format1 0` over format-1 transactions with data from the 2.0
+  fork now needs `--allow-unsampled`, in `index-l1-import` (whatever their
+  witnesses) and `index-l1-verify` (new flag there): only the format-1 draw
+  checks a transaction is format 1. Block 422,250's `hash_list_merkle` is now checked
   against the fold through 422,249 whenever a range holds both. Readers
   accept `l1-1` to `l1-4`; `--core-db` holds no witnesses and is unchanged.
   See [docs/index-publication.md](docs/index-publication.md#witness-files)

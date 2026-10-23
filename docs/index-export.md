@@ -601,6 +601,16 @@ nothing the chain does not confirm:
 - The **fold** runs from empty at height 0 or from the pinned fold below
   the band, and must equal every pinned fold it reaches and, in a band
   holding it, block 422,250's `hash_list_merkle`.
+- Each pre-2.0 block's **2.0 hash** is computed from the band's own fields,
+  its transaction ids and its transition `tx_root`, checked against
+  Arweave's `hash_list_1_0` at its height when the witness directory holds
+  it (as `hash_list_1_0`, refused unless its SHA-256 is Arweave's), and
+  their fold must equal every pinned fold of `hash_list_1_0` it reaches. A
+  band whose header fields are not Arweave's is not given witnesses.
+- Where a block's transition `tx_root` from the checkpoint or
+  `/block_index` disagrees with the one its transactions and roots give,
+  the band is not given witnesses (`couldnt_check`; a new band is
+  published as `l1-3`), and the height is named.
 
 Then the band with its witnesses is judged whole by the code every
 consumer runs (`index-l1-verify --bands-dir`), and must pass with no block

@@ -323,7 +323,8 @@ Before a band's first row reaches SQLite, both modes check it:
    headers and signatures as `index-l1-verify` (`--sample-blocks`,
    `--sample-txs`, `--sample-format1`, from the `--anchor-from` sources).
    Without sources, with `--sample-txs 0`, or with `--sample-format1 0`
-   while blocks whose `tx_root` cannot be recomputed are accepted, the run
+   over any format-1 transaction with data from the 2.0 fork (a witnessed
+   root binds its size and root, never that it is format 1), the run
    is refused unless `--allow-unsampled`, and then that part is not
    checked against the chain. A sample that refutes the band refuses it
    ("the sample refutes the bands"); one that could not be read (too many
@@ -504,7 +505,7 @@ underneath.
 | `--allow-unbound` | Import pre-2.0 blocks no witnessed fold binds (every one in an `l1-3` band) |
 | `--allow-incomplete` | Import blocks whose transactions or owners' keys the band lacks |
 | `--allow-unverified-format1` | Import blocks whose `tx_root` cannot be recomputed (a format-1 transaction with data and no witnessed v1 root: every one in an `l1-3` band) |
-| `--allow-unsampled` | Import with no sample (no `--anchor-from`), or with `--sample-txs 0`, or with `--sample-format1 0` over accepted `txRootFormat1` blocks |
+| `--allow-unsampled` | Import with no sample (no `--anchor-from`), or with `--sample-txs 0`, or with `--sample-format1 0` over any format-1 transaction with data from the 2.0 fork (witnessed or not: only the draw checks format 1) |
 | `--sample-blocks`, `--sample-txs`, `--sample-format1`, `--seed`, `--concurrency` | The sample, as `index-l1-verify` |
 | `--read-timeout` | Milliseconds each read from a source may take (default 30000) |
 | `--spill-max` | The most the check's DuckDB may spill, as a DuckDB size (default 128GB) |
@@ -800,7 +801,9 @@ kinds of block the rest cannot:
   it: equal, and the block is bound like any other; unequal, and `tx_root`
   fails (never `unbound`). A row for anything but a format-1 transaction
   with data at its height, a repeated row, or a row out of order fails
-  `witnesses`.
+  `witnesses`, and so does a format-1 transaction whose `data_root` column
+  is not NULL (its root is the witness's; a column beside it would be
+  imported and bound by nothing).
 - **A block below the 2.0 fork.** Its identity hash cannot be recomputed:
   from the 1.6 fork it is a deep hash over its header fields and the full
   wallet list; below it, a SHA-384 over the header as JSON with the full
@@ -814,23 +817,104 @@ kinds of block the rest cannot:
   and required equal). The fold starts from empty at height 0, or from a
   fold pinned in this build at heights 99,999, 199,999, 299,999, 399,999
   and 422,249 (recomputed from Arweave's own 2.0 checkpoint by a test); a
-  run of pre-2.0 blocks is bound once its fold reaches a value the chain
-  fixes — a pin, or block 422,250's `hash_list_merkle` (bound itself as the
-  blocks above it are) — and a fold that reaches another fails
-  `hash_list_merkle`. That binds each such block's hash, weave size and
-  transactions' sizes and data roots, as for a post-2.0 block. Block
-  422,250's `hash_list_merkle` is checked against the fold through 422,249
-  whenever the range holds both, witnesses or not.
+  fold that reaches another value at a pin, or at block 422,250's
+  `hash_list_merkle`, fails `hash_list_merkle`. That fold binds each block's
+  hash, weave size and transition `tx_root` to the chain, and through the
+  root its transactions' sizes and data roots. It does not bind the rest of
+  the header (timestamp, difficulties, `last_retarget`, nonce, `hash`,
+  reward address and pool, `wallet_list`) nor the transaction ids. Those are
+  bound by the block's **2.0 hash** (`witness_fork_2_0.h2`): the 2.0–2.4
+  identity-hash rule over the 1.0 header with its transition `tx_root` and
+  sorted transaction ids, the hash Arweave lists for each pre-2.0 block in
+  `genesis_data/hash_list_1_0` and checks every pre-2.0 header a node
+  syncs against (`ar_header_sync`). Each is recomputed from the band's own
+  fields and must equal the witness (`hash_list_1_0` fails otherwise), and
+  their fold, `SHA-384(fold ‖ h2)` from empty at 0, must equal the fold of
+  `hash_list_1_0` pinned at the same five heights (recomputed from the file
+  by a test). These fields are **Arweave-checkpointed**: bound to the list
+  Arweave ships, not to a hash the chain's own blocks reach. A run of
+  pre-2.0 blocks is bound once **both** folds reach their pins (and every
+  block's 2.0 hash recomputes); block 422,250's `hash_list_merkle` alone is
+  not enough. Under `--skip-tx-root` such blocks are not counted in
+  `foldBound`. Block 422,250's `hash_list_merkle` is checked against the
+  fold through 422,249 whenever the range holds both, witnesses or not.
+
+**Column by column**, for an `l1-4` band: what binds each column the
+importer writes, by era. `chain`: a hash or root the chain commits to and
+the verifier recomputes; `checkpoint`: a pre-2.0 block's 2.0 hash, folded
+to Arweave's pinned `hash_list_1_0`; `signature`: the transaction's
+signature, checked on the sample; `sample`: compared on sampled headers
+only; `canonical`: one value, anything else fails; `none`: nothing checks
+it. `src/lib/parquet-l1/column-bindings.ts` is the source, and its test
+fails when this table, a column, or a binding drifts; the result's
+`assurance` lists the `sample`, `signature` and `none` columns.
+
+<!-- column-bindings:start -->
+| Column | pre-1.6 | 1.6–2.0 | 2.0–2.5 | 2.5+ | Why |
+|---|---|---|---|---|---|
+| `blocks.indep_hash` | `chain` | `chain` | `chain` | `chain` | below 2.0: in the 2.0 seed fold to FORK_2_0_FOLD_PINS (judge.ts stepFork20); from 2.0: in the hash_list_merkle recurrence to the anchored top (judge.ts, anchor.ts) |
+| `blocks.height` | `chain` | `chain` | `chain` | `chain` | each block is judged at its height against the one below (contiguous); the folds and recurrence are positional |
+| `blocks.previous_block` | `chain` | `chain` | `chain` | `chain` | equal to the chain-bound indep_hash of the block below (judge.ts 'linked') |
+| `blocks.nonce` | `checkpoint` | `checkpoint` | `sample` | `sample` | below 2.0: in the block's 2.0 hash (judge.ts recomputeH2, folded to FORK_2_0_H2_PINS); from 2.0: not in hash_list_merkle, compared field by field on the anchor block and sampled headers (anchor.ts compareHeaderWithBlock) |
+| `blocks.hash` | `checkpoint` | `checkpoint` | `sample` | `sample` | below 2.0: in the block's 2.0 hash (judge.ts recomputeH2, folded to FORK_2_0_H2_PINS); from 2.0: not in hash_list_merkle, compared field by field on the anchor block and sampled headers (anchor.ts compareHeaderWithBlock) |
+| `blocks.block_timestamp` | `checkpoint` | `checkpoint` | `sample` | `sample` | below 2.0: in the block's 2.0 hash (judge.ts recomputeH2, folded to FORK_2_0_H2_PINS); from 2.0: not in hash_list_merkle, compared field by field on the anchor block and sampled headers (anchor.ts compareHeaderWithBlock) |
+| `blocks.last_retarget` | `checkpoint` | `checkpoint` | `sample` | `sample` | below 2.0: in the block's 2.0 hash (judge.ts recomputeH2, folded to FORK_2_0_H2_PINS); from 2.0: not in hash_list_merkle, compared field by field on the anchor block and sampled headers (anchor.ts compareHeaderWithBlock) |
+| `blocks.diff` | `checkpoint` | `checkpoint` | `sample` | `sample` | below 2.0: in the block's 2.0 hash (judge.ts recomputeH2, folded to FORK_2_0_H2_PINS); from 2.0: not in hash_list_merkle, compared field by field on the anchor block and sampled headers (anchor.ts compareHeaderWithBlock) |
+| `blocks.cumulative_diff` | `checkpoint` | `checkpoint` | `sample` | `sample` | below 2.0: in the block's 2.0 hash (judge.ts recomputeH2, folded to FORK_2_0_H2_PINS); from 2.0: not in hash_list_merkle, compared field by field on the anchor block and sampled headers (anchor.ts compareHeaderWithBlock) |
+| `blocks.reward_addr` | `checkpoint` | `checkpoint` | `sample` | `sample` | below 2.0: in the block's 2.0 hash (judge.ts recomputeH2, folded to FORK_2_0_H2_PINS); from 2.0: not in hash_list_merkle, compared field by field on the anchor block and sampled headers (anchor.ts compareHeaderWithBlock) |
+| `blocks.reward_pool` | `checkpoint` | `checkpoint` | `sample` | `sample` | below 2.0: in the block's 2.0 hash (judge.ts recomputeH2, folded to FORK_2_0_H2_PINS); from 2.0: not in hash_list_merkle, compared field by field on the anchor block and sampled headers (anchor.ts compareHeaderWithBlock) |
+| `blocks.wallet_list` | `checkpoint` | `checkpoint` | `sample` | `sample` | below 2.0: in the block's 2.0 hash (judge.ts recomputeH2, folded to FORK_2_0_H2_PINS); from 2.0: not in hash_list_merkle, compared field by field on the anchor block and sampled headers (anchor.ts compareHeaderWithBlock) |
+| `blocks.tx_count` | `chain` | `chain` | `chain` | `chain` | the number of links (judge.ts 'tx_count'), each a leaf of the recomputed (transition) tx_root |
+| `blocks.block_size` | `chain` | `chain` | `chain` | `chain` | the growth of the chain-bound weave_size (judge.ts 'block_size') |
+| `blocks.weave_size` | `chain` | `chain` | `chain` | `chain` | below 2.0: in the 2.0 seed fold; from 2.0: in the hash_list_merkle recurrence |
+| `blocks.usd_to_ar_rate_dividend` | `canonical` | `canonical` | `canonical` | `sample` | below 2.5: NULL, no header carried it (judge.ts checkCanonicalBlock, 'canonical'); from 2.5: compared on the anchor block and sampled headers |
+| `blocks.usd_to_ar_rate_divisor` | `canonical` | `canonical` | `canonical` | `sample` | below 2.5: NULL, no header carried it (judge.ts checkCanonicalBlock, 'canonical'); from 2.5: compared on the anchor block and sampled headers |
+| `blocks.scheduled_usd_to_ar_rate_dividend` | `canonical` | `canonical` | `canonical` | `sample` | below 2.5: NULL, no header carried it (judge.ts checkCanonicalBlock, 'canonical'); from 2.5: compared on the anchor block and sampled headers |
+| `blocks.scheduled_usd_to_ar_rate_divisor` | `canonical` | `canonical` | `canonical` | `sample` | below 2.5: NULL, no header carried it (judge.ts checkCanonicalBlock, 'canonical'); from 2.5: compared on the anchor block and sampled headers |
+| `blocks.hash_list_merkle` | `canonical` | `chain` | `chain` | `chain` | below 1.6: empty (judge.ts 'hash_list_merkle'); from 1.6: the recurrence over the chain-bound hashes below (the 1.6 seed, then SHA-384 of the one below and its hash; from 2.0 the block-index fold) |
+| `blocks.tx_root` | `canonical` | `canonical` | `chain` | `chain` | below 2.0: NULL, the protocol had none; the transition root is witness_fork_2_0's (judge.ts checkCanonicalBlock); from 2.0: recomputed from the block's transactions and in the recurrence |
+| `transactions.id` | `checkpoint` | `checkpoint` | `sample` | `sample` | equal to its link (judge.ts 'position'); below 2.0 the links' ids are in the 2.0 hash; from 2.0 tx_root drops ids, so they are compared on sampled headers and by sampled signatures |
+| `transactions.block_transaction_index` | `none` | `none` | `sample` | `sample` | the link's position (judge.ts 'position'); below 2.0 the 2.0 hash sorts the ids, so no hash binds their order; from 2.0 the order is compared on sampled headers |
+| `transactions.is_data_item` | `canonical` | `canonical` | `canonical` | `canonical` | false (verify-bands.ts 'canonical'); not written to core.db |
+| `transactions.target` | `signature` | `signature` | `signature` | `signature` | signed by the transaction, checked on the transaction sample (sample.ts judgeTx) |
+| `transactions.quantity` | `signature` | `signature` | `signature` | `signature` | signed by the transaction, checked on the transaction sample (sample.ts judgeTx) |
+| `transactions.reward` | `signature` | `signature` | `signature` | `signature` | signed by the transaction, checked on the transaction sample (sample.ts judgeTx) |
+| `transactions.owner_address` | `signature` | `signature` | `signature` | `signature` | signed by the transaction, checked on the transaction sample (sample.ts judgeTx) |
+| `transactions.anchor` | `signature` | `signature` | `signature` | `signature` | last_tx, signed by the transaction, checked on the transaction sample |
+| `transactions.tag_count` | `signature` | `signature` | `signature` | `signature` | the number of its tag rows (judge.ts 'tag_count'), which are signed |
+| `transactions.data_size` | `chain` | `chain` | `chain` | `chain` | a leaf of the recomputed (transition) tx_root, and the weave accounting |
+| `transactions.data_root` (format 2) | `canonical` | `canonical` | `chain` | `chain` | its leaf in the recomputed tx_root; no format 2 below 2.0 (judge.ts 'nulls') |
+| `transactions.data_root` (format 1) | `canonical` | `canonical` | `canonical` | `canonical` | NULL under l1-4: the root is witness_v1_data_roots', which tx_root checks (judge.ts checkCanonicalFormat1, 'witnesses') |
+| `transactions.format` | `canonical` | `canonical` | `sample` | `sample` | below 2.0: 1 (judge.ts 'nulls'); from 2.0 only the format-1 draw shows a format-1 transaction is one (--sample-format1, refused at 0 without --allow-unsampled) |
+| `transactions.height` | `chain` | `chain` | `chain` | `chain` | the height of its link (judge.ts 'position') |
+| `transactions.content_type` | `none` | `none` | `none` | `none` | derived by the exporter from the first such tag (layout.ts firstTagValue); no reader recomputes it from the tags |
+| `transactions.content_encoding` | `none` | `none` | `none` | `none` | derived by the exporter from the first such tag (layout.ts firstTagValue); no reader recomputes it from the tags |
+| `transactions.offset` | `none` | `none` | `none` | `none` | the gateway's weave offset, copied from core.db; nothing recomputes it |
+| `transactions.signature` | `checkpoint` | `checkpoint` | `sample` | `sample` | NULL, or one whose SHA-256 is the id (verify-bands.ts 'canonical'), so bound as the id is |
+| `block_transactions.height` | `chain` | `chain` | `chain` | `chain` | the link's block, by height, its indep_hash chain-bound (judge.ts 'rows') |
+| `block_transactions.block_transaction_index` | `none` | `none` | `sample` | `sample` | as transactions.block_transaction_index: no hash binds the order below 2.0 |
+| `block_transactions.transaction_id` | `checkpoint` | `checkpoint` | `sample` | `sample` | below 2.0: in the block's 2.0 hash (sorted); from 2.0 compared on sampled headers |
+| `tags.height` | `chain` | `chain` | `chain` | `chain` | a transaction at that height (verify-bands.ts 'tags'), whose position it takes |
+| `tags.id` | `checkpoint` | `checkpoint` | `sample` | `sample` | a transaction at that height, bound as its id is |
+| `tags.tag_index` | `signature` | `signature` | `signature` | `signature` | signed by the transaction, checked on the transaction sample; indexed 0 to n-1 (judge.ts tag_count) |
+| `tags.tag_name` | `signature` | `signature` | `signature` | `signature` | signed by the transaction, checked on the transaction sample; indexed 0 to n-1 (judge.ts tag_count) |
+| `tags.tag_value` | `signature` | `signature` | `signature` | `signature` | signed by the transaction, checked on the transaction sample; indexed 0 to n-1 (judge.ts tag_count) |
+| `tags.is_data_item` | `canonical` | `canonical` | `canonical` | `canonical` | false (verify-bands.ts 'canonical'); not written to core.db |
+| `wallets.address` | `signature` | `signature` | `signature` | `signature` | the SHA-256 of the key (verify-bands.ts 'wallets'); the key is checked by sampled signatures |
+| `wallets.public_modulus` | `signature` | `signature` | `signature` | `signature` | verifies the signatures of the transactions sampled |
+<!-- column-bindings:end -->
 
 **What nothing binds** is reported in `unbound`, by class, and fails the
 run unless accepted:
 
-- `pre20` — blocks below the 2.0 fork that no witnessed fold binds
+- `pre20` — blocks below the 2.0 fork that the witnessed folds do not bind
   (`--allow-unbound`, which accepts this class only): every one in a band
   without witnesses (`l1-3` and older); in an `l1-4` band, a block with no
-  `witness_fork_2_0` row, the blocks whose fold runs through it to the
-  next pin, and the first block of a run whose fold below is pinned by
-  nothing (a band starting at a height other than 0 or one above a pin).
+  `witness_fork_2_0` row or whose 2.0 hash cannot be taken from its fields,
+  the blocks whose folds run through it to the next pin, a run whose folds
+  reach a pin with another value, and a run whose folds below are pinned
+  by nothing (a band starting at a height other than 0 or one above a
+  pin).
 - `txRootFormat1` — blocks holding a format-1 transaction with data whose
   v1 data root no witness gives (`--allow-unverified-format1`): that leaf
   is the root of data the index does not store, so **every field of every
@@ -838,8 +922,9 @@ run unless accepted:
   draw is what catches a transaction relabelled into the class). Under
   `l1-3` this is every such post-2.0 block: 208,812 of 1,604,083 in the
   published bands, the last at height 1,999,999. Under `l1-4`, only a
-  transaction whose data no node serves; a pre-2.0 block whose fold binds
-  its header but not its transactions is counted here.
+  transaction whose data no node serves; a pre-2.0 block whose folds bind
+  its header but whose transition `tx_root` cannot be recomputed is counted
+  here.
 - `incomplete` — blocks the index holds only part of: a link whose
   transaction it lacks (so `tx_root` and the weave accounting cannot be
   checked), or a transaction whose owner's key it lacks (so its signature
@@ -868,7 +953,9 @@ on its own, and says so.
 | `hash_list_merkle` | The recurrence in each era's form, the 1.6 seed folded from height 0 when the range starts there; the 2.0 seed against the fold through 422,249; a witnessed fold against each pinned fold it reaches |
 | `block_size`, `weave_accounting` | Each block grew the weave by its `block_size`, and (below the padding threshold) by its transactions' `data_size` |
 | `tx_root` | Recomputed from each post-2.0 block's transactions, with the 2.5 padding and the witnessed v1 data roots; below the 2.0 fork, the transition `tx_root` from each block's transactions against its witness |
-| `witnesses` | Bands of `l1-4`: each witness file in its order, digesting to what `band.json` says, every row inside the band, well formed, and for a format-1 transaction with data at its height; each witnessed fold the fold of the block below and the block |
+| `witnesses` | Bands of `l1-4`: each witness file in its order, digesting to what `band.json` says, every row inside the band, well formed, and for a format-1 transaction with data at its height; each witnessed fold the fold of the block below and the block; no format-1 transaction with a `data_root` |
+| `hash_list_1_0` | Bands of `l1-4`: each pre-2.0 block's 2.0 hash recomputes from its fields, ids and transition `tx_root` to its witness, and their fold reaches the pinned fold of Arweave's `hash_list_1_0` |
+| `sample_format1` | With a sample, `--sample-format1 0` over format-1 transactions with data from the 2.0 fork: fails unless `--allow-unsampled` (only the format-1 draw checks they are format 1) |
 | `nulls` | Every key and commitment column is set: a NULL is a failure, never read as zero. Also format 1 or 2, and no format 2 below the 2.0 fork |
 | `position`, `tx_count` | Each transaction sits at the link of its height and index, links run 0 to n-1, and `tx_count` is their number |
 | `tag_count`, `owners`, `wallets` | Tags match `tag_count` and run 0 to n-1, every tag belongs to a transaction at its height (bands); every transaction has an owner, and one whose key the index lacks puts its block in `unbound.incomplete`; every wallet key hashes to its address (RSA and ECDSA alike) |
@@ -924,6 +1011,7 @@ its heartbeat is a day old.
 | `--allow-incomplete` | Pass with blocks whose transactions or owners' keys the index lacks |
 | `--sample-format1` | Format-1 transactions with data per band drawn from the 2.0 fork (default 200; 0 to skip): what catches a format-2 transaction relabelled format 1, witnessed or not |
 | `--allow-unverified-format1` | Pass with blocks whose `tx_root` needs a format-1 data root no witness gives |
+| `--allow-unsampled` | Pass with `--sample-format1 0` over format-1 transactions with data from the 2.0 fork |
 | `--sample-blocks` | Blocks whose headers are sampled (default 1000; 0 to skip). Needs `--anchor-from` |
 | `--sample-txs` | Transactions per band whose signatures are sampled (default 1000; 0 to skip). Needs `--anchor-from` |
 | `--seed` | Seeds the samples (the result reports the seed drawn when none is given) |

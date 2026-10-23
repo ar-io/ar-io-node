@@ -531,10 +531,12 @@ to recompute: the 2.0–2.4 identity-hash rule applied to the 1.0 header with
 `tx_root` set to the block's 2.0 transition root and its transaction ids
 sorted. Arweave ships all 422,250 of them in `genesis_data/hash_list_1_0`
 (SHA-256 `d161502a13e64fa49bcb2425420bcdcd6a4407e488aca3e14ba254f16418ca6f`,
-pinned by `test/arweave-consensus-pin.ts`). Checking an index against it
-needs a [witness](#witness) per block with transactions; the verifier does
-not check it: it binds pre-2.0 blocks through the [2.0 seed
-fold](#fork-2-0-seed-fold) instead.
+pinned by `test/arweave-consensus-pin.ts`). An `l1-4` band's verifier
+recomputes each pre-2.0 block's from its fields and folds them to a fold of
+the list pinned in `chain.ts` (`FORK_2_0_H2_PINS`): what binds the header
+fields and transaction ids the [2.0 seed fold](#fork-2-0-seed-fold) does
+not, to Arweave's checkpoint (**Arweave-checkpointed**) rather than to the
+chain's own hashes.
 
 <a id="witness"></a> **Witness (untrusted input)** — A value a verifier
 needs but the index does not hold, supplied by anyone: a pre-2.0 block's
@@ -546,9 +548,9 @@ preimage and collision resistance).
 `l1-4` [L1 band](#parquet-l1) carries beside its tables:
 `witness_v1_data_roots.parquet` (`height, id, data_root`: the v1 data root
 of each format-1 transaction with data) and, for a band holding heights
-below the 2.0 fork, `witness_fork_2_0.parquet` (`height, tx_root, fold`:
-each pre-2.0 block's transition `tx_root` and the [2.0 seed
-fold](#fork-2-0-seed-fold) after it). Described in `band.json` like the
+below the 2.0 fork, `witness_fork_2_0.parquet` (`height, tx_root, fold,
+h2`: each pre-2.0 block's transition `tx_root`, the [2.0 seed
+fold](#fork-2-0-seed-fold) after it, and its [2.0 hash](#hash-2-0-of-1-0)). Described in `band.json` like the
 lookups and, like them, not part of the band's id, so a band gains them in
 place. Every row is checked; none is trusted. See
 [index-publication.md](index-publication.md#witness-files).
