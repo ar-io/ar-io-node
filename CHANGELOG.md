@@ -12,6 +12,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- The `--publication` examples in `docs/cli.md`,
+  `docs/index-publication.md`, `docs/index-verification.md`, the
+  `index-l2-verify` help, and the `--publication` option description gave
+  the signed index publication's URL as
+  `https://<gateway>/ar-io/indexes/publication.json`, which returns 404.
+  The gateway serves it at `https://<gateway>/ar-io/indexes`; the examples
+  now use that. The local file `data/indexes/published/publication.json`
+  is unchanged.
+
 ## [Release 86] - 2026-10-23
 
 This is an **urgent, recommended release** focused on **the Node.js

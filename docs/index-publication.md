@@ -337,7 +337,7 @@ docker run --rm -u "$(id -u):$(id -g)" -v "$HOME/arweave-l1:/bands:ro" \
   -w /app --entrypoint /nodejs/bin/node "$IMAGE" \
   /app/dist/cli/cli.js index-l1-verify --bands-dir /bands \
   --anchor-from https://<gateway one>,https://<gateway two> \
-  --publication https://<publisher gateway>/ar-io/indexes/publication.json \
+  --publication https://<publisher gateway>/ar-io/indexes \
   --publisher-key <the publisher's observer address>
 ```
 
