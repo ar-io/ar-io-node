@@ -34,6 +34,7 @@ import {
   shouldUsePrivateCacheControl,
 } from './handlers.js';
 import { MemoryRateLimiter } from '../../limiter/memory-rate-limiter.js';
+import { setRequestSignal } from '../../middleware/abort-signal.js';
 import type {
   PaymentProcessor,
   PaymentRequirementsContext,
@@ -1431,7 +1432,7 @@ st
         app.use((req: any, _res, next) => {
           const controller = new AbortController();
           controller.abort();
-          req.signal = controller.signal;
+          setRequestSignal(req, controller.signal);
           next();
         });
         useDataHandler();
