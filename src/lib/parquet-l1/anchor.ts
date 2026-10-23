@@ -36,6 +36,7 @@
  */
 import { ArweaveNodePool, type Survey } from '../onchain/arweave-nodes.js';
 import { verifyHeader, type VerifiedHeader } from './block-hash.js';
+import { quoteLongIntegers } from '../exact-json.js';
 
 /** A block row as an index stores it (`stable_blocks`, or a band's `blocks`). */
 export interface L1BlockRow {
@@ -323,21 +324,6 @@ export async function anchorBlock(
     mismatches,
     problems,
   };
-}
-
-/**
- * JSON text with every integer literal of 16 or more digits quoted, so it
- * parses to its exact digits rather than the nearest double. Some headers
- * write a whole number past 2^53 bare (`"reward_pool":12775001414748366` at
- * 600,581, for one), and a header whose fields were rounded cannot be
- * recomputed: {@link verifyHeader} reads a decimal string exactly.
- *
- * Only integer literals in value position are touched: a digit run inside
- * a string is preceded by a quote or another character, never by `:`, `[`
- * or `,` and whitespace.
- */
-export function quoteLongIntegers(text: string): string {
-  return text.replace(/([:[,]\s*)(-?\d{16,})(?=\s*[,}\]])/g, '$1"$2"');
 }
 
 /**

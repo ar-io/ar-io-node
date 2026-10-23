@@ -17,7 +17,7 @@ import {
   hashListMerkleSeed,
   verifyHeader,
 } from './block-hash.js';
-import { quoteLongIntegers } from './anchor.js';
+import { quoteLongIntegers } from '../exact-json.js';
 import { ChainBlock, nextHashListMerkle } from './chain.js';
 
 /**
