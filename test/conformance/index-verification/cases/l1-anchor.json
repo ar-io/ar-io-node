@@ -443,7 +443,7 @@
   {
     "id": "l1-anchor-sample-format",
     "description": "A8/B F2: a format-2 transaction relabelled format 1, accepted as unverified format 1, then caught by its signature",
-    "tampered": "band made l1-3 (no witnesses), transactions.format, republished",
+    "tampered": "band made l1-3 (no witnesses), transactions.format, republished; that block's offsets dropped (NULL), as a forger would, so they do not give it away",
     "kind": "l1-anchor",
     "nodes": [
       {
@@ -475,6 +475,12 @@
         "format": 1
       },
       {
+        "op": "rewrite",
+        "band": 1,
+        "table": "transactions",
+        "select": "SELECT * REPLACE (CASE WHEN height = 1900011 THEN NULL ELSE \"offset\" END AS \"offset\") FROM SRC"
+      },
+      {
         "op": "republish",
         "band": 1
       }
@@ -483,7 +489,6 @@
       "verdict": "refuted",
       "check": "sample",
       "failing": [
-        "canonical",
         "sample"
       ]
     }
@@ -577,7 +582,7 @@
   {
     "id": "l1-anchor-r2-format1-flip-sampled",
     "description": "Round 2 (judge R6, D3): under --allow-unverified-format1 a format-2 transaction relabelled format 1 is caught by the format-1 draw",
-    "tampered": "band made l1-3 (no witnesses), transactions.format flipped to 1 beside a forged data_root, republished",
+    "tampered": "band made l1-3 (no witnesses), transactions.format flipped to 1 beside a forged data_root, republished; that block's offsets dropped (NULL), as a forger would, so they do not give it away",
     "kind": "l1-anchor",
     "nodes": [
       {
@@ -609,6 +614,12 @@
         "select": "SELECT * REPLACE (CASE WHEN height = 1900003 AND block_transaction_index = 0 THEN 1::UTINYINT ELSE format END AS format, CASE WHEN height = 1900003 AND block_transaction_index = 2 THEN from_hex(repeat('ab', 32)) ELSE data_root END AS data_root) FROM SRC"
       },
       {
+        "op": "rewrite",
+        "band": 0,
+        "table": "transactions",
+        "select": "SELECT * REPLACE (CASE WHEN height = 1900003 THEN NULL ELSE \"offset\" END AS \"offset\") FROM SRC"
+      },
+      {
         "op": "republish",
         "band": 0
       }
@@ -617,7 +628,6 @@
       "verdict": "refuted",
       "check": "sample",
       "failing": [
-        "canonical",
         "sample"
       ]
     }
