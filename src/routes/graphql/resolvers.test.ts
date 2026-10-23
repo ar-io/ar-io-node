@@ -5,7 +5,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import { strict as assert } from 'node:assert';
-import { describe, it, mock } from 'node:test';
+import { after, describe, it, mock } from 'node:test';
 import { GraphQLResolveInfo, OperationDefinitionNode, parse } from 'graphql';
 
 import {
@@ -24,7 +24,16 @@ import {
   resolvers,
 } from './resolvers.js';
 import { GqlTransaction } from '../../types.js';
-import { ownerFetcher } from '../../system.js';
+import { db, ownerFetcher } from '../../system.js';
+
+// Importing the resolvers boots system.ts, which starts the SQLite worker
+// threads. Stop them before the file ends: `test:ci` runs with
+// --test-force-exit, and a worker killed while still preparing its
+// statements aborts the process under Node 22 with better-sqlite3 9.x
+// ("FATAL ERROR: v8::ToLocalChecked Empty MaybeLocal").
+after(async () => {
+  await db.stop();
+});
 
 const GQL_TX = {
   id: 'LXCrfCRLHB7YyLGAeQoio00qb7LwT3UO3a-2TSDli8Q',
