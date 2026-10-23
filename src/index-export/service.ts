@@ -313,6 +313,22 @@ export function reportForOutput(report: RunReport): unknown {
 }
 
 /** The overall result of a run: the worst of its steps. */
+/**
+ * The root-TX index's own result of a run: every other index's outcomes
+ * left out (`parquet-l1` builds, derives, settles and witnesses, and
+ * `parquet-l2`), so one index's failure is never another's.
+ */
+export function rootTxResult(report: RunReport): string {
+  return runResult({
+    ...report,
+    l1Steps: [],
+    l1Derived: [],
+    l1Normalized: [],
+    l1Witnessed: [],
+    l2: [],
+  });
+}
+
 export function runResult(report: RunReport): string {
   if (report.locked !== undefined) return 'locked';
   if (report.failed !== undefined) {
@@ -2613,13 +2629,7 @@ export class ExportService {
         reasons: [report.failed.reason, report.failed.message],
       };
     }
-    const result = runResult({
-      ...report,
-      l1Steps: [],
-      l1Derived: [],
-      l1Normalized: [],
-      l2: [],
-    });
+    const result = rootTxResult(report);
     if (result === 'couldnt_check') {
       const attempts = (state.retry?.attempts ?? 0) + 1;
       const delay = Math.min(
