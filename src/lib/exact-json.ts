@@ -34,12 +34,30 @@ export function quoteLongIntegers(text: string): string {
       out += text.slice(i, j + 1);
       i = j + 1;
     } else if (c === '-' || isDigit(c)) {
+      // The whole number as JSON writes it:
+      // -? (0 | [1-9][0-9]*) (. [0-9]+)? ([eE] [+-]? [0-9]+)?
       let j = c === '-' ? i + 1 : i;
+      const intStart = j;
       while (j < text.length && isDigit(text[j])) j++;
-      const digits = j - (c === '-' ? i + 1 : i);
-      const integer = !['.', 'e', 'E'].includes(text[j]);
+      const intDigits = j - intStart;
+      let integer = true;
+      if (text[j] === '.') {
+        integer = false;
+        j++;
+        while (j < text.length && isDigit(text[j])) j++;
+      }
+      if (text[j] === 'e' || text[j] === 'E') {
+        integer = false;
+        j++;
+        if (text[j] === '+' || text[j] === '-') j++;
+        while (j < text.length && isDigit(text[j])) j++;
+      }
       const literal = text.slice(i, j);
-      out += integer && digits >= LONG_DIGITS ? `"${literal}"` : literal;
+      // A leading zero before more digits is not JSON: left as it is, so
+      // JSON.parse refuses it rather than reading it as a string.
+      const valid = intDigits > 0 && !(intDigits > 1 && text[intStart] === '0');
+      out +=
+        valid && integer && intDigits >= LONG_DIGITS ? `"${literal}"` : literal;
       i = j;
     } else {
       out += c;

@@ -51,6 +51,22 @@ describe('parseJsonExact', () => {
     }
   });
 
+  it('leaves a long fraction or exponent valid, and an invalid number invalid', () => {
+    for (const text of [
+      '{"a":1.1234567890123456}',
+      '{"a":-0.12345678901234567890,"b":1234567890123456789e-2}',
+      '[1.5e1234567890123456]',
+    ]) {
+      assert.equal(quoteLongIntegers(text), text, text);
+      assert.deepEqual(parseJsonExact(text), JSON.parse(text), text);
+    }
+    for (const text of ['{"a":0000000000000000}', '{"a":-01234567890123456}']) {
+      assert.equal(quoteLongIntegers(text), text, text);
+      assert.throws(() => JSON.parse(text));
+      assert.throws(() => parseJsonExact(text), text);
+    }
+  });
+
   it('leaves fractions and exponents alone', () => {
     const text =
       '{"a":12345678901234567.5,"b":1234567890123456789e2,"c":-1.5E3}';
