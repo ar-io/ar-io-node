@@ -21,11 +21,16 @@
  * index. The layout is generic: a selection names a tag and a value prefix,
  * and one app's data items are one selection among many.
  *
- * A band also carries lookup files ({@link PARQUET_L2_LOOKUPS}), as an
- * `l1-3` band does: Parquet derived from its tables and sorted by a key, so
- * a reader finds one data item, wallet or tag pair without scanning the
- * band. They are described in `band.json` like the tables, and left out of
- * the band's id, which covers only the tables' rows and the selection.
+ * A band also carries lookup files ({@link lookupsOf}), as an `l1-3` band
+ * does: Parquet derived from its tables and sorted by a key, so a reader
+ * finds one data item, wallet or tag pair without scanning the band. Layout
+ * `l2-2` adds two the band's publisher parameterises: `lookup_key.parquet`,
+ * the heights at which each value of the band's **key tags** (`keyTags`,
+ * such as ArDrive's `Drive-Id`) occurs, and `stats.parquet`, counts and
+ * bytes per bucket of heights by each value of its **stat tags**
+ * (`statTags`). They are described in `band.json` like the tables, and left
+ * out of the band's id, which covers only the tables' rows and the
+ * selection, so an `l2-1` band gains them in place under the same id.
  *
  * The kind that checks bands reads this module, and a builder that writes
  * them must, so the two cannot drift.
@@ -33,7 +38,7 @@
 import crypto from 'node:crypto';
 
 import type { ColumnSpec } from '../parquet/check.js';
-import { prefix64Sql } from '../parquet/keys.js';
+import { prefix64Sql, sha256_64Sql } from '../parquet/keys.js';
 import {
   LookupDescription,
   LookupDigestOrder,
@@ -51,11 +56,25 @@ import {
 export { BAND_FILE, MAX_BAND_FILE_BYTES };
 
 /** The layout version a band is written with, in its `band.json`. */
-export const PARQUET_L2_SCHEMA = 'l2-1';
+export const PARQUET_L2_SCHEMA = 'l2-2';
 
-/** The versions a reader accepts, oldest first. */
-export const PARQUET_L2_SCHEMAS = ['l2-1'] as const;
+/**
+ * The versions a reader accepts, oldest first. `l2-2` keeps `l2-1`'s tables
+ * and lookups and adds `lookup_key.parquet` and `stats.parquet`, with the
+ * tag names they are derived for (`keyTags`, `statTags`) in `band.json`.
+ */
+export const PARQUET_L2_SCHEMAS = ['l2-1', 'l2-2'] as const;
 export type ParquetL2Schema = (typeof PARQUET_L2_SCHEMAS)[number];
+
+/** Whether a layout carries the key and stats files. */
+export const hasDerivedTags = (schema: ParquetL2Schema): boolean =>
+  schema === 'l2-2';
+
+/** The most tag names `keyTags` or `statTags` may list. */
+export const MAX_DERIVED_TAGS = 16;
+
+/** Heights per row of `stats.parquet`: about a day and a half of blocks. */
+export const STATS_BUCKET_HEIGHTS = 1000;
 
 /** The kind of selection `l2-1` defines: data items picked by one tag. */
 export const SELECTION_KIND = 'ans104-data-items';
@@ -183,6 +202,52 @@ function canonicalSelection(selection: ParquetL2Selection): ParquetL2Selection {
 export function serializeSelection(selection: ParquetL2Selection): string {
   return JSON.stringify(canonicalSelection(selection));
 }
+
+/** UTF-8 byte order, the order the layout keeps tag names in. */
+const byBytes = (a: string, b: string) =>
+  Buffer.compare(Buffer.from(a, 'utf8'), Buffer.from(b, 'utf8'));
+
+/**
+ * Parses a list of tag names a band's derived files are built for
+ * (`keyTags`, `statTags`): at most {@link MAX_DERIVED_TAGS} strings under
+ * the rules of a selection's, each once, in UTF-8 byte order. Canonical, so
+ * every publisher of the same rows under the same names writes the same
+ * `band.json`.
+ *
+ * @throws with a message naming what is wrong, starting with `label`.
+ */
+export function parseTagNames(raw: unknown, label: string): string[] {
+  if (!Array.isArray(raw)) throw new Error(`${label} must be a list`);
+  if (raw.length > MAX_DERIVED_TAGS) {
+    throw new Error(`${label} lists more than ${MAX_DERIVED_TAGS} tag names`);
+  }
+  const names = raw.map((name, i) => selectionString(name, `${label}[${i}]`));
+  for (let i = 1; i < names.length; i++) {
+    const order = byBytes(names[i - 1], names[i]);
+    if (order === 0) {
+      throw new Error(`${label} names ${JSON.stringify(names[i])} twice`);
+    }
+    if (order > 0) {
+      throw new Error(`${label} must be in UTF-8 byte order`);
+    }
+  }
+  return names;
+}
+
+/** Tag names as {@link parseTagNames} wants them: each once, in byte order. */
+export function canonicalTagNames(names: readonly string[]): string[] {
+  return [...new Set(names)].sort(byBytes);
+}
+
+/** A list of tag names as a SQL list of BLOB literals, hex so no escaping stands between. */
+const blobList = (names: readonly string[]) =>
+  names
+    .map((name) => `from_hex('${Buffer.from(name, 'utf8').toString('hex')}')`)
+    .join(', ');
+
+/** `column IN (names)` as SQL; no names, no rows. */
+const tagNameIn = (column: string, names: readonly string[]) =>
+  names.length === 0 ? 'false' : `${column} IN (${blobList(names)})`;
 
 const col = (name: string, type: string): ColumnSpec => ({ name, type });
 
@@ -366,9 +431,105 @@ export const PARQUET_L2_LOOKUPS: LookupSpec[] = [
 ];
 
 /**
- * The order `l2-1` lookup digests are taken in: `numeric`, the spec's order
- * by value, which is the files' own order, so a reader can digest a lookup
- * as it reads it. (An `l1-3` band's are taken in `legacy-text` order.)
+ * `l2-2`'s key lookup: for each (name, value) pair of a band's key tags
+ * (`keyTags`), the heights at which items carry it, with how many do at
+ * each. A reader holding a key value (an ArDrive `Drive-Id`, a
+ * `Parent-Folder-Id`) reads one or two row groups here, then only the row
+ * groups of `tags` and `data_items` at those heights, however widely the
+ * value's items are spread over the band: `lookup_tag` gives only the
+ * first and last height, between which a wide drive costs the whole band.
+ * The keys are those of `lookup_tag`, which maps them back to the bytes.
+ */
+export function keyLookup(keyTags: readonly string[]): LookupSpec {
+  return {
+    name: 'key',
+    file: 'lookup_key.parquet',
+    columns: [
+      col('name8', 'UBIGINT'),
+      col('val8', 'UBIGINT'),
+      col('height', 'UBIGINT'),
+      col('items', 'UBIGINT'),
+    ],
+    orderBy: ['name8', 'val8', 'height'],
+    derive: (t) =>
+      `SELECT name8, val8, height, count(*)::UBIGINT AS items
+       FROM (SELECT DISTINCT ${sha256_64Sql('tag_name')} AS name8,
+                             ${sha256_64Sql('tag_value')} AS val8, height, id
+             FROM read_parquet(${sqlPaths(t.tags)})
+             WHERE ${tagNameIn('tag_name', keyTags)})
+       GROUP BY name8, val8, height`,
+  };
+}
+
+/**
+ * `l2-2`'s stats file: per {@link STATS_BUCKET_HEIGHTS} heights, how many
+ * distinct items the band holds there and their bytes (`data_size`), in all
+ * (a row with an empty `name` and `value`) and by each value of each of
+ * the band's stat tags (`statTags`): an ArDrive `Entity-Type`,
+ * `Content-Type` or `App-Name`. An item carrying a stat tag twice counts
+ * under its first value. A question over the whole index (bytes a month,
+ * uploads by app) is then answered from these small files alone. Rows are
+ * sorted by bucket, so a reader takes a range of heights by row group.
+ */
+export function statsLookup(statTags: readonly string[]): LookupSpec {
+  const bucket = `((height // ${STATS_BUCKET_HEIGHTS}) * ${STATS_BUCKET_HEIGHTS})::UBIGINT`;
+  return {
+    name: 'stats',
+    file: 'stats.parquet',
+    columns: [
+      col('bucket', 'UBIGINT'),
+      col('name', 'BLOB'),
+      col('value', 'BLOB'),
+      col('items', 'UBIGINT'),
+      col('bytes', 'UBIGINT'),
+    ],
+    orderBy: ['bucket', 'name', 'value'],
+    derive: (t) =>
+      `WITH items AS (
+         SELECT DISTINCT id, height, data_size
+         FROM read_parquet(${sqlPaths(t.data_items)})),
+       picked AS (
+         SELECT height, id, tag_name AS name, arg_min(tag_value, tag_index) AS value
+         FROM read_parquet(${sqlPaths(t.tags)})
+         WHERE ${tagNameIn('tag_name', statTags)}
+         GROUP BY height, id, tag_name)
+       SELECT ${bucket} AS bucket, ''::BLOB AS name, ''::BLOB AS value,
+              count(*)::UBIGINT AS items,
+              coalesce(sum(data_size), 0)::UBIGINT AS bytes
+       FROM items GROUP BY 1
+       UNION ALL
+       SELECT ${bucket} AS bucket, name, value,
+              count(*)::UBIGINT AS items,
+              coalesce(sum(data_size), 0)::UBIGINT AS bytes
+       FROM items JOIN picked USING (height, id)
+       GROUP BY 1, 2, 3`,
+  };
+}
+
+/** What of a band the lookups it carries depend on. */
+export type ParquetL2LookupLayout = Pick<
+  ParquetL2Band,
+  'schema' | 'keyTags' | 'statTags'
+>;
+
+/**
+ * The lookups a band carries, by its layout: `l2-1`'s three, and under
+ * `l2-2` the key lookup and stats for the tag names its `band.json` gives.
+ */
+export function lookupsOf(band: ParquetL2LookupLayout): LookupSpec[] {
+  if (!hasDerivedTags(band.schema)) return PARQUET_L2_LOOKUPS;
+  return [
+    ...PARQUET_L2_LOOKUPS,
+    keyLookup(band.keyTags ?? []),
+    statsLookup(band.statTags ?? []),
+  ];
+}
+
+/**
+ * The order `l2-1` and `l2-2` lookup digests are taken in: `numeric`, the
+ * spec's order by value, which is the files' own order, so a reader can
+ * digest a lookup as it reads it. (An `l1-3` band's are taken in
+ * `legacy-text` order.)
  */
 export const PARQUET_L2_LOOKUP_DIGEST_ORDER: LookupDigestOrder = 'numeric';
 
@@ -397,6 +558,13 @@ export interface ParquetL2Band {
   heightRange: [number, number];
   /** Which data items it holds: the same for every band of an index. */
   selection: ParquetL2Selection;
+  /**
+   * `l2-2`: the tag names `lookup_key.parquet` is derived for, each once,
+   * in UTF-8 byte order; empty for none. Absent under `l2-1`.
+   */
+  keyTags?: string[];
+  /** `l2-2`: the tag names `stats.parquet` counts by, as `keyTags`. */
+  statTags?: string[];
   /** Per table: rows, and a digest of the rows, independent of the Parquet bytes. */
   tables: Record<string, { rows: number; rowDigest: string }>;
   /**
@@ -420,6 +588,8 @@ const BAND_FIELDS = [
   'schema',
   'heightRange',
   'selection',
+  'keyTags',
+  'statTags',
   'tables',
   'lookups',
   'checks',
@@ -446,11 +616,24 @@ function sortedKeys(value: unknown): unknown {
  * same bytes.
  */
 export function serializeBandFile(band: ParquetL2Band): string {
+  const derived = hasDerivedTags(band.schema);
+  if (derived && (band.keyTags === undefined || band.statTags === undefined)) {
+    throw new Error(`A ${band.schema} band names its keyTags and statTags`);
+  }
+  if (!derived && (band.keyTags !== undefined || band.statTags !== undefined)) {
+    throw new Error(`A ${band.schema} band has no keyTags or statTags`);
+  }
   const canonical = {
     version: band.version,
     schema: band.schema,
     heightRange: [band.heightRange[0], band.heightRange[1]],
     selection: canonicalSelection(band.selection),
+    ...(derived
+      ? {
+          keyTags: canonicalTagNames(band.keyTags!),
+          statTags: canonicalTagNames(band.statTags!),
+        }
+      : {}),
     tables: Object.fromEntries(
       PARQUET_L2_TABLES.map(({ name }) => [
         name,
@@ -461,7 +644,7 @@ export function serializeBandFile(band: ParquetL2Band): string {
       ]),
     ),
     lookups: Object.fromEntries(
-      PARQUET_L2_LOOKUPS.map(({ name }) => [
+      lookupsOf(band).map(({ name }) => [
         name,
         {
           rows: band.lookups[name].rows,
@@ -560,11 +743,26 @@ export function parseBandFile(text: string): ParquetL2Band {
     throw new Error(`${BAND_FILE}: heightRange must be [from, to], from <= to`);
   }
   const selection = parseSelection(raw.selection, `${BAND_FILE}: selection`);
+  const derived = hasDerivedTags(schema);
+  for (const field of ['keyTags', 'statTags'] as const) {
+    if (!derived && raw[field] !== undefined) {
+      throw new Error(`${BAND_FILE}: a ${schema} band has no ${field}`);
+    }
+    if (derived && raw[field] === undefined) {
+      throw new Error(`${BAND_FILE}: a ${schema} band names its ${field}`);
+    }
+  }
+  const tagNames = derived
+    ? {
+        keyTags: parseTagNames(raw.keyTags, `${BAND_FILE}: keyTags`),
+        statTags: parseTagNames(raw.statTags, `${BAND_FILE}: statTags`),
+      }
+    : {};
   const names = PARQUET_L2_TABLES.map((table) => table.name);
   const tables = parseDescriptions(raw.tables, names, 'table');
   const lookups = parseDescriptions(
     raw.lookups,
-    PARQUET_L2_LOOKUPS.map((spec) => spec.name),
+    lookupsOf({ schema, ...tagNames }).map((spec) => spec.name),
     'lookup',
   );
   if (raw.checks !== undefined && !isObject(raw.checks)) {
@@ -580,6 +778,7 @@ export function parseBandFile(text: string): ParquetL2Band {
     schema,
     heightRange: [range[0], range[1]],
     selection,
+    ...tagNames,
     tables,
     lookups,
     ...(raw.checks !== undefined ? { checks: raw.checks } : {}),
@@ -592,11 +791,13 @@ export function parseBandFile(text: string): ParquetL2Band {
  * file per table, and one per lookup. Publisher, subscriber and verifier
  * all take a band's files from here, by the layout its `band.json` names.
  */
-export function bandFiles(_schema: ParquetL2Schema): string[] {
+export function bandFiles(schema: ParquetL2Schema): string[] {
   return [
     BAND_FILE,
     ...PARQUET_L2_TABLES.map((table) => table.file),
-    ...PARQUET_L2_LOOKUPS.map((spec) => spec.file),
+    ...lookupsOf({ schema, keyTags: [], statTags: [] }).map(
+      (spec) => spec.file,
+    ),
   ].sort();
 }
 
@@ -605,9 +806,9 @@ export function bandFiles(_schema: ParquetL2Schema): string[] {
  * table's row count and row digest. Independent of the Parquet bytes, so
  * two publishers that wrote the same rows under the same selection agree on
  * it; the selection is bound in, so bands of two selections never do, even
- * where they hold the same rows (none, say). `lookups`, `checks` and
- * `createdAt` are left out: lookups are derived from the tables, so adding
- * or changing them never changes a band's id.
+ * where they hold the same rows (none, say). `lookups`, `keyTags`,
+ * `statTags`, `checks` and `createdAt` are left out: lookups are derived
+ * from the tables, so adding or changing them never changes a band's id.
  *
  * The band's id is taken from this ({@link l2BandId}).
  */
@@ -629,11 +830,17 @@ export function bandTablesDigest(band: ParquetL2Band): Buffer {
 
 /**
  * A band id: `l2-h<from>-<to>-<publisher tag>-<digest>`, the shape of an L1
- * band's. `h` for every band size, the publisher's 8-hex tag, and the first
- * 12 hex digits of {@link bandTablesDigest}.
+ * band's. `h` for every band size, heights in canonical decimals (no
+ * leading zero: one band, one id), the publisher's 8-hex tag, and the
+ * first 12 hex digits of {@link bandTablesDigest}. Groups: from, to, tag,
+ * digest.
+ *
+ * The digest is 48 bits: enough to name a band, not to bind one. What binds
+ * a band to its publisher is the publication's signature over every file's
+ * SHA-256.
  */
 export const L2_BAND_ID_PATTERN =
-  /^l2-h(\d{1,15})-(\d{1,15})-[0-9a-f]{8}-([0-9a-f]{12})$/;
+  /^l2-h(0|[1-9]\d{0,14})-(0|[1-9]\d{0,14})-([0-9a-f]{8})-([0-9a-f]{12})$/;
 
 /**
  * A band's id: its heights, its publisher, and a digest of its heights,

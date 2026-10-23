@@ -47,6 +47,8 @@ export interface IndexBandBuildCLIOptions extends GlobalCLIOptions {
 export interface IndexBandVerifyCLIOptions extends GlobalCLIOptions {
   bandDir?: string;
   gatewayUrl?: string;
+  arweaveNodes?: string;
+  allowAgreement?: boolean;
   readTimeout?: string;
   sampleSize?: string;
 }
@@ -59,9 +61,26 @@ export interface IndexL1ImportCLIOptions extends GlobalCLIOptions {
   cacheMib?: string;
   from?: string;
   to?: string;
+  anchorFrom?: string;
+  anchorMin?: string;
+  allowUnanchored?: boolean;
+  allowUnbound?: boolean;
+  allowUnverifiedFormat1?: boolean;
+  allowIncomplete?: boolean;
+  allowUnsampled?: boolean;
+  sampleBlocks?: string;
+  sampleTxs?: string;
+  sampleFormat1?: string;
+  seed?: string;
+  concurrency?: string;
+  readTimeout?: string;
+  spillMax?: string;
+  spillReserveGb?: string;
 }
 
 export interface IndexL1VerifyCLIOptions extends GlobalCLIOptions {
+  spillMax?: string;
+  spillReserveGb?: string;
   coreDb?: string;
   bandsDir?: string;
   skipTxRoot?: boolean;
@@ -70,6 +89,47 @@ export interface IndexL1VerifyCLIOptions extends GlobalCLIOptions {
   to?: string;
   anchorFrom?: string;
   anchorMin?: string;
+  allowUnanchored?: boolean;
+  allowUnbound?: boolean;
+  allowUnverifiedFormat1?: boolean;
+  allowIncomplete?: boolean;
+  sampleBlocks?: string;
+  sampleTxs?: string;
+  sampleFormat1?: string;
+  seed?: string;
+  concurrency?: string;
+  readTimeout?: string;
+  publication?: string;
+  publisherKey?: string;
+  registryUrl?: string;
+  index?: string;
+  allowExpired?: boolean;
+}
+
+export interface IndexL2VerifyCLIOptions extends GlobalCLIOptions {
+  bandsDir?: string;
+  publisher?: string;
+  onchain?: string;
+  seed?: string;
+  spillMax?: string;
+  arweaveNodes?: string;
+  gatewayUrl?: string;
+  readTimeout?: string;
+  from?: string;
+  to?: string;
+  skipLookups?: boolean;
+  publication?: string;
+  publisherKey?: string;
+  registryUrl?: string;
+  index?: string;
+  l1BandsDir?: string;
+  allowAgreement?: boolean;
+  allowUnlocated?: boolean;
+  maxUnchecked?: string;
+  maxUnlocatedShare?: string;
+  allowExpired?: boolean;
+  bandDeadline?: string;
+  concurrency?: string;
 }
 
 export interface IndexL1AuditCLIOptions extends GlobalCLIOptions {

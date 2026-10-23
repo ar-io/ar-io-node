@@ -21,7 +21,11 @@ import {
 
 const log = createTestLogger({ suite: 'L1BandImportWorker' });
 
-const worker = (runFill: FillRunner, firstRunDelayMs = 0) =>
+const worker = (
+  runFill: FillRunner,
+  firstRunDelayMs = 0,
+  extra: Partial<ConstructorParameters<typeof L1BandImportWorker>[0]> = {},
+) =>
   new L1BandImportWorker({
     log,
     coreDbPath: 'data/sqlite/core.db',
@@ -31,6 +35,11 @@ const worker = (runFill: FillRunner, firstRunDelayMs = 0) =>
     firstRunDelayMs,
     runFill,
     invocation: ['cli.js'],
+    // The bands directory is there unless a test says otherwise.
+    statDir: async () => ({}),
+    // Never resolved over the network in a test.
+    countMachines: async () => 2,
+    ...extra,
   });
 
 describe('cliInvocation', () => {
@@ -119,6 +128,57 @@ describe('L1BandImportWorker', () => {
       '--cache-mib',
       '256',
     ]);
+  });
+
+  it('passes the allow flags only when unverified bands are accepted', async () => {
+    let seen: string[] = [];
+    await worker(
+      async (args) => {
+        seen = args;
+        return { code: 0, summary: { filled: 0 }, tail: '' };
+      },
+      0,
+      { allowUnverified: true },
+    ).runOnce();
+    assert.deepEqual(seen.slice(-2), [
+      '--allow-unbound',
+      '--allow-unverified-format1',
+    ]);
+  });
+
+  it('is idle without running the fill when the bands directory was never created', async () => {
+    let ran = false;
+    const summary = await worker(
+      async () => {
+        ran = true;
+        return { code: 0, tail: '' };
+      },
+      0,
+      {
+        statDir: async () => {
+          throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+        },
+      },
+    ).runOnce();
+    assert.equal(summary, undefined);
+    assert.equal(ran, false);
+  });
+
+  it('runs the fill (which then fails) when the bands directory cannot be read (C F4)', async () => {
+    let ran = false;
+    await worker(
+      async () => {
+        ran = true;
+        return { code: 1, tail: 'EACCES\n' };
+      },
+      0,
+      {
+        statDir: async () => {
+          throw Object.assign(new Error('denied'), { code: 'EACCES' });
+        },
+      },
+    ).runOnce();
+    assert.equal(ran, true, 'a fill run reports it, as failed');
   });
 
   it('reports what a run filled', async () => {
@@ -245,5 +305,154 @@ describe('spawnFill', () => {
     );
     assert.equal(result.code, 1);
     assert.deepEqual(result.summary, { filled: 0, refused: 'bad band' });
+  });
+});
+
+describe('L1BandImportWorker after a refusal (round 2, F)', () => {
+  it('F1: does not re-verify the same refused bands every interval, and retries once they change', async () => {
+    let runs = 0;
+    let clock = 1_000_000;
+    let entries = ['l1-h0-99-aaaaaaaa-000000000000'];
+    const subject = worker(
+      async () => {
+        runs += 1;
+        return {
+          code: 1,
+          summary: { filled: 0, refused: 'unbound' },
+          tail: '',
+        };
+      },
+      0,
+      { listDir: async () => entries, now: () => clock },
+    );
+    await subject.runOnce();
+    await subject.runOnce();
+    assert.equal(runs, 1, 'the second run waits');
+    clock += 60_000 + 1;
+    await subject.runOnce();
+    assert.equal(runs, 2, 'after the interval it tries again');
+    await subject.runOnce();
+    clock += 60_000 + 1;
+    await subject.runOnce();
+    assert.equal(runs, 2, 'refused again: it now waits twice as long');
+    entries = ['l1-h0-99-aaaaaaaa-111111111111'];
+    await subject.runOnce();
+    assert.equal(runs, 3, 'a changed band is tried at once');
+  });
+
+  it('F2: warns when the bands directory and its parent are both missing', async () => {
+    const seen: Array<{ level: string; message: string }> = [];
+    const record = (info: (typeof seen)[number]) => seen.push(info);
+    log.on('data', record);
+    try {
+      await worker(async () => ({ code: 0, tail: '' }), 0, {
+        statDir: async () => {
+          throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+        },
+      }).runOnce();
+    } finally {
+      log.off('data', record);
+    }
+    assert.ok(
+      seen.some(
+        (i) =>
+          i.level === 'warn' &&
+          /bands directory does not exist/.test(i.message),
+      ),
+      JSON.stringify(seen),
+    );
+  });
+});
+
+describe('L1BandImportWorker and its sample sources (round 3)', () => {
+  it('G4: a fill whose sample could not be read is retried at the next interval, not backed off', async () => {
+    let runs = 0;
+    let clock = 1_000_000;
+    const subject = worker(
+      async () => {
+        runs += 1;
+        return {
+          code: 1,
+          summary: {
+            refused: 'the sample could not be read',
+            refusal: 'unreadable',
+          },
+          tail: '',
+        };
+      },
+      0,
+      {
+        listDir: async () => ['l1-h0-99-aaaaaaaa-000000000000'],
+        now: () => clock,
+      },
+    );
+    await subject.runOnce();
+    clock += 60_000 + 1;
+    await subject.runOnce();
+    assert.equal(runs, 2, 'tried again after one interval, not a day');
+  });
+
+  it('I3: warns once when the sample sources are fewer than two machines', async () => {
+    const seen: Array<{ level: string; message: string }> = [];
+    const record = (info: (typeof seen)[number]) => seen.push(info);
+    log.on('data', record);
+    try {
+      const subject = worker(async () => ({ code: 0, tail: '' }), 0, {
+        sampleFrom: ['http://a.test', 'http://b.test'],
+        countMachines: async () => 1,
+      });
+      await subject.runOnce();
+      await subject.runOnce();
+    } finally {
+      log.off('data', record);
+    }
+    assert.equal(
+      seen.filter(
+        (i) =>
+          i.level === 'warn' &&
+          /fewer than two distinct machines/.test(i.message),
+      ).length,
+      1,
+    );
+  });
+});
+
+describe('L1BandImportWorker after an unreadable fill (round 4, M1)', () => {
+  it('backs off by doubling up to two hours, and tries at once when the bands change', async () => {
+    let runs = 0;
+    let clock = 1_000_000;
+    let entries = ['l1-h0-99-aaaaaaaa-000000000000'];
+    const subject = worker(
+      async () => {
+        runs += 1;
+        return {
+          code: 1,
+          summary: { refused: 'could not be read', refusal: 'unreadable' },
+          tail: '',
+        };
+      },
+      0,
+      { listDir: async () => entries, now: () => clock },
+    );
+    await subject.runOnce();
+    clock += 1;
+    await subject.runOnce();
+    assert.equal(runs, 1, 'waits an interval');
+    // Doubling: 1, 2, 4, ... minutes, capped at two hours.
+    for (let i = 0; i < 12; i += 1) {
+      clock += 2 * 3600 * 1000 + 1;
+      await subject.runOnce();
+    }
+    assert.equal(runs, 13);
+    clock += 2 * 3600 * 1000 - 1000;
+    await subject.runOnce();
+    assert.equal(
+      runs,
+      13,
+      'never waits more than two hours, nor less once capped',
+    );
+    entries = ['l1-h0-99-aaaaaaaa-111111111111'];
+    await subject.runOnce();
+    assert.equal(runs, 14, 'a changed band is tried at once');
   });
 });

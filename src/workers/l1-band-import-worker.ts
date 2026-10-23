@@ -5,10 +5,20 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import { ChildProcess, spawn } from 'node:child_process';
+import * as fsp from 'node:fs/promises';
+import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import winston from 'winston';
 
+import { ArweaveNodePool } from '../lib/onchain/arweave-nodes.js';
 import * as metrics from '../metrics.js';
+
+/** Distinct machines a list of sources resolves to, as the sample counts them. */
+async function distinctMachines(urls: string[]): Promise<number> {
+  const pool = new ArweaveNodePool({ urls });
+  await pool.ready();
+  return new Set(pool.urls.map((u) => pool.addressOf(u))).size;
+}
 
 /** What one fill run reported, as `index-l1-import --fill` prints it. */
 export interface FillSummary {
@@ -17,6 +27,8 @@ export interface FillSummary {
   rows?: number;
   uncovered?: Array<[number, number]>;
   refused?: string;
+  /** `unreadable`: only the sample could not be read (an outage); `refused`: anything else. */
+  refusal?: 'refused' | 'unreadable';
 }
 
 /** The outcome of running the fill command once. */
@@ -142,18 +154,58 @@ export const spawnFill: FillRunner = (args, onLog, register) =>
  * once history is complete; it keeps running so a
  * hole that appears later, or the publisher's next tip band, is filled.
  *
+ * Every range is verified before a row of it is written
+ * (`verifyBeforeImport`): the band checked whole, and bound to the chain by
+ * the block this gateway holds above it. Blocks that cannot be bound — below
+ * the 2.0 fork, or holding a format-1 transaction with data, which is every
+ * `l1-3` band below height 2,000,000 — are refused unless `allowUnverified`
+ * (`L1_BAND_IMPORT_ALLOW_UNVERIFIED`) accepts them. A run that fails or is
+ * refused counts as `failed`, never `idle`. The one quiet case is a bands
+ * directory that was never created (nothing installed yet, on a new
+ * gateway): `idle`, with the reason logged.
+ *
  * A child process rather than a call. The import reads Parquet through
  * DuckDB, whose native code has crashed before, and a crash there must cost
  * one run, not the gateway. It also keeps the import's SQLite page cache
  * and DuckDB's memory out of the gateway's heap, and its synchronous
  * SQLite writes off the gateway's event loop.
  */
+/** Runs without a bands directory before the worker says so as a warning. */
+export const MISSING_RUNS_BEFORE_WARNING = 6;
+
+/** The longest a fill whose sources could not be read waits before it is tried again. */
+export const UNREADABLE_MAX_BACKOFF_MS = 2 * 3600 * 1000;
+
 export class L1BandImportWorker {
   private log: winston.Logger;
   private args: string[];
   private intervalMs: number;
   private firstRunDelayMs: number;
   private runFill: FillRunner;
+  private bandsDir: string;
+  private statDir: (dir: string) => Promise<unknown>;
+  private listDir: (dir: string) => Promise<string[]>;
+  private now: () => number;
+  private maxBackoffMs: number;
+  /**
+   * The last refusal: the directory's entries then (band ids carry their
+   * digest), and when to try again. A fill refused for the same bands is
+   * not re-verified every interval: it waits, twice as long each time,
+   * until the directory changes.
+   */
+  private readonly sampleFrom: string[];
+  private readonly countMachines: (urls: string[]) => Promise<number>;
+  private sourcesChecked = false;
+  private refused:
+    | {
+        kind: 'refused' | 'unreadable';
+        entries: string;
+        until: number;
+        backoffMs: number;
+      }
+    | undefined;
+  /** Runs in a row that found no bands directory. */
+  private missingRuns = 0;
   private timer: NodeJS.Timeout | undefined;
   private child: ChildProcess | undefined;
   private running: Promise<unknown> | undefined;
@@ -168,6 +220,14 @@ export class L1BandImportWorker {
     firstRunDelayMs = 60_000,
     runFill = spawnFill,
     invocation = cliInvocation(),
+    allowUnverified = false,
+    statDir = (dir: string) => fsp.stat(dir),
+    sampleFrom = [],
+    allowUnsampled = false,
+    listDir = (dir: string) => fsp.readdir(dir),
+    now = Date.now,
+    maxBackoffMs = 24 * 3600 * 1000,
+    countMachines = distinctMachines,
   }: {
     log: winston.Logger;
     coreDbPath: string;
@@ -178,11 +238,40 @@ export class L1BandImportWorker {
     firstRunDelayMs?: number;
     runFill?: FillRunner;
     invocation?: string[];
+    /**
+     * Fill from blocks the checks cannot bind (`--allow-unbound
+     * --allow-unverified-format1`): `L1_BAND_IMPORT_ALLOW_UNVERIFIED`.
+     */
+    allowUnverified?: boolean;
+    /** Injected in tests: how the bands directory is looked at. */
+    statDir?: (dir: string) => Promise<unknown>;
+    /**
+     * Sources the fill anchors and samples against (`--anchor-from`):
+     * `L1_BAND_IMPORT_SAMPLE_FROM`. Without any, every fill is refused
+     * unless `allowUnsampled`.
+     */
+    sampleFrom?: string[];
+    /** Fill with no sample (`--allow-unsampled`): `L1_BAND_IMPORT_ALLOW_UNSAMPLED`. */
+    allowUnsampled?: boolean;
+    /** Injected in tests: the bands directory's entries. */
+    listDir?: (dir: string) => Promise<string[]>;
+    now?: () => number;
+    /** The longest a refused fill waits before it is tried again unchanged. */
+    maxBackoffMs?: number;
+    /** Injected in tests: how many distinct machines the sample sources are. */
+    countMachines?: (urls: string[]) => Promise<number>;
   }) {
+    this.sampleFrom = sampleFrom;
+    this.countMachines = countMachines;
     this.log = log.child({ class: 'L1BandImportWorker' });
     this.intervalMs = intervalMs;
     this.firstRunDelayMs = firstRunDelayMs;
     this.runFill = runFill;
+    this.bandsDir = bandsDir;
+    this.statDir = statDir;
+    this.listDir = listDir;
+    this.now = now;
+    this.maxBackoffMs = maxBackoffMs;
     this.args = [
       ...invocation,
       'index-l1-import',
@@ -193,6 +282,11 @@ export class L1BandImportWorker {
       coreDbPath,
       '--cache-mib',
       String(cacheMib),
+      ...(allowUnverified
+        ? ['--allow-unbound', '--allow-unverified-format1']
+        : []),
+      ...(sampleFrom.length > 0 ? ['--anchor-from', sampleFrom.join(',')] : []),
+      ...(allowUnsampled ? ['--allow-unsampled'] : []),
     ];
   }
 
@@ -224,12 +318,96 @@ export class L1BandImportWorker {
     }, delayMs);
   }
 
+  /**
+   * Once, at the first run: whether the sample sources are at least the
+   * two distinct machines a refutation or an attestation needs. With fewer
+   * the sample can prove draws, never refute or attest them, so it reads
+   * as unreadable rather than as a check.
+   */
+  private async checkSources(): Promise<void> {
+    if (this.sourcesChecked) return;
+    this.sourcesChecked = true;
+    if (this.sampleFrom.length === 0) {
+      this.log.warn(
+        'No sample sources (L1_BAND_IMPORT_SAMPLE_FROM): every fill is refused unless L1_BAND_IMPORT_ALLOW_UNSAMPLED=true',
+      );
+      return;
+    }
+    try {
+      const machines = await this.countMachines(this.sampleFrom);
+      if (machines < 2) {
+        this.log.warn(
+          'The L1 band import sample sources are fewer than two distinct machines: the sample cannot refute or attest anything, so fills will wait as unreadable. Add a source to L1_BAND_IMPORT_SAMPLE_FROM',
+          { sources: this.sampleFrom, machines },
+        );
+      }
+    } catch (error) {
+      this.log.warn('Could not resolve the L1 band import sample sources', {
+        sources: this.sampleFrom,
+        error: (error as Error).message,
+      });
+    }
+  }
+
   /** Runs the fill once; never throws. */
   async runOnce(): Promise<FillSummary | undefined> {
     const started = Date.now();
+    await this.checkSources();
     // A worker that was never started is stopped too; only one stopped
     // while this run was going was shut down under it.
     const wasRunning = !this.stopped;
+    // A bands directory never created is a gateway with nothing installed
+    // yet: idle, said once a run. Any other error reading it is the fill's
+    // to report, and fails the run.
+    try {
+      await this.statDir(this.bandsDir);
+      this.missingRuns = 0;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        this.missingRuns += 1;
+        metrics.l1BandImportRunsTotal.inc({ result: 'idle' });
+        // Nothing installed yet is normal on a new gateway; a missing
+        // installed/ directory too, or a directory missing run after run,
+        // is more likely a misconfigured path.
+        const parentMissing = await this.statDir(path.dirname(this.bandsDir))
+          .then(() => false)
+          .catch(() => true);
+        const level =
+          parentMissing || this.missingRuns >= MISSING_RUNS_BEFORE_WARNING
+            ? 'warn'
+            : 'info';
+        this.log[level](
+          'No bands installed yet: the bands directory does not exist',
+          {
+            bandsDir: this.bandsDir,
+            parentMissing,
+            runs: this.missingRuns,
+          },
+        );
+        return undefined;
+      }
+    }
+    let entries = '';
+    try {
+      entries = (await this.listDir(this.bandsDir)).sort().join('\n');
+    } catch {
+      entries = '';
+    }
+    if (
+      this.refused !== undefined &&
+      this.refused.entries === entries &&
+      this.now() < this.refused.until
+    ) {
+      metrics.l1BandImportRunsTotal.inc({ result: 'deferred' });
+      this.log.debug(
+        'Fill deferred: the same bands were refused, or their sources unreadable, last time',
+        {
+          retryAt: new Date(this.refused.until).toISOString(),
+        },
+      );
+      return undefined;
+    }
+
     try {
       const result = await this.runFill(
         this.args,
@@ -257,8 +435,53 @@ export class L1BandImportWorker {
           summary.uncovered.reduce((sum, [a, b]) => sum + (b - a + 1), 0),
         );
       }
+      if (result.code !== 0 && summary?.refusal === 'unreadable') {
+        // The sources could not be read: an outage, not evidence against
+        // the bands. Tried again after an interval, doubling while it
+        // lasts up to UNREADABLE_MAX_BACKOFF_MS, and at once when the
+        // bands change.
+        metrics.l1BandImportRunsTotal.inc({ result: 'unreadable' });
+        const same =
+          this.refused?.kind === 'unreadable' &&
+          this.refused.entries === entries;
+        const backoffMs = same
+          ? Math.min(
+              UNREADABLE_MAX_BACKOFF_MS,
+              (this.refused?.backoffMs ?? 0) * 2,
+            )
+          : this.intervalMs;
+        this.refused = {
+          kind: 'unreadable',
+          entries,
+          backoffMs,
+          until: this.now() + backoffMs,
+        };
+        this.log.warn(
+          'Fill waits: its sources could not be read; it is tried again later',
+          {
+            reason: summary.refused,
+            retryAt: new Date(this.refused.until).toISOString(),
+            seconds: Math.round((Date.now() - started) / 1000),
+          },
+        );
+        return summary;
+      }
       if (result.code !== 0) {
         metrics.l1BandImportRunsTotal.inc({ result: 'failed' });
+        if (summary?.refused !== undefined) {
+          const same =
+            this.refused?.kind === 'refused' &&
+            this.refused.entries === entries;
+          const backoffMs = same
+            ? Math.min(this.maxBackoffMs, (this.refused?.backoffMs ?? 0) * 2)
+            : this.intervalMs;
+          this.refused = {
+            kind: 'refused',
+            entries,
+            backoffMs,
+            until: this.now() + backoffMs,
+          };
+        }
         if (wasRunning && this.stopped) {
           this.log.info('Fill interrupted by shutdown; the next run redoes it');
         } else {
@@ -270,6 +493,7 @@ export class L1BandImportWorker {
         }
         return summary;
       }
+      this.refused = undefined;
       const filled = (summary?.filled ?? 0) > 0;
       metrics.l1BandImportRunsTotal.inc({ result: filled ? 'filled' : 'idle' });
       this.log[filled ? 'info' : 'debug']('Fill finished', {

@@ -322,17 +322,30 @@ characters), not its band id: the name comes from the files, so publishers
 of the same files agree on it. The folder's `band.json` says which heights
 it holds.
 
-To check what arrived against the chain's own commitments, run
-[`index-l1-verify`](cli.md#index-l1-verify) over the folder. It needs no
-gateway and no key, only a core image from release 85 or later (release 84
-and earlier have no `index-l1-verify`):
+To check what arrived against the chain, first rename each folder to its
+band id (the item's `ario:band`): a band's name is its identity, and
+[`index-l1-verify`](cli.md#index-l1-verify) and the importer refuse a folder
+not named for what it holds. Then run `index-l1-verify` over the folder.
+It needs no gateway, only a core image with this release's verifier.
+`--anchor-from` binds the bands to the chain (without it the run says it is
+not anchored, and fails unless `--allow-unanchored`), and `--publication`
+binds them to what their publisher signed:
 
 ```bash
-IMAGE=ghcr.io/ar-io/ar-io-core:latest   # release 85 or later
+IMAGE=ghcr.io/ar-io/ar-io-core:latest
 docker run --rm -u "$(id -u):$(id -g)" -v "$HOME/arweave-l1:/bands:ro" \
   -w /app --entrypoint /nodejs/bin/node "$IMAGE" \
-  /app/dist/cli/cli.js index-l1-verify --bands-dir /bands
+  /app/dist/cli/cli.js index-l1-verify --bands-dir /bands \
+  --anchor-from https://<gateway one>,https://<gateway two> \
+  --publication https://<publisher gateway>/ar-io/indexes/publication.json \
+  --publisher-key <the publisher's observer address>
 ```
+
+Today's `l1-3` bands report every block below the 2.0 fork, and the
+post-2.0 blocks holding a format-1 transaction with data (none from
+height 2,000,000), as `unbound`: read the result's `unbound` and
+`assurance`, and pass `--allow-unbound --allow-unverified-format1` only if
+that is enough for your use.
 
 Then query it where it lies, for example with DuckDB:
 
@@ -344,7 +357,9 @@ FROM read_parquet('~/arweave-l1/*/blocks.parquet');
 To load it into a gateway's `core.db` with
 [`index-l1-import`](cli.md#index-l1-import), rename each folder to its band
 id (the item's `ario:band`) first: the importer keys its ledger on band ids
-and passes over any other folder. A gateway is better served by the
+and refuses a folder that is not named for what it holds. A folder with no
+`band.json` (a retired copy, or one not finished arriving) is ignored and
+listed, never read. A gateway is better served by the
 index-swarm sidecar, which installs bands under their ids itself.
 
 ### Keeping up with the L1 index
@@ -529,9 +544,15 @@ time as `createdAt`; readers accept both, and a publisher settles its own in
 place.
 
 A reader checks each file against the signed digests, then its footer and
-schema against the layout and the row counts in `band.json`. The file set it
-expects is the one the layout declares. A reader that does not know a layout
-refuses the band and names the layout.
+schema against the layout and the row counts in `band.json`. It refuses a
+footer longer than 8 MiB before parsing it, since decoding a footer takes
+about 20 times its size in memory. That allows about 1.8 billion rows in a
+table at DuckDB's default row-group size, and far fewer in a lookup file,
+whose row groups are smaller (`lookup_tag` reaches it at about 210 million
+rows). A publisher runs the same check before it writes `band.json`, so it
+never publishes a band its readers would refuse. The file set it expects is
+the one the layout declares. A reader that does not know a layout refuses
+the band and names the layout.
 
 ## Lookup files
 
@@ -606,7 +627,8 @@ files, so a transaction in it is found only by a scan.
 pointers, so a wallet's bytes stored and a tag's count need no table read.
 They carry the same trust as the tables: each file's digest is signed in
 the publication, and anyone can recompute them from the tables
-(`ar-io-node index-l1-verify --bands-dir` does).
+(`ar-io-node index-l1-verify --bands-dir` does, and checks each file is in
+its key order, which the `l1-3` digests alone do not show).
 
 A lookup file's `rowDigest` is taken as a table's, over its rows in the
 order of its "Sorted by" columns. In an `l1-3` band that order compares
@@ -637,6 +659,7 @@ A band is a directory of `band.json` and these files:
 | `wallets.parquet` | Owners' `address` and key (`public_modulus`); the address is the key's SHA-256 | `address` |
 | `parents.parquet` | Every nested bundle between a held item and its root, located as an item is | `id, root_transaction_id, root_parent_offset, offset` |
 | `lookup_id.parquet`, `lookup_wallet.parquet`, `lookup_tag.parquet` | The band's [lookup files](#l2-lookup-files) | by key |
+| `lookup_key.parquet`, `stats.parquet` | Layout `l2-2`: the [key lookup and stats](#l2-key-lookup-and-stats), derived for the tag names `band.json` gives | by key |
 
 Every order is ascending with nulls last. An item's location is eight
 columns, `root_parent_offset`, `offset`, `size`, `data_offset`,
@@ -646,11 +669,14 @@ of the item's parent bundle, and `root_parent_offset` is where that payload
 starts in the root transaction's data. They are all set, or all null for an
 item known to be in its root but not where.
 
-`band.json` names the layout (`schema`: `l2-1`), the heights, the selection,
-each table's row count and row digest (computed as an L1 band's), the same
-for each lookup file (`lookups`), and `createdAt`; optionally `checks`, a small free-form object of what the
-builder checked. A reader refuses any field it does not declare. The
-selection is:
+`band.json` names the layout (`schema`: `l2-1` or `l2-2`), the heights,
+the selection, under `l2-2` the tag names its key lookup and stats are
+derived for (`keyTags`, `statTags`: each name once, in UTF-8 byte order, at
+most 16, or an empty list), each table's row count and row digest (computed
+as an L1 band's), the same for each lookup file (`lookups`), and
+`createdAt`; optionally `checks`, a small free-form object of what the
+builder checked. A reader refuses any field it does not declare, and
+accepts both layouts. The selection is:
 
 ```json
 {
@@ -674,9 +700,10 @@ JSON (`[from,to]`), a newline, the selection as one line of JSON with its
 keys in the order above, a newline, and one `<table>:<rows>:<rowDigest>`
 line per table in name order, joined by newlines. The selection is part of
 the band's identity: the same rows under two selections are two bands.
-`lookups`, `checks` and `createdAt` are not part of it: the lookup files are
-derived from the tables, so the same rows give the same id whatever their
-lookups.
+`lookups`, `keyTags`, `statTags`, `checks` and `createdAt` are not part of
+it: the lookup files are derived from the tables, so the same rows give the
+same id whatever their lookups, and an `l2-1` band becomes an `l2-2` band
+under the same id.
 
 A reader checks each file against the signed digests, then the file set,
 each footer's columns and row count against the layout and `band.json`,
@@ -721,6 +748,49 @@ in, so a reader can digest a lookup as it reads it (unlike an `l1-3`
 band's, above). A reader checks each lookup file's footer and row count as
 it does a table's. The publisher derives them from the band's own tables and checks
 them against those tables before it publishes.
+
+### L2 key lookup and stats
+
+`lookup_tag` says how many items carry a tag pair and the first and last
+height among them, so a value spread over a band, an ArDrive drive active
+for a year, costs the whole band's `tags` between those heights to find.
+Layout `l2-2` adds two files derived for tag names the publisher chooses
+and `band.json` records, so a reader uses them when the band lists the
+name it needs and falls back to `lookup_tag` otherwise:
+
+| File | One row per | Columns | Sorted by |
+|---|---|---|---|
+| `lookup_key.parquet` | (name, value) pair of a **key tag** (`keyTags`) and height at which an item carries it | `name8`, `val8`, `height`, `items` (distinct items carrying it at that height) | `name8, val8, height` |
+| `stats.parquet` | bucket of 1,000 heights (`bucket`, the first height of it), in all (empty `name` and `value`) and per value of each **stat tag** (`statTags`) | `bucket`, `name`, `value`, `items` (distinct items and heights), `bytes` (their `data_size`) | `bucket, name, value` |
+
+The keys are those of `lookup_tag` (`name8`, `val8`: the first 8 bytes of
+the SHA-256 of the name and of the value), which maps them back to the
+bytes. An item carrying a stat tag twice counts under its first value; an
+item at two places in one height counts once. For turbo-gateway.com's
+`ardrive-l2`, the key tags are `Drive-Id`, `Parent-Folder-Id`, `Folder-Id`
+and `File-Id`, and the stat tags `App-Name`, `Content-Type` and
+`Entity-Type`.
+
+```sql
+-- the heights holding one drive's records, however spread: a row group or
+-- two of lookup_key, then only tags' row groups at those heights
+SELECT height, items
+FROM read_parquet('…/*/lookup_key.parquet')
+WHERE name8 = ('0x' || left(sha256('Drive-Id'::BLOB), 16))::UBIGINT
+  AND val8 = ('0x' || left(sha256(:drive::BLOB), 16))::UBIGINT;
+
+-- bytes uploaded by app over the whole index, from the stats files alone
+SELECT CAST(value AS VARCHAR) AS app, sum(items) AS items, sum(bytes) AS bytes
+FROM read_parquet('…/*/stats.parquet')
+WHERE name = 'App-Name'::BLOB
+GROUP BY 1 ORDER BY bytes DESC;
+```
+
+A publisher that upgrades adds the two files to each published `l2-1`
+band in place, under the same id, and replaces its `band.json`; a
+subscriber fetches only those. A subscriber that does not know `l2-2`
+refuses the band and keeps its copy, so upgrade subscribers first (see
+[index-export.md](index-export.md#layout-l2-2-key-lookup-and-stats)).
 
 ## Querying a dataset over HTTP
 

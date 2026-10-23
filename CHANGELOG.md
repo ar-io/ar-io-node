@@ -4,7 +4,453 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased]
+## [Release 86] - 2026-10-23
+
+This is an **urgent, recommended release** focused on **the Node.js
+Brotli remote-code-execution fix (CVE-2026-111497), index verification
+that fails closed, and exact chain data**. Key highlights include the core
+image moving from the end-of-life Node.js 20 to 22.23.4, and the default
+observer image (`2aa908dc`, which also cranks epochs) moving to 22.23.4,
+closing the Brotli decoder RCE and the TLS hostname-check bypasses from
+Node's October 21 security release (**upgrade both images today**);
+`index-l1-verify` and `index-l1-import` binding an L1 index to the chain
+(anchor headers recomputed and agreed by two machines, every transaction
+bound or sampled) and failing closed; `index-l2-verify`, which checks a
+`parquet-l2` index against a signed publication and reads the roots it
+names from Arweave nodes with every byte proven; a pre-2.4 block's
+`reward_pool` stored exactly instead of rounded; `parquet-l2` layout
+`l2-2` with a key lookup and stats per band; opting out of Index Sharing
+now also stops seeding; and an upstream ArNS undername limit of 0 no
+longer read as 10.
+
+### Security
+
+- **The core image now runs Node.js 22.23.4, up from 20.19.6.** Node's
+  October 21, 2026 security release fixes an out-of-bounds write in its
+  bundled Brotli decoder that permits remote code execution
+  (CVE-2026-111497), plus two TLS hostname-check bypasses and a
+  `dns.resolve` truncation bug. Node 20 reached end of life in April 2026
+  and gets no fix. A gateway is exposed: its HTTP clients ask peers,
+  trusted gateways and Arweave nodes for Brotli-compressed responses and
+  decode them, and any gateway on the network can act as a peer. The
+  runtime stage now copies the pinned `node` binary onto
+  `distroless/cc-debian12` instead of using `distroless/nodejs22-debian12`,
+  whose floating tag still carried an unpatched 22.22.0 the day after the
+  fix shipped. The binary stays at `/nodejs/bin/node`, so compose files,
+  `docker-entrypoint.sh` and the `tools/` scripts are unchanged. Operators
+  who stopped Brotli decoding with a `NODE_OPTIONS=--require` shim can
+  drop it once they run this image. Running from source now wants Node 22
+  (`.nvmrc`).
+
+- **The observer moves to Node.js 22.23.4 for the same fixes.**
+  `OBSERVER_IMAGE_TAG` now pins an observer image built on
+  `node:22.23.4-bookworm-slim`, up from 22.13.0. The observer fetches from
+  every gateway on the network, and on a gateway that cranks epochs the
+  same process signs with the operator wallet.
+
+### Added
+
+- **`index-l1-verify` and `index-l1-import` options to bind and to accept.**
+  `index-l1-verify` takes `--sample-blocks`, `--sample-txs`, `--seed`,
+  `--concurrency`, `--read-timeout`, `--allow-unanchored`,
+  `--allow-unbound`, `--allow-unverified-format1`, `--spill-reserve-gb`, and
+  with `--bands-dir` `--publication`, `--publisher-key`, `--registry-url`,
+  `--index` and `--allow-expired`; its result has one shape in both views
+  (`anchor`, `unbound`, `sample`, `skipped`, `accepted`, `assurance`).
+  Both take `--allow-incomplete` (blocks whose transactions or owners'
+  keys the index lacks, no longer under `--allow-unbound`) and
+  `--sample-format1` (format-1 transactions drawn from blocks whose
+  `tx_root` cannot be recomputed, default 200).
+  `index-l1-import` takes `--anchor-from`, `--anchor-min`, the `--allow-*`
+  flags, `--allow-unsampled`, the `--sample-*` options, `--seed`,
+  `--concurrency`, `--read-timeout`, `--spill-max` and
+  `--spill-reserve-gb`, and reports per band what bound it, what it
+  accepted, what is unbound or skipped, the sample and the assurance. New
+  env vars `L1_BAND_IMPORT_ALLOW_UNVERIFIED` (default false; not
+  `--allow-incomplete`), `L1_BAND_IMPORT_SAMPLE_FROM` (default the trusted
+  node and trusted gateways) and `L1_BAND_IMPORT_ALLOW_UNSAMPLED` (default
+  false). A core migration adds `binding` and `accepted` to
+  `parquet_l1_imports`. See [docs/cli.md](docs/cli.md#index-l1-verify).
+
+- **`parquet-l2` layout `l2-2`: a key lookup and stats per band, derived
+  for tag names the publisher chooses.** `lookup_key.parquet` holds, for
+  each value of the index's `keyTags` (an ArDrive `Drive-Id`,
+  `Parent-Folder-Id`), the heights at which items carry it and how many, so
+  a reader finds a value spread over a band in a row group or two and then
+  reads only the `tags` row groups at those heights, where `lookup_tag`
+  gave only the first and last height and a wide drive cost the whole band.
+  `stats.parquet` holds items and bytes per 1,000 heights, in all and by
+  each value of the index's `statTags` (`App-Name`, `Content-Type`,
+  `Entity-Type`), so a question over the whole index is answered from the
+  small files alone. Both are configured per index in
+  `INDEX_EXPORT_L2_INDEXES` (`keyTags`, `statTags`, none unless given) and
+  recorded in `band.json`; neither enters a band's id. Every band built is
+  `l2-2`, and a published `l2-1` band, or an `l2-2` band derived for other
+  tag names, is upgraded in place under its id: the two files derived from
+  its own tables, checked, moved in, and `band.json` replaced, before any
+  build and outside the time budget (`derived` in the report,
+  `index_export_runs_total{kind="derive"}`). A subscriber that does not
+  know `l2-2` refuses the band and keeps its copy: upgrade subscribers
+  first. `index-l2-verify` checks the two files as it checks the other
+  lookups. See
+  [docs/index-publication.md](docs/index-publication.md#l2-key-lookup-and-stats).
+- **`index-l2-verify`: check an L2 index (a directory of `parquet-l2`
+  bands, such as `ardrive-l2`) as anyone holding it can.** It needs no
+  gateway and no database. Each band:
+  - its id is checked against its contents, and the set for overlaps and
+    holes;
+  - every table is read row by row, in order, against `band.json`, and every
+    owner key against its address;
+  - every item's location must be laid out as ANS-104 requires, with its
+    `data_size` the payload it gives;
+  - every nested item must name a parent bundle that `parents` describes
+    where its payload starts, and every `parents` row's payload must start
+    inside it;
+  - the lookups are checked against the tables;
+  - a sample of items per band (`--onchain <n>`, 20 when not given) is read
+    at their recorded locations from Arweave nodes and checked against their
+    ids. The items are drawn uniformly over every located item of the band,
+    then nested items are added until half the draw is nested, so rare
+    nested items are always read; `--seed` repeats a run.
+  `--spill-max` sets how much the lookup check may spill (128 GB unless
+  set; the 69-million-item h1.8M band of `ardrive-l2` peaks at about 65 GB,
+  past the 16 GB `index-l1-verify` allowed before, which it now shares).
+  A band that its own publisher's newer band supersedes is left out. For L1
+  bands, `index-l1-verify` checks the chain's own commitments instead. See
+  [docs/index-verification.md](docs/index-verification.md), new, which
+  covers every index kind: what each check proves, how to reproduce a band
+  and how to repair one.
+- **Reading roots from Arweave nodes, every byte proven**
+  (`index-band-verify --arweave-nodes`, and `index-l2-verify` by default),
+  so a header check trusts no gateway:
+  - a root's signature must hash to its id and verify, binding its
+    `data_root`, and the root must be format 2 and found in a block by two
+    machines (see Fixed);
+  - every chunk's proof is validated against that `data_root` under the
+    consensus rules for its weave offset, and the chunk must hash to the
+    proof;
+  - a node serving a chunk that fails is passed over;
+  - a root or chunk counts as gone (`unreadable`) only when every node that
+    answered said 404. Busy nodes (429, 5xx) and chunks no node could prove
+    are errors, never missing data, and a missing chunk is only that item's,
+    not its root's.
+
+### Changed
+
+- The `CHUNK_METADATA_ANCHOR_*` settings now pass through
+  `docker-compose.yaml` to core, so they can be set from `.env`. Before this,
+  only a direct `yarn start` saw them.
+- A lookup of an ArNS name that is not registered no longer logs a warning
+  and an error. "Base name not found in ArNS names cache" is now `debug` (the
+  `arns_name_cache_miss_total` counter still counts it), "Unable to resolve
+  name against all resolvers" is now `info`, and "Error during parallel
+  resolution" is logged only when a resolver timed out or was aborted, not
+  when every resolver simply found no record. A resolver that throws still
+  logs its own error.
+- **Opting out of Index Sharing stops seeding.** With
+  `INDEX_SWARM_SUBSCRIBE=[]` (or on the default publisher, whose default
+  subscription skips itself) the `index-swarm` sidecar now takes the
+  subscriber's torrents out of the engine once per start, files kept:
+  installed bands stay installed and the gateway still searches them, but
+  they are no longer seeded, and a download in progress stops. Torrents a
+  publisher seeds from `published/` are unaffected. Subscribing again seeds
+  the installed bands from their kept `.torrent` files, nothing fetched
+  again. Previously the engine went on seeding installed bands after an
+  opt-out.
+
+### Fixed
+
+- **The block importer stored a rounded `reward_pool` for blocks 585,633
+  to 633,719.** Headers before the 2.4 fork (633,720) write `reward_pool`
+  as a bare JSON number, and from 585,633 it passes 2^53, so `JSON.parse`
+  rounded an odd value to an even neighbour (600,570 was stored as
+  `...668`; the chain has `...667`). Block headers are now parsed with long
+  integers kept exact, a cached header holding a rounded number is fetched
+  again, and `sanityCheckBlock` refuses one. Gateways that indexed those
+  heights themselves, or imported L1 bands built from them, hold the
+  rounded values; `index-l1-verify` reports them as sample mismatches on
+  `reward_pool`. The shared parser also stopped quoting digits inside JSON
+  strings, which made such text unparseable.
+
+- **`index-l1-verify` and `index-l1-import` could pass, or write, an L1
+  index that was not the chain's; both now fail closed.** Three audits
+  (2026-10-22) found ways through. Fixed:
+  - The anchor compared only the top block's hash: a fabricated chain
+    under the real top hash passed with two sources agreeing, a NULL hash
+    at the anchor height compared nothing, the same machine under two
+    names counted twice, and without `--anchor-from` the result still
+    said `anchored: true`. Each source's header is now fetched whole, its
+    hash recomputed from its own fields (every era from the 2.0 fork), at
+    least two distinct machines must agree, and the index's row and
+    transaction ids must equal it. Without an anchor the run says
+    `anchored: false` and fails unless `--allow-unanchored`.
+  - Blocks holding a format-1 transaction with data were skipped from
+    `tx_root` and counted as passing, and pre-2.0 blocks (whose hash
+    cannot be recomputed) were described as bound by the anchor. Both are
+    now reported in `unbound` and fail unless `--allow-unverified-format1`
+    or `--allow-unbound` accepts them. Every published `l1-3` band below
+    height 2,000,000 holds such blocks.
+  - Transaction ids, their order, and every transaction field were bound
+    by nothing. Positions, counts, tags and owners are now checked against
+    the links and wallets, and a keyed uniform sample of block headers and
+    transaction signatures (`--sample-blocks`, `--sample-txs`) checks the
+    rest, with the share of forged rows it would catch stated in `sample`.
+  - `--bands-dir` read rows by a glob (so retired copies, second
+    generations and stray directories were read, and sound sets failed),
+    read only blocks and a few transaction columns, never checked
+    `band.json`'s row counts and digests, column layouts, lookup file
+    order, rows outside a band, band names, or a publication, silently
+    dropped an unreadable edge band, clamped `--from`/`--to`, and ignored
+    `--anchor-*`. Each band is now read by its own paths and checked whole,
+    with `--publication` binding, and the anchor and sample run as for
+    `--core-db`.
+  - NULLs were read as zero or passed. They now fail `nulls`.
+  - The import checked nothing against the chain: `--fill` spliced any
+    band beneath held blocks, and the worker's fill did the same. Every
+    band is now checked before a row is written, and bound by the block the
+    gateway holds above it or by `--anchor-from`. A band refused part way
+    with the gateway stopped left its rows behind and reported no hole; it
+    is now cleared, and `holes` read from what the database holds. A band
+    id's digest was never checked and a republished band was skipped as
+    imported; both are now checked. A missing or unreadable bands
+    directory made `--fill` exit 0; it is now an error, and the worker
+    counts it `failed`.
+  - The default `core.db` range stopped at the 2.0 fork; it is now the
+    whole held range.
+  - A second review round found more, all fixed. A refused import deleted
+    rows the gateway held before it (its own, or a republished band's);
+    it now removes only what it committed, and over held rows writes one
+    transaction. A republished band outside `--from`/`--to` was imported.
+    The import and fill drew no sample, so forged transaction fields
+    passed; they now sample and refuse without one unless
+    `--allow-unsampled`. A range imported unanchored or accepting a gap
+    vouched for bands below it; the ledger now records each range's
+    binding. Invented transaction ids no source holds came back
+    unreadable rather than failing; one lying source could fail a run.
+    An ECDSA transaction's fields, and a format-1 transaction's field
+    boundaries, are not bound by its signature; they are now checked
+    against two machines' answers (`txsAttested`) and the consensus rules
+    (canonical decimals, target and anchor lengths, no format 1 from
+    height 2,000,000). A sampled header at another height passed.
+    `--allow-unbound` also accepted incomplete blocks. A format-2
+    transaction relabelled format 1 escaped `tx_root` unsampled. The first
+    block's link and size were never checked. A tag row filed under a
+    transaction id at another height passed `tag_count`. A band whose
+    `band.json` was removed silently shrank the set. `publisherBound` was
+    true on a failed publication. `detects` ignored unreadable draws. The
+    worker re-verified the same refused bands every interval; it now backs
+    off until they change.
+  - A third round found false refutations and more fail-opens, all fixed.
+    Two sources answering 404 while a third that holds the item was busy
+    refuted an honest index; absence now refutes only when every source
+    was heard. A 404 refuted a format-1 transaction, though Arweave nodes
+    now hide some real ones from `GET /tx`; it no longer does.
+    `--anchor-min 1` let one machine refute a draw, or anchor the index on
+    its own; `--anchor-min` now refuses anything below 2, and the sample warns when its sources are fewer. A sample that could
+    not be read was reported as refuting the bands; it is now
+    `refusal: "unreadable"`, and the worker retries it at the normal
+    interval (`l1_band_import_runs_total{result="unreadable"}`).
+    Transactions below the 2.0 fork were never sampled; they now are.
+    `--sample-txs 0` (and `--sample-format1 0` over accepted format-1
+    blocks) imported without `--allow-unsampled`. A draw whose owner key
+    the index lacked was never asked about. A format-1 transaction past
+    the 10 MiB limit, or relabelled and past the byte budget, passed as
+    unreadable. A block an unfinished import wrote vouched for the band
+    below it. A fill cleared rows outside the unfinished run it redid. The
+    disk check ignored the write-ahead log of a band written over held
+    rows. The default sample sources included gateways marked
+    `trusted: false`, and a redirect could make one machine count as two.
+    Fork gates on transaction rules were one block early, as the chain
+    validates a block's transactions with the height of the block below.
+  - A fourth round found a false refusal of real mainnet data and more,
+    all fixed. RSA-PSS signatures were checked by OpenSSL, which is
+    stricter than Arweave's `rsa_pss:verify` and rejected real mined
+    transactions (`SnN5f1fBk3hD-_PSnFBFDze-kMBU-NFIKYWvrTEQWTo` at
+    1,602,352); they are now checked by a port of Arweave's own rule (and
+    its pre-2.4 legacy form), pinned. A source whose signatures did not
+    verify could stop a survey early, and refuted draws were counted as
+    proven (now `txsRefuted`, `format1Refuted`). Invented format-1 ids
+    passed as possibly hidden; their block is now asked whether it lists
+    them. The unreadable cap applied over the whole range, so an
+    unreadable band passed beside readable ones; it now applies per band.
+    A draw lacking its owner key was attested whatever owner the index
+    named; the owner address is now compared. The format-1 byte budget is
+    now 4 GB a band. The import refuses sources fewer than two machines
+    up front, treats an anchor nobody answered as an outage, settles
+    unfinished ledger rows that later imports covered (a range of another
+    grid spanning two bands was redone for ever), and its disk check
+    counts `missing_transactions` too. The worker backs off a fill whose
+    sources could not be read, up to two hours.
+  - A fifth round: an invented format-1 id past the byte budget was never
+    checked against its block, and one in a block the chain does not have
+    stayed unreadable; both are now refuted. Real pre-2.4 (legacy RSA-PSS)
+    and ECDSA transactions are now in the tests.
+
+  Gateways with `L1_BAND_IMPORT_ENABLED=true` now refuse today's `l1-3`
+  bands below height 2,000,000 unless `L1_BAND_IMPORT_ALLOW_UNVERIFIED=true`.
+  See [docs/cli.md](docs/cli.md#index-l1-verify).
+
+- **`index-l2-verify` could report `ok: true` on bad data; it now fails
+  closed.** Three audits found ways through. Fixed:
+  - NULLs passed every row predicate: a row with no id, height, root or
+    parent, a located item with no `data_size`, a nested item with no
+    parent. They now fail the new `required` check, and every predicate
+    treats NULL as failing.
+  - Nothing checked `tags` and `wallets` against `data_items`, the items
+    against the band's selection, the Parquet column types, or the order
+    of lookup files (which were sorted before digesting). The new
+    `consistency`, `selected` and `schema` checks do, and lookups are read
+    in file order and must be in their key's order.
+  - A directory entry without a readable `band.json`, or a malformed
+    `.publisher.json`, was skipped silently; a band reached through a
+    symlink was skipped too; and a `.publisher.json` could retire any band
+    of its publisher. The first two now fail `files`, a symlinked band is
+    followed and checked like any other, and a claim counts only when the
+    claiming band covers the other's heights.
+  - A band that vanished mid-run, or a file deleted mid-run, crashed the run
+    or passed. That band now fails `complete` and the run goes on.
+  - The on-chain check passed roots no block holds (one node serving a
+    self-signed root), format-1 headers given a `data_root` they don't
+    sign, and bands whose sampled roots were mostly made up. Roots must now
+    be format 2 and placed in one block by two machines (or found in an L1
+    index, `--l1-bands-dir`); a root no node has fails the band; a band
+    with nothing located fails unless `--allow-unlocated`; agreement in place of a
+    signature needs `--allow-agreement`; chunk proofs are checked under the
+    rules of the root's block, never laxer than strict borders.
+  - `--seed` did not repeat a run. Each band's draw is now seeded by
+    sha256 of the run's seed and the band's id; the seed is random per run
+    and reported, and `--seed` is for reproducing a run only.
+  - Nothing bound the bands to their publisher: an id is a 48-bit digest
+    anyone can recompute for rows of their own. `--publication`, with
+    `--publisher-key` or `--registry-url`, checks every file against the
+    publisher's signed publication; the result now says `publisherBound`,
+    and lists every check it did not run under `skipped`.
+  - Through `tools/ar-io-node`, `index-l1-*` and `index-l2-*` spill to
+    `data/tmp/index-verify`, not the container layer on `/`; the spill is
+    capped at 80% of the free space, a run that could not fit is refused
+    before it starts, and an interrupted run removes its spill.
+  - The on-chain sample was not uniform. First it drew only from about the
+    first 82,000 rows of each band (DuckDB's `USING SAMPLE reservoir …
+    REPEATABLE`); then, ordered by DuckDB's `hash(row, seed)`, which is a
+    public function of the row XORed with one of the seed, its draws were
+    clustered, so a publisher could fabricate a cluster of rows the draw
+    almost never touched (caught in 11% of runs where the bound claimed
+    93%). It now takes the N located rows with the smallest
+    `sha256("<key>:<row position>")`, the key being sha256 of the run's
+    seed, the band's id and the stratum, with nested items topped up to
+    half the draw; the stated bound uses the uniform draw only.
+  - A node that only failed to connect, or a machine without the
+    transaction at all, no longer counts against a root: before any
+    verdict of absence every silent node is asked again, any still unheard
+    leaves the item unchecked, and a status 404 denies a root only from a
+    machine that serves its header.
+  - A band with nothing verified on chain is inconclusive, whatever
+    `--max-unchecked` allows. With k items allowed unchecked, the stated
+    bound treats them as possibly fabricated (a fabricated item behind
+    unseeded data comes back unchecked): the share p at which
+    P(at most k of N drawn are fabricated) is 5%, not the N − k draws it
+    first claimed (N = 20, k = 4: 41%, where 18% was stated).
+  - The on-chain check draws its sample up front and never replaces an
+    item: each ends `ok`, `wrong` or `unchecked`; any wrong fails the band,
+    any unchecked (after a second try) leaves it inconclusive unless
+    `--max-unchecked` allows it. The pass ratio, floor and
+    `--max-unreadable-share` are gone: tolerances stacked let fabricated
+    items through. `assurance` says what a pass of N items means.
+  - A sampled root the chain refutes (no `data_root`, format 1, a signature
+    that doesn't verify, not mined, in a block at another height than its
+    items) counted only as an error, tolerated up to 20%; it now fails the
+    band. A node that times out no longer keeps a made-up root two machines
+    deny from being `missing`; two ports of one address are one machine.
+  - No single node can fail an honest band, any more than pass a bad one:
+    an answer of one node that doesn't hold up is its fault, passed over
+    for others and listed in `roots.nodeFaults`; a root is refuted only on
+    evidence from two machines. A block is its hash and height together, a
+    bound root is never `missing` (nodes holding no data answer 404 to
+    `/offset`), machines are compared by all their addresses, and moved
+    roots in the L1 check are listed with both positions.
+  - The publication is refused once expired (`--allow-expired`), a band it
+    lists in the range that the directory lacks fails, and `assurance` says
+    when its key came from a registry.
+  - New `coverage` check: heights asked for (`--from`/`--to`) that no
+    checked band covers fail. New `located` check: a band's unlocated items
+    must be exactly what its `band.json` declares and at most
+    `--max-unlocated-share` (0.001) of them.
+  - The spill also leaves 100 GB free, and spill folders a killed run left a
+    day ago are removed.
+  `index-band-verify --arweave-nodes` shares the root checks: roots must be
+  format 2 and found in a block by two machines, and agreement needs
+  `--allow-agreement`.
+
+- **`parquet-l2`: a re-settle keeps every owner's key the bands it
+  replaces hold.** Their `wallets` tables are a key source, tried after
+  `bundles.db` and before the roots (a key verifies itself: its SHA-256 is
+  the address), so a root the gateway can't serve on the day no longer
+  refuses the band for a dropped key (`dropped_wallets`), as it did the
+  h1.3M re-settle of `ardrive-l2`. Counted as `stats.owners.fromReplaced`.
+- **`parquet-l2`: a nested item is no longer located under a parent bundle
+  that `parents` does not describe.** Where every row of a bundle is
+  inconsistent (offsets taken from another copy of it, ar-io-node #937),
+  the bundle has no place in `parents`, yet a child held with an absolute
+  offset was placed from its own row; `index-l2-verify` reported each as a
+  `parents` defect (28 in the h1.3M band of `ardrive-l2`). Such a child is
+  now left unlocated as `no_parent`, and a resettle locates it once the
+  bundle's row is repaired.
+  A re-settle that unlocates such an item is not refused for it
+  (`unlocated_rows`): a location under a parent the replaced band's
+  `parents` does not describe is one no reader could check, so losing it
+  is reported as `corrected`, not as a loss. The pre-publish comparison
+  also no longer uses correlated `EXISTS` subqueries, which DuckDB 1.4.2
+  plans as a delim join over a parallel hash aggregate that failed to
+  combine its thread states on the h1.3M band of `ardrive-l2` (an internal
+  error, "Attempting to combine TupleDataCollection with mismatching
+  types"). It is now one keyed pass: each side reduced to one row per
+  (id, root), joined once into a narrow table every count and sample
+  reads, and relocations found by one anti join of the located rows keyed
+  by a 64-bit hash of their location. The comparison of that 6.7M-item
+  band takes 12 seconds under the build's 2 GB DuckDB limit, where
+  reading the two tables once per question took over an hour.
+- An index-swarm subscriber can now install a Parquet band whose files have
+  large footers. The footer limit was 2 MiB, and turbo-gateway.com's
+  `ardrive-l2` band for heights 1,800,000–1,899,999 has a 3.7 GB
+  `tags.parquet` (518M rows) with a 2.43 MB footer. Every subscriber
+  downloaded the band, matched its digests, then discarded it and downloaded
+  it again, about 7 GB each time. The limit is now 8 MiB. index-export also
+  checks its own Parquet files against that limit before writing
+  `band.json`, so a publisher can no longer publish a band its subscribers
+  refuse. An over-limit footer now says so, instead of reporting that it
+  "doesn't fit the file".
+
+- **`tools/index-swarm-setup --restart` brought back a torrent engine that
+  had been turned off.** It named `index-swarm-engine-init` and
+  `index-swarm-engine` on the `docker compose up` command line, and Compose
+  starts a service named there even when its profile is off, so a gateway
+  sharing over HTTP only (engine behind an unused profile in
+  `docker-compose.override.yaml`) got the engine again. Setup now names only
+  the services a plain `docker compose up` enables (`docker compose config
+  --services`, with `COMPOSE_PROFILES` honoured and the legacy profile names
+  it passes not counted), reading `docker-compose.override.yaml` even when
+  the running gateway was started before it existed, for `--restart` and for
+  the commands it prints without it.
+
+- **A chunk-metadata anchor probe kept running after every caller had given
+  up on it.** Concurrent lookups of one offset share a single probe of the
+  reference peer (a `HEAD /chunk/{offset}/data`, then the chain cross-checks),
+  and that probe took no signal, so when every caller's request was cancelled
+  it still ran to completion. Waiters are now counted: a caller that aborts
+  while others wait rejects only its own lookup, and when the last one aborts
+  the probe is aborted and dropped, so a later lookup of the offset starts a
+  fresh one. The abort reaches the peer `HEAD` (or ranged `GET`) and the
+  chain `/tx/{id}/offset` request; the chain `/tx/{id}` request does not take
+  a signal yet, so one already started still runs to completion. An aborted
+  probe is not remembered as a miss
+  (`CHUNK_METADATA_ANCHOR_MISS_CACHE_TTL_SECONDS`).
+
+- **An ArNS undername limit of 0 from a trusted gateway is kept, not
+  replaced with the default of 10.** The resolver read the limit and index
+  headers with `parseInt(header) || default`, so a name whose upstream
+  limit was 0 was treated as allowing 10 undernames and served undernames
+  it should not have. Only a missing or non-numeric header now falls back
+  to the default (#927).
 
 ## [Release 85] - 2026-10-17
 

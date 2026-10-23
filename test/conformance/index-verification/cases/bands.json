@@ -1,0 +1,1720 @@
+[
+  {
+    "id": "bands-honest",
+    "description": "Two sound bands, every table check",
+    "tampered": "nothing",
+    "kind": "bands",
+    "bands": [
+      {
+        "from": 100,
+        "to": 199
+      },
+      {
+        "from": 200,
+        "to": 299
+      }
+    ],
+    "options": {
+      "publisher": true
+    },
+    "expect": {
+      "verdict": "verified"
+    }
+  },
+  {
+    "id": "bands-honest-installed-generation",
+    "description": "A sound band in a directory named <id>~<generation>, as a subscriber installs it",
+    "tampered": "nothing",
+    "kind": "bands",
+    "bands": [
+      {
+        "from": 100,
+        "to": 199
+      }
+    ],
+    "files": [
+      {
+        "op": "renameGeneration",
+        "band": 0,
+        "generation": "abc123def456"
+      }
+    ],
+    "options": {
+      "publisher": true
+    },
+    "expect": {
+      "verdict": "verified"
+    }
+  },
+  {
+    "id": "bands-honest-l1-mined",
+    "description": "A sound band whose root the L1 index holds where its items say",
+    "tampered": "nothing",
+    "kind": "bands",
+    "bands": [
+      {
+        "from": 100,
+        "to": 199
+      }
+    ],
+    "options": {
+      "l1": {
+        "required": true,
+        "bands": [
+          {
+            "from": 100,
+            "to": 199,
+            "roots": [
+              {
+                "band": 0,
+                "height": 101,
+                "bti": 0
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "expect": {
+      "verdict": "verified"
+    }
+  },
+  {
+    "id": "bands-honest-unlocated-allowed",
+    "description": "A band whose items are all unlocated, as its band.json declares, allowed",
+    "tampered": "nothing (all unlocated, declared)",
+    "kind": "bands",
+    "bands": [
+      {
+        "from": 100,
+        "to": 199,
+        "rows": [
+          {
+            "op": "unlocate",
+            "row": "all"
+          }
+        ],
+        "band": [
+          {
+            "op": "setChecks",
+            "value": {
+              "unlocated": {
+                "no_offsets": 2
+              }
+            }
+          }
+        ]
+      }
+    ],
+    "options": {
+      "allowUnlocated": true,
+      "onchain": {
+        "perBand": 2,
+        "source": "stranger"
+      }
+    },
+    "expect": {
+      "verdict": "verified"
+    }
+  },
+  {
+    "id": "coverage-gap",
+    "description": "Heights asked for that no band covers",
+    "tampered": "--to 250 over a band ending at 199",
+    "kind": "bands",
+    "bands": [
+      {
+        "from": 100,
+        "to": 199
+      }
+    ],
+    "options": {
+      "from": 100,
+      "to": 250
+    },
+    "expect": {
+      "verdict": "refuted",
+      "check": "coverage",
+      "failing": [
+        "coverage"
+      ]
+    }
+  },
+  {
+    "id": "identity-band-json-lies",
+    "description": "band.json changed after the id was taken",
+    "tampered": "data_items rows +1 in band.json",
+    "kind": "bands",
+    "bands": [
+      {
+        "from": 100,
+        "to": 199,
+        "band": [
+          {
+            "op": "addRows",
+            "table": "data_items",
+            "delta": 1
+          }
+        ]
+      }
+    ],
+    "expect": {
+      "verdict": "refuted",
+      "check": "identity",
+      "failing": [
+        "identity",
+        "tables"
+      ]
+    }
+  },
+  {
+    "id": "identity-noncanonical-height",
+    "description": "A band id whose height has a leading zero",
+    "tampered": "directory renamed h100 -> h0100",
+    "kind": "bands",
+    "bands": [
+      {
+        "from": 100,
+        "to": 199
+      }
+    ],
+    "files": [
+      {
+        "op": "renameId",
+        "band": 0,
+        "from": "-h100-",
+        "to": "-h0100-"
+      }
+    ],
+    "expect": {
+      "verdict": "refuted",
+      "check": "identity",
+      "failing": [
+        "identity"
+      ]
+    }
+  },
+  {
+    "id": "l1-moved",
+    "description": "The L1 index holds the root at another position in its block",
+    "tampered": "L1 block_transaction_index 1, items say 0",
+    "kind": "bands",
+    "bands": [
+      {
+        "from": 100,
+        "to": 199
+      }
+    ],
+    "options": {
+      "l1": {
+        "required": true,
+        "bands": [
+          {
+            "from": 100,
+            "to": 199,
+            "roots": [
+              {
+                "band": 0,
+                "height": 101,
+                "bti": 1
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "expect": {
+      "verdict": "refuted",
+      "check": "mined",
+      "failing": [
+        "mined"
+      ]
+    }
+  },
+  {
+    "id": "l1-uncovered-required",
+    "description": "A named L1 index that doesn't cover the band",
+    "tampered": "L1 band 100-150",
+    "kind": "bands",
+    "bands": [
+      {
+        "from": 100,
+        "to": 199
+      }
+    ],
+    "options": {
+      "l1": {
+        "required": true,
+        "bands": [
+          {
+            "from": 100,
+            "to": 150,
+            "roots": [
+              {
+                "band": 0,
+                "height": 101,
+                "bti": 0
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "expect": {
+      "verdict": "refuted",
+      "check": "mined",
+      "failing": [
+        "mined"
+      ]
+    }
+  },
+  {
+    "id": "l2-2-beside-l2-1",
+    "description": "An l2-1 band beside an l2-2 one, each checked by its own layout",
+    "tampered": "nothing",
+    "kind": "bands",
+    "bands": [
+      {
+        "from": 100,
+        "to": 199
+      },
+      {
+        "from": 200,
+        "to": 299,
+        "layout": {
+          "schema": "l2-2",
+          "keyTags": [
+            "App-Name"
+          ],
+          "statTags": [
+            "App-Name"
+          ]
+        }
+      }
+    ],
+    "expect": {
+      "verdict": "verified"
+    }
+  },
+  {
+    "id": "l2-2-honest",
+    "description": "Two sound l2-2 bands: key lookup and stats derived for App-Name",
+    "tampered": "nothing",
+    "kind": "bands",
+    "bands": [
+      {
+        "from": 100,
+        "to": 199,
+        "layout": {
+          "schema": "l2-2",
+          "keyTags": [
+            "App-Name"
+          ],
+          "statTags": [
+            "App-Name"
+          ]
+        }
+      },
+      {
+        "from": 200,
+        "to": 299,
+        "layout": {
+          "schema": "l2-2",
+          "keyTags": [
+            "App-Name"
+          ],
+          "statTags": [
+            "App-Name"
+          ]
+        }
+      }
+    ],
+    "options": {
+      "publisher": true
+    },
+    "expect": {
+      "verdict": "verified"
+    }
+  },
+  {
+    "id": "l2-2-key-and-stat-tags-differ",
+    "description": "A sound l2-2 band whose key tags and stat tags differ (stats by no tag, key by App-Name)",
+    "tampered": "nothing",
+    "kind": "bands",
+    "bands": [
+      {
+        "from": 100,
+        "to": 199,
+        "layout": {
+          "schema": "l2-2",
+          "keyTags": [
+            "App-Name"
+          ],
+          "statTags": []
+        }
+      }
+    ],
+    "expect": {
+      "verdict": "verified"
+    }
+  },
+  {
+    "id": "l2-2-key-lookup-emptied",
+    "description": "The key lookup emptied (derived for no tags), band.json describing it",
+    "tampered": "lookup_key emptied",
+    "kind": "bands",
+    "bands": [
+      {
+        "from": 100,
+        "to": 199,
+        "layout": {
+          "schema": "l2-2",
+          "keyTags": [
+            "App-Name"
+          ],
+          "statTags": [
+            "App-Name"
+          ]
+        }
+      }
+    ],
+    "files": [
+      {
+        "op": "emptyFile",
+        "band": 0,
+        "file": "lookup_key.parquet"
+      },
+      {
+        "op": "redescribeLookup",
+        "band": 0,
+        "lookup": "key"
+      }
+    ],
+    "expect": {
+      "verdict": "refuted",
+      "check": "lookups",
+      "failing": [
+        "lookups"
+      ]
+    }
+  },
+  {
+    "id": "l2-2-key-lookup-tampered",
+    "description": "A key lookup row changed, band.json describing the file as it is: its rows aren't the ones the tags give",
+    "tampered": "one row's items set to 999",
+    "kind": "bands",
+    "bands": [
+      {
+        "from": 100,
+        "to": 199,
+        "layout": {
+          "schema": "l2-2",
+          "keyTags": [
+            "App-Name"
+          ],
+          "statTags": [
+            "App-Name"
+          ]
+        }
+      }
+    ],
+    "files": [
+      {
+        "op": "editParquet",
+        "band": 0,
+        "file": "lookup_key.parquet",
+        "row": 0,
+        "column": "items",
+        "value": 999
+      },
+      {
+        "op": "redescribeLookup",
+        "band": 0,
+        "lookup": "key"
+      }
+    ],
+    "expect": {
+      "verdict": "refuted",
+      "check": "lookups",
+      "failing": [
+        "lookups"
+      ]
+    }
+  },
+  {
+    "id": "l2-2-key-lookup-unsorted",
+    "description": "The key lookup's rows out of their key's order, band.json describing them as they are",
+    "tampered": "lookup_key rewritten in reverse",
+    "kind": "bands",
+    "bands": [
+      {
+        "from": 100,
+        "to": 199,
+        "layout": {
+          "schema": "l2-2",
+          "keyTags": [
+            "App-Name"
+          ],
+          "statTags": [
+            "App-Name"
+          ]
+        }
+      }
+    ],
+    "files": [
+      {
+        "op": "reverseFile",
+        "band": 0,
+        "file": "lookup_key.parquet"
+      },
+      {
+        "op": "redescribeLookup",
+        "band": 0,
+        "lookup": "key"
+      }
+    ],
+    "expect": {
+      "verdict": "refuted",
+      "check": "lookups",
+      "failing": [
+        "lookups"
+      ]
+    }
+  },
+  {
+    "id": "l2-2-real-honest",
+    "description": "A real l2-2 band read end to end",
+    "tampered": "nothing",
+    "kind": "bands",
+    "bands": [
+      {
+        "from": 100,
+        "to": 199,
+        "real": {
+          "direct": 20,
+          "nested": 10
+        },
+        "layout": {
+          "schema": "l2-2",
+          "keyTags": [
+            "App-Name"
+          ],
+          "statTags": [
+            "App-Name"
+          ]
+        }
+      }
+    ],
+    "options": {
+      "onchain": {
+        "perBand": 20,
+        "source": "honest",
+        "seed": 21
+      }
+    },
+    "expect": {
+      "verdict": "verified",
+      "draw": {
+        "drawnUniform": 20,
+        "nestedAtLeast": 10
+      }
+    }
+  },
+  {
+    "id": "l2-2-stats-extra-column",
+    "description": "stats.parquet with an extra column, band.json describing it",
+    "tampered": "a column added to stats.parquet",
+    "kind": "bands",
+    "bands": [
+      {
+        "from": 100,
+        "to": 199,
+        "layout": {
+          "schema": "l2-2",
+          "keyTags": [
+            "App-Name"
+          ],
+          "statTags": [
+            "App-Name"
+          ]
+        }
+      }
+    ],
+    "files": [
+      {
+        "op": "recast",
+        "band": 0,
+        "file": "stats.parquet",
+        "columns": {
+          "bytes": "UBIGINT"
+        },
+        "add": {
+          "name": "extra",
+          "type": "VARCHAR",
+          "value": "junk"
+        }
+      },
+      {
+        "op": "redescribeLookup",
+        "band": 0,
+        "lookup": "stats"
+      }
+    ],
+    "expect": {
+      "verdict": "refuted",
+      "check": "schema",
+      "failing": [
+        "schema"
+      ]
+    }
+  },
+  {
+    "id": "l2-2-stats-missing",
+    "description": "An l2-2 band without its stats file",
+    "tampered": "stats.parquet deleted",
+    "kind": "bands",
+    "bands": [
+      {
+        "from": 100,
+        "to": 199,
+        "layout": {
+          "schema": "l2-2",
+          "keyTags": [
+            "App-Name"
+          ],
+          "statTags": [
+            "App-Name"
+          ]
+        }
+      }
+    ],
+    "files": [
+      {
+        "op": "removeFile",
+        "band": 0,
+        "file": "stats.parquet"
+      }
+    ],
+    "expect": {
+      "verdict": "refuted",
+      "check": "files",
+      "failing": [
+        "files"
+      ]
+    }
+  },
+  {
+    "id": "l2-2-stats-tampered",
+    "description": "A stats row changed, band.json describing the file as it is: the stats are recomputed from the rows, not trusted",
+    "tampered": "bytes of one stats row set to 999",
+    "kind": "bands",
+    "bands": [
+      {
+        "from": 100,
+        "to": 199,
+        "layout": {
+          "schema": "l2-2",
+          "keyTags": [
+            "App-Name"
+          ],
+          "statTags": [
+            "App-Name"
+          ]
+        }
+      }
+    ],
+    "files": [
+      {
+        "op": "editParquet",
+        "band": 0,
+        "file": "stats.parquet",
+        "row": 0,
+        "column": "bytes",
+        "value": 999
+      },
+      {
+        "op": "redescribeLookup",
+        "band": 0,
+        "lookup": "stats"
+      }
+    ],
+    "expect": {
+      "verdict": "refuted",
+      "check": "lookups",
+      "failing": [
+        "lookups"
+      ]
+    }
+  },
+  {
+    "id": "l2-2-stats-wrong-tag-set",
+    "description": "stats derived for the key tags instead of the stat tags band.json names, band.json describing them",
+    "tampered": "stats derived by App-Name where statTags is empty",
+    "kind": "bands",
+    "bands": [
+      {
+        "from": 100,
+        "to": 199,
+        "layout": {
+          "schema": "l2-2",
+          "keyTags": [
+            "App-Name"
+          ],
+          "statTags": []
+        }
+      }
+    ],
+    "files": [
+      {
+        "op": "rederiveLookup",
+        "band": 0,
+        "lookup": "stats",
+        "keyTags": [
+          "App-Name"
+        ],
+        "statTags": [
+          "App-Name"
+        ]
+      }
+    ],
+    "expect": {
+      "verdict": "refuted",
+      "check": "lookups",
+      "failing": [
+        "lookups"
+      ]
+    }
+  },
+  {
+    "id": "l2-2-unlocated-child-of-unplaced-parent",
+    "description": "As unlocated-child-of-unplaced-parent, under l2-2",
+    "tampered": "nothing (child unlocated, parents empty, declared)",
+    "kind": "bands",
+    "bands": [
+      {
+        "from": 100,
+        "to": 199,
+        "layout": {
+          "schema": "l2-2",
+          "keyTags": [
+            "App-Name"
+          ],
+          "statTags": [
+            "App-Name"
+          ]
+        },
+        "rows": [
+          {
+            "op": "unlocate",
+            "row": 1
+          },
+          {
+            "op": "clear",
+            "table": "parents"
+          }
+        ],
+        "band": [
+          {
+            "op": "setChecks",
+            "value": {
+              "unlocated": {
+                "no_parent": 1
+              }
+            }
+          }
+        ]
+      }
+    ],
+    "options": {
+      "maxUnlocatedShare": 0.6
+    },
+    "expect": {
+      "verdict": "verified"
+    }
+  },
+  {
+    "id": "located-undeclared",
+    "description": "An unlocated item its band.json does not declare",
+    "tampered": "one item's location removed",
+    "kind": "bands",
+    "bands": [
+      {
+        "from": 100,
+        "to": 199,
+        "rows": [
+          {
+            "op": "unlocate",
+            "row": 0
+          }
+        ]
+      }
+    ],
+    "expect": {
+      "verdict": "refuted",
+      "check": "located",
+      "failing": [
+        "located"
+      ]
+    }
+  },
+  {
+    "id": "onchain-band-unheard",
+    "description": "Every drawn item's read fails in transport",
+    "tampered": "nodes busy",
+    "kind": "bands",
+    "bands": [
+      {
+        "from": 100,
+        "to": 199
+      }
+    ],
+    "options": {
+      "onchain": {
+        "perBand": 2,
+        "source": "busy"
+      }
+    },
+    "expect": {
+      "verdict": "unknown",
+      "check": "onchain",
+      "failing": [
+        "onchain"
+      ]
+    }
+  },
+  {
+    "id": "real-honest-band",
+    "description": "A band of real signed items, 30 directly in their root and 30 in a nested bundle, read end to end from the root's bytes",
+    "tampered": "nothing",
+    "kind": "bands",
+    "bands": [
+      {
+        "from": 100,
+        "to": 199,
+        "real": {
+          "direct": 30,
+          "nested": 30
+        }
+      }
+    ],
+    "options": {
+      "onchain": {
+        "perBand": 20,
+        "source": "honest",
+        "seed": 9
+      }
+    },
+    "expect": {
+      "verdict": "verified",
+      "draw": {
+        "drawnUniform": 20,
+        "nestedAtLeast": 10
+      }
+    }
+  },
+  {
+    "id": "real-nested-top-up",
+    "description": "Nested items are topped up until half the draw is nested, whatever the uniform draw holds",
+    "tampered": "60 direct, 10 nested",
+    "kind": "bands",
+    "bands": [
+      {
+        "from": 100,
+        "to": 199,
+        "real": {
+          "direct": 60,
+          "nested": 10
+        }
+      }
+    ],
+    "options": {
+      "onchain": {
+        "perBand": 20,
+        "source": "honest",
+        "seed": 13
+      }
+    },
+    "expect": {
+      "verdict": "verified",
+      "draw": {
+        "drawnUniform": 20,
+        "nestedAtLeast": 10
+      }
+    }
+  },
+  {
+    "id": "real-unlocated-never-drawn",
+    "description": "Unlocated items, declared, are never drawn: only located items are",
+    "tampered": "5 of 40 items unlocated (declared)",
+    "kind": "bands",
+    "bands": [
+      {
+        "from": 100,
+        "to": 199,
+        "real": {
+          "direct": 30,
+          "nested": 10
+        },
+        "rows": [
+          {
+            "op": "unlocate",
+            "row": 0
+          },
+          {
+            "op": "unlocate",
+            "row": 1
+          },
+          {
+            "op": "unlocate",
+            "row": 2
+          },
+          {
+            "op": "unlocate",
+            "row": 3
+          },
+          {
+            "op": "unlocate",
+            "row": 4
+          }
+        ],
+        "band": [
+          {
+            "op": "setChecks",
+            "value": {
+              "unlocated": {
+                "no_offsets": 5
+              }
+            }
+          }
+        ]
+      }
+    ],
+    "options": {
+      "maxUnlocatedShare": 0.5,
+      "onchain": {
+        "perBand": 20,
+        "source": "honest",
+        "seed": 11
+      }
+    },
+    "expect": {
+      "verdict": "verified",
+      "draw": {
+        "drawnUniform": 20
+      }
+    }
+  },
+  {
+    "id": "s1-null-row",
+    "description": "A data_items row with every value NULL",
+    "tampered": "pushed an all-NULL row",
+    "kind": "bands",
+    "bands": [
+      {
+        "from": 100,
+        "to": 199,
+        "rows": [
+          {
+            "op": "pushNull",
+            "table": "data_items"
+          }
+        ]
+      }
+    ],
+    "expect": {
+      "verdict": "refuted",
+      "check": "required",
+      "failing": [
+        "consistency",
+        "located",
+        "locations",
+        "required",
+        "selected"
+      ]
+    }
+  },
+  {
+    "id": "s10-symlinked-corrupt-band",
+    "description": "A corrupt band reached through a symlink",
+    "tampered": "tip band.json rows changed, directory moved and symlinked",
+    "kind": "bands",
+    "bands": [
+      {
+        "from": 100,
+        "to": 199
+      },
+      {
+        "from": 200,
+        "to": 299,
+        "band": [
+          {
+            "op": "addRows",
+            "table": "data_items",
+            "delta": 5
+          }
+        ]
+      }
+    ],
+    "files": [
+      {
+        "op": "symlinkElsewhere",
+        "band": 1
+      }
+    ],
+    "expect": {
+      "verdict": "refuted",
+      "check": "identity",
+      "failing": [
+        "identity",
+        "tables"
+      ]
+    }
+  },
+  {
+    "id": "s11-column-types",
+    "description": "A table with a column of another type and an extra column",
+    "tampered": "tag_count VARCHAR, block_transaction_index BIGINT, extra column",
+    "kind": "bands",
+    "bands": [
+      {
+        "from": 100,
+        "to": 199
+      }
+    ],
+    "files": [
+      {
+        "op": "recast",
+        "band": 0,
+        "table": "data_items",
+        "columns": {
+          "tag_count": "VARCHAR",
+          "block_transaction_index": "BIGINT"
+        },
+        "add": {
+          "name": "extra",
+          "type": "VARCHAR",
+          "value": "junk"
+        }
+      }
+    ],
+    "expect": {
+      "verdict": "refuted",
+      "check": "schema",
+      "failing": [
+        "schema"
+      ]
+    }
+  },
+  {
+    "id": "s12-forged-rows-no-publication",
+    "description": "Rows rewritten, band.json and id recomputed, no publication given: internally consistent, and the result says it is bound to nothing",
+    "tampered": "tag value rewritten, everything recomputed",
+    "kind": "bands",
+    "bands": [
+      {
+        "from": 100,
+        "to": 199,
+        "rows": [
+          {
+            "op": "set",
+            "table": "tags",
+            "row": 1,
+            "column": "tag_value",
+            "value": "utf8:ArDrive-Forged"
+          }
+        ]
+      }
+    ],
+    "options": {
+      "publisher": true
+    },
+    "expect": {
+      "verdict": "verified",
+      "publisherBound": false
+    }
+  },
+  {
+    "id": "s2-null-data-size",
+    "description": "A located item with no data_size",
+    "tampered": "data_size NULL",
+    "kind": "bands",
+    "bands": [
+      {
+        "from": 100,
+        "to": 199,
+        "rows": [
+          {
+            "op": "set",
+            "table": "data_items",
+            "row": 0,
+            "column": "data_size",
+            "value": null
+          }
+        ]
+      }
+    ],
+    "expect": {
+      "verdict": "refuted",
+      "check": "required",
+      "failing": [
+        "locations",
+        "required"
+      ]
+    }
+  },
+  {
+    "id": "s3-null-parent",
+    "description": "A located nested item with no parent_id",
+    "tampered": "parent_id NULL",
+    "kind": "bands",
+    "bands": [
+      {
+        "from": 100,
+        "to": 199,
+        "rows": [
+          {
+            "op": "set",
+            "table": "data_items",
+            "row": 1,
+            "column": "parent_id",
+            "value": null
+          }
+        ]
+      }
+    ],
+    "expect": {
+      "verdict": "refuted",
+      "check": "required",
+      "failing": [
+        "locations",
+        "parents",
+        "required"
+      ]
+    }
+  },
+  {
+    "id": "s4-orphan-tag-rows",
+    "description": "A tag row of no item, outside the band's heights",
+    "tampered": "tag row pushed at height 5000",
+    "kind": "bands",
+    "bands": [
+      {
+        "from": 100,
+        "to": 199,
+        "rows": [
+          {
+            "op": "push",
+            "table": "tags",
+            "values": [
+              5000,
+              "hash:ghost",
+              0,
+              "utf8:App-Name",
+              "utf8:ArDrive-Ghost"
+            ]
+          }
+        ]
+      }
+    ],
+    "expect": {
+      "verdict": "refuted",
+      "check": "consistency",
+      "failing": [
+        "consistency"
+      ]
+    }
+  },
+  {
+    "id": "s4b-item-not-selected",
+    "description": "An item with no tag the selection takes",
+    "tampered": "its only tag renamed",
+    "kind": "bands",
+    "bands": [
+      {
+        "from": 100,
+        "to": 199,
+        "rows": [
+          {
+            "op": "set",
+            "table": "tags",
+            "row": 0,
+            "column": "tag_name",
+            "value": "utf8:Evil"
+          }
+        ]
+      }
+    ],
+    "expect": {
+      "verdict": "refuted",
+      "check": "selected",
+      "failing": [
+        "selected"
+      ]
+    }
+  },
+  {
+    "id": "s5a-wallet-removed",
+    "description": "An owner's key removed from wallets, the band declaring none missing",
+    "tampered": "wallets emptied",
+    "kind": "bands",
+    "bands": [
+      {
+        "from": 100,
+        "to": 199,
+        "rows": [
+          {
+            "op": "clear",
+            "table": "wallets"
+          }
+        ]
+      }
+    ],
+    "expect": {
+      "verdict": "refuted",
+      "check": "consistency",
+      "failing": [
+        "consistency"
+      ]
+    }
+  },
+  {
+    "id": "s5b-tag-count",
+    "description": "An item whose tag_count is not its number of tags",
+    "tampered": "tag_count 99",
+    "kind": "bands",
+    "bands": [
+      {
+        "from": 100,
+        "to": 199,
+        "rows": [
+          {
+            "op": "set",
+            "table": "data_items",
+            "row": 0,
+            "column": "tag_count",
+            "value": 99
+          }
+        ]
+      }
+    ],
+    "expect": {
+      "verdict": "refuted",
+      "check": "consistency",
+      "failing": [
+        "consistency"
+      ]
+    }
+  },
+  {
+    "id": "s7-lookup-unsorted",
+    "description": "Lookup files whose rows are out of their key's order",
+    "tampered": "lookup_id and lookup_tag rewritten in reverse",
+    "kind": "bands",
+    "bands": [
+      {
+        "from": 100,
+        "to": 199,
+        "rows": [
+          {
+            "op": "moreDirect",
+            "count": 5
+          }
+        ]
+      }
+    ],
+    "files": [
+      {
+        "op": "reverseFile",
+        "band": 0,
+        "file": "lookup_id.parquet"
+      },
+      {
+        "op": "reverseFile",
+        "band": 0,
+        "file": "lookup_tag.parquet"
+      }
+    ],
+    "expect": {
+      "verdict": "refuted",
+      "check": "lookups",
+      "failing": [
+        "lookups"
+      ]
+    }
+  },
+  {
+    "id": "s8-tip-band-json-missing",
+    "description": "The tip band's band.json removed",
+    "tampered": "band.json deleted",
+    "kind": "bands",
+    "bands": [
+      {
+        "from": 100,
+        "to": 199
+      },
+      {
+        "from": 200,
+        "to": 299
+      }
+    ],
+    "files": [
+      {
+        "op": "removeFile",
+        "band": 1,
+        "file": "band.json"
+      }
+    ],
+    "expect": {
+      "verdict": "refuted",
+      "check": "files",
+      "failing": [
+        "files"
+      ]
+    }
+  },
+  {
+    "id": "s8b-low-band-json-missing",
+    "description": "The low band's band.json removed",
+    "tampered": "band.json deleted",
+    "kind": "bands",
+    "bands": [
+      {
+        "from": 100,
+        "to": 199
+      },
+      {
+        "from": 200,
+        "to": 299
+      }
+    ],
+    "files": [
+      {
+        "op": "removeFile",
+        "band": 0,
+        "file": "band.json"
+      }
+    ],
+    "expect": {
+      "verdict": "refuted",
+      "check": "files",
+      "failing": [
+        "files"
+      ]
+    }
+  },
+  {
+    "id": "s9-supersession-not-covering",
+    "description": "A lower band claims to supersede a corrupt tip band it doesn't cover",
+    "tampered": "tip band.json rows changed; .publisher.json claim",
+    "kind": "bands",
+    "bands": [
+      {
+        "from": 100,
+        "to": 199
+      },
+      {
+        "from": 200,
+        "to": 299,
+        "band": [
+          {
+            "op": "addRows",
+            "table": "data_items",
+            "delta": 5
+          }
+        ]
+      }
+    ],
+    "files": [
+      {
+        "op": "supersedes",
+        "band": 0,
+        "target": 1
+      }
+    ],
+    "expect": {
+      "verdict": "refuted",
+      "check": "identity",
+      "failing": [
+        "identity",
+        "tables"
+      ]
+    }
+  },
+  {
+    "id": "s9b-malformed-publisher-json",
+    "description": "An unreadable .publisher.json",
+    "tampered": "not JSON",
+    "kind": "bands",
+    "bands": [
+      {
+        "from": 100,
+        "to": 199
+      }
+    ],
+    "files": [
+      {
+        "op": "writeFile",
+        "band": 0,
+        "file": ".publisher.json",
+        "text": "{not json"
+      }
+    ],
+    "expect": {
+      "verdict": "refuted",
+      "check": "files",
+      "failing": [
+        "files"
+      ]
+    }
+  },
+  {
+    "id": "seed-salted-per-band",
+    "description": "Two bands of the same layout draw different items under one seed: the draw is salted by the band's id",
+    "tampered": "two bands of 201 direct items; every read a stranger's header",
+    "kind": "bands",
+    "bands": [
+      {
+        "from": 100,
+        "to": 199,
+        "rows": [
+          {
+            "op": "moreDirect",
+            "count": 200
+          }
+        ]
+      },
+      {
+        "from": 200,
+        "to": 299,
+        "rows": [
+          {
+            "op": "moreDirect",
+            "count": 200
+          }
+        ]
+      }
+    ],
+    "options": {
+      "lookups": false,
+      "onchain": {
+        "perBand": 10,
+        "source": "stranger",
+        "seed": 5
+      }
+    },
+    "expect": {
+      "verdict": "refuted",
+      "check": "onchain",
+      "draw": {
+        "drawnUniform": 10,
+        "bandsDiffer": true
+      },
+      "failing": [
+        "onchain"
+      ]
+    }
+  },
+  {
+    "id": "set-overlap",
+    "description": "Two bands overlapping",
+    "tampered": "second band starts at 150",
+    "kind": "bands",
+    "bands": [
+      {
+        "from": 100,
+        "to": 199
+      },
+      {
+        "from": 150,
+        "to": 249
+      }
+    ],
+    "expect": {
+      "verdict": "refuted",
+      "check": "refused",
+      "failing": [
+        "refused"
+      ]
+    }
+  },
+  {
+    "id": "strata-nested-majority",
+    "description": "N items are drawn over every located item, not one stratum: a band of 201 nested items and 1 direct",
+    "tampered": "201 nested items; every read a stranger's header",
+    "kind": "bands",
+    "bands": [
+      {
+        "from": 100,
+        "to": 199,
+        "rows": [
+          {
+            "op": "moreNested",
+            "count": 200
+          }
+        ]
+      }
+    ],
+    "options": {
+      "lookups": false,
+      "onchain": {
+        "perBand": 20,
+        "source": "stranger",
+        "seed": 3
+      }
+    },
+    "expect": {
+      "verdict": "refuted",
+      "check": "onchain",
+      "draw": {
+        "drawnUniform": 20
+      },
+      "failing": [
+        "onchain"
+      ]
+    }
+  },
+  {
+    "id": "strata-uniform-draw",
+    "description": "N items are drawn uniformly over every located item, nested ones topped up",
+    "tampered": "200 direct items beside one nested; every read a stranger's header",
+    "kind": "bands",
+    "bands": [
+      {
+        "from": 100,
+        "to": 199,
+        "rows": [
+          {
+            "op": "moreDirect",
+            "count": 200
+          }
+        ]
+      }
+    ],
+    "options": {
+      "lookups": false,
+      "onchain": {
+        "perBand": 20,
+        "source": "stranger",
+        "seed": 3
+      }
+    },
+    "expect": {
+      "verdict": "refuted",
+      "check": "onchain",
+      "draw": {
+        "drawnUniform": 20,
+        "readsInclude": [
+          3500
+        ]
+      },
+      "failing": [
+        "onchain"
+      ]
+    }
+  },
+  {
+    "id": "t1-seed-repeat",
+    "description": "The same seed draws the same items",
+    "tampered": "nothing (every read a stranger's header)",
+    "kind": "bands",
+    "bands": [
+      {
+        "from": 100,
+        "to": 199,
+        "rows": [
+          {
+            "op": "moreDirect",
+            "count": 200
+          }
+        ]
+      }
+    ],
+    "options": {
+      "lookups": false,
+      "onchain": {
+        "perBand": 4,
+        "source": "stranger",
+        "seed": 7
+      }
+    },
+    "expect": {
+      "verdict": "refuted",
+      "check": "onchain",
+      "repeatable": true,
+      "failing": [
+        "onchain"
+      ]
+    }
+  },
+  {
+    "id": "t3-band-vanishes",
+    "description": "A band deleted while the run reads the set",
+    "tampered": "tip band deleted after the first band",
+    "kind": "bands",
+    "bands": [
+      {
+        "from": 100,
+        "to": 199
+      },
+      {
+        "from": 200,
+        "to": 299
+      }
+    ],
+    "files": [
+      {
+        "op": "deleteDuringRun",
+        "band": 1
+      }
+    ],
+    "expect": {
+      "verdict": "refuted",
+      "check": "complete",
+      "failing": [
+        "complete"
+      ]
+    }
+  },
+  {
+    "id": "t4-file-vanishes",
+    "description": "A table file deleted while the run reads it",
+    "tampered": "tags.parquet deleted mid-run",
+    "kind": "bands",
+    "bands": [
+      {
+        "from": 100,
+        "to": 199
+      },
+      {
+        "from": 200,
+        "to": 299
+      }
+    ],
+    "files": [
+      {
+        "op": "deleteFileDuringRun",
+        "band": 1,
+        "file": "tags.parquet"
+      }
+    ],
+    "expect": {
+      "verdict": "refuted",
+      "check": "complete",
+      "failing": [
+        "complete"
+      ]
+    }
+  },
+  {
+    "id": "unlocated-band-strict",
+    "description": "A band whose items are all unlocated, not allowed",
+    "tampered": "all locations removed (declared)",
+    "kind": "bands",
+    "bands": [
+      {
+        "from": 100,
+        "to": 199,
+        "rows": [
+          {
+            "op": "unlocate",
+            "row": "all"
+          }
+        ],
+        "band": [
+          {
+            "op": "setChecks",
+            "value": {
+              "unlocated": {
+                "no_offsets": 2
+              }
+            }
+          }
+        ]
+      }
+    ],
+    "options": {
+      "onchain": {
+        "perBand": 2,
+        "source": "stranger"
+      }
+    },
+    "expect": {
+      "verdict": "refuted",
+      "check": "located",
+      "failing": [
+        "located",
+        "onchain"
+      ]
+    }
+  },
+  {
+    "id": "unlocated-child-of-unplaced-parent",
+    "description": "A nested item whose parent bundle has no place in parents is left unlocated, declared as no_parent (#1067, #1069)",
+    "tampered": "nothing (child unlocated, parents empty, declared)",
+    "kind": "bands",
+    "bands": [
+      {
+        "from": 100,
+        "to": 199,
+        "rows": [
+          {
+            "op": "unlocate",
+            "row": 1
+          },
+          {
+            "op": "clear",
+            "table": "parents"
+          }
+        ],
+        "band": [
+          {
+            "op": "setChecks",
+            "value": {
+              "unlocated": {
+                "no_parent": 1
+              }
+            }
+          }
+        ]
+      }
+    ],
+    "options": {
+      "maxUnlocatedShare": 0.6
+    },
+    "expect": {
+      "verdict": "verified"
+    }
+  },
+  {
+    "id": "unlocated-child-undeclared",
+    "description": "A nested item left unlocated under an unplaced parent, but not declared",
+    "tampered": "child unlocated, checks.unlocated says none",
+    "kind": "bands",
+    "bands": [
+      {
+        "from": 100,
+        "to": 199,
+        "rows": [
+          {
+            "op": "unlocate",
+            "row": 1
+          },
+          {
+            "op": "clear",
+            "table": "parents"
+          }
+        ]
+      }
+    ],
+    "options": {
+      "maxUnlocatedShare": 0.6
+    },
+    "expect": {
+      "verdict": "refuted",
+      "check": "located",
+      "failing": [
+        "located"
+      ]
+    }
+  }
+]

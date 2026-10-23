@@ -33,6 +33,7 @@ import {
   validateIndexPublication,
   verifyIndexPublication,
   parseIndexPublicationDocument,
+  readPublicationBody,
 } from './index-publication.js';
 
 /**
@@ -649,5 +650,33 @@ describe('index publication', () => {
       // Valid base58, wrong length.
       assert.equal(isSolanaAddress('abc'), false);
     });
+  });
+});
+
+describe('readPublicationBody', () => {
+  const streamOf = (chunks: Uint8Array[]) =>
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const chunk of chunks) controller.enqueue(chunk);
+        controller.close();
+      },
+    });
+
+  it('returns a body within the cap', async () => {
+    const body = await readPublicationBody(new Response('{"version":1}'));
+    assert.equal(body.toString(), '{"version":1}');
+  });
+
+  it('refuses a declared length over the cap before reading', async () => {
+    const response = new Response(streamOf([new Uint8Array(10)]), {
+      headers: { 'content-length': String(INDEX_PUBLICATION_MAX_BYTES + 1) },
+    });
+    await assert.rejects(readPublicationBody(response), /declares .* over the/);
+  });
+
+  it('refuses a stream that grows past the cap, whatever it declared', async () => {
+    const chunk = new Uint8Array(1024 * 1024);
+    const response = new Response(streamOf(Array(5).fill(chunk)));
+    await assert.rejects(readPublicationBody(response), /exceeded the/);
   });
 });

@@ -1001,4 +1001,70 @@ describe('ArweaveCompositeClient', () => {
       );
     });
   });
+
+  describe('block headers with integers past 2^53', () => {
+    // Block 600,570 as the chain serves it: reward_pool is a bare number
+    // past 2^53, which JSON.parse rounds to ...668.
+    const HEADER =
+      '{"nonce":"x","previous_block":"4vy5NMo9QjuxNG1bE95DZmSHMS1w_wrCpBrpakYaYfsiU8EJV8nIuHtsZq_Aq_KE",' +
+      '"timestamp":1609102030,"height":600570,"reward_pool":12774234261122667,' +
+      '"indep_hash":"lJHaGZxBgTWPp4KLJzQFXK3qKoAGOFWfcn0pyygNNuftoc9fhPNY6TnSHWIj6faJ","txs":[]}';
+    let server: http.Server;
+    let asked: number;
+
+    beforeEach(async () => {
+      asked = 0;
+      server = http.createServer((_req, res) => {
+        asked++;
+        res
+          .writeHead(200, {
+            'Content-Type': 'application/json',
+            Connection: 'close',
+          })
+          .end(HEADER);
+      });
+      await new Promise<void>((resolve) =>
+        server.listen(0, '127.0.0.1', () => resolve()),
+      );
+    });
+
+    afterEach(async () => {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    });
+
+    const client = () => {
+      const c = new ArweaveCompositeClient({
+        log,
+        arweave,
+        trustedNodeUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+        blockStore: mockBlockStore,
+        txStore: mockTxStore,
+        failureSimulator,
+        peerManager: mockPeerManager,
+        requestTimeout: 1000,
+        maxConcurrentRequests: 1,
+      });
+      createdClients.push(c);
+      // The bucket filler is mocked off; give the request a token.
+      (c as any).trustedNodeRequestBucket = 10;
+      return c;
+    };
+
+    it('keeps a pre-2.4 reward_pool exact when fetching a block', async () => {
+      mockBlockStore.getByHeight = mock.fn(async () => undefined);
+      const block = await client().prefetchBlockByHeight(600570, false);
+      assert.equal(block?.reward_pool, '12774234261122667');
+      assert.equal(block?.height, 600570);
+      assert.equal(asked, 1);
+    });
+
+    it('refetches a cached block whose reward_pool was rounded', async () => {
+      mockBlockStore.getByHeight = mock.fn(async () => ({
+        ...JSON.parse(HEADER),
+      }));
+      const block = await client().prefetchBlockByHeight(600570, false);
+      assert.equal(asked, 1, 'the rounded cache entry was not used');
+      assert.equal(block?.reward_pool, '12774234261122667');
+    });
+  });
 });

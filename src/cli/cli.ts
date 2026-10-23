@@ -21,6 +21,7 @@ import {
   indexL1ImportOptions,
   indexL1AuditOptions,
   indexL1VerifyOptions,
+  indexL2VerifyOptions,
   indexBandVerifyOptions,
 } from './options.js';
 import { passthroughArgs, runSdkCli, sdkCli } from './passthrough.js';
@@ -29,6 +30,7 @@ import type {
   IndexBandExportCLIOptions,
   IndexL1ImportCLIOptions,
   IndexL1AuditCLIOptions,
+  IndexL2VerifyCLIOptions,
   IndexL1VerifyCLIOptions,
   IndexBandVerifyCLIOptions,
 } from './types.js';
@@ -43,6 +45,8 @@ const indexExportCommands = async () =>
   import('./commands/indexExportCommands.js');
 const indexL1ImportCommands = async () =>
   import('./commands/indexL1ImportCommands.js');
+const indexL2VerifyCommands = async () =>
+  import('./commands/indexL2VerifyCommands.js');
 const indexL1VerifyCommands = async () =>
   import('./commands/indexL1VerifyCommands.js');
 const indexL1AuditCommands = async () =>
@@ -175,7 +179,7 @@ makeCommand<IndexL1ImportCLIOptions>({
 makeCommand<IndexL1VerifyCLIOptions>({
   name: 'index-l1-verify',
   description:
-    "Check this gateway's L1 index against the weave size the chain commits to",
+    'Check an L1 index (a core.db, or a directory of parquet-l1 bands) against the chain: anchored, judged block by block, and sampled; fails on what it cannot bind unless an --allow-* flag accepts it',
   options: indexL1VerifyOptions,
   action: async (options) =>
     (await indexL1VerifyCommands()).indexL1VerifyCLICommand(options, {
@@ -188,10 +192,48 @@ makeCommand<IndexL1VerifyCLIOptions>({
     'Example:',
     '  ar-io-node index-l1-verify --core-db data/sqlite/core.db',
     '',
-    'Read-only, so the gateway can stay up. Below the 2.0 fork a block',
-    'grew the weave by exactly its transactions, and the first post-2.0',
-    'block commits the running total, so one trusted block hash pins the',
-    'size of every transaction beneath it. Exits 1 if a check fails.',
+    '  ar-io-node index-l1-verify --core-db data/sqlite/core.db \\',
+    '    --anchor-from https://<gateway-a>,https://<gateway-b>',
+    '',
+    'Read-only, so the gateway can stay up. The top block is fetched from',
+    'every --anchor-from source and its hash recomputed from its fields;',
+    'the hash_list_merkle recurrence then binds each post-2.0 block hash,',
+    'weave size and tx_root below it, and a keyed sample of headers and',
+    'signatures checks what nothing else binds. Pre-2.0 blocks and blocks',
+    'holding a format-1 transaction with data are reported unbound. Exits 1',
+    'if a check fails or something unbound is not accepted.',
+    CONTRACT,
+  ].join('\n'),
+);
+
+makeCommand<IndexL2VerifyCLIOptions>({
+  name: 'index-l2-verify',
+  description:
+    'Check a directory of parquet-l2 bands (an L2 index such as ardrive-l2) as their holder can, and their locations against Arweave',
+  options: indexL2VerifyOptions,
+  action: async (options) =>
+    (await indexL2VerifyCommands()).indexL2VerifyCLICommand(options, {
+      log: createCliLogger({ debug: options.debug === true }),
+    }),
+}).addHelpText(
+  'after',
+  [
+    '',
+    'Example:',
+    '  ar-io-node index-l2-verify --bands-dir data/indexes/installed/ardrive-l2 \\',
+    '    --publication https://turbo-gateway.com/ar-io/indexes/publication.json \\',
+    '    --registry-url http://core:4000',
+    '',
+    "Read-only, no gateway or database needed. Checks every band's id against",
+    'its contents, the set for overlaps and holes, every file and table row by',
+    'row, every location and parent link, tags and keys against items, the',
+    'selection and the lookups; with --publication, every file against the',
+    "publisher's signature; with an L1 index, every root's block; then reads",
+    'a sample of items per band from Arweave nodes, proving each chunk against',
+    'the chain, and checks their headers hash to their ids. Fails closed: exits',
+    '1 if a check fails or a band cannot be read whole. "ok" covers only the',
+    'checks that ran: read it with "skipped" and "publisherBound".',
+    'See docs/index-verification.md.',
     CONTRACT,
   ].join('\n'),
 );

@@ -211,6 +211,8 @@ describe('L1 bands, from a publisher into a subscribing gateway', () => {
       bandsDir,
       intervalMs: 60_000,
       cacheMib: 64,
+      // The test chain is not Arweave's: nothing to sample from.
+      allowUnsampled: true,
     });
     // The gateway's block importer, writing alongside the fill with the
     // busy timeout the gateway gives its writers.
@@ -269,8 +271,11 @@ describe('L1 bands, from a publisher into a subscribing gateway', () => {
     }
   });
 
-  it('leaves an index that index-l1-verify passes', async () => {
-    const result = (await indexL1VerifyCLICommand({ coreDb }, { log })) as {
+  it('leaves an index that index-l1-verify passes (unanchored: the test chain is not Arweave)', async () => {
+    const result = (await indexL1VerifyCLICommand(
+      { coreDb, allowUnanchored: true },
+      { log },
+    )) as {
       ok: boolean;
       heightRange: [number, number];
       checks: unknown;
@@ -286,6 +291,7 @@ describe('L1 bands, from a publisher into a subscribing gateway', () => {
       bandsDir,
       intervalMs: 60_000,
       cacheMib: 64,
+      allowUnsampled: true,
     }).runOnce();
     assert.equal(summary?.filled, 0);
   });

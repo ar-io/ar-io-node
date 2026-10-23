@@ -12,8 +12,10 @@
  * sidecar has already checked them against the signed digests and the
  * layout; this reads the rows and checks them against what the band's own
  * `band.json` claims: the row count and the row digest of each table, in the
- * table's order. A band whose rows don't reproduce its digests is refused
- * before a single row reaches SQLite.
+ * table's order. The importer checks the band whole (`judge.ts`, through
+ * `verify-bands.ts`) before it writes a row, and this check runs again as
+ * the rows are written, against a band changed underneath it; a table that
+ * fails it part way leaves rows behind, which the importer then clears.
  *
  * Rows come back in batches so a 1.4 GB band never has to fit in memory.
  */
@@ -22,6 +24,8 @@ import * as path from 'node:path';
 
 import type { ColumnSpec } from '../parquet/check.js';
 import { RowDigest } from '../parquet/digest.js';
+import { scanDigest, ScanDigestUnavailable } from '../parquet/scan-digest.js';
+import { rowComparator } from '../parquet-l2/order.js';
 import { ParquetL1Band, PARQUET_L1_TABLES, TableSpec } from './layout.js';
 
 /** Rows read per batch: enough to amortise the query, small enough to hold. */
@@ -236,3 +240,62 @@ export const IMPORT_ORDER: TableSpec[] = [
   'block_transactions',
   'tags',
 ].map((name) => PARQUET_L1_TABLES.find((t) => t.name === name) as TableSpec);
+
+/**
+ * The row count and row digest of a band's table as its file holds the
+ * rows, each row checked to come strictly after the one before in the
+ * table's order (so no key repeats, and the file is in the order its
+ * digest is taken in). Taken in DuckDB ({@link scanDigest}); where that
+ * cannot encode a column, the rows are read in order by
+ * {@link readTable}'s reader instead, which sorts them and so checks
+ * neither the file's order nor repeats.
+ *
+ * @throws BandRowsError when a row is out of order.
+ */
+export async function digestBandTable(
+  duck: Database,
+  dir: string,
+  spec: TableSpec,
+): Promise<{ rows: number; rowDigest: string; inFileOrder: boolean }> {
+  const file = path.join(dir, spec.file).replace(/'/g, "''");
+  const compare = rowComparator(spec);
+  await duck.exec('SET preserve_insertion_order = true');
+  try {
+    const result = await scanDigest(
+      duck,
+      {
+        relation: `read_parquet('${file}', file_row_number = true)`,
+        position: 'file_row_number',
+      },
+      spec.columns,
+      {
+        by: spec.orderBy,
+        rule: 'strict',
+        violates: (prev, cur) => {
+          const order = compare(prev, cur);
+          return order >= 0 ? order : undefined;
+        },
+      },
+    );
+    if ('outOfOrder' in result) {
+      throw new BandRowsError(
+        `${spec.file}: row ${result.outOfOrder.row} is ${result.outOfOrder.cmp === 0 ? 'a repeat of' : 'before'} the row before it in the table's order (${spec.orderBy.join(', ')})`,
+      );
+    }
+    return { ...result, inFileOrder: true };
+  } catch (error) {
+    if (!(error instanceof ScanDigestUnavailable)) throw error;
+  }
+  const digest = new RowDigest(spec.columns);
+  const self = `read_parquet('${file}')`;
+  const columns = spec.columns.map((c) => selectColumn(c)).join(', ');
+  const order = spec.orderBy.map((c) => `t."${c}"`).join(', ');
+  const names = spec.columns.map((c) => c.name);
+  const stream = await duck.stream(
+    `SELECT ${columns} FROM ${self} t ORDER BY ${order}`,
+  );
+  for await (const row of stream) {
+    digest.add(names.map((n) => (row as Record<string, unknown>)[n]));
+  }
+  return { rows: digest.rows, rowDigest: digest.hex(), inFileOrder: false };
+}

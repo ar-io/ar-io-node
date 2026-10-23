@@ -39,6 +39,7 @@ import { sqlPath } from '../../../lib/parquet/lookups.js';
 import { ParquetL2Kind } from '../../../index-swarm/kinds/parquet-l2.js';
 import { withBandWriter } from '../parquet-l1/export.js';
 import { deriveL1Bands } from '../parquet-l1/kind.js';
+import { compareL2Bands } from './compare.js';
 import { exportL2Band, L2CheckError, L2UnavailableError } from './export.js';
 import { GatewayReads } from './gateway-reads.js';
 import type { L2SourceRow } from './source.js';
@@ -242,6 +243,42 @@ describe('exportL2Band', () => {
     } as never);
   });
 
+  it('derives the key lookup and stats for the tag names given, sorted, under the same id', async () => {
+    const plain = await exportBand(new MemoryL2Source(rows(), ancestors()));
+    const result = await exportBand(new MemoryL2Source(rows(), ancestors()), {
+      keyTags: ['Content-Type', 'App-Name', 'App-Name'],
+      statTags: ['App-Name'],
+    });
+    try {
+      const { band } = result;
+      assert.deepEqual(band.keyTags, ['App-Name', 'Content-Type']);
+      assert.deepEqual(band.statTags, ['App-Name']);
+      // Seven selected items at two heights, every one with an App-Name;
+      // the stats hold the totals row of each bucket and one per App-Name
+      // value there.
+      assert.ok(band.lookups.key.rows >= 2, String(band.lookups.key.rows));
+      assert.ok(band.lookups.stats.rows > 1, String(band.lookups.stats.rows));
+      assert.equal(
+        l2BandId(band, bandPublisherTag(PUBLISHER)),
+        l2BandId(plain.band, bandPublisherTag(PUBLISHER)),
+      );
+      const read = parseBandFile(
+        await fs.readFile(path.join(result.dir, 'band.json'), 'utf8'),
+      );
+      assert.deepEqual(read.keyTags, ['App-Name', 'Content-Type']);
+      await withBandWriter(path.join(dir, 'read'), async (duck) => {
+        assert.deepEqual(await verifyBandLookups(duck, result.dir, band), []);
+        const [row] = (await duck.all(
+          `SELECT count(*)::INTEGER AS n FROM read_parquet('${path.join(result.dir, 'stats.parquet')}') WHERE name = ''::BLOB`,
+        )) as Array<{ n: number }>;
+        assert.ok(row.n >= 1);
+      });
+    } finally {
+      await fs.rm(result.staging, { recursive: true, force: true });
+      await fs.rm(plain.staging, { recursive: true, force: true });
+    }
+  });
+
   it('writes lookups its tables give, checked, and left out of its id', async () => {
     const result = await exportBand(new MemoryL2Source(rows(), ancestors()));
     try {
@@ -251,11 +288,19 @@ describe('exportL2Band', () => {
       assert.equal(band.lookups.id.rows, 7);
       assert.ok(band.lookups.wallet.rows >= 7);
       assert.ok(band.lookups.tag.rows > 0);
+      // Written as l2-2, for no key or stat tags unless given.
+      assert.equal(band.schema, 'l2-2');
+      assert.deepEqual(band.keyTags, []);
+      assert.deepEqual(band.statTags, []);
+      assert.equal(band.lookups.key.rows, 0);
+      assert.equal(band.lookups.stats.rows, 1);
       const files = await fs.readdir(result.dir);
       for (const file of [
         'lookup_id.parquet',
         'lookup_wallet.parquet',
         'lookup_tag.parquet',
+        'lookup_key.parquet',
+        'stats.parquet',
       ]) {
         assert.ok(files.includes(file), file);
       }
@@ -274,9 +319,10 @@ describe('exportL2Band', () => {
         // A lookup another row longer is refused, against its band and
         // against its tables.
         const file = path.join(result.dir, 'lookup_id.parquet');
+        const original = await fs.readFile(file);
         await duck.exec(
           `COPY (SELECT * FROM read_parquet(${sqlPath(file)})
-                 UNION ALL SELECT 1::UBIGINT, 100000::UBIGINT)
+                 UNION ALL SELECT 18446744073709551615::UBIGINT, 100000::UBIGINT)
            TO ${sqlPath(`${file}.tampered`)} (FORMAT PARQUET)`,
         );
         await fs.rename(`${file}.tampered`, file);
@@ -284,6 +330,18 @@ describe('exportL2Band', () => {
         assert.equal(problems.length, 2, problems.join('\n'));
         assert.match(problems[0], /holds 8 rows .* its band says 7 rows/);
         assert.match(problems[1], /1 rows that its tables do not give/);
+        // A row out of the file's order is refused as that, read as the
+        // file holds it.
+        await fs.writeFile(file, original);
+        await duck.exec(
+          `COPY (SELECT * FROM read_parquet(${sqlPath(file)})
+                 UNION ALL SELECT 1::UBIGINT, 100000::UBIGINT)
+           TO ${sqlPath(`${file}.tampered`)} (FORMAT PARQUET)`,
+        );
+        await fs.rename(`${file}.tampered`, file);
+        const unordered = await verifyBandLookups(duck, result.dir, band);
+        assert.equal(unordered.length, 1, unordered.join('\n'));
+        assert.match(unordered[0], /before the row ahead of it/);
       });
     } finally {
       await fs.rm(result.staging, { recursive: true, force: true });
@@ -739,6 +797,68 @@ describe('exportL2Band, locations', () => {
       assert.equal(bad.band.checks?.located, 0);
     } finally {
       await done(plain, relativeHeader, bad);
+    }
+  });
+
+  it('leaves items unlocated when their parent bundle cannot be placed, even where their own row places them', async () => {
+    // The parent's only row is inconsistent (the #937 class: here a payload
+    // that ends past the row's own end), so it has no place in `parents`.
+    // The children carry absolute offsets that would place them on their
+    // own; the band must not locate them under a parent it does not
+    // describe.
+    const broken = { ...n1()[0], size: 1 };
+    const result = await exportBand(absolute(), [broken]);
+    try {
+      assert.equal(result.band.checks?.located, 0);
+      assert.deepEqual(result.band.checks?.unlocated, { no_parent: 3 });
+      assert.equal(result.band.tables.parents.rows, 0);
+      // The ambiguous rows (b2, b3) were not read from the root: no reading
+      // could place them under a parent the band does not describe.
+      assert.deepEqual(result.stats.proofs, {
+        relative: 0,
+        absolute: 0,
+        none: 0,
+        both: 0,
+        unproven: 0,
+      });
+      assert.equal(result.band.checks?.ambiguousProven, 0);
+    } finally {
+      await done(result);
+    }
+  });
+
+  it('compares such a correction as corrected, not as an unlocated loss', async () => {
+    // The old band located the three items under their parent but, as a
+    // band built before the rule did, without a `parents` row describing
+    // the parent (its row was dropped as inconsistent): a location no
+    // reader can check.
+    const old = await exportBand(right(), n1());
+    const next = await exportBand(absolute(), [{ ...n1()[0], size: 1 }]);
+    try {
+      assert.equal(old.band.checks?.located, 3);
+      assert.deepEqual(next.band.checks?.unlocated, { no_parent: 3 });
+      await withBandWriter(path.join(dir, 'read'), async (duck) => {
+        // With the parent described, losing the locations is a loss.
+        const loss = await compareL2Bands(duck, [old.dir], next.dir, 10);
+        assert.equal(loss.unlocated, 3);
+        assert.equal(loss.corrected, 0);
+        assert.equal(loss.missing, 0);
+        // Without it, a correction.
+        const parents = path.join(old.dir, 'parents.parquet');
+        await duck.exec(
+          `COPY (SELECT * FROM read_parquet('${parents}') WHERE false) TO '${parents}.tmp' (FORMAT PARQUET)`,
+        );
+        await fs.rename(`${parents}.tmp`, parents);
+        const corrected = await compareL2Bands(duck, [old.dir], next.dir, 10);
+        assert.equal(corrected.unlocated, 0);
+        assert.deepEqual(corrected.unlocatedSample, []);
+        assert.equal(corrected.corrected, 3);
+        assert.equal(corrected.correctedSample.length, 3);
+        assert.equal(corrected.missing, 0);
+        assert.equal(corrected.relocated, 0);
+      });
+    } finally {
+      await done(old, next);
     }
   });
 

@@ -21,7 +21,9 @@ import { LRUCache } from 'lru-cache';
 
 import { FailureSimulator } from '../lib/chaos.js';
 import { fromB64Url } from '../lib/encoding.js';
+import { parseJsonExact } from '../lib/exact-json.js';
 import {
+  hasRoundedInteger,
   sanityCheckBlock,
   sanityCheckChunk,
   sanityCheckTx,
@@ -839,8 +841,9 @@ export class ArweaveCompositeClient
         .then((block) => {
           this.failureSimulator.maybeFail();
 
-          // Return cached block if it exists
-          if (!this.skipCache && block) {
+          // Return cached block if it exists, unless it was cached before
+          // long integers were parsed exactly and holds a rounded one.
+          if (!this.skipCache && block && !hasRoundedInteger(block)) {
             return block;
           }
 
@@ -848,6 +851,14 @@ export class ArweaveCompositeClient
             .push({
               method: 'GET',
               url: `/block/height/${height}`,
+              // Pre-2.4 headers write reward_pool as a bare number past
+              // 2^53, which JSON.parse would round.
+              transformResponse: [
+                (data: unknown) =>
+                  typeof data === 'string' && data.length > 0
+                    ? parseJsonExact(data)
+                    : data,
+              ],
             })
             .then((response) => {
               // Delete PoA and PoA 2 to reduce cache size

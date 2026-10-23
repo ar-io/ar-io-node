@@ -6,11 +6,16 @@
  */
 
 /**
- * `index-l1-verify`: check a gateway's L1 index against the weave size the
- * chain commits to, and against itself.
+ * `index-l1-verify`: check an L1 index — a gateway's `core.db`, or a
+ * directory of `parquet-l1` bands — against the chain: anchored at its top
+ * block (recomputed from the block's own fields, from at least two distinct
+ * machines), judged block by block, and sampled where nothing else binds.
+ * Fails closed: what it cannot bind is listed and fails the run unless an
+ * `--allow-*` flag accepts it. See `src/lib/parquet-l1/verify.ts`.
  *
  * Read-only, so it is safe to run while the gateway is up.
  */
+import { rmSync } from 'node:fs';
 import * as fsp from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -18,24 +23,65 @@ import Sqlite from 'better-sqlite3';
 import type { Database } from 'duckdb-async';
 import { Logger } from 'winston';
 
+import crypto from 'node:crypto';
+
+import type { GatewayRegistry } from '../../index-swarm/gateway-registry.js';
 import {
-  AnchorAnswer,
-  anchorHeights,
-  checkAnchors,
-  checkTxRoots,
+  ArweaveNodePool,
+  type FetchLike,
+  parseNodeUrls,
+} from '../../lib/onchain/arweave-nodes.js';
+import {
   chooseRange,
   stableHeightRange,
-  verifyRange,
+  verifyCoreDb,
   VerifyRefused,
-  type VerifyCheck,
-  type VerifyFailure,
 } from '../../lib/parquet-l1/verify.js';
-import { verifyBands } from '../../lib/parquet-l1/verify-bands.js';
+import {
+  BandsRefused,
+  verifyBands,
+} from '../../lib/parquet-l1/verify-bands.js';
+import type {
+  L1Allowances,
+  L1VerifyReport,
+} from '../../lib/parquet-l1/verify-run.js';
+import { exactJsonFetch } from '../../lib/parquet-l1/anchor.js';
+import type { SampleOptions } from '../../lib/parquet-l1/sample.js';
 import type { IndexL1VerifyCLIOptions, JsonSerializable } from '../types.js';
 import { requiredStringFromOptions } from '../utils.js';
+import { resolvePublication } from './index-publication-options.js';
 
-/** The most a check may spill, the cap `index-l1-import` uses too. */
-export const BANDS_SPILL_MAX = '16GB';
+/**
+ * The most a check may spill unless `--spill-max` says otherwise. The lookup
+ * check of a 69-million-item band (h1.8M of `ardrive-l2`) peaks at about
+ * 65 GB (measured 2026-10-20); 128 GB leaves room for a band twice that.
+ */
+export const BANDS_SPILL_MAX = '128GB';
+/** A DuckDB size: digits and a unit (`16GB`, `512MB`, `1TB`). */
+export const SPILL_MAX_PATTERN =
+  /^\d+(\.\d+)?\s*(KB|MB|GB|TB|KiB|MiB|GiB|TiB)$/i;
+
+/** Bytes in a DuckDB size such as `16GB` (10^9) or `16GiB` (2^30). */
+export function spillBytes(size: string): number {
+  const m = /^(\d+(?:\.\d+)?)\s*(K|M|G|T)(i?)B$/i.exec(size.trim());
+  if (m === null) throw new Error(`not a size: ${size}`);
+  const power = 'KMGT'.indexOf(m[2].toUpperCase()) + 1;
+  const base = m[3] !== '' ? 1024 : 1000;
+  return Math.floor(Number(m[1]) * base ** power);
+}
+
+/** The share of the spill directory's free space a run may spill into. */
+export const SPILL_FREE_SHARE = 0.8;
+/** Space a run always leaves free under its spill, whatever else it may take. */
+export const SPILL_RESERVE_BYTES = 100e9;
+/** A spill folder whose heartbeat is older than this was left by a killed run. */
+export const STALE_SPILL_MS = 24 * 3600 * 1000;
+/**
+ * A file in each spill folder its run touches every minute: another run
+ * removes the folder only once it has stopped beating for a day.
+ */
+export const SPILL_HEARTBEAT_FILE = '.heartbeat';
+const HEARTBEAT_MS = 60_000;
 
 /**
  * A DuckDB session for checking bands: bounded memory, two threads, no
@@ -47,332 +93,495 @@ export const BANDS_SPILL_MAX = '16GB';
  * so checking the lookups of a large band failed on the directory, not the
  * band. The spill goes in a folder of its own under the system temp
  * directory (`TMPDIR`), which `close` removes, and is capped so a run cannot
- * fill the disk under it (through the wrapper, the container layer on `/`).
+ * fill the disk under it: at `spillMax`, at most {@link SPILL_FREE_SHARE}
+ * of the space free there when the run starts, and never into the last
+ * {@link SPILL_RESERVE_BYTES} of it
+ * (`tools/ar-io-node` mounts a folder under the node's data directory
+ * there, so the container layer on `/` is never the one filled). An
+ * interrupt (SIGINT, SIGTERM) removes the folder before the process ends.
  */
 export async function openBandsDuck(
-  options: { tmpRoot?: string } = {},
-): Promise<{ duck: Database; spill: string; close(): Promise<void> }> {
-  const spill = await fsp.mkdtemp(
-    path.join(options.tmpRoot ?? os.tmpdir(), 'ar-io-node-l1-verify-'),
-  );
-  const removeSpill = () => fsp.rm(spill, { recursive: true, force: true });
-  let duck: Database | undefined;
-  try {
-    const { Database } = await import('duckdb-async');
-    duck = await Database.create(':memory:');
-    await duck.exec(
-      `SET memory_limit = '2GB'; SET threads = 2; SET temp_directory = '${spill.replace(/'/g, "''")}'; SET max_temp_directory_size = '${BANDS_SPILL_MAX}'; SET autoinstall_known_extensions = false; SET autoload_known_extensions = false;`,
+  options: {
+    tmpRoot?: string;
+    prefix?: string;
+    spillMax?: string;
+    /** Injected in tests: the bytes free under the temp root. */
+    freeBytes?: (dir: string) => Promise<number>;
+    /** Space always left free under the spill (default {@link SPILL_RESERVE_BYTES}). */
+    reserveBytes?: number;
+  } = {},
+): Promise<{
+  duck: Database;
+  spill: string;
+  /** What the spill is capped at, in bytes, and the bytes free when it opened. */
+  spillCapBytes: number;
+  freeBytes: number;
+  /** Spill folders a killed run left, removed as this one opened. */
+  removedStale: string[];
+  /**
+   * Opens `count` more databases set up as `duck` is, each spilling to a
+   * folder of its own inside the run's, each capped at the whole spill cap:
+   * a caller using more than one shares the cap out between them (as
+   * `verifyL2Bands` does, given `spillBytes`). `close` closes them too.
+   */
+  openMore(count: number): Promise<Database[]>;
+  close(): Promise<void>;
+}> {
+  const spillMax = options.spillMax ?? BANDS_SPILL_MAX;
+  if (!SPILL_MAX_PATTERN.test(spillMax)) {
+    throw new Error(
+      `--spill-max must be a size such as 16GB or 512MB, not ${spillMax}`,
     );
+  }
+  const tmpRoot = options.tmpRoot ?? os.tmpdir();
+  const freeBytes = await (
+    options.freeBytes ??
+    (async (dir: string) => {
+      const stats = await fsp.statfs(dir);
+      return Number(stats.bavail) * Number(stats.bsize);
+    })
+  )(tmpRoot);
+  const spillCapBytes = Math.max(
+    0,
+    Math.min(
+      spillBytes(spillMax),
+      Math.floor(freeBytes * SPILL_FREE_SHARE),
+      freeBytes - (options.reserveBytes ?? SPILL_RESERVE_BYTES),
+    ),
+  );
+  const prefix = options.prefix ?? 'ar-io-node-l1-verify-';
+  // Folders of this kind a killed run (SIGKILL) left a day or more ago.
+  const removedStale: string[] = [];
+  for (const name of await fsp.readdir(tmpRoot).catch(() => [] as string[])) {
+    if (!name.startsWith(prefix)) continue;
+    const dir = path.join(tmpRoot, name);
+    const stat = await fsp.lstat(dir).catch(() => undefined);
+    if (stat === undefined || !stat.isDirectory()) continue;
+    // The heartbeat's age, or the folder's where a run kept none.
+    const beat = await fsp
+      .stat(path.join(dir, SPILL_HEARTBEAT_FILE))
+      .catch(() => undefined);
+    if (Date.now() - (beat ?? stat).mtimeMs < STALE_SPILL_MS) continue;
+    try {
+      await fsp.rm(dir, { recursive: true, force: true });
+      removedStale.push(dir);
+    } catch {
+      // Another user's folder, or one still in use: not this run's to remove.
+    }
+  }
+  const spill = await fsp.mkdtemp(path.join(tmpRoot, prefix));
+  const removeSpill = () => fsp.rm(spill, { recursive: true, force: true });
+  // An interrupted run leaves no spill behind: removed, then the signal's
+  // usual end (exit 130 for Ctrl-C) follows. Set before anything is
+  // written into the folder.
+  const beat: { timer?: NodeJS.Timeout } = {};
+  const onSignal = (signal: NodeJS.Signals) => {
+    clearInterval(beat.timer);
+    rmSync(spill, { recursive: true, force: true });
+    process.removeListener('SIGINT', onSignal);
+    process.removeListener('SIGTERM', onSignal);
+    process.kill(process.pid, signal);
+  };
+  process.once('SIGINT', onSignal);
+  process.once('SIGTERM', onSignal);
+  const forget = () => {
+    clearInterval(beat.timer);
+    process.removeListener('SIGINT', onSignal);
+    process.removeListener('SIGTERM', onSignal);
+  };
+  const heartbeat = path.join(spill, SPILL_HEARTBEAT_FILE);
+  try {
+    await fsp.writeFile(heartbeat, '');
   } catch (error) {
-    await duck?.close().catch(() => undefined);
+    forget();
     await removeSpill();
     throw error;
   }
+  beat.timer = setInterval(() => {
+    const now = new Date();
+    fsp.utimes(heartbeat, now, now).catch(() => undefined);
+  }, HEARTBEAT_MS);
+  beat.timer.unref();
+  const capOf = (bytes: number) =>
+    `${Math.max(1, Math.floor(bytes / 2 ** 20))}MiB`;
+  const open = async (dir: string, capBytes: number) => {
+    const { Database } = await import('duckdb-async');
+    const opened = await Database.create(':memory:');
+    try {
+      await opened.exec(
+        `SET memory_limit = '2GB'; SET threads = 2; SET temp_directory = '${dir.replace(/'/g, "''")}'; SET max_temp_directory_size = '${capOf(capBytes)}'; SET autoinstall_known_extensions = false; SET autoload_known_extensions = false;`,
+      );
+    } catch (error) {
+      await opened.close().catch(() => undefined);
+      throw error;
+    }
+    return opened;
+  };
+  let duck: Database | undefined;
+  try {
+    duck = await open(spill, spillCapBytes);
+  } catch (error) {
+    await removeSpill();
+    forget();
+    throw error;
+  }
   const opened = duck;
+  const more: Database[] = [];
   return {
     duck: opened,
     spill,
+    spillCapBytes,
+    freeBytes,
+    removedStale,
+    openMore: async (count: number) => {
+      const added: Database[] = [];
+      for (let i = 1; i <= count; i += 1) {
+        const dir = path.join(spill, `db-${more.length + 1}`);
+        await fsp.mkdir(dir);
+        more.push(await open(dir, spillCapBytes));
+        added.push(more[more.length - 1]);
+      }
+      return added;
+    },
     close: async () => {
       try {
+        for (const other of more) {
+          await other.close().catch(() => undefined);
+        }
         await opened.close();
       } finally {
         await removeSpill();
+        forget();
       }
     },
   };
 }
 
-/** Checks a directory of bands, with no database involved. */
-async function verifyBandsCLI(
-  options: IndexL1VerifyCLIOptions,
-  log: Logger,
-): Promise<JsonSerializable> {
-  const bandsDir = options.bandsDir as string;
-  const whole = (value: string | undefined, flag: string) => {
-    if (value === undefined) return undefined;
-    const n = Number(value);
-    if (!Number.isSafeInteger(n) || n < 0) {
-      throw new VerifyRefused(`${flag} must be a whole height, 0 or above`);
-    }
-    return n;
-  };
-  const session = await openBandsDuck();
-  const { duck } = session;
-  try {
-    log.info('Checking bands', { bandsDir, spill: session.spill });
-    const out = await verifyBands(duck, bandsDir, {
-      ...(whole(options.from, '--from') !== undefined
-        ? { from: whole(options.from, '--from') as number }
-        : {}),
-      ...(whole(options.to, '--to') !== undefined
-        ? { to: whole(options.to, '--to') as number }
-        : {}),
-      txRoot: options.skipTxRoot !== true,
-      lookups: options.skipLookups !== true,
-    });
-    log.info('Checked bands', { ok: out.ok, blocks: out.blocks });
-    const answer = {
-      bandsDir: out.bandsDir,
-      bands: out.bands.length,
-      heightRange: out.heightRange,
-      blocks: out.blocks,
-      txRootChecked: out.txRootChecked,
-      txRootSkipped: out.txRootSkipped,
-      merkleChecked: out.merkleChecked,
-      merkleSkipped: out.merkleSkipped,
-      accountingChecked: out.accountingChecked,
-      accountingSkipped: out.accountingSkipped,
-      lookupsChecked: out.lookupsChecked,
-      lookupsSkipped: out.lookupsSkipped,
-      ok: out.ok,
-      checks: out.checks.map((c: VerifyCheck) => ({
-        name: c.name,
-        ok: c.ok,
-        detail: c.detail,
-        ...(c.failures !== undefined
-          ? {
-              failures: c.failures.map((f: VerifyFailure) => ({
-                height: f.height,
-                found: f.found,
-                expected: f.expected,
-              })),
-            }
-          : {}),
-        ...(c.more !== undefined ? { more: c.more } : {}),
-      })),
-      seconds: Math.round(out.seconds * 10) / 10,
-    };
-    if (!out.ok) throw answer;
-    return answer;
-  } finally {
-    await session.close();
-  }
-}
-
-export interface IndexL1VerifyDeps {
-  log: Logger;
-  /** Asks one source for a block's identity hash; injected in tests. */
-  fetchIndepHash?: (
-    url: string,
-    height: number,
-    timeoutMs: number,
-  ) => Promise<string>;
-}
-
-/** How long one source gets to answer before it counts as unreachable. */
-export const ANCHOR_TIMEOUT_MS = 10_000;
-
+/** Blocks drawn for the header sample by default. */
+export const DEFAULT_SAMPLE_BLOCKS = 1000;
+/** Transactions drawn per band for the signature sample by default. */
+export const DEFAULT_SAMPLE_TXS = 1000;
 /**
- * Asks one source for a block's identity hash. Any Arweave node or
- * gateway serves `/block/height/N`; raw nodes on port 1984 are a
- * different implementation from this one, which is what makes their
- * agreement worth having.
+ * Format-1 transactions drawn per band, from blocks whose tx_root cannot be
+ * recomputed, by default: what catches a format-2 transaction relabelled.
  */
-async function httpIndepHash(
-  url: string,
-  height: number,
-  timeoutMs: number,
-): Promise<string> {
-  const stop = AbortSignal.timeout(timeoutMs);
-  const response = await fetch(
-    `${url.replace(/\/+$/, '')}/block/height/${height}`,
-    { signal: stop },
-  );
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  const body = (await response.json()) as { indep_hash?: unknown };
-  if (typeof body.indep_hash !== 'string' || body.indep_hash.length === 0) {
-    throw new Error('no indep_hash in the response');
-  }
-  return body.indep_hash;
-}
+export const DEFAULT_SAMPLE_FORMAT1 = 200;
+/**
+ * Bytes of format-1 data a band's signature sample may fetch, counting
+ * every machine's copy: a band of 1,000 draws at two copies measured about
+ * 1.22 GB (200000-299999), so this leaves room to spare.
+ */
+export const DEFAULT_SAMPLE_V1_BYTES = 4e9;
+/** Sample fetches in flight by default. */
+export const DEFAULT_SAMPLE_CONCURRENCY = 8;
+/** How long one read from a source may take by default. */
+export const DEFAULT_READ_TIMEOUT_MS = 30_000;
 
-const height = (
-  value: string | undefined,
-  flag: string,
-): number | undefined => {
+const whole = (value: string | undefined, flag: string): number | undefined => {
   if (value === undefined) return undefined;
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed) || parsed < 0) {
-    throw new VerifyRefused(`${flag} must be a whole height, 0 or above`);
+    throw new VerifyRefused(`${flag} must be a whole number, 0 or above`);
   }
   return parsed;
 };
 
-export async function indexL1VerifyCLICommand(
-  options: IndexL1VerifyCLIOptions,
-  { log, fetchIndepHash = httpIndepHash }: IndexL1VerifyDeps,
-): Promise<JsonSerializable> {
-  // Bands are the consumer's view: a directory of them can be checked
-  // with no gateway and no `core.db`, which is the whole point of the
-  // format being content-addressed and signed.
-  if (
-    options.bandsDir !== undefined &&
-    options.bandsDir.length > 0 &&
-    options.coreDb === undefined
-  ) {
-    return verifyBandsCLI(options, log);
+/** `--spill-reserve-gb` in bytes, or the default. */
+export function spillReserveBytes(value: string | undefined): number {
+  if (value === undefined) return SPILL_RESERVE_BYTES;
+  const gb = Number(value);
+  if (!Number.isFinite(gb) || gb < 0) {
+    throw new VerifyRefused('--spill-reserve-gb must be a number, 0 or above');
   }
-  const coreDb = requiredStringFromOptions(options, 'coreDb');
-  const wantFrom = height(options.from, '--from');
-  const wantTo = height(options.to, '--to');
-  // Deduplicated, and trailing slashes removed first, or the same node
-  // listed twice satisfies --anchor-min on its own — which is precisely
-  // the single point of trust the anchor exists to remove.
-  const sources = [
-    ...new Set(
-      (options.anchorFrom ?? '')
-        .split(',')
-        .map((url) => url.trim().replace(/\/+$/, ''))
-        .filter((url) => url.length > 0),
-    ),
-  ];
-  const minSources =
-    options.anchorMin === undefined ? 2 : Number(options.anchorMin);
-  if (!Number.isInteger(minSources) || minSources < 1) {
-    throw new VerifyRefused('--anchor-min must be a positive whole number');
-  }
+  return gb * 1e9;
+}
 
-  let db: Sqlite.Database;
+export interface IndexL1VerifyDeps {
+  log: Logger;
+  /** Injected in tests: the bytes free under the spill directory. */
+  freeBytes?: (dir: string) => Promise<number>;
+  /** Injected in tests: how sources are fetched from (`/block/…`, `/tx/…`). */
+  fetch?: FetchLike;
+  /** Injected in tests: every address a source's host name resolves to. */
+  lookupAll?: (host: string) => Promise<string[]>;
+  /** Injected in tests: the registry `--registry-url` reads. */
+  registry?: GatewayRegistry;
+  /** Injected in tests: the time a publication's expiry is judged at. */
+  now?: () => number;
+}
+
+/**
+ * The sources `--anchor-from` names, as a pool that counts machines, not
+ * names; undefined without any.
+ */
+export function anchorPool(
+  options: { anchorFrom?: string; readTimeout?: string },
+  deps: Pick<IndexL1VerifyDeps, 'fetch' | 'lookupAll'>,
+  Refused: new (message: string) => Error = VerifyRefused,
+): ArweaveNodePool | undefined {
+  const given = options.anchorFrom?.trim() ?? '';
+  if (given === '') return undefined;
+  let urls: string[];
   try {
-    db = new Sqlite(coreDb, { readonly: true, fileMustExist: true });
+    urls = parseNodeUrls(given);
   } catch (error) {
-    throw new VerifyRefused(
-      `Cannot open ${coreDb}: ${(error as Error).message}`,
-    );
+    throw new Refused(`--anchor-from: ${(error as Error).message}`);
   }
-  try {
-    const held = stableHeightRange(db);
-    if (held === undefined) {
-      throw new VerifyRefused(`${coreDb} holds no stable blocks to check`);
-    }
-    const [from, to] = chooseRange(held, {
-      ...(wantFrom !== undefined ? { from: wantFrom } : {}),
-      ...(wantTo !== undefined ? { to: wantTo } : {}),
-    });
-    log.info('Checking the L1 index', { coreDb, from, to });
-    const result = verifyRange(db, { from, to });
+  return new ArweaveNodePool({
+    urls,
+    timeoutMs:
+      whole(options.readTimeout, '--read-timeout') ?? DEFAULT_READ_TIMEOUT_MS,
+    // Long integers kept exact, or some headers could not be recomputed.
+    fetch: deps.fetch ?? exactJsonFetch,
+    ...(deps.lookupAll !== undefined ? { lookupAll: deps.lookupAll } : {}),
+    dedupeByAddress: true,
+  });
+}
 
-    // Separate because it is the only check that reads every
-    // transaction rather than a sum over them, so it costs minutes
-    // where the rest cost seconds. Skipped on request for a quick pass.
-    let txRoots = { checked: 0, skipped: 0, seconds: 0 };
-    if (options.skipTxRoot !== true) {
-      const began = Date.now();
-      const out = await checkTxRoots(db, { from, to });
-      result.checks.push(out.check);
-      result.ok = result.ok && out.check.ok;
-      txRoots = {
-        checked: out.checked,
-        skipped: out.skipped,
-        seconds: (Date.now() - began) / 1000,
-      };
-      log.info('Recomputed tx_root', txRoots);
-    }
+/** The sample a run draws: none without sources, or with every count 0. */
+export function sampleOptions(
+  options: {
+    sampleBlocks?: string;
+    sampleTxs?: string;
+    sampleFormat1?: string;
+    seed?: string;
+    concurrency?: string;
+  },
+  pool: ArweaveNodePool | undefined,
+  confirm: number,
+): SampleOptions | undefined {
+  const blocks =
+    whole(options.sampleBlocks, '--sample-blocks') ?? DEFAULT_SAMPLE_BLOCKS;
+  const txs = whole(options.sampleTxs, '--sample-txs') ?? DEFAULT_SAMPLE_TXS;
+  const format1 =
+    whole(options.sampleFormat1, '--sample-format1') ?? DEFAULT_SAMPLE_FORMAT1;
+  if (pool === undefined || (blocks === 0 && txs === 0 && format1 === 0)) {
+    return undefined;
+  }
+  return {
+    seed: whole(options.seed, '--seed') ?? crypto.randomInt(2 ** 31),
+    blocks,
+    txsPerStratum: txs,
+    format1PerStratum: format1,
+    v1BytesPerStratum: DEFAULT_SAMPLE_V1_BYTES,
+    concurrency:
+      whole(options.concurrency, '--concurrency') ?? DEFAULT_SAMPLE_CONCURRENCY,
+    confirm,
+  };
+}
 
-    // Everything above is the index agreeing with itself. This is the
-    // only part that asks anyone else, and it is what turns the chain
-    // binding into a statement about the real Arweave chain.
-    let anchors: AnchorAnswer[] = [];
-    if (sources.length > 0) {
-      const wanted = anchorHeights(from, to);
-      const hashes = db.prepare(
-        'SELECT indep_hash FROM stable_blocks WHERE height = ?',
-      );
-      const ours = new Map<number, string>();
-      for (const h of wanted) {
-        const row = hashes.get(h) as { indep_hash: Buffer | null } | undefined;
-        if (row?.indep_hash != null) {
-          ours.set(h, row.indep_hash.toString('base64url'));
-        }
-      }
-      anchors = (
-        await Promise.all(
-          wanted.flatMap((h) =>
-            sources.map(async (url): Promise<AnchorAnswer> => {
-              try {
-                return {
-                  url,
-                  height: h,
-                  indepHash: await fetchIndepHash(url, h, ANCHOR_TIMEOUT_MS),
-                };
-              } catch (error) {
-                return { url, height: h, error: (error as Error).message };
-              }
-            }),
-          ),
-        )
-      ).flat();
-      const check = checkAnchors(ours, anchors, minSources);
-      result.checks.push(check);
-      result.ok = result.ok && check.ok;
-      log.info('Asked for anchors', {
-        heights: wanted,
-        sources: sources.length,
-        answered: anchors.filter((a) => a.indepHash !== undefined).length,
-      });
-    }
-    log.info('Checked the L1 index', {
-      ok: result.ok,
-      blocks: result.blocks,
-      seconds: Math.round(result.seconds),
-    });
-    const answer = {
-      coreDb,
-      heightRange: result.heightRange,
-      blocks: result.blocks,
-      anchored: result.anchored,
-      ...(result.anchorHeight !== undefined
-        ? { anchorHeight: result.anchorHeight }
-        : {}),
-      ...(result.weaveSize !== undefined
-        ? { weaveSize: result.weaveSize, accountedFor: result.accountedFor }
-        : {}),
-      txRootChecked: txRoots.checked,
-      txRootSkipped: txRoots.skipped,
-      txRootSeconds: Math.round(txRoots.seconds * 10) / 10,
-      merkleChecked: result.merkleChecked,
-      merkleSkipped: result.merkleSkipped,
-      accountingChecked: result.accountingChecked,
-      accountingSkipped: result.accountingSkipped,
-      ok: result.ok,
-      ...(anchors.length > 0
+/** What the `--allow-*` flags accept. */
+export function allowances(options: {
+  allowUnanchored?: boolean;
+  allowUnbound?: boolean;
+  allowIncomplete?: boolean;
+  allowUnverifiedFormat1?: boolean;
+}): L1Allowances {
+  return {
+    unanchored: options.allowUnanchored === true,
+    unbound: options.allowUnbound === true,
+    incomplete: options.allowIncomplete === true,
+    unverifiedFormat1: options.allowUnverifiedFormat1 === true,
+  };
+}
+
+/**
+ * `--anchor-min`, at least 2 (the default): one machine never anchors an
+ * index, as it never refutes or attests a draw.
+ */
+export function anchorMin(
+  value: string | undefined,
+  Refused: new (message: string) => Error = VerifyRefused,
+): number {
+  const n = value === undefined ? 2 : Number(value);
+  if (!Number.isInteger(n) || n < 2) {
+    throw new Refused('--anchor-min must be a whole number of at least 2');
+  }
+  return n;
+}
+
+/** A report as the command prints it: the checks' failures trimmed to their fields. */
+function printable(report: L1VerifyReport): Record<string, unknown> {
+  return {
+    ...report,
+    seconds: Math.round(report.seconds * 10) / 10,
+    checks: report.checks.map((c) => ({
+      name: c.name,
+      ok: c.ok,
+      detail: c.detail,
+      ...(c.failures !== undefined
         ? {
-            anchorSources: anchors.map((a) => ({
-              url: a.url,
-              height: a.height,
-              ...(a.indepHash !== undefined ? { indepHash: a.indepHash } : {}),
-              ...(a.error !== undefined ? { error: a.error } : {}),
+            failures: c.failures.map((f) => ({
+              height: f.height,
+              found: f.found,
+              expected: f.expected,
             })),
           }
         : {}),
-      checks: result.checks.map((c) => ({
-        name: c.name,
-        ok: c.ok,
-        detail: c.detail,
-        ...(c.failures !== undefined
+      ...(c.more !== undefined ? { more: c.more } : {}),
+    })),
+  };
+}
+
+export async function indexL1VerifyCLICommand(
+  options: IndexL1VerifyCLIOptions,
+  deps: IndexL1VerifyDeps,
+): Promise<JsonSerializable> {
+  const { log } = deps;
+  const wantFrom = whole(options.from, '--from');
+  const wantTo = whole(options.to, '--to');
+  const min = anchorMin(options.anchorMin);
+  const pool = anchorPool(options, deps);
+  const sample = sampleOptions(options, pool, min);
+  const accepted =
+    pool !== undefined && sample === undefined
+      ? ['--sample-blocks 0 --sample-txs 0']
+      : [];
+  const common = {
+    txRoot: options.skipTxRoot !== true,
+    ...(pool !== undefined ? { pool } : {}),
+    anchorMin: min,
+    ...(sample !== undefined ? { sample } : {}),
+    allow: allowances(options),
+    accepted,
+  };
+
+  const bandsMode =
+    options.bandsDir !== undefined &&
+    options.bandsDir.length > 0 &&
+    options.coreDb === undefined;
+  if (!bandsMode && options.publication !== undefined) {
+    throw new VerifyRefused(
+      '--publication binds bands: give --bands-dir, not --core-db',
+    );
+  }
+
+  let report: Record<string, unknown>;
+  let ok: boolean;
+  if (bandsMode) {
+    const bandsDir = options.bandsDir as string;
+    // A directory that was named must be there and readable: a run that
+    // reads nothing proves nothing.
+    try {
+      const stat = await fsp.stat(bandsDir);
+      if (!stat.isDirectory()) throw new Error('not a directory');
+      await fsp.readdir(bandsDir);
+    } catch (error) {
+      throw new VerifyRefused(
+        `--bands-dir ${bandsDir}: ${(error as NodeJS.ErrnoException).code ?? (error as Error).message}`,
+      );
+    }
+    const timeoutMs =
+      whole(options.readTimeout, '--read-timeout') ?? DEFAULT_READ_TIMEOUT_MS;
+    const publication = await resolvePublication(
+      options,
+      {
+        log,
+        timeoutMs,
+        ...(deps.registry !== undefined ? { registry: deps.registry } : {}),
+      },
+      VerifyRefused,
+    );
+    const session = await openBandsDuck({
+      ...(options.spillMax !== undefined ? { spillMax: options.spillMax } : {}),
+      ...(deps.freeBytes !== undefined ? { freeBytes: deps.freeBytes } : {}),
+      reserveBytes: spillReserveBytes(options.spillReserveGb),
+    });
+    try {
+      // The lookup check spills; with nothing to spill into it would fail
+      // in DuckDB and report sound bands as unreadable. Refuse first.
+      if (options.skipLookups !== true && session.spillCapBytes === 0) {
+        throw new VerifyRefused(
+          `no room to spill under ${path.dirname(session.spill)}: ${(session.freeBytes / 2 ** 30).toFixed(1)} GiB free, less the ${(spillReserveBytes(options.spillReserveGb) / 2 ** 30).toFixed(1)} GiB a run always leaves. Free space there, point TMPDIR elsewhere, lower --spill-reserve-gb, or --skip-lookups`,
+        );
+      }
+      for (const dir of session.removedStale) {
+        log.warn('Removed a spill folder a killed run left', { dir });
+      }
+      log.info('Checking bands', { bandsDir, spill: session.spill });
+      let out;
+      try {
+        out = await verifyBands(session.duck, bandsDir, {
+          ...common,
+          ...(wantFrom !== undefined ? { from: wantFrom } : {}),
+          ...(wantTo !== undefined ? { to: wantTo } : {}),
+          lookups: options.skipLookups !== true,
+          ...(publication !== undefined
+            ? {
+                publication: {
+                  document: publication.document,
+                  publisherKey: publication.publisherKey,
+                  ...(publication.index !== undefined
+                    ? { index: publication.index }
+                    : {}),
+                  ...(publication.keyFrom !== undefined
+                    ? { keyFrom: publication.keyFrom }
+                    : {}),
+                  ...(options.allowExpired === true
+                    ? { allowExpired: true }
+                    : {}),
+                  ...(deps.now !== undefined ? { now: deps.now } : {}),
+                },
+              }
+            : {}),
+        });
+      } catch (error) {
+        if (error instanceof BandsRefused) {
+          throw new VerifyRefused(error.message);
+        }
+        throw error;
+      }
+      log.info('Checked bands', { ok: out.ok, blocks: out.blocks });
+      ok = out.ok;
+      const { bands, ...rest } = out;
+      report = {
+        mode: 'bands-dir',
+        ...printable(rest as unknown as L1VerifyReport),
+        bands: bands.length,
+        bandIds: bands.map((b) => b.id),
+        ...(publication !== undefined
           ? {
-              failures: c.failures.map((f) => ({
-                height: f.height,
-                found: f.found,
-                expected: f.expected,
-              })),
+              publication: {
+                ...(out.publication ?? {}),
+                source: publication.source,
+              },
             }
           : {}),
-        ...(c.more !== undefined ? { more: c.more } : {}),
-      })),
-      // Everything, not just the streamed pass: tx_root runs outside
-      // `verifyRange`'s own timer and dominates a whole-chain run, so
-      // reporting that pass alone understated the cost tenfold.
-      seconds: Math.round((result.seconds + txRoots.seconds) * 10) / 10,
-      streamedPassSeconds: Math.round(result.seconds * 10) / 10,
-    };
-    // A failed check has to fail the command. `runCommand` prints a
-    // thrown result on stderr and exits 1; returning it would print the
-    // same JSON and exit 0, and a script would read a broken index as a
-    // good one.
-    if (!result.ok) throw answer;
-    return answer;
-  } finally {
-    db.close();
+      };
+    } finally {
+      await session.close();
+    }
+  } else {
+    const coreDb = requiredStringFromOptions(options, 'coreDb');
+    let db: Sqlite.Database;
+    try {
+      db = new Sqlite(coreDb, { readonly: true, fileMustExist: true });
+    } catch (error) {
+      throw new VerifyRefused(
+        `Cannot open ${coreDb}: ${(error as Error).message}`,
+      );
+    }
+    try {
+      const held = stableHeightRange(db);
+      if (held === undefined) {
+        throw new VerifyRefused(`${coreDb} holds no stable blocks to check`);
+      }
+      const [from, to] = chooseRange(held, {
+        ...(wantFrom !== undefined ? { from: wantFrom } : {}),
+        ...(wantTo !== undefined ? { to: wantTo } : {}),
+      });
+      log.info('Checking the L1 index', { coreDb, from, to });
+      const out = await verifyCoreDb(db, { ...common, from, to });
+      ok = out.ok;
+      report = { mode: 'core-db', coreDb, ...printable(out) };
+    } finally {
+      db.close();
+    }
   }
+  log.info('Checked the L1 index', { ok, seconds: report.seconds });
+  // A failed check has to fail the command. `runCommand` prints a thrown
+  // result on stderr and exits 1; returning it would print the same JSON
+  // and exit 0, and a script would read a broken index as a good one.
+  if (!ok) throw report;
+  return report as JsonSerializable;
 }

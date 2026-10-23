@@ -6,7 +6,6 @@
  */
 
 import axios from 'axios';
-import fs from 'node:fs';
 import { performance } from 'node:perf_hooks';
 import pLimit from 'p-limit';
 
@@ -39,6 +38,7 @@ interface RequestResult {
 interface FdSample {
   timestamp: number;
   count: number;
+  max?: number;
 }
 
 interface Statistics {
@@ -84,17 +84,15 @@ class ChunkLoadTester {
     }
 
     try {
-      this.currentWeaveSize = await this.getCurrentWeaveSize();
-
-      if (
-        this.config.maxOffset &&
-        this.config.maxOffset < this.currentWeaveSize
-      ) {
+      if (this.config.maxOffset) {
+        // --max-offset makes the tool self-contained: skip the chain lookup
+        // entirely so no reachable chain reference is required.
         this.currentWeaveSize = this.config.maxOffset;
         console.log(
           `Max offset (custom): ${this.currentWeaveSize.toLocaleString()} bytes`,
         );
       } else {
+        this.currentWeaveSize = await this.getCurrentWeaveSize();
         console.log(
           `Max offset (weave size): ${this.currentWeaveSize.toLocaleString()} bytes`,
         );
@@ -290,8 +288,7 @@ class ChunkLoadTester {
     }
 
     if (this.config.durationSeconds !== undefined) {
-      const elapsedSeconds =
-        (performance.now() - this.startTimestamp) / 1000;
+      const elapsedSeconds = (performance.now() - this.startTimestamp) / 1000;
       if (elapsedSeconds >= this.config.durationSeconds) {
         return true;
       }
@@ -300,51 +297,90 @@ class ChunkLoadTester {
     return false;
   }
 
-  private async getFdCount(pid: number): Promise<number | null> {
-    try {
-      const fdDir = `/proc/${pid}/fd`;
-      const entries = await fs.promises.readdir(fdDir);
-      return entries.length;
-    } catch (error: any) {
-      if (error.code === 'ENOENT' || error.code === 'EACCES') {
-        return null;
-      }
+  // FD tracking reads the gateway's own Prometheus metrics endpoint
+  // (`/ar-io/__gateway_metrics`) instead of /proc/<pid>/fd, so it works for
+  // containerized gateways (distroless image, host /proc unreadable) and
+  // bare-metal gateways alike, with no special privileges.
+  private parsePrometheusGauge(text: string, name: string): number | null {
+    const match = text.match(
+      new RegExp(`^${name}(?:\\{[^}]*\\})?\\s+([0-9.eE+-]+)`, 'm'),
+    );
+    if (!match) {
       return null;
     }
+    const value = parseFloat(match[1]);
+    return Number.isNaN(value) ? null : value;
+  }
+
+  private async getFdMetrics(): Promise<{
+    open: number;
+    max: number | null;
+  } | null> {
+    try {
+      const response = await axios.get(
+        `${this.config.gateway}/ar-io/__gateway_metrics`,
+        {
+          timeout: this.config.timeout,
+          headers: { 'User-Agent': 'ar-io-node-chunk-load-tester/1.0' },
+          responseType: 'text',
+        },
+      );
+      const text = typeof response.data === 'string' ? response.data : '';
+      const open = this.parsePrometheusGauge(text, 'process_open_fds');
+      if (open === null) {
+        return null;
+      }
+      return {
+        open,
+        max: this.parsePrometheusGauge(text, 'process_max_fds'),
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  private fdTrackingWarned = false;
+
+  private warnFdTrackingUnavailable(): void {
+    if (this.fdTrackingWarned) return;
+    this.fdTrackingWarned = true;
+    console.log(
+      'WARNING: --track-fds was requested but the gateway metrics endpoint ' +
+        `(${this.config.gateway}/ar-io/__gateway_metrics) did not return ` +
+        'process_open_fds; no FD samples will be collected.',
+    );
   }
 
   private async sampleFdCount(): Promise<void> {
     if (!this.config.trackFdsPid) return;
 
-    const count = await this.getFdCount(this.config.trackFdsPid);
-    if (count !== null) {
+    const metrics = await this.getFdMetrics();
+    if (metrics !== null) {
       this.stats.fdSamples.push({
         timestamp: performance.now() - this.startTimestamp,
-        count,
+        count: metrics.open,
+        max: metrics.max ?? undefined,
       });
+    } else {
+      this.warnFdTrackingUnavailable();
     }
   }
 
-  private startFdTracking(): void {
+  private async startFdTracking(): Promise<void> {
     if (!this.config.trackFdsPid) return;
 
-    // Check if /proc exists (Linux only)
-    if (!fs.existsSync('/proc')) {
-      console.log(
-        'WARNING: FD tracking only available on Linux (/proc not found)',
-      );
-      return;
-    }
+    console.log(
+      `FD tracking enabled (via ${this.config.gateway}/ar-io/__gateway_metrics)`,
+    );
 
-    // Take initial sample
-    this.sampleFdCount();
+    // Take an initial sample up front so a broken metrics endpoint warns
+    // immediately instead of silently no-op'ing for the whole run.
+    await this.sampleFdCount();
 
     // Set up periodic sampling
     this.fdTrackingInterval = setInterval(() => {
       this.sampleFdCount();
     }, this.config.fdSampleIntervalMs);
-
-    console.log(`FD tracking enabled for PID ${this.config.trackFdsPid}`);
   }
 
   private async stopFdTracking(): Promise<void> {
@@ -377,7 +413,7 @@ class ChunkLoadTester {
     console.log('');
 
     // Start FD tracking if configured
-    this.startFdTracking();
+    await this.startFdTracking();
 
     while (this.running && !this.shouldStop()) {
       // Keep the concurrent request pool full
@@ -457,9 +493,7 @@ class ChunkLoadTester {
     console.log(`Duration: ${durationStr}`);
     console.log(`Concurrency: ${this.config.concurrency}`);
     console.log(`Requests/sec: ${rps}`);
-    console.log(
-      `Total Requests: ${this.stats.totalRequests.toLocaleString()}`,
-    );
+    console.log(`Total Requests: ${this.stats.totalRequests.toLocaleString()}`);
     console.log(
       `Successes: ${this.stats.successes.toLocaleString()} (${successRate}%)`,
     );
@@ -483,9 +517,9 @@ class ChunkLoadTester {
     // Error code breakdown
     if (this.stats.errorCodeCounts.size > 0) {
       console.log('\nError Codes:');
-      const sortedCodes = Array.from(
-        this.stats.errorCodeCounts.entries(),
-      ).sort(([, a], [, b]) => b - a);
+      const sortedCodes = Array.from(this.stats.errorCodeCounts.entries()).sort(
+        ([, a], [, b]) => b - a,
+      );
 
       for (const [code, count] of sortedCodes) {
         const isResourceError = RESOURCE_ERRORS.has(code);
@@ -529,13 +563,22 @@ class ChunkLoadTester {
       const avg = counts.reduce((a, b) => a + b, 0) / counts.length;
       const delta = final - initial;
 
-      console.log(`\nFile Descriptor Tracking (PID: ${this.config.trackFdsPid}):`);
+      console.log(`\nFile Descriptor Tracking:`);
       console.log(`  - Initial: ${initial}`);
       console.log(`  - Final: ${final}`);
       console.log(`  - Min: ${min}`);
       console.log(`  - Max: ${max}`);
       console.log(`  - Average: ${avg.toFixed(1)}`);
       console.log(`  - Delta: ${delta >= 0 ? '+' : ''}${delta}`);
+
+      const maxFds = this.stats.fdSamples
+        .map((s) => s.max)
+        .find((m) => m !== undefined);
+      if (maxFds !== undefined && maxFds > 0) {
+        const utilization = ((max / maxFds) * 100).toFixed(2);
+        console.log(`  - FD limit: ${maxFds}`);
+        console.log(`  - Peak utilization: ${utilization}% of limit`);
+      }
 
       if (max > initial * 1.5) {
         console.log('  - WARNING: Significant FD growth detected!');
@@ -628,6 +671,9 @@ function parseArguments(): TestConfig {
         if (!nextArg || isNaN(parseInt(nextArg))) {
           throw new Error('--track-fds requires a PID');
         }
+        // The PID is accepted for compatibility but is no longer used: FD
+        // counts are read from the gateway's /ar-io/__gateway_metrics
+        // endpoint so tracking works for containerized gateways too.
         config.trackFdsPid = parseInt(nextArg);
         i++;
         break;
@@ -695,8 +741,9 @@ Options:
   --duration <seconds>   Run for specified duration
   --delay <ms>           Delay between requests per slot (default: 0)
   --timeout <ms>         Request timeout in milliseconds (default: 30000)
-  --max-offset <number>  Override maximum offset for testing
-  --track-fds <pid>      Track file descriptors for specified PID
+  --max-offset <number>  Override maximum offset for testing (no chain lookup needed)
+  --track-fds <pid>      Track gateway file descriptors via its metrics endpoint
+                         (PID accepted for compatibility, no longer used)
   --fd-interval <ms>     FD sampling interval in ms (default: 1000)
   --verbose              Show detailed logs for each request
   --help, -h             Show this help message

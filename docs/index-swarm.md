@@ -74,11 +74,12 @@ Check it with `./tools/index-swarm-status`.
 
 **To opt out** of subscribing, set `INDEX_SWARM_SUBSCRIBE=[]` and recreate the
 sidecar (`docker compose up -d --no-deps index-swarm`). Nothing new is then
-downloaded, but bands already installed stay: the gateway still searches
-them and the engine still seeds them. Any explicit value replaces the
-default, so naming another publisher also drops the ar.io one unless it is
-listed too, and its installed bands are then retired. To stop seeding or
-remove the bands, see [turning it off](#turning-it-off).
+downloaded and nothing installed is seeded any more: bands already
+installed stay, and the gateway still searches them, but the sidecar takes
+their torrents out of the engine (keeping the files). Any explicit value
+replaces the default, so naming another publisher also drops the ar.io one
+unless it is listed too, and its installed bands are then retired. To remove
+the bands as well, see [turning it off](#turning-it-off).
 
 **Upgrading.** A gateway that already sets `INDEX_SWARM_SUBSCRIBE`,
 `INDEX_SWARM_ENGINE_AUTH`, `CDB64_ROOT_TX_INDEX_SOURCES` or
@@ -211,7 +212,7 @@ A gateway can do both: pass `--subscribe` and `--publish` together.
 | `--max-disk-gib <n>` | `INDEX_SWARM_MAX_DISK_BYTES`. Works on its own, to change an existing subscriber's budget |
 | `--no-gateway` | Leaves the two gateway keys alone |
 | `--dry-run` | Shows the changes and writes nothing |
-| `--restart` | Then recreates what needs it: the gateway only when `CDB64_ROOT_TX_INDEX_SOURCES`, `ROOT_TX_LOOKUP_ORDER` or `L1_BAND_IMPORT_ENABLED` differ from what it runs with, then the engine and the sidecar, by service name, with the compose files the running gateway was started with |
+| `--restart` | Then recreates what needs it: the gateway only when `CDB64_ROOT_TX_INDEX_SOURCES`, `ROOT_TX_LOOKUP_ORDER` or `L1_BAND_IMPORT_ENABLED` differ from what it runs with, then the engine and the sidecar, by service name, with the compose files the running gateway was started with. plus `docker-compose.override.yaml` if they lack it. A service those files turn off (an engine behind an unused profile, for HTTP only) is left alone |
 | `--env-file <path>` | A file other than `.env`, relative to the gateway's directory |
 
 It is idempotent: a second run changes only what is missing, so it is also
@@ -719,7 +720,10 @@ from them stays in `core.db`.
 [L2 bands](index-publication.md#l2-bands)), are opt-in the same way: a
 subscription takes one only when it names it, `"name": ["root-tx-index",
 "ardrive-l2"]`. The sidecar checks and installs them under
-`installed/<index>/`; nothing in the gateway reads them yet. A publisher
+`installed/<index>/`; nothing in the gateway reads them yet. Check an
+installed index row by row, and its locations against the chain, with
+[`index-l2-verify`](cli.md#index-l2-verify) (see
+[index-verification.md](index-verification.md)). A publisher
 offers them as `{"name":"ardrive-l2","kind":"parquet-l2"}`, with band
 directories under `data/indexes/published/ardrive-l2/`, which `index-export`
 builds (see [L2 bands](index-export.md#l2-bands)). A `filter`, if set, must be the selection its bands declare:
@@ -1218,9 +1222,27 @@ Subscribers see that document age and, once it expires, alarm.
 To stop taking bands but keep the services, set `INDEX_SWARM_SUBSCRIBE=[]`
 and recreate the sidecar. With nothing subscribed the sidecar runs no
 subscriber (a publisher keeps publishing), so nothing retires the bands
-already installed or takes them out of the engine: the gateway keeps searching them and the engine keeps seeding them
-until both are removed as below. A subscription that lists other publishers
-instead retires the bands of each publisher it no longer names.
+already installed: the gateway keeps searching them until they are removed
+as below. It does stop sharing them. Once per start, as soon as the engine
+answers (checked every minute, so an engine that is down only delays it),
+the sidecar removes from the engine every torrent its subscriber records
+name, the installed bands' seeds and any download in progress, never with
+their files, and drops those records. Torrents the engine runs from
+`published/` are the publisher's and are left alone, as is a torrent the
+publisher also seeds even if the subscriber added it first. On a node with no
+engine configured (HTTP only) there is no engine to ask, so torrents an
+engine still holds from an earlier run are not removed: configure the engine,
+or remove them in its Web UI without deleting files. The same applies to the
+default publisher, whose default subscription skips itself: it subscribes to
+nothing, so it seeds only what it publishes. A partial download stays in
+`swarm/` until a subscriber's housekeeping, or the operator, removes it.
+
+Subscribing again (unset `INDEX_SWARM_SUBSCRIBE`, or name publishers)
+resumes seeding without fetching anything again: the installed bands keep
+their records and their checked `.torrent` files in `torrents/`, and the
+subscriber's first poll seeds every installed band of a publisher it still
+subscribes to. A subscription that lists other publishers instead retires
+the bands of each publisher it no longer names.
 
 To keep sharing but over HTTP only, without the torrent engine (as a sidecar
 ran before Release 85 when no engine password was set), put just the two
@@ -1241,10 +1263,15 @@ remove `INDEX_SWARM_ENGINE_AUTH` from `.env` if set, delete
 sidecar (`docker compose up -d --no-deps --force-recreate index-swarm`: it
 reads the password only at startup, and deleting the file changes nothing
 compose can see). With no password the sidecar does not look for an engine
-and moves bands over HTTP only. Do not use `tools/index-swarm-setup
---restart` on such a gateway: it names the engine services, and Compose
-starts a service named on the command line even when its profile is off.
-Run setup without `--restart` and recreate what it lists, engine excluded.
+and moves bands over HTTP only. `tools/index-swarm-setup --restart` leaves
+the engine alone on such a gateway: it starts only the services the compose
+files enable on a plain `docker compose up` (`COMPOSE_PROFILES` included, the
+legacy `index-swarm` profile names it passes not counted), since Compose
+starts a service named on the command line even when its profile is off. It
+reads `docker-compose.override.yaml` even when the running gateway was
+started before the file existed. Setup from releases
+before 86 named the engine regardless; with one of those, run setup without
+`--restart` and recreate what it lists, engine excluded.
 
 To remove the feature:
 

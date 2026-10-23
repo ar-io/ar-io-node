@@ -1,0 +1,615 @@
+[
+  {
+    "id": "l1-anchor-honest",
+    "description": "Sound bands anchored at their top by two machines that agree on a recomputed header",
+    "tampered": "nothing",
+    "kind": "l1-anchor",
+    "nodes": [
+      {
+        "name": "a",
+        "answer": "honest"
+      },
+      {
+        "name": "b",
+        "answer": "honest"
+      }
+    ],
+    "expect": {
+      "verdict": "verified",
+      "failing": [],
+      "anchored": true
+    }
+  },
+  {
+    "id": "l1-anchor-honest-sampled",
+    "description": "Sound bands anchored, with every block's header and every transaction's signature sampled",
+    "tampered": "nothing",
+    "kind": "l1-anchor",
+    "nodes": [
+      {
+        "name": "a",
+        "answer": "honest"
+      },
+      {
+        "name": "b",
+        "answer": "honest"
+      }
+    ],
+    "options": {
+      "sample": {
+        "blocks": 20,
+        "txs": 100
+      }
+    },
+    "expect": {
+      "verdict": "verified",
+      "failing": [],
+      "anchored": true
+    }
+  },
+  {
+    "id": "l1-anchor-other-block",
+    "description": "One source serves the block below the one asked for",
+    "tampered": "node b's answer",
+    "kind": "l1-anchor",
+    "nodes": [
+      {
+        "name": "a",
+        "answer": "honest"
+      },
+      {
+        "name": "b",
+        "answer": "otherBlock"
+      }
+    ],
+    "expect": {
+      "verdict": "unknown",
+      "check": "anchor",
+      "failing": [
+        "anchor"
+      ],
+      "anchored": false
+    }
+  },
+  {
+    "id": "l1-anchor-altered-unhashed",
+    "description": "One source serves the real hash beside a changed weave_size",
+    "tampered": "node b's header weave_size",
+    "kind": "l1-anchor",
+    "nodes": [
+      {
+        "name": "a",
+        "answer": "honest"
+      },
+      {
+        "name": "b",
+        "answer": "alteredUnhashed"
+      }
+    ],
+    "expect": {
+      "verdict": "unknown",
+      "check": "anchor",
+      "failing": [
+        "anchor"
+      ],
+      "anchored": false
+    }
+  },
+  {
+    "id": "l1-anchor-shared-ip",
+    "description": "B F7: two names that resolve to one address count once",
+    "tampered": "both nodes resolve to 198.51.100.1",
+    "kind": "l1-anchor",
+    "nodes": [
+      {
+        "name": "a",
+        "answer": "honest"
+      },
+      {
+        "name": "b",
+        "answer": "honest"
+      }
+    ],
+    "shared": [
+      [
+        "a",
+        "b"
+      ]
+    ],
+    "expect": {
+      "verdict": "unknown",
+      "check": "anchor",
+      "failing": [
+        "anchor"
+      ],
+      "anchored": false
+    }
+  },
+  {
+    "id": "l1-anchor-null-hash",
+    "description": "A C3/B F4: NULL indep_hash at the anchor height, republished",
+    "tampered": "blocks.indep_hash at the top, republished",
+    "kind": "l1-anchor",
+    "nodes": [
+      {
+        "name": "a",
+        "answer": "honest"
+      },
+      {
+        "name": "b",
+        "answer": "honest"
+      }
+    ],
+    "ops": [
+      {
+        "op": "nullCell",
+        "band": 1,
+        "table": "blocks",
+        "column": "indep_hash",
+        "where": "height = 1900019"
+      },
+      {
+        "op": "republish",
+        "band": 1
+      }
+    ],
+    "expect": {
+      "verdict": "refuted",
+      "check": "anchor",
+      "failing": [
+        "nulls",
+        "anchor"
+      ],
+      "anchored": false
+    }
+  },
+  {
+    "id": "l1-anchor-rehashed-merkle-both",
+    "description": "Both sources serve a fabricated hash_list_merkle with the header re-hashed to it",
+    "tampered": "both nodes' headers",
+    "kind": "l1-anchor",
+    "nodes": [
+      {
+        "name": "a",
+        "answer": "rehashedMerkle"
+      },
+      {
+        "name": "b",
+        "answer": "rehashedMerkle"
+      }
+    ],
+    "expect": {
+      "verdict": "refuted",
+      "check": "anchor",
+      "failing": [
+        "anchor"
+      ],
+      "anchored": false
+    }
+  },
+  {
+    "id": "l1-anchor-rehashed-merkle-one",
+    "description": "One source serves a fabricated, re-hashed header; the other the chain's",
+    "tampered": "node b's header",
+    "kind": "l1-anchor",
+    "nodes": [
+      {
+        "name": "a",
+        "answer": "honest"
+      },
+      {
+        "name": "b",
+        "answer": "rehashedMerkle"
+      }
+    ],
+    "expect": {
+      "verdict": "unknown",
+      "check": "anchor",
+      "failing": [
+        "anchor"
+      ],
+      "anchored": false
+    }
+  },
+  {
+    "id": "l1-anchor-missing",
+    "description": "Both sources answer 404",
+    "tampered": "nothing (no source has the block)",
+    "kind": "l1-anchor",
+    "nodes": [
+      {
+        "name": "a",
+        "answer": "missing"
+      },
+      {
+        "name": "b",
+        "answer": "missing"
+      }
+    ],
+    "expect": {
+      "verdict": "unknown",
+      "check": "anchor",
+      "failing": [
+        "anchor"
+      ],
+      "anchored": false
+    }
+  },
+  {
+    "id": "l1-anchor-unreachable",
+    "description": "Neither source can be reached",
+    "tampered": "nothing (sources down)",
+    "kind": "l1-anchor",
+    "nodes": [
+      {
+        "name": "a",
+        "answer": "unreachable"
+      },
+      {
+        "name": "b",
+        "answer": "unreachable"
+      }
+    ],
+    "expect": {
+      "verdict": "unknown",
+      "check": "anchor",
+      "failing": [
+        "anchor"
+      ],
+      "anchored": false
+    }
+  },
+  {
+    "id": "l1-anchor-too-few",
+    "description": "Two sources agree where three machines are required",
+    "tampered": "nothing (--anchor-min 3)",
+    "kind": "l1-anchor",
+    "nodes": [
+      {
+        "name": "a",
+        "answer": "honest"
+      },
+      {
+        "name": "b",
+        "answer": "honest"
+      }
+    ],
+    "options": {
+      "anchorMin": 3
+    },
+    "expect": {
+      "verdict": "unknown",
+      "check": "anchor",
+      "failing": [
+        "anchor"
+      ],
+      "anchored": false
+    }
+  },
+  {
+    "id": "l1-anchor-fabricated-chain",
+    "description": "B F1a/A C2: a fabricated band under the real top hash: every hash below the top replaced and the chain rebuilt to match, republished",
+    "tampered": "every block hash below the top, previous_block and hash_list_merkle rebuilt, republished",
+    "kind": "l1-anchor",
+    "nodes": [
+      {
+        "name": "a",
+        "answer": "honest"
+      },
+      {
+        "name": "b",
+        "answer": "honest"
+      }
+    ],
+    "ops": [
+      {
+        "op": "rechain"
+      }
+    ],
+    "expect": {
+      "verdict": "refuted",
+      "check": "anchor",
+      "failing": [
+        "anchor"
+      ],
+      "anchored": false
+    }
+  },
+  {
+    "id": "l1-anchor-sample-tag",
+    "description": "B F3: a tag value forged in one block, republished: only a signature catches it",
+    "tampered": "tags.tag_value, republished",
+    "kind": "l1-anchor",
+    "nodes": [
+      {
+        "name": "a",
+        "answer": "honest"
+      },
+      {
+        "name": "b",
+        "answer": "honest"
+      }
+    ],
+    "options": {
+      "sample": {
+        "blocks": 0,
+        "txs": 100
+      }
+    },
+    "ops": [
+      {
+        "op": "editTag",
+        "band": 1,
+        "height": 1900011
+      },
+      {
+        "op": "republish",
+        "band": 1
+      }
+    ],
+    "expect": {
+      "verdict": "refuted",
+      "check": "sample",
+      "failing": [
+        "sample"
+      ],
+      "anchored": true
+    }
+  },
+  {
+    "id": "l1-anchor-sample-quantity",
+    "description": "B F3: a quantity forged, republished: only a signature catches it",
+    "tampered": "transactions.quantity, republished",
+    "kind": "l1-anchor",
+    "nodes": [
+      {
+        "name": "a",
+        "answer": "honest"
+      },
+      {
+        "name": "b",
+        "answer": "honest"
+      }
+    ],
+    "options": {
+      "sample": {
+        "blocks": 0,
+        "txs": 100
+      }
+    },
+    "ops": [
+      {
+        "op": "setQuantity",
+        "band": 1,
+        "height": 1900011,
+        "quantity": "999999999999"
+      },
+      {
+        "op": "republish",
+        "band": 1
+      }
+    ],
+    "expect": {
+      "verdict": "refuted",
+      "check": "sample",
+      "failing": [
+        "sample"
+      ],
+      "anchored": true
+    }
+  },
+  {
+    "id": "l1-anchor-sample-order",
+    "description": "B F3: a block's transactions and links reordered together, republished: tx_root sorts by id, so only a header catches it",
+    "tampered": "block_transaction_index of transactions and links, republished",
+    "kind": "l1-anchor",
+    "nodes": [
+      {
+        "name": "a",
+        "answer": "honest"
+      },
+      {
+        "name": "b",
+        "answer": "honest"
+      }
+    ],
+    "options": {
+      "sample": {
+        "blocks": 20,
+        "txs": 0
+      }
+    },
+    "ops": [
+      {
+        "op": "moveTx",
+        "band": 1,
+        "height": 1900011,
+        "links": true
+      },
+      {
+        "op": "republish",
+        "band": 1
+      }
+    ],
+    "expect": {
+      "verdict": "refuted",
+      "check": "sample",
+      "failing": [
+        "sample"
+      ],
+      "anchored": true
+    }
+  },
+  {
+    "id": "l1-anchor-sample-format",
+    "description": "A8/B F2: a format-2 transaction relabelled format 1, accepted as unverified format 1, then caught by its signature",
+    "tampered": "transactions.format, republished",
+    "kind": "l1-anchor",
+    "nodes": [
+      {
+        "name": "a",
+        "answer": "honest"
+      },
+      {
+        "name": "b",
+        "answer": "honest"
+      }
+    ],
+    "options": {
+      "sample": {
+        "blocks": 0,
+        "txs": 100
+      },
+      "allowUnverifiedFormat1": true
+    },
+    "ops": [
+      {
+        "op": "setFormat",
+        "band": 1,
+        "height": 1900011,
+        "bti": 0,
+        "format": 1
+      },
+      {
+        "op": "republish",
+        "band": 1
+      }
+    ],
+    "expect": {
+      "verdict": "refuted",
+      "check": "sample",
+      "failing": [
+        "sample"
+      ]
+    }
+  },
+  {
+    "id": "l1-anchor-r2-top-band-file-removed",
+    "description": "Round 2 (judge R3): the top band's band.json removed, its directory still named as the band: the set must not shrink silently",
+    "tampered": "band.json removed from the band named as such",
+    "kind": "l1-anchor",
+    "nodes": [
+      {
+        "name": "a",
+        "answer": "honest"
+      },
+      {
+        "name": "b",
+        "answer": "honest"
+      }
+    ],
+    "options": {
+      "sample": {
+        "blocks": 2,
+        "txs": 2
+      }
+    },
+    "ops": [
+      {
+        "op": "removeFile",
+        "band": 1,
+        "file": "band.json"
+      }
+    ],
+    "expect": {
+      "verdict": "refuted",
+      "check": "files",
+      "failing": [
+        "files"
+      ]
+    }
+  },
+  {
+    "id": "l1-anchor-r2-incomplete-not-allow-unbound",
+    "description": "Round 2 (judge R5, D1): --allow-unbound accepts pre-2.0 blocks only, not a post-2.0 block with a dropped transaction",
+    "tampered": "a transaction and its tags dropped beside its link, republished",
+    "kind": "l1-anchor",
+    "nodes": [
+      {
+        "name": "a",
+        "answer": "honest"
+      },
+      {
+        "name": "b",
+        "answer": "honest"
+      }
+    ],
+    "options": {
+      "allowUnbound": true,
+      "sample": {
+        "blocks": 0,
+        "txs": 0
+      }
+    },
+    "ops": [
+      {
+        "op": "rewrite",
+        "band": 0,
+        "table": "tags",
+        "select": "SELECT * FROM SRC WHERE NOT (height = 1900003 AND id IN (SELECT id FROM SRC WHERE tag_value = 'value-1900003-0-1'::BLOB))"
+      },
+      {
+        "op": "rewrite",
+        "band": 0,
+        "table": "transactions",
+        "select": "SELECT * FROM SRC WHERE NOT (height = 1900003 AND block_transaction_index = 0)"
+      },
+      {
+        "op": "republish",
+        "band": 0
+      }
+    ],
+    "expect": {
+      "verdict": "unknown",
+      "failing": [
+        "unbound"
+      ],
+      "unbound": [
+        "incomplete"
+      ]
+    }
+  },
+  {
+    "id": "l1-anchor-r2-format1-flip-sampled",
+    "description": "Round 2 (judge R6, D3): under --allow-unverified-format1 a format-2 transaction relabelled format 1 is caught by the format-1 draw",
+    "tampered": "transactions.format flipped to 1 beside a forged data_root, republished",
+    "kind": "l1-anchor",
+    "nodes": [
+      {
+        "name": "a",
+        "answer": "honest"
+      },
+      {
+        "name": "b",
+        "answer": "honest"
+      }
+    ],
+    "options": {
+      "allowUnverifiedFormat1": true,
+      "sample": {
+        "blocks": 0,
+        "txs": 0,
+        "format1": 5
+      }
+    },
+    "ops": [
+      {
+        "op": "rewrite",
+        "band": 0,
+        "table": "transactions",
+        "select": "SELECT * REPLACE (CASE WHEN height = 1900003 AND block_transaction_index = 0 THEN 1::UTINYINT ELSE format END AS format, CASE WHEN height = 1900003 AND block_transaction_index = 2 THEN from_hex(repeat('ab', 32)) ELSE data_root END AS data_root) FROM SRC"
+      },
+      {
+        "op": "republish",
+        "band": 0
+      }
+    ],
+    "expect": {
+      "verdict": "refuted",
+      "check": "sample",
+      "failing": [
+        "sample"
+      ]
+    }
+  }
+]

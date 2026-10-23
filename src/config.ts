@@ -1397,19 +1397,19 @@ export const CHUNK_PEER_ORIGIN_DEADLINE_MS = env.nonNegativeIntOrDefault(
 // (X-AR-IO-Hops >= 1): `off`, `audit` or `enforce`.
 //
 // A peer that asks us for a chunk gives us one second before it gives up
-// (PEER_REQUEST_TIMEOUT_MS in ar-io-chunk-source.ts), while the serve
-// deadline that bounds our own cascade is CHUNK_SERVE_DEADLINE_MS. Remote
-// work started for that caller therefore outlives its patience, and the
-// caller already has its own miner path. The AR.IO peer sources bound
-// forwarding depth with validateHopCount, but the boundary lookup and the
-// Arweave node path carry no such bound, so `enforce` closes that gap at the
-// serve boundary rather than in each source.
+// (PEER_REQUEST_TIMEOUT_MS in ar-io-chunk-source.ts) and has its own miner
+// path, so remote work started for it outlives its patience. In every mode
+// a forwarded request therefore has its offset resolved from the local
+// database only (CompositeTxBoundarySource: no anchor probe, AR.IO peer or
+// chain search), and the AR.IO peer sources bound forwarding depth with
+// validateHopCount. This setting governs only where the chunk bytes may
+// then come from: `off` allows any source except AR.IO peers, `enforce`
+// also declines Arweave nodes, leaving this gateway's caches and
+// operator-owned storage (legacy S3/PostgreSQL).
 //
-// `audit` changes nothing and records what enforcing would have cost, via
-// chunk_peer_origin_audit_total. Run it before enforcing on any gateway
-// that originates data: a chunk ingested at upload time has no
-// absolute-offset index entry, so it misses the local cache lookup and is
-// reachable only through boundary resolution, which `enforce` skips.
+// `audit` changes nothing and records, via chunk_peer_origin_audit_total,
+// the requests `enforce` would refuse (`bytes="remote"`). Run it before
+// enforcing on any gateway that originates data.
 //
 // Defaults to `off`, preserving existing behavior.
 export const CHUNK_PEER_ORIGIN_MODE = (() => {
@@ -1724,6 +1724,57 @@ export const L1_BAND_IMPORT_INTERVAL_SECONDS = +env.varOrDefault(
   'L1_BAND_IMPORT_INTERVAL_SECONDS',
   '600',
 );
+
+/**
+ * Fill from blocks the import's checks cannot bind to the chain: pre-2.0
+ * blocks and post-2.0 blocks holding a format-1 transaction with data,
+ * which today's `l1-3` bands carry no witnesses for (every band below
+ * height 2,000,000). Off by default, so those bands are refused; on, they
+ * are filled with their other checks passed, and the run logs what it
+ * accepted.
+ */
+export const L1_BAND_IMPORT_ALLOW_UNVERIFIED =
+  env.varOrDefault('L1_BAND_IMPORT_ALLOW_UNVERIFIED', 'false') === 'true';
+
+/**
+ * Where the fill anchors and samples (`--anchor-from`): comma-separated
+ * gateways or Arweave nodes serving /block/ and /tx/. By default this
+ * gateway's trusted node and the trusted gateways not marked
+ * `trusted: false`. The sample's refutations and source-attested fields
+ * need two distinct machines among them; the worker warns at its first
+ * run when they resolve to fewer.
+ */
+export function l1BandImportSampleSources(
+  explicit: string | undefined,
+  trustedNodeUrl: string,
+  trustedGateways: Record<string, { trusted?: boolean }>,
+): string[] {
+  return (
+    explicit ??
+    [
+      trustedNodeUrl,
+      ...Object.entries(trustedGateways)
+        .filter(([, config]) => config.trusted !== false)
+        .map(([url]) => url),
+    ].join(',')
+  )
+    .split(',')
+    .map((url) => url.trim())
+    .filter((url) => url.length > 0)
+    .filter((url, i, all) => all.indexOf(url) === i);
+}
+export const L1_BAND_IMPORT_SAMPLE_FROM = l1BandImportSampleSources(
+  env.varOrUndefined('L1_BAND_IMPORT_SAMPLE_FROM'),
+  TRUSTED_NODE_URL,
+  TRUSTED_GATEWAYS_URLS,
+);
+
+/**
+ * Fill with no sample of headers and signatures: transaction ids, their
+ * order and every transaction field then go unchecked. Off by default.
+ */
+export const L1_BAND_IMPORT_ALLOW_UNSAMPLED =
+  env.varOrDefault('L1_BAND_IMPORT_ALLOW_UNSAMPLED', 'false') === 'true';
 
 /** SQLite page cache for a fill run, in MiB, in a process of its own. */
 export const L1_BAND_IMPORT_CACHE_MIB = +env.varOrDefault(

@@ -581,7 +581,7 @@ root-TX bands, or the reverse.
 
 ## L2 bands
 
-An L2 band (`parquet-l2`, layout `l2-1` in
+An L2 band (`parquet-l2`, layout `l2-2` in
 [index-publication.md](index-publication.md#l2-bands)) holds the ANS-104
 data items of one height range that a **selection** takes: those with a tag
 named exactly `name` whose value starts with `valuePrefix` and not with
@@ -590,13 +590,17 @@ published under `published/<name>/`:
 
 ```bash
 INDEX_EXPORT_KINDS=root-tx-index,parquet-l1,parquet-l2
-INDEX_EXPORT_L2_INDEXES='[{"name":"ardrive-l2","selection":{"kind":"ans104-data-items","tag":{"name":"App-Name","valuePrefix":"ArDrive","excludeValuePrefix":"ArDriver"}}}]'
+INDEX_EXPORT_L2_INDEXES='[{"name":"ardrive-l2","selection":{"kind":"ans104-data-items","tag":{"name":"App-Name","valuePrefix":"ArDrive","excludeValuePrefix":"ArDriver"}},"keyTags":["Drive-Id","Parent-Folder-Id","Folder-Id","File-Id"],"statTags":["App-Name","Content-Type","Entity-Type"]}]'
 # and in INDEX_SWARM_PUBLISH: {"name":"ardrive-l2","kind":"parquet-l2"}
 ```
 
 A band's selection is bound into its id, so an index's selection never
 changes: bands of another selection in its directory stop the run
 (`grid_layout`). A new selection is a new index, under a new name.
+`keyTags` and `statTags` (optional, none unless given) name the tags each
+band's key lookup and stats are derived for; they are not part of a band's
+id, and a change to them is applied to every published band in place
+([below](#layout-l2-2-key-lookup-and-stats)).
 
 ### Where L2 rows come from
 
@@ -627,9 +631,12 @@ changes: bands of another selection in its directory stop the run
   key whose SHA-256 is the address: the item's own row (ClickHouse keeps
   `owner` only for keys of at most 64 bytes, so not an RSA modulus); the
   gateway's `bundles.db` `wallets` table, read-only
-  (`INDEX_EXPORT_L2_WALLETS_DB`); the root, read through the header-check
-  gateway at a located item's owner offset (`owner_size` bytes, 512 for
-  an Arweave key), up to three places an owner. An owner with none is left
+  (`INDEX_EXPORT_L2_WALLETS_DB`); the `wallets` tables of the bands this
+  one replaces (a key verifies itself, so a re-settle keeps every key they
+  had whatever the gateway serves that day; `stats.owners.fromReplaced`);
+  the root, read through the header-check gateway at a located item's
+  owner offset (`owner_size` bytes, 512 for an Arweave key), up to three
+  places an owner. An owner with none is left
   out of `wallets` and counted (`ownersWithoutKey`, and by why in
   `stats.owners.withoutKeyBy`: `unreadable`, `wrong`, `nowhere`); the
   band still builds.
@@ -657,7 +664,10 @@ all set, or all null. The rules, in order:
    (`repaired`) or absolute ones; deeper only on an unbroken chain (else
    `deep`). `inconsistent` and `no_parent` as for root-TX bands. An item
    whose bundle the index holds at two places in the root is left
-   unlocated (`parent_two_places`).
+   unlocated (`parent_two_places`); one whose bundle it holds at none
+   (every row of the bundle inconsistent) is left unlocated (`no_parent`)
+   even where the item's own row, an absolute offset, would place it: a
+   band never locates an item under a parent `parents` does not describe.
 5. **Ambiguous items** (one level down, `root_parent_offset` 0, both
    readings possible) are settled by their bytes: the header is read from
    the root at both candidate starts and decoded, and the reading whose
@@ -787,6 +797,43 @@ rebuild of unchanged rows publishes nothing. Its `checks` are `located`,
 404 counts there as `ambiguous`, the row it is; the 404s are counted in
 `.publisher.json` (`unreadable`: `proofs`, `keys`).
 
+### Layout `l2-2`: key lookup and stats
+
+Every band built is `l2-2`
+([index-publication.md](index-publication.md#l2-key-lookup-and-stats)):
+beside `l2-1`'s three lookups it carries `lookup_key.parquet`, the heights
+at which each value of the index's `keyTags` occurs, and `stats.parquet`,
+items and bytes per 1,000 heights by each value of its `statTags`. Both
+are derived from the band's own tables after they are written, checked
+against them, and recorded in `band.json` with the tag names
+(`keyTags`, `statTags`). A reader accepts `l2-1` and `l2-2`.
+
+A published band that is not `l2-2`, or whose `band.json` names other tag
+names than the index is configured with, is upgraded in place: each run,
+before any build and outside the time budget, derives the two files from
+the band's tables into the work directory, checks them, moves them into
+the band, and replaces `band.json` by a rename. The band keeps its id and
+its rows, its tables and other lookups are not touched (a tag change
+replaces only the two files), and nothing is read from the source or
+header-checked, so a subscriber that holds the band fetches only the two
+files and `band.json`. Each band is reported under the index's
+`derived` (`reason`: `layout`, or `tags_changed` where the files were
+replaced) and counted as `index_export_runs_total{kind="derive"}`; a
+failure is logged and the builds go on. With `--range`, only the bands
+inside it are upgraded; with `--dry-run`, each is derived and reported and
+nothing changes.
+
+The derive sorts the band's `tags` once per file, under
+`INDEX_EXPORT_L2_DUCKDB_MEMORY` and spilling into the work directory as a
+build does: minutes for a 5,000-height band, an hour or so for the
+69-million-item h1.8M band of `ardrive-l2`.
+
+**Upgrade order.** A sidecar that does not know `l2-2` cannot read an
+`l2-2` band: as a subscriber it refuses the band, naming the layout, and
+keeps its copy; as a publisher it cannot describe the band, so the band goes
+unpublished. Upgrade subscribers first, then the publisher's `index-swarm`
+with or before its `index-export`, as for `l1-3`.
+
 ### Lifecycle
 
 L2 bands follow the [grid layout](#grid-layout) on the L1 heights, with one
@@ -836,7 +883,10 @@ re-settled band), it must:
 - **lose nothing**: every id of the bands it replaces is in it
   (`dropped_items`, with a sample);
 - **unlocate nothing**: every (id, root) they located it locates
-  (`unlocated_rows`);
+  (`unlocated_rows`), except one they located only under a parent their
+  `parents` doesn't describe at that place (a location no reader can
+  check: the parent's own row was inconsistent, #937), which it may leave
+  unlocated as `no_parent`; such pairs are reported as `corrected`;
 - **drop no key**: every owner they hold a key for it holds one for
   (`dropped_wallets`);
 - an item located now and not before (say, a root that answered 404 then

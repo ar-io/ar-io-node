@@ -50,7 +50,7 @@ services:
       - observer
 
   core:
-    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-27b668f978a7a28009097d6df4f19fffe4e3af04}
+    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-6c5cf67c55ac3264e527647f08ee0a5f2ce0fec7}
     build:
       context: .
     restart: unless-stopped
@@ -110,6 +110,9 @@ services:
       - L1_BAND_IMPORT_BANDS_DIR=${L1_BAND_IMPORT_BANDS_DIR:-}
       - L1_BAND_IMPORT_INTERVAL_SECONDS=${L1_BAND_IMPORT_INTERVAL_SECONDS:-}
       - L1_BAND_IMPORT_CACHE_MIB=${L1_BAND_IMPORT_CACHE_MIB:-}
+      - L1_BAND_IMPORT_ALLOW_UNVERIFIED=${L1_BAND_IMPORT_ALLOW_UNVERIFIED:-}
+      - L1_BAND_IMPORT_SAMPLE_FROM=${L1_BAND_IMPORT_SAMPLE_FROM:-}
+      - L1_BAND_IMPORT_ALLOW_UNSAMPLED=${L1_BAND_IMPORT_ALLOW_UNSAMPLED:-}
       - SKIP_CACHE=${SKIP_CACHE:-}
       - SKIP_DATA_CACHE=${SKIP_DATA_CACHE:-}
       - SKIP_DATA_CACHE_WRITES=${SKIP_DATA_CACHE_WRITES:-}
@@ -191,6 +194,11 @@ services:
       - CHUNK_METADATA_RETRIEVAL_ORDER=${CHUNK_METADATA_RETRIEVAL_ORDER:-}
       - CHUNK_DATA_SOURCE_PARALLELISM=${CHUNK_DATA_SOURCE_PARALLELISM:-}
       - CHUNK_METADATA_SOURCE_PARALLELISM=${CHUNK_METADATA_SOURCE_PARALLELISM:-}
+      - CHUNK_METADATA_ANCHOR_ENABLED=${CHUNK_METADATA_ANCHOR_ENABLED:-}
+      - CHUNK_METADATA_ANCHOR_REQUEST_TIMEOUT_MS=${CHUNK_METADATA_ANCHOR_REQUEST_TIMEOUT_MS:-}
+      - CHUNK_METADATA_ANCHOR_TX_CACHE_SIZE=${CHUNK_METADATA_ANCHOR_TX_CACHE_SIZE:-}
+      - CHUNK_METADATA_ANCHOR_TX_CACHE_TTL_SECONDS=${CHUNK_METADATA_ANCHOR_TX_CACHE_TTL_SECONDS:-}
+      - CHUNK_METADATA_ANCHOR_MISS_CACHE_TTL_SECONDS=${CHUNK_METADATA_ANCHOR_MISS_CACHE_TTL_SECONDS:-}
       - CHUNK_REQUEST_CONCURRENCY=${CHUNK_REQUEST_CONCURRENCY:-}
       - CHUNK_FIRST_DATA_TIMEOUT_MS=${CHUNK_FIRST_DATA_TIMEOUT_MS:-}
       - TX_CHUNKS_GEOMETRY_DB_ENABLED=${TX_CHUNKS_GEOMETRY_DB_ENABLED:-}
@@ -330,7 +338,7 @@ services:
       - AWS_ELASTICACHE_TURBO_HOST=${AWS_ELASTICACHE_TURBO_HOST:-}
       - AWS_ELASTICACHE_TURBO_USE_TLS=${AWS_ELASTICACHE_TURBO_USE_TLS:-}
       - AWS_ELASTICACHE_TURBO_PORT=${AWS_ELASTICACHE_TURBO_PORT:-}
-      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-85}
+      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-86}
       - CHUNK_POST_MIN_SUCCESS_COUNT=${CHUNK_POST_MIN_SUCCESS_COUNT:-}
       - CHUNK_POST_MIN_PREFERRED_SUCCESS_COUNT=${CHUNK_POST_MIN_PREFERRED_SUCCESS_COUNT:-}
       - CHUNK_POST_MAX_CONSECUTIVE_FAILURES=${CHUNK_POST_MAX_CONSECUTIVE_FAILURES:-}
@@ -681,7 +689,7 @@ services:
       - clickhouse
 
   observer:
-    image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG:-c5e98ddcf567598358fa73a0852b6be2cbbd42c4}
+    image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG:-2aa908dc40e0c6fcf3c91bda92565af10876288e}
     restart: unless-stopped
     ports:
       - ${OBSERVER_PORT:-5050}:5050
@@ -748,7 +756,7 @@ services:
       - TURBO_UPLOAD_SERVICE_URL=${TURBO_UPLOAD_SERVICE_URL:-}
       - RUN_OBSERVER=${RUN_OBSERVER:-true}
       - MIN_RELEASE_NUMBER=${MIN_RELEASE_NUMBER:-0}
-      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-85}
+      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-86}
       - AR_IO_SDK_LOG_LEVEL=${AR_IO_SDK_LOG_LEVEL:-none}
       # Reference Gateway Configuration
       # The bundled observer references THIS node's own gateway by default (its
@@ -840,7 +848,7 @@ services:
   # have, so a separate image would be roughly a gigabyte of duplicate layers
   # per operator for code that is already present.
   index-swarm:
-    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-27b668f978a7a28009097d6df4f19fffe4e3af04}
+    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-6c5cf67c55ac3264e527647f08ee0a5f2ce0fec7}
     build:
       context: .
     entrypoint: ['/nodejs/bin/node', 'dist/index-swarm/main.js']
@@ -966,7 +974,7 @@ services:
     # The core image, at its own tag when set: the service can move to a
     # release before core does, and must not run an image that predates it.
     # Like core's, this build tags the core image.
-    image: ghcr.io/ar-io/ar-io-core:${INDEX_EXPORT_IMAGE_TAG:-${CORE_IMAGE_TAG:-27b668f978a7a28009097d6df4f19fffe4e3af04}}
+    image: ghcr.io/ar-io/ar-io-core:${INDEX_EXPORT_IMAGE_TAG:-${CORE_IMAGE_TAG:-6c5cf67c55ac3264e527647f08ee0a5f2ce0fec7}}
     build:
       context: .
     entrypoint: ['/nodejs/bin/node', 'dist/index-export/main.js']
@@ -1066,7 +1074,7 @@ services:
   # have one: the engine never runs without a password. Runs by default; the
   # old `--profile index-swarm-torrent` flag is still accepted.
   index-swarm-engine-init:
-    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-27b668f978a7a28009097d6df4f19fffe4e3af04}
+    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-6c5cf67c55ac3264e527647f08ee0a5f2ce0fec7}
     entrypoint: ['/nodejs/bin/node', 'dist/index-swarm/engine-init.js']
     restart: 'no'
     volumes:

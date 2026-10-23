@@ -12,7 +12,16 @@ import * as path from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import Sqlite from 'better-sqlite3';
 
-import { exportL1Band } from '../../index-export/kinds/parquet-l1/export.js';
+import {
+  exportBands,
+  republish,
+  rewriteTable,
+} from '../../../test/parquet-l1-bands.js';
+import {
+  chainNode,
+  scriptedFetch,
+  scriptedLookup,
+} from '../../../test/parquet-l1-headers.js';
 import { GENERATION_SEPARATOR } from '../../index-swarm/subscriber.js';
 import { LEDGER_MIGRATION } from '../../lib/parquet-l1/import.js';
 import { buildCoreDb } from '../../../test/parquet-l1-core-db.js';
@@ -28,6 +37,7 @@ const MIGRATION = `migrations/${LEDGER_MIGRATION}`;
 
 describe('indexL1ImportCLICommand', () => {
   let dir: string;
+  let id: string;
   let bandsDir: string;
   let coreDb: string;
 
@@ -39,19 +49,9 @@ describe('indexL1ImportCLICommand', () => {
     const source = path.join(dir, 'source.db');
     await fsp.mkdir(bandsDir);
     await fsp.mkdir(workDir);
-    await buildCoreDb(source, FIRST, 31);
-    const out = await exportL1Band({
-      coreDbPath: source,
-      workDir,
-      from: FIRST,
-      to: FIRST + 19,
-    });
-    await fsp.rename(
-      out.dir,
-      path.join(
-        bandsDir,
-        `l1-h${FIRST}-${FIRST + 19}-f5b1208c-${'0'.repeat(12)}`,
-      ),
+    await buildCoreDb(source, FIRST, 31, { verifiable: true });
+    [id] = (await exportBands(source, bandsDir, [[FIRST, FIRST + 19]])).map(
+      (b) => b.id,
     );
 
     const db = new Sqlite(coreDb);
@@ -67,10 +67,18 @@ describe('indexL1ImportCLICommand', () => {
     await fsp.rm(dir, { recursive: true, force: true });
   });
 
-  it('imports the bands and answers in the documented shape', async () => {
+  it('imports the bands, anchored at their top, and answers in the documented shape', async () => {
+    const source = path.join(dir, 'source.db');
     const result = (await indexL1ImportCLICommand(
-      { bandsDir, coreDb },
-      { log },
+      { bandsDir, coreDb, anchorFrom: 'http://a.test,http://b.test' },
+      {
+        log,
+        fetch: scriptedFetch({
+          'http://a.test': chainNode(source),
+          'http://b.test': chainNode(source),
+        }),
+        lookupAll: scriptedLookup(),
+      },
     )) as Record<string, unknown>;
 
     assert.equal(result.imported, 1);
@@ -88,13 +96,12 @@ describe('indexL1ImportCLICommand', () => {
   });
 
   it('imports bands as the index-swarm sidecar installs them, keyed by band id', async () => {
-    const id = `l1-h${FIRST}-${FIRST + 19}-f5b1208c-${'0'.repeat(12)}`;
     await fsp.rename(
       path.join(bandsDir, id),
       path.join(bandsDir, `${id}${GENERATION_SEPARATOR}${'a'.repeat(12)}`),
     );
     const result = (await indexL1ImportCLICommand(
-      { bandsDir, coreDb },
+      { bandsDir, coreDb, allowUnanchored: true, allowUnsampled: true },
       { log },
     )) as Record<string, unknown>;
     assert.equal(result.imported, 1);
@@ -128,7 +135,7 @@ describe('indexL1ImportCLICommand', () => {
       db.close();
     }
     const result = (await indexL1ImportCLICommand(
-      { bandsDir, coreDb, fill: true },
+      { bandsDir, coreDb, fill: true, allowUnsampled: true },
       { log },
     )) as Record<string, unknown>;
     assert.equal(result.mode, 'fill');
@@ -153,7 +160,16 @@ describe('indexL1ImportCLICommand', () => {
     try {
       for (const fill of [false, true]) {
         await assert.rejects(
-          indexL1ImportCLICommand({ bandsDir, coreDb, fill }, { log }),
+          indexL1ImportCLICommand(
+            {
+              bandsDir,
+              coreDb,
+              fill,
+              allowUnanchored: true,
+              allowUnsampled: true,
+            },
+            { log },
+          ),
           /Another import or fill is running/,
         );
       }
@@ -162,7 +178,7 @@ describe('indexL1ImportCLICommand', () => {
     }
     // Released with the process that held it, or here with its handle.
     const result = (await indexL1ImportCLICommand(
-      { bandsDir, coreDb },
+      { bandsDir, coreDb, allowUnanchored: true, allowUnsampled: true },
       { log },
     )) as Record<string, unknown>;
     assert.equal(result.imported, 1);
@@ -172,7 +188,13 @@ describe('indexL1ImportCLICommand', () => {
     const stale = path.join(dir, '.duckdb-import-killed');
     await fsp.mkdir(stale);
     await fsp.writeFile(path.join(stale, 'spill.tmp'), 'x');
-    await indexL1ImportCLICommand({ bandsDir, coreDb }, { log });
+    // Its heartbeat stopped two days ago: a run that was killed.
+    const old = new Date(Date.now() - 2 * 24 * 3600 * 1000);
+    await fsp.utimes(stale, old, old);
+    await indexL1ImportCLICommand(
+      { bandsDir, coreDb, allowUnanchored: true, allowUnsampled: true },
+      { log },
+    );
     assert.equal(fs.existsSync(stale), false);
     assert.deepEqual(
       (await fsp.readdir(dir)).filter((n) => n.startsWith('.duckdb-import')),
@@ -181,9 +203,12 @@ describe('indexL1ImportCLICommand', () => {
   });
 
   it('does nothing the second time', async () => {
-    await indexL1ImportCLICommand({ bandsDir, coreDb }, { log });
+    await indexL1ImportCLICommand(
+      { bandsDir, coreDb, allowUnanchored: true, allowUnsampled: true },
+      { log },
+    );
     const again = (await indexL1ImportCLICommand(
-      { bandsDir, coreDb },
+      { bandsDir, coreDb, allowUnanchored: true, allowUnsampled: true },
       { log },
     )) as Record<string, unknown>;
     assert.equal(again.imported, 0);
@@ -194,24 +219,18 @@ describe('indexL1ImportCLICommand', () => {
   });
 
   it('stops after --max-bands', async () => {
-    const second = path.join(dir, 'work2');
-    await fsp.mkdir(second);
-    const out = await exportL1Band({
-      coreDbPath: path.join(dir, 'source.db'),
-      workDir: second,
-      from: FIRST + 20,
-      to: FIRST + 29,
-    });
-    await fsp.rename(
-      out.dir,
-      path.join(
-        bandsDir,
-        `l1-h${FIRST + 20}-${FIRST + 29}-f5b1208c-${'1'.repeat(12)}`,
-      ),
-    );
+    await exportBands(path.join(dir, 'source.db'), bandsDir, [
+      [FIRST + 20, FIRST + 29],
+    ]);
 
     const result = (await indexL1ImportCLICommand(
-      { bandsDir, coreDb, maxBands: '1' },
+      {
+        bandsDir,
+        coreDb,
+        maxBands: '1',
+        allowUnanchored: true,
+        allowUnsampled: true,
+      },
       { log },
     )) as Record<string, unknown>;
     assert.equal(result.imported, 1);
@@ -220,7 +239,7 @@ describe('indexL1ImportCLICommand', () => {
     // ever seen: --max-bands has to be what left it, not a name the
     // reader passed over.
     const next = (await indexL1ImportCLICommand(
-      { bandsDir, coreDb },
+      { bandsDir, coreDb, allowUnanchored: true, allowUnsampled: true },
       { log },
     )) as Record<string, unknown>;
     assert.equal(
@@ -230,30 +249,40 @@ describe('indexL1ImportCLICommand', () => {
     );
   });
 
-  it('fails the command when a band is refused, keeping what landed', async () => {
-    // The bands below the failure are imported and kept, but the run did
-    // not do what was asked, so it must exit 1 rather than print a
-    // success a script would believe.
-    const file = path.join(
-      bandsDir,
-      `l1-h${FIRST}-${FIRST + 19}-f5b1208c-${'0'.repeat(12)}`,
-      'band.json',
+  it('fails the command when a band is refused, writing nothing of it', async () => {
+    // A band whose rows were changed and republished self-consistently:
+    // refused by the check before writing, and the run must exit 1.
+    const { Database } = await import('duckdb-async');
+    const duck = await Database.create(':memory:');
+    await rewriteTable(
+      duck,
+      path.join(bandsDir, id),
+      'transactions',
+      `SELECT * REPLACE (data_size + 1 AS data_size) FROM SRC`,
     );
-    const band = JSON.parse(await fsp.readFile(file, 'utf8'));
-    band.tables.transactions.rowDigest = 'f'.repeat(64);
-    await fsp.writeFile(file, JSON.stringify(band));
+    await republish(duck, path.join(bandsDir, id));
+    await duck.close();
 
     let thrown: Record<string, unknown> | undefined;
     try {
-      await indexL1ImportCLICommand({ bandsDir, coreDb }, { log });
+      await indexL1ImportCLICommand(
+        { bandsDir, coreDb, allowUnanchored: true, allowUnsampled: true },
+        { log },
+      );
     } catch (error) {
       thrown = error as Record<string, unknown>;
     }
     assert.ok(thrown !== undefined, 'the command failed');
     assert.ok(!(thrown instanceof Error), 'and threw the result, not an Error');
     assert.equal(thrown.imported, 0);
-    assert.match(String(thrown.refused), /digest/);
+    assert.match(String(thrown.refused), /do not verify/);
     assert.deepEqual(JSON.parse(JSON.stringify(thrown)), thrown);
+    const db = new Sqlite(coreDb, { readonly: true });
+    assert.equal(
+      db.prepare('SELECT COUNT(*) FROM stable_blocks').pluck().get(),
+      0,
+    );
+    db.close();
   });
 
   it('refuses a cache size it cannot act on', async () => {
@@ -269,7 +298,13 @@ describe('indexL1ImportCLICommand', () => {
 
   it('imports with an explicit cache size', async () => {
     const result = (await indexL1ImportCLICommand(
-      { bandsDir, coreDb, cacheMib: '16' },
+      {
+        bandsDir,
+        coreDb,
+        cacheMib: '16',
+        allowUnanchored: true,
+        allowUnsampled: true,
+      },
       { log },
     )) as Record<string, unknown>;
     assert.equal(result.imported, 1);

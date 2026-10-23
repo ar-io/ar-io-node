@@ -42,7 +42,24 @@ export function isValidationParams(
   );
 }
 
+/**
+ * Whether a block holds an integer `JSON.parse` rounded: a number past 2^53.
+ * Pre-2.4 headers write `reward_pool` as a bare number, past 2^53 from
+ * height 585,633, so one parsed without `parseJsonExact` (or cached
+ * before it was used) is off by up to one. Read exactly, it is a string.
+ */
+export function hasRoundedInteger(block: PartialJsonBlock): boolean {
+  const rewardPool: unknown = (block as { reward_pool?: unknown }).reward_pool;
+  return typeof rewardPool === 'number' && !Number.isSafeInteger(rewardPool);
+}
+
 export function sanityCheckBlock(block: PartialJsonBlock) {
+  if (hasRoundedInteger(block)) {
+    throw new Error(
+      "Invalid block: 'reward_pool' is a number past 2^53, so it was rounded",
+    );
+  }
+
   if (!block.indep_hash) {
     throw new Error("Invalid block: missing 'indep_hash'");
   }

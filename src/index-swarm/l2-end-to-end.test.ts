@@ -233,6 +233,13 @@ function bandRows(): Record<string, unknown[][]> {
   };
 }
 
+/** The layout the band is written in: `l2-2`, its key lookup and stats over App-Name. */
+const LAYOUT = {
+  schema: 'l2-2' as const,
+  keyTags: ['App-Name'],
+  statTags: ['App-Name'],
+};
+
 /** Writes the band into `dir`, as a builder must, and describes it. */
 async function writeBand(dir: string): Promise<ParquetL2Band> {
   await fs.mkdir(dir, { recursive: true });
@@ -255,15 +262,17 @@ async function writeBand(dir: string): Promise<ParquetL2Band> {
       );
       tables[spec.name] = await digestTable(db, file, spec);
     }
-    lookups = await writeBandLookups(db, dir);
+    lookups = await writeBandLookups(db, dir, { layout: LAYOUT });
   } finally {
     await db.close();
   }
   const band: ParquetL2Band = {
     version: 1,
-    schema: 'l2-1',
+    schema: LAYOUT.schema,
     heightRange: [FIRST, BAND_TO],
     selection: SELECTION,
+    keyTags: LAYOUT.keyTags,
+    statTags: LAYOUT.statTags,
     tables,
     lookups,
     createdAt: '2026-10-14T00:00:00.000Z',
@@ -377,7 +386,7 @@ describe('L2 bands, from a publisher into a subscribing gateway', () => {
     assert.deepEqual(offered.heightRange, [FIRST, BAND_TO]);
     assert.equal(offered.records, 5);
     assert.deepEqual(offered.metadata, {
-      schema: 'l2-1',
+      schema: 'l2-2',
       selection: SELECTION,
     });
   });
@@ -391,8 +400,8 @@ describe('L2 bands, from a publisher into a subscribing gateway', () => {
       names[0],
     );
     const dir = path.join(installed, names[0]);
-    assert.deepEqual((await fs.readdir(dir)).sort(), bandFiles('l2-1'));
-    for (const name of bandFiles('l2-1')) {
+    assert.deepEqual((await fs.readdir(dir)).sort(), bandFiles('l2-2'));
+    for (const name of bandFiles('l2-2')) {
       assert.equal(
         await sha256File(path.join(dir, name)),
         await sha256File(path.join(publishedDir, INDEX, bandId, name)),

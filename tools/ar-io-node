@@ -20,6 +20,7 @@
 #   ./tools/ar-io-node index-l1-verify --bands-dir data/indexes/installed/parquet-l1
 #   ./tools/ar-io-node index-l1-import --bands-dir data/indexes/installed/parquet-l1 \
 #     --core-db data/sqlite/core.db
+#   ./tools/ar-io-node index-l2-verify --bands-dir data/indexes/installed/ardrive-l2
 #   ./tools/ar-io-node get-gateway --address <wallet>
 #
 # Mounts only what a command needs: data/indexes for index-band-* commands
@@ -27,7 +28,13 @@
 # rename stays on one filesystem), plus for index-band-export the SQLite
 # directory read-only and the ClickHouse settings; for index-l1-* commands
 # data/indexes read-only and the SQLite directory, read-write for
-# index-l1-import and read-only otherwise; for any other command only the file
+# index-l1-import and read-only otherwise; for index-l2-* commands
+# data/indexes read-only; for index-l1-* and index-l2-* commands also a
+# spill folder for DuckDB at /tmp, data/tmp/index-verify beside data/indexes
+# (created if missing; only for the checks that spill: index-l2-verify, and
+# index-l1-verify over --bands-dir), so a large check never fills the disk
+# under `/`;
+# for any other command only the file
 # a --wallet-file names, read-only. Band commands never take a key. It runs as
 # your user, so data/indexes/published/<index> must be writable by you;
 # index-l1-import runs as the owner of the core.db it writes, which on a
@@ -97,7 +104,8 @@ MOUNT_HOSTS=()
 MOUNT_TARGETS=()
 to_container() {
   local value="$1" host i
-  if [[ "${value}" == "-" ]]; then
+  # stdin and URLs are not paths.
+  if [[ "${value}" == "-" || "${value}" =~ ^https?:// ]]; then
     echo "${value}"
     return
   fi
@@ -136,6 +144,29 @@ rewrite_paths() {
       fi
     done
   done
+}
+# Whether an option was given, as `--opt value` or `--opt=value`.
+has_arg() {
+  local arg
+  for arg in ${ARGS[@]+"${ARGS[@]}"}; do
+    if [[ "${arg}" == "$1" || "${arg}" == "$1="* ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+# Give a verifier's DuckDB spill a folder on the node's data disk, mounted
+# at /tmp in the container, so it never spills into the container layer on
+# `/`. The CLI caps the spill at 80% of what is free there.
+mount_spill() {
+  local spill
+  spill="$(realpath -m "$1/../tmp/index-verify")"
+  if ! mkdir -p "${spill}" 2>/dev/null || [[ ! -w "${spill}" ]]; then
+    echo "ar-io-node: cannot write ${spill}, where the check spills." >&2
+    echo "Create it for your user: sudo install -d -o $(id -u) -g $(id -g) ${spill}" >&2
+    exit 1
+  fi
+  DOCKER_ARGS+=(-v "${spill}:/tmp" -e TMPDIR=/tmp)
 }
 # Join the gateway's network, so URLs such as http://core:4000 work.
 join_gateway_network() {
@@ -185,6 +216,26 @@ case "${COMMAND}" in
     fi
     join_gateway_network
     ;;
+  index-l2-*)
+    # Bands are only read; root transactions come from Arweave nodes or a
+    # gateway (--gateway-url may name http://core:4000).
+    DATA_PATH="$(setting INDEX_SWARM_DATA_PATH)"
+    DATA_PATH="$(realpath -m "${DATA_PATH:-./data/indexes}")"
+    if [[ -d "${DATA_PATH}" ]]; then
+      DOCKER_ARGS+=(-v "${DATA_PATH}:/app/data/indexes:ro")
+      MOUNT_HOSTS+=("${DATA_PATH}")
+      MOUNT_TARGETS+=("data/indexes")
+    fi
+    mount_spill "${DATA_PATH}"
+    # Each DuckDB database index-l2-verify reads on holds a libuv thread for
+    # as long as a query runs, and the on-chain reads' DNS lookups and the
+    # file reads need threads of their own: a pool of 16 (unless the shell
+    # sets one) leaves room beside up to 14 databases. The CLI never runs
+    # more than the pool less two.
+    DOCKER_ARGS+=(-e "UV_THREADPOOL_SIZE=${UV_THREADPOOL_SIZE:-16}")
+    rewrite_paths --bands-dir --l1-bands-dir --publication
+    join_gateway_network
+    ;;
   index-l1-*)
     # Bands are only read. The gateway's SQLite is written by index-l1-import
     # and only read by the other commands.
@@ -222,8 +273,17 @@ case "${COMMAND}" in
       MOUNT_HOSTS+=("${SQLITE_PATH}")
       MOUNT_TARGETS+=("data/sqlite")
     fi
-    rewrite_paths --bands-dir --core-db
-    # --data-from and --anchor-from may name http://core:4000.
+    # Only index-l1-verify over a directory of bands (no --core-db) opens a
+    # DuckDB session that spills; the others never touch the spill folder,
+    # so they never need it to be writable.
+    if [[ "${COMMAND}" == "index-l1-verify" ]] && has_arg --bands-dir && ! has_arg --core-db; then
+      mount_spill "${DATA_PATH}"
+    fi
+    # --publication binds index-l1-verify's bands to a signed publication,
+    # given as a file (rewritten like the others) or a URL (left alone).
+    rewrite_paths --bands-dir --core-db --publication
+    # --data-from, --anchor-from and --registry-url may name
+    # http://core:4000.
     join_gateway_network
     ;;
   *)

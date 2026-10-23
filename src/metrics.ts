@@ -112,16 +112,16 @@ export const chunkServeLocalOnlyCounter = new promClient.Counter({
 
 // What enforcing CHUNK_PEER_ORIGIN_MODE would have done to a peer-origin
 // chunk request, recorded while `audit` leaves behavior unchanged.
-// `boundary` is whether offset resolution stayed local (the DB source) or
-// needed the network; `bytes` is whether the chunk came off local disk or a
-// remote source.
+// `boundary` is how the offset was resolved: a forwarded request is resolved
+// from the local database only, in every mode, so it is `local` or `none`
+// (no row). `bytes` is whether the chunk came off local disk or a remote
+// source.
 //
-// **`bytes="local"` is the cost of enforcing**, whatever the boundary label:
-// this gateway held the chunk and served it. `boundary="local"` means
-// enforcing would still have served it; `boundary="remote"` means it would
-// not, because the bytes were only locatable through a network offset
-// lookup that enforcing declines. Sum both when deciding whether a gateway
-// can enforce, and do not read `boundary="local",bytes="local"` alone.
+// **`bytes="remote"` is the cost of enforcing**: those are the requests
+// `enforce` would refuse, because the chunk data was only reachable from an
+// Arweave node. `bytes` reflects the data source only: a chunk whose data was
+// cached but whose metadata was not counts as `local`, yet `enforce` would
+// still 404 it, so treat `bytes="remote"` as a lower bound.
 //
 // `cancelled` means the retrieval was aborted, either by the caller
 // disconnecting or by an internal timeout. The service sees a merged signal
@@ -2378,7 +2378,7 @@ export const manifestResolutionDurationSeconds = new promClient.Histogram({
  */
 export const l1BandImportRunsTotal = new promClient.Counter({
   name: 'l1_band_import_runs_total',
-  help: 'L1 band import worker runs, by result (filled, idle, failed)',
+  help: 'L1 band import worker runs, by result (filled, idle, failed, deferred: a refused fill waiting for its bands to change, unreadable: the sample could not be read, tried again next interval)',
   labelNames: ['result'] as const,
 });
 

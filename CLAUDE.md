@@ -106,7 +106,7 @@ load), use the `testing` skill in `.claude/skills/`; `release` and
 - **Branching**: branches are cut from and merged back to `develop`; `main`
   only moves at release time. Open PRs against `develop`, not `main`.
 - **ESM + NodeNext**: relative imports must carry a `.js` extension even in
-  TypeScript (`import { x } from '../lib/y.js'`). Node 20 (`.nvmrc`),
+  TypeScript (`import { x } from '../lib/y.js'`). Node 22 (`.nvmrc`),
   `"type": "module"`, run via `ts-node/esm` + SWC (`register.js`).
 - **License header**: every `.ts` file must start with the AGPL header in
   `resources/license.header.js` — `eslint-plugin-header` fails the build
@@ -118,6 +118,11 @@ load), use the `testing` skill in `.claude/skills/`; `release` and
   logic, make processes idempotent, and keep every component runnable in a
   single process. In tests, use in-memory implementations and sociable tests
   in preference to mocks and stubs.
+- **Verification code has a conformance suite**: changes to
+  `src/lib/parquet-l2/verify-bands.ts`, `src/lib/onchain/*`,
+  `src/lib/index-band/verify.ts` or the `src/lib/parquet-l1` verifiers must
+  add or update a case in `test/conformance/index-verification/` (see its
+  README; `yarn test` runs it).
 - Stage specific files. Do not use `git add .` or `git commit -A`.
 - Use [Conventional Commits](https://www.conventionalcommits.org/) format
   (`feat:`, `fix:`, `refactor:`, `chore:`, `docs:`, `test:`, etc.).
