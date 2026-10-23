@@ -234,7 +234,7 @@ export const optionMap = {
   l2Publication: {
     alias: '--publication <path|url>',
     description:
-      "The publisher's signed index publication (a file, such as data/indexes/published/publication.json, or a URL, such as https://<gateway>/ar-io/indexes/publication.json): every band must be listed in it and every file must have the size and SHA-256 it signs. Needs --publisher-key or --registry-url. Without it the bands are checked only for internal consistency (publisherBound: false)",
+      "The publisher's signed index publication (a file, such as data/indexes/published/publication.json, or a URL, such as https://<gateway>/ar-io/indexes): every band must be listed in it and every file must have the size and SHA-256 it signs. Needs --publisher-key or --registry-url. Without it the bands are checked only for internal consistency (publisherBound: false)",
   },
   l2PublisherKey: {
     alias: '--publisher-key <address>',

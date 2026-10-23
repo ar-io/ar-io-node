@@ -653,7 +653,7 @@ Given both, the command checks `core.db`.
 ```bash
 # the consumer's view: no gateway involved
 ./tools/ar-io-node index-l1-verify --bands-dir data/indexes/installed/parquet-l1 \
-  --publication https://<publisher gateway>/ar-io/indexes/publication.json \
+  --publication https://<publisher gateway>/ar-io/indexes \
   --registry-url http://core:4000 \
   --anchor-from https://<gateway one>,https://<gateway two>
 
@@ -1093,7 +1093,7 @@ proves, and how to reproduce or repair a band that fails, is in
 # a subscriber's installed copy, every check, bound to the publisher's signed
 # publication (its key from the registry), 20 items per band from Arweave nodes
 ./tools/ar-io-node index-l2-verify --bands-dir data/indexes/installed/ardrive-l2 \
-  --publication https://turbo-gateway.com/ar-io/indexes/publication.json \
+  --publication https://turbo-gateway.com/ar-io/indexes \
   --registry-url http://core:4000
 
 # a publisher's settled bands, bound to its own publication, read through its
@@ -1156,7 +1156,7 @@ beating.
   "publisherBound": true,
   "skipped": [],
   "assurance": [
-    "bound to publication https://turbo-gateway.com/ar-io/indexes/publication.json (sequence 157), signed by <observer address>",
+    "bound to publication https://turbo-gateway.com/ar-io/indexes (sequence 157), signed by <observer address>",
     "roots found in the L1 index at data/indexes/installed/parquet-l1, which index-l1-verify must have checked for this to trust nothing",
     "sampled roots placed in a block at their items' height by two or more machines (by address); their position in the block is not checked",
     "on chain, 20 located items drawn uniformly per band, none replaced: a band in which 14% or more of the located items are fabricated would have been caught with 95% probability; smaller fractions may not be (unlocated items are not checked on chain at all)"
@@ -1166,7 +1166,7 @@ beating.
     { "name": "parents", "ok": false, "detail": "items directly in a root sit at offset 0; items in a nested bundle name one described in parents, whose payload starts where the item says",
       "failures": [{ "height": 1300000, "found": "l2-h1300000-1399999-3078e8b8-3f379144c94a: 28 items in a nested bundle that parents does not describe there", "expected": "0" }] }
   ],
-  "publication": { "publisher": "<wallet>", "keyId": "<observer address>", "keyFrom": "the registry at http://core:4000", "sequence": 157, "issuedAt": "2026-10-20T00:00:00.000Z", "expiresAt": "2026-10-21T00:00:00.000Z", "expired": false, "index": "ardrive-l2", "bound": true, "absent": [], "source": "https://turbo-gateway.com/ar-io/indexes/publication.json" },
+  "publication": { "publisher": "<wallet>", "keyId": "<observer address>", "keyFrom": "the registry at http://core:4000", "sequence": 157, "issuedAt": "2026-10-20T00:00:00.000Z", "expiresAt": "2026-10-21T00:00:00.000Z", "expired": false, "index": "ardrive-l2", "bound": true, "absent": [], "source": "https://turbo-gateway.com/ar-io/indexes" },
   "located": [{ "id": "l2-h1300000-1399999-3078e8b8-3f379144c94a", "items": 6760000, "unlocated": 2396, "declared": 2396, "share": 0.00035 }],
   "mined": { "l1BandsDir": "data/indexes/installed/parquet-l1", "checks": { "height": true, "position": true }, "checked": 23, "uncovered": [] },
   "superseded": [],
