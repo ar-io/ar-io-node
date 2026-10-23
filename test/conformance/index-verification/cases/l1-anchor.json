@@ -18,6 +18,13 @@
       "verdict": "verified",
       "failing": [],
       "anchored": true
+    },
+    "options": {
+      "sample": {
+        "blocks": 2,
+        "txs": 0,
+        "format1": 0
+      }
     }
   },
   {

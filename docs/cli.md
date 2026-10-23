@@ -704,7 +704,10 @@ Arweave's rules passes every self-check. What ties it to the real chain:
   no header fetched): those pins fold on to block 422,250's
   `hash_list_merkle`, so a pre-2.0 band verifies and imports with no
   `--allow-unanchored`. A run whose folds stop short of a pin is not
-  anchored.
+  anchored. An anchor needs no source, but the block draw does: a run
+  anchored this way with no `--anchor-from` fails `sample_blocks` unless
+  `--allow-unsampled`, since the order of its blocks' transactions is
+  checked by nothing else.
 - **The `hash_list_merkle` recurrence.** From the 2.0 fork each block's
   `hash_list_merkle` folds the hash, weave size and `tx_root` of every
   block below it, so an anchored top binds those three for every post-2.0
@@ -977,7 +980,7 @@ on its own, and says so.
 | `witnesses` | Bands of `l1-4`: each witness file in its order, digesting to what `band.json` says, every row inside the band, well formed, and for a format-1 transaction with data at its height; each witnessed fold the fold of the block below and the block; no format-1 transaction with a `data_root` |
 | `hash_list_1_0` | Bands of `l1-4`: each pre-2.0 block's 2.0 hash recomputes from its fields, ids and transition `tx_root` to its witness, and their fold reaches the pinned fold of Arweave's `hash_list_1_0` |
 | `sample_format1` | Format-1 transactions with data from the 2.0 fork and none drawn (`--sample-format1 0`, every count 0, or no `--anchor-from`): fails unless `--allow-unsampled` (only the format-1 draw checks they are format 1) |
-| `sample_blocks` | With sources, `--sample-blocks 0`: fails unless `--allow-unsampled` (only the block draw checks transaction order and the header fields no hash carries) |
+| `sample_blocks` | With sources, `--sample-blocks 0`; or anchored (by pinned folds) with no sample at all: fails unless `--allow-unsampled` (only the block draw checks transaction order and the header fields no hash carries) |
 | `nulls` | Every key and commitment column is set: a NULL is a failure, never read as zero. Also format 1 or 2, and no format 2 below the 2.0 fork |
 | `position`, `tx_count` | Each transaction sits at the link of its height and index, links run 0 to n-1, and `tx_count` is their number |
 | `tag_count`, `owners`, `wallets` | Tags match `tag_count` and run 0 to n-1, every tag belongs to a transaction at its height (bands); every transaction has an owner, and one whose key the index lacks puts its block in `unbound.incomplete`; every wallet key hashes to its address (RSA and ECDSA alike) |

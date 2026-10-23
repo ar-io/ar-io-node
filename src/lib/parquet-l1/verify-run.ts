@@ -404,10 +404,12 @@ export async function runL1Verify(
   const gates: Array<[string, boolean, string, string]> = [
     [
       'sample_blocks',
-      sampled &&
-        (options.sample as SampleOptions).blocks <= 0 &&
-        judged.totals.blocks > 0,
-      `${judged.totals.blocks} blocks, none of their headers drawn (--sample-blocks 0): the order of their transactions and the header fields no hash carries are checked by nothing`,
+      // Unsampled, an anchored run (a pre-2.0 range bound by its pinned
+      // folds needs no source) would otherwise pass with these unchecked;
+      // an unanchored one already fails, or names --allow-unanchored.
+      judged.totals.blocks > 0 &&
+        (sampled ? (options.sample as SampleOptions).blocks <= 0 : anchored),
+      `${judged.totals.blocks} blocks, none of their headers drawn (${sampled ? '--sample-blocks 0' : 'no sample'}): the order of their transactions and the header fields no hash carries are checked by nothing`,
       'the block draw over them (--sample-blocks), or --allow-unsampled',
     ],
     [

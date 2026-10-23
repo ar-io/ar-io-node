@@ -411,7 +411,8 @@
     "kind": "l1-bands",
     "chain": "pre20",
     "options": {
-      "allowUnanchored": true
+      "allowUnanchored": true,
+      "allowUnsampled": true
     },
     "ops": [
       {
@@ -729,7 +730,8 @@
     "kind": "l1-bands",
     "chain": "pre20",
     "options": {
-      "allowUnanchored": true
+      "allowUnanchored": true,
+      "allowUnsampled": true
     },
     "expect": {
       "verdict": "verified",
@@ -873,7 +875,8 @@
     "kind": "l1-bands",
     "chain": "pre20",
     "options": {
-      "allowUnanchored": true
+      "allowUnanchored": true,
+      "allowUnsampled": true
     },
     "ops": [
       {

@@ -199,7 +199,8 @@ describe('attacks on l1-4 witnesses', () => {
       allow: { unanchored: true },
       foldPins,
     });
-    assert.deepEqual(failing(verified), ['witnesses']);
+    // Unsampled, a pinned band also fails sample_blocks.
+    assert.deepEqual(failing(verified), ['witnesses', 'sample_blocks']);
     const out = await fill({
       pool: pool(),
       sample: sample(0),
@@ -230,7 +231,8 @@ describe('attacks on l1-4 witnesses', () => {
       allow: { unanchored: true },
       foldPins,
     });
-    assert.deepEqual(failing(unsampled), []);
+    // Undrawn, the order is checked by nothing: never a silent pass.
+    assert.deepEqual(failing(unsampled), ['sample_blocks']);
     const sampled = await verifyBands(duck, bandsDir, {
       allow: { unanchored: true },
       foldPins,
@@ -371,6 +373,21 @@ describe('attacks on l1-4 witnesses', () => {
     });
     assert.equal(unpinned.ok, false);
     assert.equal(unpinned.anchored, false);
+    // Anchored by its pins with no source at all: nothing drew a header,
+    // so its transaction order is checked by nothing. Not a pass.
+    const noSource = await verifyBands(duck, bandsDir, { foldPins });
+    assert.equal(noSource.anchored, true);
+    assert.equal(noSource.ok, false);
+    assert.ok(
+      failing(noSource).includes('sample_blocks'),
+      failing(noSource).join(),
+    );
+    const noSourceAccepted = await verifyBands(duck, bandsDir, {
+      foldPins,
+      allow: { unsampled: true },
+    });
+    assert.equal(noSourceAccepted.ok, true, failing(noSourceAccepted).join());
+    assert.ok(noSourceAccepted.accepted.includes('--allow-unsampled'));
     // Imported offline into an empty core.db, with nothing above it.
     const db = new Sqlite(core, { timeout: 1000 });
     try {
