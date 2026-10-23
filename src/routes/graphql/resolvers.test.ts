@@ -29,8 +29,9 @@ import { db, ownerFetcher } from '../../system.js';
 // Importing the resolvers boots system.ts, which starts the SQLite worker
 // threads. Stop them before the file ends: `test:ci` runs with
 // --test-force-exit, and a worker killed while still preparing its
-// statements aborts the process under Node 22 with better-sqlite3 9.x
-// ("FATAL ERROR: v8::ToLocalChecked Empty MaybeLocal").
+// statements aborts the process under Node 22 ("FATAL ERROR:
+// v8::ToLocalChecked Empty MaybeLocal"). better-sqlite3 9.x and 12.x both do
+// this, so the wait is needed whichever is installed.
 after(async () => {
   await db.stop();
 });
