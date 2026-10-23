@@ -14,8 +14,10 @@ import { generateTransactionChunks } from 'arweave/node/lib/merkle.js';
 
 import { createTestLogger } from '../../../../test/test-logger.js';
 import { v1DataRoot } from '../../../lib/parquet-l1/chain.js';
+import { WitnessRefused } from '../../../lib/parquet-l1/witnesses.js';
 import {
   CHECKPOINT_FILE,
+  HASH_LIST_1_0_FILE,
   dataPathRoot,
   l1WitnessInputs,
   parseBlockIndex,
@@ -176,14 +178,24 @@ describe('l1WitnessInputs', () => {
     assert.equal(out.has(b64(short)), false);
   });
 
-  it('refuses a checkpoint that is not Arweave’s', async () => {
+  it('refuses a checkpoint or hash list that is not Arweave’s as a witness refusal, never a failed run', async () => {
     await fsp.writeFile(path.join(dir, CHECKPOINT_FILE), '[]');
+    await fsp.writeFile(path.join(dir, HASH_LIST_1_0_FILE), '[]');
     const inputs = l1WitnessInputs(
       { dir, nodes: [], maxMissing: 0 },
       [0, 99],
       log,
     );
-    await assert.rejects(inputs.blockIndex!(0, 99), /SHA-256/);
+    // A refused band is built without witnesses (l1-3); any other error
+    // would stop the run.
+    await assert.rejects(
+      inputs.blockIndex!(0, 99),
+      (e: unknown) => e instanceof WitnessRefused && /SHA-256/.test(e.message),
+    );
+    await assert.rejects(
+      inputs.hashList10!(),
+      (e: unknown) => e instanceof WitnessRefused && /SHA-256/.test(e.message),
+    );
   });
 
   it('pages /block_index from 400,000 with X-Block-Format 3', async () => {

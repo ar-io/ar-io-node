@@ -46,10 +46,11 @@ import {
   v1DataRoot,
 } from '../../../lib/parquet-l1/chain.js';
 import { idHeightRange } from '../../../lib/parquet-l1/layout.js';
-import type {
-  BlockIndexEntryIn,
-  V1Need,
-  WitnessInputs,
+import {
+  type BlockIndexEntryIn,
+  type V1Need,
+  type WitnessInputs,
+  WitnessRefused,
 } from '../../../lib/parquet-l1/witnesses.js';
 
 /** The checkpoint's file name in the witness directory. */
@@ -314,20 +315,35 @@ async function readCheckpoint(
   } catch {
     return out;
   }
+  // A file that is not Arweave's refuses the band's witnesses (it is
+  // built without them, as l1-3), never the run.
   const digest = sha256(bytes).toString('hex');
   if (digest !== FORK_2_0_CHECKPOINT_SHA256) {
-    throw new Error(
+    throw new WitnessRefused(
       `${CHECKPOINT_FILE} has SHA-256 ${digest}, not Arweave's ${FORK_2_0_CHECKPOINT_SHA256}`,
     );
   }
-  const list = JSON.parse(bytes.toString('utf8')) as unknown[];
+  let list: unknown[];
+  try {
+    list = JSON.parse(bytes.toString('utf8')) as unknown[];
+  } catch (error) {
+    throw new WitnessRefused(
+      `${CHECKPOINT_FILE} is not JSON: ${(error as Error).message}`,
+    );
+  }
   if (!Array.isArray(list) || list.length !== FORK_2_0_CHECKPOINT_TOP + 1) {
-    throw new Error(
+    throw new WitnessRefused(
       `${CHECKPOINT_FILE} is not ${FORK_2_0_CHECKPOINT_TOP + 1} entries`,
     );
   }
   for (let h = lo; h <= Math.min(hi, FORK_2_0_CHECKPOINT_TOP); h++) {
-    out.set(h, parseEntry(list[FORK_2_0_CHECKPOINT_TOP - h]));
+    try {
+      out.set(h, parseEntry(list[FORK_2_0_CHECKPOINT_TOP - h]));
+    } catch (error) {
+      throw new WitnessRefused(
+        `${CHECKPOINT_FILE} at ${h}: ${(error as Error).message}`,
+      );
+    }
   }
   return out;
 }
@@ -414,13 +430,22 @@ export async function readHashList10(
   }
   const digest = sha256(bytes).toString('hex');
   if (digest !== HASH_LIST_1_0_SHA256) {
-    throw new Error(
+    throw new WitnessRefused(
       `${HASH_LIST_1_0_FILE} has SHA-256 ${digest}, not Arweave's ${HASH_LIST_1_0_SHA256}`,
     );
   }
-  const list = JSON.parse(bytes.toString('utf8')) as string[];
+  let list: string[];
+  try {
+    list = JSON.parse(bytes.toString('utf8')) as string[];
+  } catch (error) {
+    throw new WitnessRefused(
+      `${HASH_LIST_1_0_FILE} is not JSON: ${(error as Error).message}`,
+    );
+  }
   if (!Array.isArray(list) || list.length !== FORK_2_0) {
-    throw new Error(`${HASH_LIST_1_0_FILE} is not ${FORK_2_0} entries`);
+    throw new WitnessRefused(
+      `${HASH_LIST_1_0_FILE} is not ${FORK_2_0} entries`,
+    );
   }
   // Newest first: height h is at FORK_2_0 - h - 1.
   return list.map((_, h) => Buffer.from(list[FORK_2_0 - h - 1], 'base64url'));
