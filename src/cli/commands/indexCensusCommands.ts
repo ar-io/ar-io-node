@@ -135,10 +135,18 @@ export async function indexCensusCLICommand(
     options.output === undefined
       ? undefined
       : `${options.output}.${process.pid}.partial`;
-  const out = partial === undefined ? undefined : fs.createWriteStream(partial);
-  out?.write(TSV_HEADER + '\n');
+  let out: fs.WriteStream | undefined;
+  // A write stream reports a failure (a missing directory, a full disk) as an
+  // 'error' event, which try/catch doesn't see: record it and rethrow.
+  let writeError: Error | undefined;
   const started = Date.now();
   try {
+    if (partial !== undefined) {
+      await fsp.mkdir(path.dirname(path.resolve(partial)), { recursive: true });
+      out = fs.createWriteStream(partial);
+      out.on('error', (error) => (writeError ??= error));
+      out.write(TSV_HEADER + '\n');
+    }
     const result = await runCensus({
       bundles: db,
       clickhouse,
@@ -165,9 +173,13 @@ export async function indexCensusCLICommand(
         );
       },
     });
+    if (writeError !== undefined) throw writeError;
     if (out !== undefined && partial !== undefined) {
+      const stream = out;
       await new Promise<void>((resolve, reject) =>
-        out.end((error?: Error | null) => (error ? reject(error) : resolve())),
+        stream.end((error?: Error | null) =>
+          error ? reject(error) : resolve(),
+        ),
       );
       await fsp.rename(partial, options.output!);
     }

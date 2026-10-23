@@ -428,7 +428,9 @@ export async function runCensus(options: CensusOptions): Promise<CensusResult> {
         listItems.all(Buffer.from(hex, 'hex')) as Array<{ id: Buffer }>
       ).map((row) => toHex(row.id));
       listed.set(hex, ids);
-      allIds.push(...ids);
+      // A loop, not push(...ids): a root with very many items would exceed
+      // the engine's argument limit and throw a RangeError.
+      for (const itemId of ids) allIds.push(itemId);
     }
     const unique = [...new Set(allIds)];
     const seen = new Map<string, number[]>();
