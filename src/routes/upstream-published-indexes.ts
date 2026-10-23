@@ -30,6 +30,7 @@ import { Logger } from 'winston';
 
 import {
   INDEX_PUBLICATION_MAX_BYTES,
+  IndexPublication,
   parseIndexPublicationDocument,
   verifyIndexPublication,
 } from '../lib/index-publication.js';
@@ -66,8 +67,8 @@ export class UpstreamPublishedIndexes {
   private readonly fetchDocument: FetchDocument;
   private readonly now: () => number;
 
-  /** Names from the last document accepted, sorted. */
-  private advertised: string[] | undefined;
+  /** What the last document accepted advertises. */
+  private advertised: IndexAdvertisement | undefined;
   /** When `advertised` was last confirmed by a successful fetch. */
   private confirmedAt: number | undefined;
   /** Digest of the last document verified, so a repeat is not re-verified. */
@@ -143,6 +144,14 @@ export class UpstreamPublishedIndexes {
    * current to advertise. Never waits.
    */
   names(): string[] | undefined {
+    return this.advertisement()?.names;
+  }
+
+  /**
+   * What to advertise for the signing node's publication, or undefined when
+   * there is nothing current to advertise. Never waits.
+   */
+  advertisement(): IndexAdvertisement | undefined {
     if (
       this.confirmedAt === undefined ||
       this.now() - this.confirmedAt > this.staleMs
@@ -167,6 +176,11 @@ export class UpstreamPublishedIndexes {
     return this.refreshing;
   }
 
+  /**
+   * Fetch the signing node's document and, when it is new, verify it and
+   * take what it advertises. A failure to fetch keeps what was confirmed
+   * until it goes stale; a 404 or an invalid document withdraws it.
+   */
   private async fetchAndCheck(): Promise<void> {
     this.abort = new AbortController();
     let response: { status: number; body: Buffer };
@@ -204,12 +218,12 @@ export class UpstreamPublishedIndexes {
       .update(response.body)
       .digest('hex');
     if (sha256 !== this.verifiedSha256 || this.advertised === undefined) {
-      const names = this.accept(response.body);
-      if (names === undefined) return;
-      if (names.join('\n') !== this.advertised?.join('\n')) {
-        this.log.info('Advertising index names', { names });
+      const advertised = this.accept(response.body);
+      if (advertised === undefined) return;
+      if (advertised.names.join('\n') !== this.advertised?.names.join('\n')) {
+        this.log.info('Advertising index names', { names: advertised.names });
       }
-      this.advertised = names;
+      this.advertised = advertised;
       this.verifiedSha256 = sha256;
     }
     this.confirmedAt = this.now();
@@ -219,8 +233,8 @@ export class UpstreamPublishedIndexes {
     }
   }
 
-  /** The names in a document, or undefined (and withdrawn) if it fails. */
-  private accept(body: Buffer): string[] | undefined {
+  /** What a document advertises, or undefined (and withdrawn) if it fails. */
+  private accept(body: Buffer): IndexAdvertisement | undefined {
     let document;
     try {
       document = parseIndexPublicationDocument(body);
@@ -260,7 +274,7 @@ export class UpstreamPublishedIndexes {
       return undefined;
     }
 
-    return [...new Set(publication.indexes.map((index) => index.name))].sort();
+    return advertisementOf(publication);
   }
 
   /** Stop advertising now: the signing node answered, and not with names. */
@@ -279,17 +293,45 @@ export class UpstreamPublishedIndexes {
   }
 }
 
+/** What a publication lets /ar-io/info advertise about it. */
+export interface IndexAdvertisement {
+  /** Every index it publishes, sorted. */
+  names: string[];
+  /**
+   * Those with at least one band offered as a torrent, sorted: the indexes
+   * whose feed lists anything.
+   */
+  torrentNames: string[];
+}
+
+/** What to advertise for a publication. Pure. */
+export function advertisementOf(
+  publication: IndexPublication,
+): IndexAdvertisement {
+  const sorted = (names: string[]) => [...new Set(names)].sort();
+  return {
+    names: sorted(publication.indexes.map((index) => index.name)),
+    torrentNames: sorted(
+      publication.indexes
+        .filter((index) =>
+          index.bands.some((band) => band.torrent !== undefined),
+        )
+        .map((index) => index.name),
+    ),
+  };
+}
+
 /**
  * What /ar-io/info advertises: this node's own publication when it has one,
  * which a signing node always does; otherwise what it advertises for the
  * signing node.
  */
-export function indexNamesToAdvertise({
+export function indexesToAdvertise({
   published,
   upstream,
 }: {
-  published: string[] | undefined;
-  upstream: string[] | undefined;
-}): string[] | undefined {
+  published: IndexAdvertisement | undefined;
+  upstream: IndexAdvertisement | undefined;
+}): IndexAdvertisement | undefined {
   return published ?? upstream;
 }

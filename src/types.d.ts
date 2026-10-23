@@ -1436,6 +1436,7 @@ export interface ContiguousDataSource {
     parentSpan,
     signal,
     acceptContentType,
+    backgroundCacheOnRangeMiss,
   }: {
     id: string;
     requestAttributes?: RequestAttributes;
@@ -1458,6 +1459,15 @@ export interface ContiguousDataSource {
      * next priority tier. PE-9099.
      */
     acceptContentType?: (contentType: string | undefined) => boolean;
+    /**
+     * For a `region` that misses a cache: whether the cache may start a
+     * background fetch of the whole item to fill itself (within
+     * BACKGROUND_CACHE_RANGE_MAX_SIZE). Defaults to true. Pass false when
+     * the range is all the caller will ever want of the item, such as a
+     * signature read from its parent bundle, so a small read does not
+     * download the whole bundle. Sources without a cache ignore it.
+     */
+    backgroundCacheOnRangeMiss?: boolean;
   }): Promise<ContiguousData>;
 }
 
@@ -1507,6 +1517,15 @@ export interface ManifestPathResolver {
     id: string,
     path: string | undefined,
   ): Promise<ManifestResolution>;
+
+  /**
+   * A cached resolution that came from trusted bytes, without fetching
+   * anything; undefined when there is none.
+   */
+  resolveFromTrustedCache(
+    id: string,
+    path: string | undefined,
+  ): ManifestResolution | undefined;
 }
 
 /**

@@ -21,10 +21,16 @@ import { readBandRecordsCsv } from '../../lib/index-band/csv.js';
 import {
   checkBandHeaders,
   gatewayRootSource,
+  HEADER_CHECK_POOL_FACTOR,
   HeaderCheckResult,
   RootSourceFactory,
   sampleBandEntries,
 } from '../../lib/index-band/verify.js';
+import {
+  ArweaveNodePool,
+  parseNodeUrls,
+} from '../../lib/onchain/arweave-nodes.js';
+import { onChainRootSource } from '../../lib/onchain/root-source.js';
 import type {
   IndexBandBuildCLIOptions,
   IndexBandVerifyCLIOptions,
@@ -77,6 +83,9 @@ function parseMetadata(value: string | undefined): Record<string, unknown> {
   return parsed as Record<string, unknown>;
 }
 
+/** Entries the header check reads, unless --sample-size says otherwise. */
+const DEFAULT_SAMPLE_SIZE = 150;
+
 const defaultOpenInput = (input: string): Readable =>
   input === '-' ? process.stdin : createReadStream(input);
 
@@ -89,6 +98,16 @@ function headerCheckJson(result: HeaderCheckResult): JsonSerializable {
     ok: result.ok,
     wrong: result.wrong,
     errors: result.errors,
+    // Candidates drawn on, and those passed over: their roots are gone.
+    poolSize: result.poolSize,
+    unreadable: result.unreadable.length,
+    unreadableShare: Number(result.unreadableShare.toFixed(3)),
+    ...(result.unreadable.length > 0
+      ? { unreadableSample: result.unreadable.slice(0, 20) }
+      : {}),
+    ...(result.malformedTags > 0
+      ? { malformedTags: result.malformedTags, malformed: result.malformed }
+      : {}),
   };
 }
 
@@ -157,6 +176,7 @@ export async function indexBandBuildCLICommand(
     metadata,
     dryRun: options.dryRun === true,
     ...(sampleSize !== undefined ? { sampleSize } : {}),
+    samplePool: HEADER_CHECK_POOL_FACTOR,
     ...(check
       ? {
           beforePublish: async (staged) => {
@@ -170,6 +190,7 @@ export async function indexBandBuildCLICommand(
             try {
               headerCheck = await checkBandHeaders({
                 entries: staged.sample,
+                targets: { '': sampleSize ?? DEFAULT_SAMPLE_SIZE },
                 totalRecords: staged.records,
                 openRoot: roots.openRoot,
               });
@@ -234,26 +255,57 @@ export async function indexBandVerifyCLICommand(
   deps: IndexBandCommandDeps,
 ): Promise<JsonSerializable> {
   const bandDir = requiredStringFromOptions(options, 'bandDir');
-  const sampleSize = positiveIntegerFromOptions(options, 'sampleSize') ?? 150;
+  const sampleSize =
+    positiveIntegerFromOptions(options, 'sampleSize') ?? DEFAULT_SAMPLE_SIZE;
   const readTimeout = positiveIntegerFromOptions(options, 'readTimeout');
-  if (options.gatewayUrl === undefined && deps.roots === undefined) {
-    throw new Error('--gateway-url is required');
+  if (
+    options.gatewayUrl === undefined &&
+    options.arweaveNodes === undefined &&
+    deps.roots === undefined
+  ) {
+    throw new Error('--gateway-url or --arweave-nodes is required');
+  }
+  if (options.gatewayUrl !== undefined && options.arweaveNodes !== undefined) {
+    throw new Error('--gateway-url and --arweave-nodes are exclusive');
   }
   await fs.access(path.join(bandDir, 'manifest.json')).catch(() => {
     throw new Error(
       `--band-dir ${bandDir} is not a band (no manifest.json)${process.env.AR_IO_NODE_CLI_DATA_DIR !== undefined ? '; through tools/ar-io-node, give a path under data/indexes, such as a build\'s "dir"' : ''}`,
     );
   });
-  const sample = await sampleBandEntries(bandDir, sampleSize);
+  // A pool, so entries under roots that are gone can be passed over.
+  const sample = await sampleBandEntries(
+    bandDir,
+    sampleSize * HEADER_CHECK_POOL_FACTOR,
+  );
   deps.log.info('Checking sampled headers against their roots', {
     entries: sample.entries.length,
-    gateway: options.gatewayUrl,
+    ...(options.gatewayUrl !== undefined
+      ? { gateway: options.gatewayUrl }
+      : { arweaveNodes: options.arweaveNodes }),
   });
+  // Arweave nodes, every byte proven against the chain, or a gateway, trusted.
   const roots =
-    deps.roots ?? gatewayRootSource(options.gatewayUrl as string, readTimeout);
+    deps.roots ??
+    (options.arweaveNodes !== undefined
+      ? {
+          openRoot: onChainRootSource({
+            pool: new ArweaveNodePool({
+              urls: parseNodeUrls(options.arweaveNodes),
+              ...(readTimeout !== undefined ? { timeoutMs: readTimeout } : {}),
+            }),
+            allowAgreement: options.allowAgreement === true,
+          }).openRoot,
+          close: () => undefined,
+        }
+      : gatewayRootSource(options.gatewayUrl as string, readTimeout));
   let result: HeaderCheckResult;
   try {
-    result = await checkBandHeaders({ ...sample, openRoot: roots.openRoot });
+    result = await checkBandHeaders({
+      ...sample,
+      targets: { '': sampleSize },
+      openRoot: roots.openRoot,
+    });
   } finally {
     roots.close();
   }

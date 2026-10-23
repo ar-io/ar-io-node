@@ -40,6 +40,34 @@ describe('CsvOverlaySource', () => {
   const write = (name: string, lines: string[]) =>
     fs.writeFile(path.join(dir, name), lines.join('\n') + '\n');
 
+  it('fingerprints the files covering the heights by name, size and content', async () => {
+    await write('100-199.csv', [line(1, 150)]);
+    await write('200-299.csv', [line(2, 250)]);
+    await write('300-399.csv.partial', [line(3, 350)]);
+    const fingerprint = async (from: number, to: number) =>
+      new CsvOverlaySource('bundler', dir).fingerprint(from, to);
+    const both = await fingerprint(100, 299);
+    const first = await fingerprint(100, 199);
+    assert.notEqual(both, first);
+    assert.equal(await fingerprint(150, 160), first, 'only the files read');
+    assert.equal(await fingerprint(100, 299), both, 'stable');
+    // Rewritten with another row of the same length.
+    await write('100-199.csv', [line(9, 150)]);
+    assert.notEqual(await fingerprint(100, 199), first);
+    // A file added beside it, or renamed.
+    await write('100-199.csv', [line(1, 150)]);
+    assert.equal(await fingerprint(100, 199), first);
+    await write('180-189.csv', []);
+    assert.notEqual(await fingerprint(100, 199), first);
+    await fs.rm(path.join(dir, '180-189.csv'));
+    await fs.rename(
+      path.join(dir, '100-199.csv'),
+      path.join(dir, '100-198.csv'),
+    );
+    assert.notEqual(await fingerprint(100, 199), first);
+    assert.equal(new CsvOverlaySource('bundler', dir).identity, `csv ${dir}`);
+  });
+
   it('lists coverage-named files only, skipping temp and dot files', async () => {
     await write('100-199.csv', []);
     await write('200-299.csv.tmp', []);

@@ -4,12 +4,19 @@
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
-import { DEFAULT_CDB64_ROOT_TX_INDEX_SOURCES } from '../../lib/root-tx-defaults.js';
+import {
+  CDB_REMOTE_LOOKUP_SOURCE,
+  DEFAULT_CDB64_ROOT_TX_INDEX_SOURCES,
+  INSTALLED_ROOT_TX_INDEX_SOURCE,
+} from '../../lib/root-tx-defaults.js';
+import { parsePublicOrigin } from '../../lib/public-origin.js';
 import {
   DEFAULT_ENGINE_URL,
+  DEFAULT_MAX_DISK_BYTES,
+  isDefaultSubscribe,
   parseEngineAuth,
   parsePublish,
-  parseSubscribe,
+  resolveSubscribe,
 } from '../config.js';
 
 /**
@@ -21,17 +28,26 @@ import {
 /** The only index the gateway can load from the sidecar today. */
 export const ROOT_TX_INDEX = 'root-tx-index';
 /** Where the sidecar installs it, as the gateway's CDB64 source names it. */
-export const INSTALLED_ROOT_TX_SOURCE = 'data/indexes/installed/root-tx-index';
-/** The lookup order a subscriber wants: the installed bands right after the local DB. */
-export const SUBSCRIBER_LOOKUP_ORDER = 'db,cdb,gateways,graphql';
+export const INSTALLED_ROOT_TX_SOURCE = INSTALLED_ROOT_TX_INDEX_SOURCE;
 /**
- * Disk for installed bands when the operator names none. Twice the size of the
- * full index published today (about 21 GB), because a band being replaced stays
- * installed until its successor is, so both copies are on disk for a while.
+ * Disk for installed bands when the operator names none: the sidecar's own
+ * default (64 GiB). The sidecar applies it only while `INDEX_SWARM_SUBSCRIBE`
+ * is unset, so setup writes it when it turns an unset subscription into an
+ * explicit one.
  */
-export const DEFAULT_MAX_DISK_GIB = 50;
+export const DEFAULT_MAX_DISK_GIB = DEFAULT_MAX_DISK_BYTES / 1024 ** 3;
+/**
+ * The budget with L1 bands as well: the whole chain is about 15 GB of
+ * them today, beside a root-TX index of about 20 GB, and both grow.
+ */
+export const DEFAULT_MAX_DISK_GIB_WITH_L1 = 100;
+/** The index name L1 bands are published under. */
+export const L1_INDEX = 'parquet-l1';
 const TRACKER_PORT_DEFAULT = '6969';
-const ENGINE_USER = 'swarm';
+/** The host address compose publishes the direct tracker port on, unset. */
+const TRACKER_HOST_IP_DEFAULT = '127.0.0.1';
+/** Where the gateway's Envoy forwards announces to the sidecar's tracker. */
+export const GATEWAY_ANNOUNCE_PATH = '/ar-io/indexes/announce';
 
 export interface SetupOptions {
   /** Publishers to subscribe to, by registered gateway wallet. */
@@ -40,10 +56,22 @@ export interface SetupOptions {
   torrent: boolean;
   /** This node's public address, for peers and the tracker. */
   publicHost?: string;
+  /**
+   * The gateway's public origin (`https://gateway.example`). When publishing
+   * torrents, its tracker is announced to through it, at
+   * `<origin>/ar-io/indexes/announce`, so no tracker port needs opening.
+   * Defaults to `https://<ARNS_ROOT_HOST>` when that is set.
+   */
+  publicUrl?: string;
   enginePort?: number;
   maxDiskGiB?: number;
   /** Also point the gateway at the installed bands (default true). */
   gateway: boolean;
+  /**
+   * Also take the publishers' L1 bands, and have the gateway fill its L1
+   * history from them while it runs (L1_BAND_IMPORT_ENABLED).
+   */
+  l1?: boolean;
   /** When publishing: the lowest height index-export builds. */
   startHeight?: number;
   /** When publishing: the gateway index-export header-checks against. */
@@ -87,6 +115,19 @@ const splitList = (value: string) =>
     .map((s) => s.trim())
     .filter((s) => s.length > 0);
 
+/**
+ * This gateway's wallet, so the default subscription is resolved as the
+ * sidecar resolves it: never to itself.
+ */
+const ownWallet = (env: EnvReader): string | undefined => {
+  const wallet = env.get('AR_IO_WALLET')?.trim();
+  return wallet !== undefined && wallet !== '' ? wallet : undefined;
+};
+
+/** Whether a variable is unset or blank, as the sidecar reads it. */
+const isUnset = (value: string | undefined): boolean =>
+  value === undefined || value.trim() === '';
+
 const normalizeSource = (source: string) =>
   source.replace(/^\.\//, '').replace(/\/+$/, '');
 
@@ -95,16 +136,69 @@ export function urlHost(host: string): string {
   return host.includes(':') && !host.startsWith('[') ? `[${host}]` : host;
 }
 
-/** `ROOT_TX_LOOKUP_ORDER` with `cdb` right after `db` (or first). */
-export function subscriberLookupOrder(current: string | undefined): string {
-  if (current === undefined) return SUBSCRIBER_LOOKUP_ORDER;
-  const order = splitList(current).filter((s) => s !== 'cdb');
-  const db = order.indexOf('db');
+/**
+ * The gateway's public origin, as core works it out for its feeds and
+ * WebSeed: the one given, else `INDEXES_PUBLIC_URL`, else `https://` and the
+ * first `ARNS_ROOT_HOST`, else undefined. Without a trailing slash. An
+ * `INDEXES_PUBLIC_URL` that is not an origin is passed over here;
+ * {@link planSetup} refuses it before it gets this far.
+ */
+export function gatewayOrigin(
+  env: EnvReader,
+  publicUrl: string | undefined,
+): string | undefined {
+  if (publicUrl !== undefined) return publicUrl.replace(/\/+$/, '');
+  const configured = env.get('INDEXES_PUBLIC_URL');
+  if (configured !== undefined && configured.trim() !== '') {
+    try {
+      return parsePublicOrigin(configured);
+    } catch {
+      // Fall through to ARNS_ROOT_HOST.
+    }
+  }
+  const root = splitList(env.get('ARNS_ROOT_HOST') ?? '')[0];
+  return root !== undefined ? `https://${root}` : undefined;
+}
+
+/**
+ * The `ROOT_TX_LOOKUP_ORDER` a subscriber wants, or undefined to leave it
+ * unset: unset or blank, the gateway's default
+ * (`db,cdb,gateways,graphql,hyperbeam,cdb-remote`) is already right.
+ *
+ * A value that is set gets `cdb` right after `db` (or first), with every
+ * other token kept, `hyperbeam` included. `cdb-remote` is kept where it is,
+ * or added last when missing: without it, `cdb` would also ask the CDB64
+ * sources read over the network (the shipped indexes) right after `db`,
+ * before any other source. Each of the two appears once.
+ */
+export function subscriberLookupOrder(
+  current: string | undefined,
+): string | undefined {
+  if (current === undefined || current.trim() === '') return undefined;
+  // The gateway reads tokens without regard to case, so match them that way.
+  const is = (token: string, name: string) => token.toLowerCase() === name;
+  const order: string[] = [];
+  let hasRemote = false;
+  for (const token of splitList(current)) {
+    if (is(token, 'cdb')) continue;
+    if (is(token, CDB_REMOTE_LOOKUP_SOURCE)) {
+      if (hasRemote) continue;
+      hasRemote = true;
+    }
+    order.push(token);
+  }
+  const db = order.findIndex((token) => is(token, 'db'));
   order.splice(db + 1, 0, 'cdb');
+  if (!hasRemote) {
+    order.push(CDB_REMOTE_LOOKUP_SOURCE);
+  }
   return order.join(',');
 }
 
-/** `CDB64_ROOT_TX_INDEX_SOURCES` with the installed bands searched first. */
+/**
+ * `CDB64_ROOT_TX_INDEX_SOURCES` with the installed bands searched first.
+ * Unset, that is the gateway's default, which already starts with them.
+ */
 export function subscriberSources(current: string | undefined): string {
   const sources = splitList(current ?? DEFAULT_CDB64_ROOT_TX_INDEX_SOURCES);
   const rest = sources.filter(
@@ -113,11 +207,13 @@ export function subscriberSources(current: string | undefined): string {
   return [INSTALLED_ROOT_TX_SOURCE, ...rest].join(',');
 }
 
-export function planSetup(
-  env: EnvReader,
-  options: SetupOptions,
-  randomPassword: () => string,
-): SetupPlan {
+/**
+ * What `tools/index-swarm-setup` would change in `.env`, and what it would
+ * restart, for the roles asked for. Pure: it reads the environment through
+ * `env` and writes nothing. Errors stop setup before anything is written;
+ * warnings and notes are said and the plan goes ahead.
+ */
+export function planSetup(env: EnvReader, options: SetupOptions): SetupPlan {
   const plan: SetupPlan = {
     changes: [],
     warnings: [],
@@ -136,16 +232,42 @@ export function planSetup(
     });
   };
 
+  // Unset, the sidecar subscribes to the ar.io publisher by default; only an
+  // explicit empty list leaves it nothing to do. One that does not parse is
+  // reported where it is parsed again.
+  let subscribing = true;
+  try {
+    subscribing =
+      resolveSubscribe(env.get('INDEX_SWARM_SUBSCRIBE'), ownWallet(env))
+        .length > 0;
+  } catch {
+    // Reported below.
+  }
   const hasRole =
     options.subscribe.length > 0 ||
     options.publish ||
-    env.get('INDEX_SWARM_SUBSCRIBE') !== undefined ||
+    subscribing ||
     env.get('INDEX_SWARM_PUBLISH') !== undefined;
   if (!hasRole) {
     plan.errors.push(
-      'Nothing to set up: pass --subscribe <publisher wallet>, --publish, or both.',
+      'Nothing to set up: INDEX_SWARM_SUBSCRIBE is [] (subscribed to nothing). Pass --subscribe <publisher wallet>, --publish, or both.',
     );
     return plan;
+  }
+
+  // Core refuses to start with an INDEXES_PUBLIC_URL that is not an origin,
+  // and setup may restart core: stop here rather than plan around it.
+  const configuredOrigin = env.get('INDEXES_PUBLIC_URL');
+  if (configuredOrigin !== undefined && configuredOrigin.trim() !== '') {
+    try {
+      parsePublicOrigin(configuredOrigin);
+    } catch {
+      // Not the value itself: one that fails may carry credentials.
+      plan.errors.push(
+        "INDEXES_PUBLIC_URL is not an origin, and the gateway will not start with it. Set it to the gateway's scheme, host and optional port only, such as https://gateway.example, or remove it.",
+      );
+      return plan;
+    }
   }
 
   // An explicit budget applies to any gateway set up here, not only one
@@ -159,11 +281,23 @@ export function planSetup(
     });
   }
 
+  if (options.l1 === true && options.subscribe.length === 0) {
+    plan.errors.push(
+      '--l1 takes L1 bands from the publishers --subscribe names: pass --subscribe <publisher wallet> as well.',
+    );
+    return plan;
+  }
+
   // Subscribing.
   if (options.subscribe.length > 0) {
-    let current: ReturnType<typeof parseSubscribe>;
+    // Unset means the default subscription, which is kept: adding a
+    // publisher must not drop the one the sidecar already follows.
+    let current: ReturnType<typeof resolveSubscribe>;
     try {
-      current = parseSubscribe(env.get('INDEX_SWARM_SUBSCRIBE'));
+      current = resolveSubscribe(
+        env.get('INDEX_SWARM_SUBSCRIBE'),
+        ownWallet(env),
+      );
     } catch (error: any) {
       plan.errors.push(
         `The existing INDEX_SWARM_SUBSCRIBE is invalid (${error.message}); fix or remove it, then run this again.`,
@@ -173,10 +307,22 @@ export function planSetup(
     const entries: Array<Record<string, string | string[]>> = current.map(
       (entry) => ({ ...entry }),
     );
+    const l1 = options.l1 === true;
     for (const publisher of options.subscribe) {
       const existing = current.find((e) => e.publisher === publisher);
       if (existing === undefined) {
-        entries.push({ publisher, name: ROOT_TX_INDEX });
+        entries.push({
+          publisher,
+          name: l1 ? [ROOT_TX_INDEX, L1_INDEX] : ROOT_TX_INDEX,
+        });
+        continue;
+      }
+      // A subscription without a name takes every index that is not opt-in,
+      // which is the root-TX index alone; naming L1 as well keeps that.
+      const names = [existing.name ?? ROOT_TX_INDEX].flat();
+      if (l1 && !names.includes(L1_INDEX)) {
+        const entry = entries.find((e) => e.publisher === publisher);
+        if (entry !== undefined) entry.name = [...names, L1_INDEX];
       } else if (
         existing.name !== undefined &&
         ![existing.name].flat().includes(ROOT_TX_INDEX)
@@ -192,35 +338,86 @@ export function planSetup(
       reason: 'the publishers to subscribe to',
     });
 
+    // The sidecar's 64 GiB default budget applies only while the
+    // subscription is the default one. Writing an explicit subscription over
+    // an unset one would drop that ceiling, so keep it by writing it. A
+    // subscription that was already explicit had no default ceiling, and
+    // gets none added here.
     if (
+      !l1 &&
       options.maxDiskGiB === undefined &&
-      env.get('INDEX_SWARM_MAX_DISK_BYTES') === undefined
+      isUnset(env.get('INDEX_SWARM_MAX_DISK_BYTES')) &&
+      isDefaultSubscribe(env.get('INDEX_SWARM_SUBSCRIBE'))
     ) {
       set({
         key: 'INDEX_SWARM_MAX_DISK_BYTES',
-        value: String(DEFAULT_MAX_DISK_GIB * 1024 ** 3),
-        reason: `${DEFAULT_MAX_DISK_GIB} GiB for installed bands (change with --max-disk-gib)`,
+        value: String(DEFAULT_MAX_DISK_BYTES),
+        reason: `${DEFAULT_MAX_DISK_GIB} GiB for installed bands, the ceiling the default subscription had (change with --max-disk-gib)`,
       });
     }
 
-    if (options.gateway) {
-      const sources = subscriberSources(env.get('CDB64_ROOT_TX_INDEX_SOURCES'));
-      const order = subscriberLookupOrder(env.get('ROOT_TX_LOOKUP_ORDER'));
+    // Root-TX bands alone fit the default budget written above, so only L1
+    // bands need a larger one. A budget of exactly that default is taken as
+    // the one setup wrote, and raised; any other is the operator's own.
+    const budget = env.get('INDEX_SWARM_MAX_DISK_BYTES')?.trim();
+    if (
+      l1 &&
+      options.maxDiskGiB === undefined &&
+      (isUnset(budget) || budget === String(DEFAULT_MAX_DISK_BYTES))
+    ) {
+      const gib = DEFAULT_MAX_DISK_GIB_WITH_L1;
+      set({
+        key: 'INDEX_SWARM_MAX_DISK_BYTES',
+        value: String(gib * 1024 ** 3),
+        reason: `${gib} GiB for installed bands (change with --max-disk-gib)`,
+      });
+    } else if (
+      l1 &&
+      options.maxDiskGiB === undefined &&
+      budget !== '0' &&
+      Number(budget) < DEFAULT_MAX_DISK_GIB_WITH_L1 * 1024 ** 3
+    ) {
+      plan.warnings.push(
+        `INDEX_SWARM_MAX_DISK_BYTES is under ${DEFAULT_MAX_DISK_GIB_WITH_L1} GiB. L1 bands are about 15 GB today beside a root-TX index of about 20 GB; raise it with --max-disk-gib if bands stop installing.`,
+      );
+    }
+
+    if (l1) {
       const before = plan.changes.length;
       set({
-        key: 'CDB64_ROOT_TX_INDEX_SOURCES',
-        value: sources,
-        reason: 'the gateway loads installed bands first',
+        key: 'L1_BAND_IMPORT_ENABLED',
+        value: 'true',
+        reason:
+          'the gateway fills its L1 history from the installed bands while it runs',
       });
-      set({
-        key: 'ROOT_TX_LOOKUP_ORDER',
-        value: order,
-        reason: 'installed bands answer right after the local database',
-      });
-      plan.restartCore = plan.changes.length > before;
+      if (plan.changes.length > before) plan.restartCore = true;
+    }
+
+    if (options.gateway) {
+      const currentSources = env.get('CDB64_ROOT_TX_INDEX_SOURCES');
+      const order = subscriberLookupOrder(env.get('ROOT_TX_LOOKUP_ORDER'));
+      const before = plan.changes.length;
+      // Unset, the gateway's default already searches them first.
+      if (currentSources !== undefined) {
+        set({
+          key: 'CDB64_ROOT_TX_INDEX_SOURCES',
+          value: subscriberSources(currentSources),
+          reason: 'the gateway loads installed bands first',
+        });
+      }
+      // Unset, the gateway's default already asks the installed bands right
+      // after the local database.
+      if (order !== undefined) {
+        set({
+          key: 'ROOT_TX_LOOKUP_ORDER',
+          value: order,
+          reason: 'installed bands answer right after the local database',
+        });
+      }
+      if (plan.changes.length > before) plan.restartCore = true;
       if (
-        env.get('ROOT_TX_LOOKUP_ORDER') !== undefined &&
-        splitList(order).includes('hyperbeam')
+        order !== undefined &&
+        splitList(order).some((token) => token.toLowerCase() === 'hyperbeam')
       ) {
         plan.warnings.push(
           'ROOT_TX_LOOKUP_ORDER includes hyperbeam. Keep it only if the hb profile runs; otherwise every lookup that reaches it waits on a dead endpoint.',
@@ -307,11 +504,22 @@ export function planSetup(
     plan.notes.push(
       'index-export builds bands into data/indexes/published/root-tx-index/ once a day; dry-run it first: docker compose --profile index-export run --rm index-export --once --dry-run (see "Producing bands" in docs/index-swarm.md).',
     );
+    // The gateway's feeds need absolute URLs, from INDEXES_PUBLIC_URL or
+    // ARNS_ROOT_HOST. A core setting, so noted rather than written.
+    if (
+      env.get('INDEXES_PUBLIC_URL') === undefined &&
+      env.get('ARNS_ROOT_HOST') === undefined
+    ) {
+      plan.notes.push(
+        `The gateway serves an RSS feed of each published index at /ar-io/indexes/feed/<index>.xml only with INDEXES_PUBLIC_URL (or ARNS_ROOT_HOST) set; set INDEXES_PUBLIC_URL=${options.publicUrl ?? 'https://<this gateway>'} and recreate the gateway to offer them.`,
+      );
+    }
   }
 
-  // The torrent engine. Like --max-disk-gib, its address and port apply
-  // without --torrent, so an operator can move an engine that already runs;
-  // with the engine off they wait in .env until it is turned on.
+  // The torrent engine runs by default: its init generates a password into
+  // data/indexes/engine-auth when INDEX_SWARM_ENGINE_AUTH is unset, so
+  // --torrent no longer writes one. Its address and port apply on their own,
+  // so an operator can move an engine that already runs.
   if (options.publicHost !== undefined) {
     set({
       key: 'INDEX_SWARM_ENGINE_PUBLIC_HOST',
@@ -327,23 +535,16 @@ export function planSetup(
     });
   }
   const auth = env.get('INDEX_SWARM_ENGINE_AUTH');
-  if (options.torrent) {
-    if (auth === undefined) {
-      set({
-        key: 'INDEX_SWARM_ENGINE_AUTH',
-        value: `${ENGINE_USER}:${randomPassword()}`,
-        display: `${ENGINE_USER}:<generated, not shown>`,
-        reason: 'the torrent engine’s password; setting it turns the engine on',
-      });
-    } else {
-      try {
-        parseEngineAuth(auth);
-      } catch (error: any) {
-        plan.errors.push(
-          `The existing INDEX_SWARM_ENGINE_AUTH is unusable (${error.message}); remove it to have one generated, then run this again.`,
-        );
-      }
+  if (auth !== undefined) {
+    try {
+      parseEngineAuth(auth);
+    } catch (error: any) {
+      plan.errors.push(
+        `The existing INDEX_SWARM_ENGINE_AUTH is unusable (${error.message}); remove it to have the engine's init generate one, then run this again.`,
+      );
     }
+  }
+  {
     const url = env.get('INDEX_SWARM_ENGINE_URL');
     if (url !== undefined && url !== DEFAULT_ENGINE_URL) {
       plan.warnings.push(
@@ -352,9 +553,35 @@ export function planSetup(
     }
 
     if (options.publish && env.get('INDEX_SWARM_TRACKERS') === undefined) {
+      // Through the gateway's own HTTPS where its address is known, so no
+      // tracker port needs opening; else the tracker's port at the public
+      // host, as before.
+      const origin = gatewayOrigin(env, options.publicUrl);
       const host =
         options.publicHost ?? env.get('INDEX_SWARM_ENGINE_PUBLIC_HOST');
-      if (host !== undefined) {
+      if (origin !== undefined) {
+        set({
+          key: 'INDEX_SWARM_TRACKERS',
+          value: `${origin}${GATEWAY_ANNOUNCE_PATH}`,
+          reason:
+            'this node’s closed tracker, announced to through the gateway’s HTTPS, written into its torrents',
+        });
+        // The route is Envoy's: an older Envoy image sends it to core, which
+        // answers 404, and every announce fails without a word.
+        plan.notes.push(
+          `Announces reach the tracker through the gateway's Envoy, which must be release 85 or later: recreate envoy (then core) if it is older. Check with: curl -s '${origin}${GATEWAY_ANNOUNCE_PATH}?info_hash=x' (a bencoded "failure reason", not a 404).`,
+        );
+        // Without a public host the tracker lists this node's engine under
+        // the gateway's name, which is right only when that name reaches
+        // this node on the peer port.
+        if (host === undefined) {
+          const enginePort =
+            options.enginePort ?? env.get('INDEX_SWARM_ENGINE_PORT') ?? '6881';
+          plan.notes.push(
+            `The tracker lists this node's engine at ${new URL(origin).hostname}:${enginePort}. If that name does not reach this node on that port (a CDN, or a load balancer that does not forward it), pass --public-host <this node's public IP>.`,
+          );
+        }
+      } else if (host !== undefined) {
         const port =
           env.get('INDEX_SWARM_TRACKER_PORT') ?? TRACKER_PORT_DEFAULT;
         set({
@@ -362,20 +589,29 @@ export function planSetup(
           value: `http://${urlHost(host)}:${port}/announce`,
           reason: 'this node’s closed tracker, written into its torrents',
         });
+        // Compose publishes the direct port on loopback unless told
+        // otherwise; announcing to it needs it on every address.
+        if (env.get('INDEX_SWARM_TRACKER_HOST_IP') === undefined) {
+          set({
+            key: 'INDEX_SWARM_TRACKER_HOST_IP',
+            value: '0.0.0.0',
+            reason:
+              'publish the direct tracker port on every address, so peers reach it',
+          });
+        }
       } else {
         plan.warnings.push(
-          'Publishing torrents without a tracker: pass --public-host <this node’s public IP> so peers can find this node’s tracker. Without one they find each other only through DHT and the WebSeed.',
+          'Publishing torrents without a tracker: pass --public-url <this gateway’s https URL> (or --public-host <this node’s public IP>) so peers can find this node’s tracker. Without one they find each other only through DHT and the WebSeed.',
         );
       }
     }
   }
 
-  // With errors nothing is written or restarted, so this matters only
-  // for a plan that goes ahead.
-  const engineOn =
-    auth !== undefined ||
-    plan.changes.some((c) => c.key === 'INDEX_SWARM_ENGINE_AUTH');
-  if (engineOn) {
+  // The engine runs by default, so it is recreated with the sidecar.
+  // docker-compose.yaml no longer needs the profile names; passing them is
+  // harmless. With errors nothing is written or restarted, so this matters
+  // only for a plan that goes ahead.
+  {
     plan.profiles.push('index-swarm-torrent');
     // The engine first (its init runs before it), then what was planned.
     plan.services = [
@@ -388,9 +624,33 @@ export function planSetup(
     plan.notes.push(
       `Open port ${port} (TCP and UDP) to the internet for peers. Docker-published ports bypass the host's INPUT firewall; to restrict them, filter where Docker forwards (the DOCKER-USER chain with Docker's default iptables backend; see "Running the engine" in docs/index-swarm.md).`,
     );
-    if (options.publish || env.get('INDEX_SWARM_PUBLISH') !== undefined) {
+    // The tracker's own port matters only when torrents announce to it
+    // directly; through the gateway's HTTPS there is nothing to open.
+    const trackers =
+      plan.changes.find((c) => c.key === 'INDEX_SWARM_TRACKERS')?.value ??
+      env.get('INDEX_SWARM_TRACKERS');
+    const trackerPort =
+      env.get('INDEX_SWARM_TRACKER_PORT') ?? TRACKER_PORT_DEFAULT;
+    if (
+      (options.publish || env.get('INDEX_SWARM_PUBLISH') !== undefined) &&
+      trackers !== undefined &&
+      splitList(trackers).some((url) => {
+        try {
+          return new URL(url).port === trackerPort;
+        } catch {
+          return false;
+        }
+      })
+    ) {
+      const hostIp =
+        plan.changes.find((c) => c.key === 'INDEX_SWARM_TRACKER_HOST_IP')
+          ?.value ??
+        env.get('INDEX_SWARM_TRACKER_HOST_IP') ??
+        TRACKER_HOST_IP_DEFAULT;
       plan.notes.push(
-        `Open the tracker port ${env.get('INDEX_SWARM_TRACKER_PORT') ?? TRACKER_PORT_DEFAULT} (TCP) too.`,
+        hostIp.startsWith('127.') || hostIp === '::1'
+          ? `Torrents announce to the tracker port ${trackerPort} directly, but compose publishes it on ${hostIp} only: set INDEX_SWARM_TRACKER_HOST_IP=0.0.0.0 and open ${trackerPort} (TCP).`
+          : `Open the tracker port ${trackerPort} (TCP) too.`,
       );
     }
   }

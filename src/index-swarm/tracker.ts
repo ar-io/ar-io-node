@@ -198,6 +198,31 @@ function addressBucket(ip: string): string {
  * @throws on an entry that is neither an address nor a CIDR, so a typo is a
  *   startup error rather than a proxy silently not trusted.
  */
+/**
+ * Whether a request bears a browser's marks rather than a BitTorrent
+ * client's. Behind the gateway the tracker shares an HTTPS origin any page
+ * can embed, so an `<img src=".../announce?...">` would list every visitor
+ * as a peer.
+ *
+ * Browsers send `Sec-Fetch-Site` and `Sec-Fetch-Dest`, many send `Origin`,
+ * most send a `Referer`, and an image or a page asks for one in `Accept`;
+ * older browsers lack the Fetch Metadata headers but not the rest.
+ * BitTorrent clients send none of these. Not `Sec-Fetch-Mode`: Node's own
+ * `fetch` sends that one. A heuristic, not proof: a client can send any
+ * headers it likes, so this stops pages, not a deliberate liar, who is
+ * bounded like any peer by the per-address caps.
+ */
+export function fromBrowser(headers: http.IncomingHttpHeaders): boolean {
+  const accept = headers['accept'] ?? '';
+  return (
+    headers['sec-fetch-site'] !== undefined ||
+    headers['sec-fetch-dest'] !== undefined ||
+    headers['origin'] !== undefined ||
+    headers['referer'] !== undefined ||
+    /\b(image|text\/html)\b/i.test(accept)
+  );
+}
+
 export class ClosedTracker {
   private readonly log: Logger;
   private readonly allowed: () => Set<string>;
@@ -442,26 +467,51 @@ export class ClosedTracker {
   /**
    * The announcing peer's address: the socket's, or, from a trusted proxy,
    * the nearest `X-Forwarded-For` hop that is not itself a trusted proxy.
+   *
+   * @param proxies the proxies believed on the listener the request came in
+   *   on; by default the tracker's own `trustedProxies`.
    */
   clientAddress(
     socketAddress: string,
     forwardedFor: string | string[] | undefined,
+    proxies: net.BlockList = this.trustedProxies,
   ): string {
-    return clientAddressBehindProxies(
-      socketAddress,
-      forwardedFor,
-      this.trustedProxies,
-    );
+    return clientAddressBehindProxies(socketAddress, forwardedFor, proxies);
   }
 
-  /** Serve it: `/announce` only; everything else is a 404. */
-  listen(host: string, port: number): Promise<http.Server> {
+  /**
+   * Serve it: `/announce` only; everything else is a 404.
+   *
+   * Every response is `Cache-Control: no-store`: an announce answer is for
+   * one peer, and a cache anywhere on the path (an edge cache keyed on the
+   * path without the query, say) would hand it to every other.
+   *
+   * @param options.trustedProxies proxies whose `X-Forwarded-For` this
+   *   listener believes, instead of the tracker's own. The listener behind
+   *   the gateway's Envoy believes private addresses; the published one must
+   *   not, because where Docker's userland proxy carries outside traffic an
+   *   outside client arrives from a private address too, and could then name
+   *   any peer address it liked.
+   */
+  listen(
+    host: string,
+    port: number,
+    options: { trustedProxies?: readonly string[] } = {},
+  ): Promise<http.Server> {
+    const proxies =
+      options.trustedProxies !== undefined
+        ? parseTrustedProxies([...options.trustedProxies])
+        : this.trustedProxies;
     const server = http.createServer((req, res) => {
       const url = req.url ?? '/';
       const q = url.indexOf('?');
       const pathname = q < 0 ? url : url.slice(0, q);
       if (req.method !== 'GET' || pathname !== '/announce') {
-        res.writeHead(404).end();
+        res.writeHead(404, { 'Cache-Control': 'no-store' }).end();
+        return;
+      }
+      if (fromBrowser(req.headers)) {
+        res.writeHead(403, { 'Cache-Control': 'no-store' }).end();
         return;
       }
       const body = this.announce(
@@ -469,11 +519,13 @@ export class ClosedTracker {
         this.clientAddress(
           req.socket.remoteAddress ?? '',
           req.headers['x-forwarded-for'],
+          proxies,
         ),
       );
       res.writeHead(200, {
         'Content-Type': 'text/plain',
         'Content-Length': String(body.length),
+        'Cache-Control': 'no-store',
       });
       res.end(body);
     });
@@ -485,7 +537,11 @@ export class ClosedTracker {
     return new Promise((resolve, reject) => {
       server.once('error', reject);
       server.listen(port, host, () => {
-        this.log.info('Closed tracker listening', { host, port });
+        this.log.info('Closed tracker listening', {
+          host,
+          port,
+          behindProxy: options.trustedProxies !== undefined,
+        });
         resolve(server);
       });
     });

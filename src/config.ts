@@ -11,6 +11,8 @@ import { existsSync, readFileSync } from 'node:fs';
 import { createFilter } from './filters.js';
 import { assertMonotoneFilter } from './database/gql-l1-routing.js';
 import * as env from './lib/env.js';
+import { PRIVATE_NETWORK_RANGES } from './lib/trusted-proxies.js';
+import { parsePublicOrigin } from './lib/public-origin.js';
 import { resolveFacilitatorKeyId } from './payments/facilitator-utils.js';
 import { initHttpSig } from './lib/httpsig.js';
 import type { HttpSigSignerContext } from './lib/httpsig.js';
@@ -787,6 +789,16 @@ export const CHUNK_METADATA_ANCHOR_TX_CACHE_TTL_SECONDS =
     300,
   );
 
+// How long (seconds) an offset the anchor could not resolve is left
+// unprobed. Every gateway on the defaults shares one reference peer, so a
+// chunk none of them holds is otherwise re-probed on every request for it.
+// 0 turns the miss cache off.
+export const CHUNK_METADATA_ANCHOR_MISS_CACHE_TTL_SECONDS =
+  env.nonNegativeIntOrDefault(
+    'CHUNK_METADATA_ANCHOR_MISS_CACHE_TTL_SECONDS',
+    60,
+  );
+
 // LRU cache size for resolved manifest paths. Keyed by (manifest id, path);
 // values are immutable per manifest transaction, so no TTL is needed. Caching
 // resolutions lets repeat requests for the same manifest path skip re-fetching
@@ -798,7 +810,14 @@ export const MANIFEST_RESOLUTION_CACHE_SIZE = env.positiveIntOrDefault(
 
 // Root TX index lookup order configuration.
 // Available sources: 'db', 'peers', 'gateways', 'graphql', 'hyperbeam', 'cdb',
-// 'turbo'. Sources are probed in order and the first actionable result wins.
+// 'cdb-remote', 'turbo'. Sources are probed in order and the first actionable
+// result wins.
+// - 'cdb':        CDB64 indexes (CDB64_ROOT_TX_INDEX_SOURCES). Without
+//                 'cdb-remote' in the order it asks every CDB64 source, local
+//                 and remote, as it always has; with it, only those read from
+//                 local disk (such as installed Index Sharing bands).
+// - 'cdb-remote': CDB64 sources read over the network, including the shipped
+//                 resources/ indexes (partitions on Arweave).
 // - 'peers':    GET /ar-io/offsets/:id against peer AR.IO nodes. One indexed
 //               read on the peer; cheap whether it hits or misses.
 // - 'gateways': HEAD /raw/:id against peer AR.IO gateways, harvesting
@@ -1378,19 +1397,19 @@ export const CHUNK_PEER_ORIGIN_DEADLINE_MS = env.nonNegativeIntOrDefault(
 // (X-AR-IO-Hops >= 1): `off`, `audit` or `enforce`.
 //
 // A peer that asks us for a chunk gives us one second before it gives up
-// (PEER_REQUEST_TIMEOUT_MS in ar-io-chunk-source.ts), while the serve
-// deadline that bounds our own cascade is CHUNK_SERVE_DEADLINE_MS. Remote
-// work started for that caller therefore outlives its patience, and the
-// caller already has its own miner path. The AR.IO peer sources bound
-// forwarding depth with validateHopCount, but the boundary lookup and the
-// Arweave node path carry no such bound, so `enforce` closes that gap at the
-// serve boundary rather than in each source.
+// (PEER_REQUEST_TIMEOUT_MS in ar-io-chunk-source.ts) and has its own miner
+// path, so remote work started for it outlives its patience. In every mode
+// a forwarded request therefore has its offset resolved from the local
+// database only (CompositeTxBoundarySource: no anchor probe, AR.IO peer or
+// chain search), and the AR.IO peer sources bound forwarding depth with
+// validateHopCount. This setting governs only where the chunk bytes may
+// then come from: `off` allows any source except AR.IO peers, `enforce`
+// also declines Arweave nodes, leaving this gateway's caches and
+// operator-owned storage (legacy S3/PostgreSQL).
 //
-// `audit` changes nothing and records what enforcing would have cost, via
-// chunk_peer_origin_audit_total. Run it before enforcing on any gateway
-// that originates data: a chunk ingested at upload time has no
-// absolute-offset index entry, so it misses the local cache lookup and is
-// reachable only through boundary resolution, which `enforce` skips.
+// `audit` changes nothing and records, via chunk_peer_origin_audit_total,
+// the requests `enforce` would refuse (`bytes="remote"`). Run it before
+// enforcing on any gateway that originates data.
 //
 // Defaults to `off`, preserving existing behavior.
 export const CHUNK_PEER_ORIGIN_MODE = (() => {
@@ -1675,7 +1694,93 @@ export const START_WRITERS =
 
 // Indexing range
 export const START_HEIGHT = +env.varOrDefault('START_HEIGHT', '0');
+/** Whether START_HEIGHT was set, so an explicit 0 is told from the default. */
+export const START_HEIGHT_SET =
+  env.varOrUndefined('START_HEIGHT') !== undefined;
 export const STOP_HEIGHT = +env.varOrDefault('STOP_HEIGHT', 'Infinity');
+
+//
+// L1 band import
+//
+
+/**
+ * Fill the L1 history beneath this gateway from installed `parquet-l1`
+ * bands (subscribe to them with the index-swarm sidecar), while it runs.
+ * With an empty `core.db` and no START_HEIGHT, the block importer then
+ * starts at the chain tip instead of 0, and the history beneath arrives
+ * from the bands.
+ */
+export const L1_BAND_IMPORT_ENABLED =
+  env.varOrDefault('L1_BAND_IMPORT_ENABLED', 'false') === 'true';
+
+/** Where the index-swarm sidecar installs `parquet-l1` bands. */
+export const L1_BAND_IMPORT_BANDS_DIR = env.varOrDefault(
+  'L1_BAND_IMPORT_BANDS_DIR',
+  'data/indexes/installed/parquet-l1',
+);
+
+/** Seconds between fill runs, counted from the end of the last. */
+export const L1_BAND_IMPORT_INTERVAL_SECONDS = +env.varOrDefault(
+  'L1_BAND_IMPORT_INTERVAL_SECONDS',
+  '600',
+);
+
+/**
+ * Fill from blocks the import's checks cannot bind to the chain: pre-2.0
+ * blocks and post-2.0 blocks holding a format-1 transaction with data,
+ * which today's `l1-3` bands carry no witnesses for (every band below
+ * height 2,000,000). Off by default, so those bands are refused; on, they
+ * are filled with their other checks passed, and the run logs what it
+ * accepted.
+ */
+export const L1_BAND_IMPORT_ALLOW_UNVERIFIED =
+  env.varOrDefault('L1_BAND_IMPORT_ALLOW_UNVERIFIED', 'false') === 'true';
+
+/**
+ * Where the fill anchors and samples (`--anchor-from`): comma-separated
+ * gateways or Arweave nodes serving /block/ and /tx/. By default this
+ * gateway's trusted node and the trusted gateways not marked
+ * `trusted: false`. The sample's refutations and source-attested fields
+ * need two distinct machines among them; the worker warns at its first
+ * run when they resolve to fewer.
+ */
+export function l1BandImportSampleSources(
+  explicit: string | undefined,
+  trustedNodeUrl: string,
+  trustedGateways: Record<string, { trusted?: boolean }>,
+): string[] {
+  return (
+    explicit ??
+    [
+      trustedNodeUrl,
+      ...Object.entries(trustedGateways)
+        .filter(([, config]) => config.trusted !== false)
+        .map(([url]) => url),
+    ].join(',')
+  )
+    .split(',')
+    .map((url) => url.trim())
+    .filter((url) => url.length > 0)
+    .filter((url, i, all) => all.indexOf(url) === i);
+}
+export const L1_BAND_IMPORT_SAMPLE_FROM = l1BandImportSampleSources(
+  env.varOrUndefined('L1_BAND_IMPORT_SAMPLE_FROM'),
+  TRUSTED_NODE_URL,
+  TRUSTED_GATEWAYS_URLS,
+);
+
+/**
+ * Fill with no sample of headers and signatures: transaction ids, their
+ * order and every transaction field then go unchecked. Off by default.
+ */
+export const L1_BAND_IMPORT_ALLOW_UNSAMPLED =
+  env.varOrDefault('L1_BAND_IMPORT_ALLOW_UNSAMPLED', 'false') === 'true';
+
+/** SQLite page cache for a fill run, in MiB, in a process of its own. */
+export const L1_BAND_IMPORT_CACHE_MIB = +env.varOrDefault(
+  'L1_BAND_IMPORT_CACHE_MIB',
+  '512',
+);
 
 //
 // Verification
@@ -3361,15 +3466,27 @@ export const TRUSTED_CACHE_RETRY_RATE = +env.varOrDefault(
   '0.0',
 );
 
-// Background caching for range request cache misses
+// Background caching for range request cache misses.
+//
+// A single-range GET of an uncached item fetches only the range (see
+// serveUncachedRange in routes/data/handlers.ts), so this background fetch is
+// what fills the cache with the whole item. Before that, the data handlers
+// fetched the whole item first and kept downloading it into the cache after
+// the range was served, for any size, so these defaults keep range-only
+// traffic (video, SQLite-over-HTTP) filling the cache: 10 GiB covers nearly
+// every item, and 4 fetches at once keep one long download from holding the
+// only permit. The foreground write guards (FOREGROUND_CACHE_MAX_SIZE and
+// FOREGROUND_CACHE_CONCURRENCY) apply to these fetches too. Signature and
+// owner reads from a parent bundle opt out (backgroundCacheOnRangeMiss), so
+// they never download a whole bundle. 0 disables.
 export const BACKGROUND_CACHE_RANGE_MAX_SIZE = env.nonNegativeIntOrDefault(
   'BACKGROUND_CACHE_RANGE_MAX_SIZE',
-  0,
+  10 * 1024 * 1024 * 1024,
 );
 
 export const BACKGROUND_CACHE_RANGE_CONCURRENCY = env.positiveIntOrDefault(
   'BACKGROUND_CACHE_RANGE_CONCURRENCY',
-  1,
+  4,
 );
 
 // Guards on the foreground (on-demand) full-item cache write path. Both
@@ -3523,6 +3640,47 @@ export const INDEXES_ADVERTISE_FROM_URL = env.varOrUndefined(
   'INDEXES_ADVERTISE_FROM_URL',
 );
 
+/**
+ * This gateway's public origin (`https://gateway.example`): the base of the
+ * absolute URLs in its index feeds (`/ar-io/indexes/feed/<index>.xml`) and of
+ * the WebSeed each served `.torrent` names. From configuration, never from a
+ * request's Host header, which whoever sends the request controls. Defaults
+ * to `https://<ARNS_ROOT_HOST>`; with neither, the feeds answer 404 and
+ * torrents are served without a WebSeed. An origin only (scheme, host and
+ * port): a value that is not one stops the gateway at startup, as an explicit
+ * setting that is wrong would otherwise publish broken links.
+ */
+export const INDEXES_PUBLIC_URL = (() => {
+  const value = env.varOrUndefined('INDEXES_PUBLIC_URL');
+  if (value !== undefined && value.trim() !== '') {
+    try {
+      return parsePublicOrigin(value);
+    } catch (error: any) {
+      throw new Error(`INDEXES_PUBLIC_URL: ${error.message}`);
+    }
+  }
+  if (ARNS_ROOT_HOST === undefined) return undefined;
+  // A default must not stop a gateway that started before: an
+  // ARNS_ROOT_HOST that makes no origin just means no feeds.
+  try {
+    return parsePublicOrigin(`https://${ARNS_ROOT_HOST}`);
+  } catch {
+    return undefined;
+  }
+})();
+
+/**
+ * Whether each served `.torrent` names this gateway as its WebSeed, so a
+ * stock BitTorrent client can finish a band no peer is delivering, while the
+ * gateway still offers the band and within its allowance where the byte
+ * routes are metered. Such a client draws part
+ * of every band from it even while peers could serve it, through the byte
+ * routes' meter when that is on; `false` serves torrents as the publisher
+ * wrote them, for peers only.
+ */
+export const INDEXES_TORRENT_WEBSEED =
+  env.varOrDefault('INDEXES_TORRENT_WEBSEED', 'true') === 'true';
+
 export const ENABLE_RATE_LIMITER =
   env.varOrDefault('ENABLE_RATE_LIMITER', 'false') === 'true';
 
@@ -3566,7 +3724,7 @@ export const RATE_LIMITER_IP_REFILL_PER_SEC = +env.varOrDefault(
  */
 const TRUSTED_PROXIES_VALUE = env.varOrDefault(
   'TRUSTED_PROXIES',
-  '127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10,169.254.0.0/16,::1/128,fc00::/7,fe80::/10',
+  PRIVATE_NETWORK_RANGES.join(','),
 );
 export const TRUSTED_PROXIES =
   TRUSTED_PROXIES_VALUE.trim() === 'none'

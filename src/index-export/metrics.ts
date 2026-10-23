@@ -31,7 +31,7 @@ const metric = <T extends string>(
 export const runs = metric(
   'counter',
   'index_export_runs_total',
-  'Band builds by outcome: published, unchanged, skipped, couldnt_check (retried) or rejected (needs an operator), with the reason. kind=derive counts lookups added to a published parquet-l1 band.',
+  'Band builds by outcome: published, unchanged, skipped, couldnt_check (retried) or rejected (needs an operator), with the reason. kind=derive counts lookups added to a published band in place (a parquet-l1 band, or a parquet-l2 band gaining its key lookup and stats).',
   ['index', 'kind', 'result', 'reason'],
 ) as promClient.Counter<'index' | 'kind' | 'result' | 'reason'>;
 
@@ -77,6 +77,20 @@ export const gateWrong = metric(
   ['index', 'kind', 'tag'],
 ) as promClient.Counter<'index' | 'kind' | 'tag'>;
 
+export const gateMalformedTags = metric(
+  'counter',
+  'index_export_gate_malformed_tags_total',
+  'Sampled headers that passed (right id, right length) though their tag count field disagrees with their tag bytes: malformed items, not wrong offsets.',
+  ['index', 'kind'],
+) as promClient.Counter<'index' | 'kind'>;
+
+export const gateUnreadable = metric(
+  'counter',
+  'index_export_gate_unreadable_total',
+  "Sampled entries the header check passed over because the gateway doesn't have their root (404): history whose roots are gone network-wide. Neither passed nor wrong.",
+  ['index', 'kind'],
+) as promClient.Counter<'index' | 'kind'>;
+
 export const gateHttp = metric(
   'counter',
   'index_export_gate_http_total',
@@ -104,6 +118,62 @@ export const overlayAge = metric(
   'Seconds since the newest file in an overlay was written.',
   ['index', 'source'],
 ) as promClient.Gauge<'index' | 'source'>;
+
+export const resettles = metric(
+  'counter',
+  'index_export_resettles_total',
+  'Grid layout: frozen bands re-settled, by role and result: unchanged (nothing published), rebuilt (a new band supersedes it) or failed (rejected, or could not check; the band stays).',
+  ['index', 'kind', 'result'],
+) as promClient.Counter<'index' | 'kind' | 'result'>;
+
+export const resettleGate = metric(
+  'counter',
+  'index_export_resettle_gate_total',
+  'Grid layout: due bands by what the fingerprint gate found: same_sources (not rebuilt), changed, unrecorded (no fingerprint yet: rebuilt once) or source_down (not rebuilt this run).',
+  ['index', 'kind', 'verdict'],
+) as promClient.Counter<'index' | 'kind' | 'verdict'>;
+
+export const resettleEntries = metric(
+  'gauge',
+  'index_export_resettle_entries',
+  'Grid layout: entries the latest re-settle of a role added, changed (relocated, each header-checked) or left unchanged.',
+  ['index', 'kind', 'change'],
+) as promClient.Gauge<'index' | 'kind' | 'change'>;
+
+export const tipUnplaced = metric(
+  'gauge',
+  'index_export_tip_unplaced_entries',
+  'Grid layout: entries the latest tip kept from the previous one without a frozen band to hand them to: their root no source gave, or the frozen band of their height lacks them. A re-settle of that band takes the latter in.',
+  ['index'],
+) as promClient.Gauge<'index'>;
+
+export const l2Rows = metric(
+  'gauge',
+  'index_export_l2_rows',
+  'parquet-l2: rows per table of the latest band built of a kind (h, d, tip), published or not.',
+  ['index', 'kind', 'table'],
+) as promClient.Gauge<'index' | 'kind' | 'table'>;
+
+export const l2Unlocated = metric(
+  'gauge',
+  'index_export_l2_unlocated_rows',
+  'parquet-l2: data items the latest band of a kind holds without a location, by reason (no_offsets, layout, no_parent, inconsistent, deep, ambiguous, unproven, parent_two_places).',
+  ['index', 'kind', 'reason'],
+) as promClient.Gauge<'index' | 'kind' | 'reason'>;
+
+export const l2OwnersWithoutKey = metric(
+  'gauge',
+  'index_export_l2_owners_without_key',
+  'parquet-l2: owners of the latest band of a kind with no key whose SHA-256 is their address (left out of wallets).',
+  ['index', 'kind'],
+) as promClient.Gauge<'index' | 'kind'>;
+
+export const l2Proofs = metric(
+  'counter',
+  'index_export_l2_proofs_total',
+  'parquet-l2: ambiguous data items settled by reading their header from the root, by outcome: relative, absolute (located), none or both (left unlocated), unproven (the root a 404: left unlocated).',
+  ['index', 'outcome'],
+) as promClient.Counter<'index' | 'outcome'>;
 
 export const heartbeat = metric(
   'gauge',

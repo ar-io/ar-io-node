@@ -50,6 +50,14 @@ export const TRIGGER_HEADERS = new Set([
   // publication lists for it. Signing binds that claim, and the body through
   // Content-Digest (or Repr-Digest on a range), to this gateway.
   'x-ar-io-index-file',
+  // A feed of a published index's bands, naming (by SHA-256) the
+  // publication it was built from. Signing binds the feed's body, through
+  // Content-Digest, to that publication.
+  'x-ar-io-index-feed',
+  // A band's .torrent, named by the v1 infohash the publication signs. The
+  // infohash pins only the info dictionary; signing binds the rest, the
+  // trackers and the WebSeed this gateway added, through Content-Digest.
+  'x-ar-io-index-torrent',
   'x-ar-io-chunk-source-type',
 ]);
 

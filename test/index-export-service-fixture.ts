@@ -26,6 +26,7 @@ import { scanBundle, ScannedDataItem } from '../src/lib/ans104-bundle-scan.js';
 import { ByteRangeSource } from '../src/lib/byte-range-source.js';
 import { fromB64Url, toB64Url } from '../src/lib/encoding.js';
 import type { BandRecord } from '../src/lib/index-band/build.js';
+import type { RootSourceFactory } from '../src/lib/index-band/verify.js';
 import type { ExportConfig } from '../src/index-export/config.js';
 import {
   newSourceStats,
@@ -117,7 +118,8 @@ export class ExportServiceHarness {
     ...more,
   });
 
-  roots = () => ({
+  /** Opens roots for the header check; a test may wrap it, root by root. */
+  roots: () => { openRoot: RootSourceFactory; close: () => void } = () => ({
     openRoot: (): ByteRangeSource =>
       this.rootsFail
         ? ({
@@ -144,6 +146,8 @@ export class ExportServiceHarness {
       openRoots: this.roots,
       diskSpace: async () => ({ free: this.freeBytes, total: 1e13 }),
       headerCheck: { retryDelayMs: 1 },
+      // Thousands of small files a suite; none need survive a power cut.
+      syncBands: false,
     });
 
   live = (): Promise<OwnBand[]> =>

@@ -32,10 +32,11 @@ import {
   BandFile,
   IndexEntry,
   IndexPublication,
-  INDEX_PUBLICATION_MAX_BYTES,
   manifestSha256,
   parseIndexPublicationDocument,
+  readPublicationBody,
   verifyIndexPublication,
+  WEBSEED_PATH,
 } from '../lib/index-publication.js';
 import { publicKeyFromSolanaAddress } from '../lib/httpsig.js';
 import {
@@ -119,7 +120,7 @@ const UNTRACKED_MIN_AGE_MS = 10 * 60_000;
  * Separates a band id from its generation in an installed directory name.
  * A band id can't contain it, so no directory name is ambiguous.
  */
-const GENERATION_SEPARATOR = '~';
+export const GENERATION_SEPARATOR = '~';
 
 /** A short digest of a band's files: its identity on disk. */
 export function bandGeneration(band: BandDescriptor): string {
@@ -580,32 +581,7 @@ export class Subscriber {
       throw new Error(`HTTP ${response.status} ${response.statusText}`);
     }
 
-    const declared = Number(response.headers.get('content-length') ?? '0');
-    if (Number.isFinite(declared) && declared > INDEX_PUBLICATION_MAX_BYTES) {
-      throw new Error(
-        `Publication declares ${declared} bytes, over the ${INDEX_PUBLICATION_MAX_BYTES} byte limit`,
-      );
-    }
-    if (response.body === null) {
-      throw new Error('Publication response had no body');
-    }
-
-    const chunks: Buffer[] = [];
-    let total = 0;
-    const reader = response.body.getReader();
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done === true) break;
-      total += value.length;
-      if (total > INDEX_PUBLICATION_MAX_BYTES) {
-        await reader.cancel();
-        throw new Error(
-          `Publication exceeded the ${INDEX_PUBLICATION_MAX_BYTES} byte limit`,
-        );
-      }
-      chunks.push(Buffer.from(value));
-    }
-    return Buffer.concat(chunks);
+    return readPublicationBody(response);
   }
 
   /** Resolve where to fetch from and which key must have signed. */
@@ -1222,7 +1198,7 @@ export class Subscriber {
     // A copy already on disk (state lost, or a crash between install and
     // the state write) is adopted rather than fetched again.
     const adopted = await this.adoptInstalledCopy(
-      index.name,
+      index,
       band,
       targetDir,
       claimed,
@@ -1447,7 +1423,7 @@ export class Subscriber {
     transport: 'http' | 'torrent';
   }): Promise<boolean> {
     try {
-      await kind.validate(band, sourceDir);
+      await kind.validate(band, sourceDir, index);
     } catch (error: any) {
       // Bytes that match their digests but are not the shape this kind can
       // serve must not reach the gateway, and must not be resumed onto.
@@ -1507,7 +1483,7 @@ export class Subscriber {
    * Returns its directory, or undefined.
    */
   private async adoptInstalledCopy(
-    indexName: string,
+    index: IndexEntry,
     band: BandDescriptor,
     targetDir: string,
     claimed: ReadonlySet<string>,
@@ -1515,7 +1491,7 @@ export class Subscriber {
   ): Promise<string | undefined> {
     // This generation's directory under any suffix, and the layout from
     // before generations, in that order.
-    const indexDir = path.join(this.installedDir, indexName);
+    const indexDir = path.join(this.installedDir, index.name);
     const prefix = `${band.id}${GENERATION_SEPARATOR}${bandGeneration(band)}`;
     const onDisk = (await fs.readdir(indexDir).catch(() => [] as string[]))
       .filter((name) => name === prefix || name.startsWith(`${prefix}.`))
@@ -1542,10 +1518,10 @@ export class Subscriber {
       // The same gate a download passes: what is on disk is not trusted
       // for being there.
       try {
-        await kind.validate(band, dir);
+        await kind.validate(band, dir, index);
       } catch (error: any) {
         this.log.warn('A copy on disk failed validation; not adopting it', {
-          index: indexName,
+          index: index.name,
           band: band.id,
           dir,
           error: error?.message,
@@ -2126,7 +2102,7 @@ export class Subscriber {
       ) {
         try {
           await transport.setWebSeeds(pending.id, [
-            new URL('/ar-io/indexes/webseed/', origin).toString(),
+            new URL(WEBSEED_PATH, origin).toString(),
           ]);
           pending.webSeeded = true;
           pending.webSeededAt = now;

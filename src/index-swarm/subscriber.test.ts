@@ -32,6 +32,7 @@ import { MemorySwarm, MemoryTransport } from './transport/memory.js';
 import { buildTorrent, torrentIds } from './torrent.js';
 import { bdecode, bencode, BencodeValue } from '../lib/bencode.js';
 import { Publisher } from './publisher.js';
+import { stopSubscriberTorrents } from './opt-out.js';
 import { StateStore } from './state.js';
 import { createKindRegistry } from './kinds/registry.js';
 import { GatewayRegistry, PublisherRecord } from './gateway-registry.js';
@@ -659,6 +660,40 @@ describe('Subscriber', () => {
       await engine.remove(id); // a wiped engine
       await subscriber.pollOnce();
       assert.equal(engine.entry(id)?.state, 'seeding');
+    });
+
+    it('stops seeding on opt-out, keeps the band, and seeds it again on re-subscribing', async () => {
+      await makeBand('band-a');
+      const swarm = new MemorySwarm();
+      await publishTorrents(new MemoryTransport(swarm));
+      const engine = new MemoryTransport(swarm);
+      await makeTorrentSubscriber(engine).pollOnce();
+      const [{ id }] = Object.values((await subState.load()).seeding);
+      const digests = await installedDigests('band-a');
+
+      // INDEX_SWARM_SUBSCRIBE=[]: no subscriber runs, main.ts runs this.
+      const result = await stopSubscriberTorrents({
+        log,
+        state: subState,
+        transport: engine,
+        swarmDir: path.join(path.dirname(subIncoming), 'swarm'),
+      });
+      assert.equal(result.removed, 1);
+      assert.equal(engine.entry(id), undefined, 'no longer seeded');
+      assert.deepEqual(Object.values((await subState.load()).seeding), []);
+      assert.deepEqual(await installedIds(), ['band-a'], 'still installed');
+      assert.deepEqual(await installedDigests('band-a'), digests);
+
+      // Subscribing again: a fresh subscriber seeds the installed band from
+      // its kept torrent, without fetching it again.
+      const httpBytes = await bytesBy('http');
+      await makeTorrentSubscriber(engine).pollOnce();
+      assert.equal(engine.entry(id)?.state, 'seeding');
+      assert.equal(
+        engine.entry(id)?.dir,
+        (await subState.load()).installed['root-tx-index']['band-a'].dir,
+      );
+      assert.equal(await bytesBy('http'), httpBytes, 'nothing fetched again');
     });
 
     it('starts an installed band seeding again after it was stopped', async () => {
@@ -2438,9 +2473,9 @@ describe('Subscriber', () => {
     // a fresh download.
     const base = createKindRegistry({ log }).get('cdb64-root-tx')!;
     const strict: ArtifactKind = Object.assign(Object.create(base), {
-      validate: async (band: any, dir: string) => {
+      validate: async (band: any, dir: string, index: any) => {
         if (dir.startsWith(subInstalled)) throw new Error('not well-formed');
-        return base.validate(band, dir);
+        return base.validate(band, dir, index);
       },
     });
 

@@ -5,6 +5,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+import { INDEX_FEED_PATH } from '../lib/index-publication.js';
 import { calculateX402Price } from '../payments/x402-pricing.js';
 
 /**
@@ -124,10 +125,13 @@ export interface HttpsigInfo {
  * Present only while a valid publication exists. `manifestUrl` is where the
  * signed publication document lives; `names` lets a crawler decide whether
  * a publisher offers anything it wants without fetching the document.
+ * `feeds`, present when any index has one, maps an index to the RSS feed
+ * of its torrents, so a BitTorrent client can follow it from one link.
  */
 export interface IndexesInfo {
   manifestUrl: string;
   names: string[];
+  feeds?: Record<string, string>;
 }
 
 /**
@@ -191,6 +195,11 @@ export interface ArIoInfoConfig {
   };
   /** Names of the indexes currently published; omitted when none. */
   indexNames?: string[];
+  /**
+   * Of those, the ones this gateway serves a feed for: indexes with a band
+   * offered as a torrent, on a gateway with a public origin.
+   */
+  indexFeedNames?: string[];
 }
 
 /**
@@ -326,10 +335,19 @@ export function buildArIoInfo(config: ArIoInfoConfig): ArIoInfoResponse {
   }
 
   if (config.indexNames !== undefined && config.indexNames.length > 0) {
+    const names = config.indexNames;
     response.indexes = {
       manifestUrl: '/ar-io/indexes',
-      names: config.indexNames,
+      names,
     };
+    const feeds = (config.indexFeedNames ?? []).filter((name) =>
+      names.includes(name),
+    );
+    if (feeds.length > 0) {
+      response.indexes.feeds = Object.fromEntries(
+        feeds.map((name) => [name, `${INDEX_FEED_PATH}${name}.xml`]),
+      );
+    }
   }
 
   return response;

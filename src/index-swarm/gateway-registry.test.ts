@@ -112,6 +112,29 @@ describe('CoreGatewayRegistry', () => {
     assert.equal(await r.lookup('nobody'), undefined);
   });
 
+  it("resolves this node's own wallet from the peer list's self, without listing it", async () => {
+    // A fleet node subscribed to its own fleet's publication: its wallet is
+    // never one of its peers, so only `self` can resolve it.
+    body = {
+      ...PEERS,
+      self: {
+        url: 'https://fleet.example',
+        wallet: 'wallet-fleet',
+        observerAddress: 'observer-fleet',
+        operatorStake: 50_000,
+        status: 'joined',
+      },
+    };
+    const r = registry();
+    assert.deepEqual(await r.lookup('wallet-fleet'), {
+      wallet: 'wallet-fleet',
+      observerAddress: 'observer-fleet',
+      url: 'https://fleet.example',
+      status: 'joined',
+    });
+    assert.ok(!(await r.list()).some((g) => g.wallet === 'wallet-fleet'));
+  });
+
   it('reads the peer list once per TTL, however many lookups ask', async () => {
     const r = registry();
     await Promise.all([r.lookup('wallet-a'), r.lookup('wallet-b'), r.list()]);

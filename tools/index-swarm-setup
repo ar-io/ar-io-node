@@ -5,18 +5,19 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
-# Set up index sharing (the index-swarm sidecar, and optionally BitTorrent)
-# in .env, then optionally restart what the changes need. Idempotent: run it
-# again to add a publisher or turn on torrents.
+# Set up index sharing (the index-swarm sidecar and its torrent engine, which
+# run by default) further in .env, then optionally restart what the changes
+# need. Idempotent: run it again to add a publisher.
 #
 # Usage (from the gateway's directory, where .env and docker-compose.yaml are):
-#   ./tools/index-swarm-setup --subscribe <publisher wallet> --torrent --restart
-#   ./tools/index-swarm-setup --publish --torrent --public-host <ip> --restart
+#   ./tools/index-swarm-setup --subscribe <publisher wallet> --restart
+#   ./tools/index-swarm-setup --publish --public-host <ip> --restart
 #   ./tools/index-swarm-setup --help
 #
 # The .env logic runs in the core image (CORE_IMAGE_TAG), so the host needs
 # only Docker. --restart recreates, by service name, only what the changes
-# need, using the same compose files the running gateway was started with.
+# need, using the same compose files the running gateway was started with,
+# and never a service those files turn off (an engine behind a profile).
 
 set -euo pipefail
 
@@ -89,8 +90,9 @@ for field in ${SUMMARY}; do
 done
 
 # The compose files the running gateway was started with, so override files
-# (log rotation, local tweaks) are kept. Without a running gateway, compose's
-# own defaults (docker-compose.yaml plus docker-compose.override.yaml).
+# (log rotation, local tweaks) are kept, plus docker-compose.override.yaml
+# if it is not among them. Without a running gateway, compose's own defaults
+# (docker-compose.yaml plus docker-compose.override.yaml).
 COMPOSE=(docker compose)
 # The file just edited is the one compose must read.
 if [[ "${ENV_REAL}" != "$(realpath -m .env)" ]]; then
@@ -103,6 +105,20 @@ if [[ -n "${CORE_CONTAINER}" ]]; then
   FILES="$(docker inspect -f '{{ index .Config.Labels "com.docker.compose.project.config_files" }}' "${CORE_CONTAINER}")"
   IFS=',' read -r -a FILE_LIST <<<"${FILES}"
   for file in "${FILE_LIST[@]}"; do COMPOSE+=(-f "${file}"); done
+  # An override written since the gateway was created (turning the engine
+  # off recreates only the sidecar) is missing from core's label, and a plain
+  # `docker compose up` would load it.
+  for override in docker-compose.override.yaml docker-compose.override.yml; do
+    [[ -f "${override}" ]] || continue
+    listed=false
+    for file in "${FILE_LIST[@]}"; do
+      [[ "$(realpath -m "${file}")" == "$(realpath -m "${override}")" ]] && listed=true
+    done
+    if [[ "${listed}" != true ]]; then
+      echo "index-swarm-setup: also reading ${override}, which the running gateway was started without" >&2
+      COMPOSE+=(-f "$(pwd)/${override}")
+    fi
+  done
 fi
 # The gateway also needs recreating when it runs with values older than the
 # file's, as after an earlier run without --restart.
@@ -112,7 +128,7 @@ env_value() {
 }
 if [[ -n "${CORE_CONTAINER}" && "${RESTART_CORE}" != 1 ]]; then
   RUNNING_ENV="$(docker inspect -f '{{ range .Config.Env }}{{ println . }}{{ end }}' "${CORE_CONTAINER}")"
-  for key in CDB64_ROOT_TX_INDEX_SOURCES ROOT_TX_LOOKUP_ORDER; do
+  for key in CDB64_ROOT_TX_INDEX_SOURCES ROOT_TX_LOOKUP_ORDER L1_BAND_IMPORT_ENABLED; do
     running="$(sed -n "s/^${key}=//p" <<<"${RUNNING_ENV}" | tail -n1)"
     if [[ "${running}" != "$(env_value "${key}")" ]]; then RESTART_CORE=1; fi
   done
@@ -121,17 +137,50 @@ fi
 PROFILE_ARGS=()
 IFS=',' read -r -a PROFILE_LIST <<<"${PROFILES}"
 for profile in "${PROFILE_LIST[@]}"; do PROFILE_ARGS+=(--profile "${profile}"); done
-IFS=',' read -r -a SERVICE_LIST <<<"${SERVICES}"
+IFS=',' read -r -a PLANNED_LIST <<<"${SERVICES}"
+# Only the planned services this node's compose files enable. Compose starts
+# a service named on the command line even when its profile is off, so an
+# engine put behind an unused profile (HTTP-only sharing, see "Turning it
+# off" in docs/index-swarm.md) would otherwise come back. `config --services`
+# lists what a plain `up` starts with the same files (COMPOSE_PROFILES
+# applies). The planned profile flags are not counted: setup always passes
+# the old index-swarm names, which would re-enable an engine parked behind
+# one. Only index-export, which a publisher's plan adds with its profile, is
+# judged with that profile on.
+if ! ENABLED="$("${COMPOSE[@]}" config --services)"; then
+  echo "index-swarm-setup: docker compose config failed; nothing restarted" >&2
+  exit 1
+fi
+SERVICE_LIST=()
+for service in "${PLANNED_LIST[@]}"; do
+  enabled="${ENABLED}"
+  if [[ "${service}" == index-export ]]; then
+    if ! enabled="$("${COMPOSE[@]}" --profile index-export config --services)"; then
+      echo "index-swarm-setup: docker compose config failed; nothing restarted" >&2
+      exit 1
+    fi
+  fi
+  if grep -qxF "${service}" <<<"${enabled}"; then
+    SERVICE_LIST+=("${service}")
+  else
+    echo "index-swarm-setup: ${service} is off in the compose files; leaving it alone" >&2
+  fi
+done
 
 core_cmd="${COMPOSE[*]} up -d --no-deps core"
-swarm_cmd="${COMPOSE[*]} ${PROFILE_ARGS[*]} up -d --no-deps ${SERVICE_LIST[*]}"
+swarm_cmd=""
+if [[ ${#SERVICE_LIST[@]} -gt 0 ]]; then
+  swarm_cmd="${COMPOSE[*]} ${PROFILE_ARGS[*]} up -d --no-deps ${SERVICE_LIST[*]}"
+fi
 
 if [[ "${RESTART}" != true ]]; then
-  echo >&2
-  echo "To apply it:" >&2
-  [[ "${RESTART_CORE}" == 1 ]] && echo "  ${core_cmd}" >&2
-  echo "  ${swarm_cmd}" >&2
-  echo "Or run this again with --restart. Then check it: ./tools/index-swarm-status" >&2
+  if [[ "${RESTART_CORE}" == 1 || -n "${swarm_cmd}" ]]; then
+    echo >&2
+    echo "To apply it:" >&2
+    [[ "${RESTART_CORE}" == 1 ]] && echo "  ${core_cmd}" >&2
+    [[ -n "${swarm_cmd}" ]] && echo "  ${swarm_cmd}" >&2
+    echo "Or run this again with --restart. Then check it: ./tools/index-swarm-status" >&2
+  fi
   exit 0
 fi
 
@@ -151,8 +200,10 @@ if [[ "${RESTART_CORE}" == 1 ]]; then
   echo "Gateway: ${health:-unknown}" >&2
 fi
 
-echo >&2
-echo "Starting ${SERVICE_LIST[*]}..." >&2
-"${COMPOSE[@]}" "${PROFILE_ARGS[@]}" up -d --no-deps "${SERVICE_LIST[@]}"
+if [[ ${#SERVICE_LIST[@]} -gt 0 ]]; then
+  echo >&2
+  echo "Starting ${SERVICE_LIST[*]}..." >&2
+  "${COMPOSE[@]}" "${PROFILE_ARGS[@]}" up -d --no-deps "${SERVICE_LIST[@]}"
+fi
 echo >&2
 echo "Done. In a few minutes, check it: ./tools/index-swarm-status" >&2

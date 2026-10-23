@@ -47,6 +47,8 @@ export interface PublishedFile {
 export interface PublicationView {
   raw: Buffer;
   sha256: string;
+  /** The document, parsed and validated, as the views below were built from. */
+  publication: IndexPublication;
   /** Index names offered, sorted. What /ar-io/info advertises. */
   names: string[];
   /** `<index>/<band>/<file>` to the file it names. */
@@ -233,6 +235,7 @@ export class PublishedIndexes {
     this.view = {
       raw,
       sha256: crypto.createHash('sha256').update(raw).digest('hex'),
+      publication,
       names: [
         ...new Set(publication.indexes.map((index) => index.name)),
       ].sort(),

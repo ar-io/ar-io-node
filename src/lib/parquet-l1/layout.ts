@@ -34,7 +34,12 @@
  */
 import { FORK_2_0 } from './chain.js';
 import { prefix64Sql, sha256_64Sql } from '../parquet/keys.js';
-import { LookupDescription, LookupSpec, sqlPaths } from '../parquet/lookups.js';
+import {
+  LookupDescription,
+  LookupDigestOrder,
+  LookupSpec,
+  sqlPaths,
+} from '../parquet/lookups.js';
 
 /** The layout version a band is written with, in its `band.json`. */
 export const PARQUET_L1_SCHEMA = 'l1-3';
@@ -394,12 +399,29 @@ export const PARQUET_L1_LOOKUPS: LookupSpec[] = [
   },
 ];
 
+/**
+ * The order `l1-3` lookup digests are taken in: `legacy-text`. l1-3 lookup
+ * digests use text order of 64-bit columns (`id8`, `addr8`, `height`,
+ * `data_size`, …: `10` < `100` < `9`), though the files are sorted by
+ * value, because the digest query ordered by its own text aliases of them.
+ * Kept so every published `l1-3` band still verifies; a future schema moves
+ * to `numeric`, the files' own order.
+ */
+export const PARQUET_L1_LOOKUP_DIGEST_ORDER: LookupDigestOrder = 'legacy-text';
+
 /** The lookups a layout declares: none before `l1-3`. */
 export function lookupsOf(schema: ParquetL1Schema): LookupSpec[] {
   return schema === 'l1-3' ? PARQUET_L1_LOOKUPS : [];
 }
 
-/** What a band says about itself, in `band.json`. */
+/**
+ * What a band says about itself, in `band.json`.
+ *
+ * Only what its rows determine, so every publisher of the same rows writes
+ * the same file ({@link serializeBandFile}), the same torrent, and so one
+ * swarm. What is the publisher's own, which bands this one replaces and
+ * when it was built, is kept beside the band in {@link PUBLISHER_FILE}.
+ */
 export interface ParquetL1Band {
   version: 1;
   /** The version this band was written with, not the one we write. */
@@ -413,10 +435,211 @@ export interface ParquetL1Band {
    * tables, so not part of the band's id ({@link bandTablesDigest}).
    */
   lookups?: Record<string, LookupDescription>;
-  /** Ids of bands this one replaces (a rebuilt tip band). */
+  /**
+   * Ids of bands this one replaces. Only in a band written before band files
+   * were made the same for every publisher: the ids carry the publisher's
+   * tag. A publisher now keeps them in {@link PUBLISHER_FILE}, and the
+   * signed publication carries them.
+   */
   supersedes?: string[];
-  /** When the band was built. */
+  /**
+   * The time of the band's top block ({@link bandTime}), the same for every
+   * publisher, and stable, so importing a band twice writes the same rows.
+   * A band written before band files were made the same for every publisher
+   * carries when it was built.
+   */
   createdAt: string;
+}
+
+/**
+ * Beside a band its publisher wrote, never part of it: no band file names
+ * it, so it is not published, put in a torrent or served. What is the
+ * publisher's own about the band, as {@link BandPublisherFacts}.
+ */
+export const PUBLISHER_FILE = '.publisher.json';
+
+/** What only the band's publisher knows about it, in {@link PUBLISHER_FILE}. */
+export interface BandPublisherFacts {
+  /** Ids of this publisher's bands that this one replaces. */
+  supersedes?: string[];
+  /** When this publisher built it. */
+  builtAt?: string;
+  /**
+   * Grid-built bands (`parquet-l2`): when the band was built, or confirmed,
+   * with its heights settled (the settle lag below the sources' top). A band
+   * without it is still rebuilt as its heights settle.
+   */
+  settledAt?: string;
+  /**
+   * `parquet-l2`: what the header check of the band's sample read, which
+   * depends on the sample and the gateway, so is kept out of `band.json`.
+   */
+  headerCheck?: Record<string, number>;
+  /**
+   * `parquet-l2`: reads the gateway answered 404 for when the band was
+   * built: ambiguous items left `proofs` unproven, owners left without a
+   * key (`keys`). A band with any is rebuilt now and then, in case the
+   * roots are served again.
+   */
+  unreadable?: Record<string, number>;
+}
+
+/** A band's `createdAt`: its top block's timestamp, in seconds, as a date. */
+export function bandTime(topBlockTimestamp: number): string {
+  if (!Number.isSafeInteger(topBlockTimestamp) || topBlockTimestamp < 0) {
+    throw new Error(`not a block timestamp: ${topBlockTimestamp}`);
+  }
+  return new Date(topBlockTimestamp * 1000).toISOString();
+}
+
+/**
+ * A band's `band.json`, written the one way: fields, tables and lookups in
+ * the layout's order, and no `supersedes`, which is the publisher's own.
+ * Two publishers of the same rows therefore write the same bytes.
+ */
+export function serializeBandFile(band: ParquetL1Band): string {
+  const lookups = lookupsOf(band.schema);
+  const canonical = {
+    version: band.version,
+    schema: band.schema,
+    heightRange: [band.heightRange[0], band.heightRange[1]],
+    tables: Object.fromEntries(
+      PARQUET_L1_TABLES.map(({ name }) => [
+        name,
+        {
+          rows: band.tables[name].rows,
+          rowDigest: band.tables[name].rowDigest,
+        },
+      ]),
+    ),
+    ...(lookups.length > 0 && band.lookups !== undefined
+      ? {
+          lookups: Object.fromEntries(
+            lookups.map(({ name }) => [
+              name,
+              {
+                rows: band.lookups![name].rows,
+                rowDigest: band.lookups![name].rowDigest,
+              },
+            ]),
+          ),
+        }
+      : {}),
+    createdAt: band.createdAt,
+  };
+  return JSON.stringify(canonical, null, 2);
+}
+
+/**
+ * Parses {@link PUBLISHER_FILE}. It is this node's own, but checked all the
+ * same: a malformed one is refused rather than half-read.
+ *
+ * @throws with a message naming what is wrong.
+ */
+export function parsePublisherFile(text: string): BandPublisherFacts {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch (error) {
+    throw new Error(
+      `${PUBLISHER_FILE} is not JSON: ${(error as Error).message}`,
+    );
+  }
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    throw new Error(`${PUBLISHER_FILE} must be an object`);
+  }
+  const facts = raw as Record<string, unknown>;
+  const out: BandPublisherFacts = {};
+  if (facts.supersedes !== undefined) {
+    if (
+      !Array.isArray(facts.supersedes) ||
+      !facts.supersedes.every((id) => typeof id === 'string' && id.length > 0)
+    ) {
+      throw new Error(
+        `${PUBLISHER_FILE}: supersedes must be a list of band ids`,
+      );
+    }
+    out.supersedes = facts.supersedes as string[];
+  }
+  if (facts.builtAt !== undefined) {
+    if (
+      typeof facts.builtAt !== 'string' ||
+      Number.isNaN(Date.parse(facts.builtAt))
+    ) {
+      throw new Error(`${PUBLISHER_FILE}: builtAt must be a date`);
+    }
+    out.builtAt = facts.builtAt;
+  }
+  if (facts.settledAt !== undefined) {
+    if (
+      typeof facts.settledAt !== 'string' ||
+      Number.isNaN(Date.parse(facts.settledAt))
+    ) {
+      throw new Error(`${PUBLISHER_FILE}: settledAt must be a date`);
+    }
+    out.settledAt = facts.settledAt;
+  }
+  for (const key of ['headerCheck', 'unreadable'] as const) {
+    const value = facts[key];
+    if (value === undefined) continue;
+    if (
+      typeof value !== 'object' ||
+      value === null ||
+      Array.isArray(value) ||
+      !Object.values(value).every((n) => typeof n === 'number')
+    ) {
+      throw new Error(`${PUBLISHER_FILE}: ${key} must be an object of numbers`);
+    }
+    out[key] = value as Record<string, number>;
+  }
+  return out;
+}
+
+/**
+ * The publisher's facts kept beside a band, or undefined when there is no
+ * {@link PUBLISHER_FILE} (a band written before it existed, or one a
+ * subscriber installed).
+ */
+export async function readPublisherFacts(
+  bandDir: string,
+): Promise<BandPublisherFacts | undefined> {
+  const fs = await import('node:fs/promises');
+  const path = await import('node:path');
+  let text: string;
+  try {
+    text = await fs.readFile(path.join(bandDir, PUBLISHER_FILE), 'utf8');
+  } catch (error: any) {
+    if (error?.code === 'ENOENT') return undefined;
+    throw error;
+  }
+  return parsePublisherFile(text);
+}
+
+/** Writes {@link PUBLISHER_FILE} beside a band, replacing it by a rename. */
+export async function writePublisherFacts(
+  bandDir: string,
+  facts: BandPublisherFacts,
+): Promise<void> {
+  const fs = await import('node:fs/promises');
+  const path = await import('node:path');
+  const file = path.join(bandDir, PUBLISHER_FILE);
+  const temporary = `${file}.tmp`;
+  await fs.writeFile(temporary, JSON.stringify(facts, null, 2));
+  await fs.rename(temporary, file);
+}
+
+/**
+ * The ids a band of this publisher's replaces: from {@link PUBLISHER_FILE},
+ * else, for a band written before it existed, from the band's own file.
+ * The one rule for the publication (the sidecar) and the exporter's view of
+ * its live bands, so the two cannot disagree on what is retired.
+ */
+export async function bandSupersedes(found: {
+  dir: string;
+  band: ParquetL1Band;
+}): Promise<string[] | undefined> {
+  const facts = await readPublisherFacts(found.dir);
+  return facts?.supersedes ?? found.band.supersedes;
 }
 
 const isHeight = (value: unknown): value is number =>
@@ -589,15 +812,44 @@ export function bandTablesDigest(band: ParquetL1Band): Buffer {
     .digest();
 }
 
-/** A band directory that could be read: its name, its path, and its description. */
+/** A band directory that could be read: its band id, its path, and its description. */
 export interface BandOnDisk {
+  /** The band id: the directory's name without any installed generation. */
   id: string;
   dir: string;
   band: ParquetL1Band;
 }
 
 /**
- * Every band of a directory whose `band.json` could be read.
+ * The heights a band's id claims, or `undefined` if it is not a band id.
+ * The id is whoever-published-it's, and it is the import ledger's key, so it
+ * has to agree with the band it names.
+ */
+export function idHeightRange(id: string): [number, number] | undefined {
+  const m = /^l1-h(\d{1,15})-(\d{1,15})-[0-9a-f]{8}-[0-9a-f]{12}$/.exec(id);
+  if (m === null) return undefined;
+  return [Number(m[1]), Number(m[2])];
+}
+
+/**
+ * Separates a band id from its generation in the name the index-swarm
+ * sidecar installs a band under, `<band id>~<generation>`
+ * (`GENERATION_SEPARATOR` in `src/index-swarm/subscriber.ts`). A band id
+ * cannot contain it.
+ */
+export const INSTALLED_GENERATION_SEPARATOR = '~';
+
+/**
+ * Every band of a directory whose `band.json` could be read, once each.
+ *
+ * A directory is named by its band id as a publisher writes it, or
+ * `<band id>~<generation>` as the index-swarm sidecar installs it; `id` is
+ * the band id either way. While the sidecar replaces a band it holds two
+ * generations of it for a while. Both have the same tables, since a band's
+ * id is their digest, so only one is returned: one whose heights agree with
+ * its id over one that does not (a copy that disagrees is no copy of that
+ * band, and must not hide one that is), then the one changed last, the
+ * replacement rather than the copy about to be retired.
  *
  * Shared by the publisher's view of what it has published and the
  * importer's view of what it may import, so the two cannot drift on what
@@ -613,7 +865,10 @@ export interface BandOnDisk {
 export async function readBandDirectory(dir: string): Promise<BandOnDisk[]> {
   const fs = await import('node:fs/promises');
   const path = await import('node:path');
-  const found: BandOnDisk[] = [];
+  type Candidate = BandOnDisk & { agrees: boolean; changedAt: number };
+  const better = (a: Candidate, b: Candidate) =>
+    a.agrees !== b.agrees ? a.agrees : a.changedAt > b.changedAt;
+  const found = new Map<string, Candidate>();
   for (const name of await fs.readdir(dir).catch(() => [] as string[])) {
     if (name.startsWith('.')) continue;
     const bandDir = path.join(dir, name);
@@ -626,7 +881,27 @@ export async function readBandDirectory(dir: string): Promise<BandOnDisk[]> {
     } catch {
       continue;
     }
-    found.push({ id: name, dir: bandDir, band });
+    const id = name.split(INSTALLED_GENERATION_SEPARATOR)[0];
+    const named = idHeightRange(id);
+    const candidate: Candidate = {
+      id,
+      dir: bandDir,
+      band,
+      agrees:
+        named !== undefined &&
+        named[0] === band.heightRange[0] &&
+        named[1] === band.heightRange[1],
+      // ctime, as the sidecar judges an installed copy's age: a rename into
+      // place keeps a directory's mtime but not its ctime.
+      changedAt: (await fs.stat(bandDir).catch(() => stat)).ctimeMs,
+    };
+    const held = found.get(id);
+    if (held !== undefined && !better(candidate, held)) continue;
+    found.set(id, candidate);
   }
-  return found;
+  return [...found.values()].map((b) => ({
+    id: b.id,
+    dir: b.dir,
+    band: b.band,
+  }));
 }

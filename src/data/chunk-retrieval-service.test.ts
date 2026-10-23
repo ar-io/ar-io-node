@@ -20,6 +20,9 @@ import {
   TxBoundarySource,
 } from '../types.js';
 import * as metrics from '../metrics.js';
+import { ChunkMetadataAnchorSource } from './chunk-metadata-anchor-source.js';
+import { CompositeTxBoundarySource } from './composite-tx-boundary-source.js';
+import { TxPathValidationSource } from './tx-path-validation-source.js';
 import {
   ChunkNotFoundError,
   ChunkRetrievalService,
@@ -823,6 +826,88 @@ describe('ChunkRetrievalService', () => {
       );
 
       assert.equal(await auditCount('none', 'none'), before + 1);
+    });
+  });
+
+  describe('a request another gateway forwarded (hops >= 1)', () => {
+    it('makes no network request when the database misses: no anchor probe, no AR.IO peer, no chain search', async () => {
+      // End to end through the real boundary sources: the loop between
+      // gateways on 2026-10-17 needed only one of these to fire per hop.
+      const peerCalls: string[] = [];
+      const axiosStub = {
+        head: async (url: string) => {
+          peerCalls.push(`anchor HEAD ${url}`);
+          return { status: 404, headers: {} };
+        },
+        get: async (url: string) => {
+          peerCalls.push(`anchor GET ${url}`);
+          return { status: 404, headers: {} };
+        },
+      } as any;
+      const anchorSource = new ChunkMetadataAnchorSource({
+        log,
+        peerUrls: ['https://ref.example'],
+        requestTimeoutMs: 1000,
+        cacheSize: 8,
+        cacheTtlMs: 60_000,
+        fetchTxOffset: async () => {
+          peerCalls.push('chain /tx/offset');
+          throw new Error('unexpected');
+        },
+        fetchTransaction: async () => {
+          peerCalls.push('chain /tx');
+          throw new Error('unexpected');
+        },
+        axiosInstance: axiosStub,
+      });
+      const txPathSource = new TxPathValidationSource({
+        log,
+        unvalidatedChunkSource: {
+          getUnvalidatedChunk: async (_offset, requestAttributes) => {
+            peerCalls.push(`ar-io peer (hops ${requestAttributes?.hops})`);
+            throw new Error('peer miss');
+          },
+        },
+        arweaveClient: {} as any,
+      });
+      const chainSource: TxBoundarySource = {
+        getTxBoundary: async () => {
+          peerCalls.push('chain binary search');
+          return null;
+        },
+      };
+      const chunkSource = createMockChunkSource();
+      const service = new ChunkRetrievalService({
+        log,
+        chunkSource,
+        txBoundarySource: new CompositeTxBoundarySource({
+          log,
+          dbSource: { getTxBoundary: async () => null },
+          anchorSource,
+          txPathSource,
+          chainSource,
+        }),
+        chunkDataStore: createMockChunkDataStore(),
+        chunkMetadataStore: createMockChunkMetadataStore(),
+      });
+
+      await assert.rejects(
+        service.retrieveChunk(ABSOLUTE_OFFSET, { hops: 1, clientIps: [] }),
+        ChunkNotFoundError,
+      );
+      assert.deepEqual(peerCalls, []);
+      assert.equal((chunkSource.getChunkByAny as any).mock.callCount(), 0);
+
+      // The same miss from a client (hop 0) still uses every source.
+      await assert.rejects(
+        service.retrieveChunk(ABSOLUTE_OFFSET, { hops: 0, clientIps: [] }),
+        ChunkNotFoundError,
+      );
+      assert.deepEqual(peerCalls, [
+        `anchor HEAD https://ref.example/chunk/${ABSOLUTE_OFFSET}/data`,
+        'ar-io peer (hops 0)',
+        'chain binary search',
+      ]);
     });
   });
 });

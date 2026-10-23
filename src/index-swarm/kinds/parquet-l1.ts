@@ -13,7 +13,11 @@
  * The sidecar checks bytes, not the chain: digests against the signed
  * publication, then here each file's footer and schema against the layout
  * and the row counts the band declares. Checks against the chain belong to
- * the importer, which has a node to ask. Installed bands go under
+ * the importer (`index-l1-import`, and the gateway's fill worker), which
+ * runs them before it writes a row: the band judged whole as
+ * `index-l1-verify --bands-dir` judges it, then bound to the chain by the
+ * block the gateway holds above it or by a network anchor, blocks it cannot
+ * bind refused unless accepted. Installed bands go under
  * `installed/parquet-l1/` for the importer; the gateway itself reads none.
  */
 import * as fs from 'node:fs/promises';
@@ -26,6 +30,7 @@ import { checkParquetFile, openFooterReader } from '../../lib/parquet/check.js';
 import {
   BAND_FILE,
   bandFiles,
+  bandSupersedes,
   isL1BandRange,
   L1_SPAN,
   L1_SUB_SPAN,
@@ -108,6 +113,10 @@ export class ParquetL1Kind implements ArtifactKind {
         }),
       ),
     );
+    // What the band replaces is this publisher's own, kept beside the band
+    // (or, in a band written before that, in its band.json): it goes in the
+    // signed publication, never in the band's files.
+    const supersedes = await bandSupersedes({ dir, band });
     return {
       id: path.basename(dir),
       heightRange: band.heightRange,
@@ -115,9 +124,7 @@ export class ParquetL1Kind implements ArtifactKind {
       files,
       metadata: {
         schema: band.schema,
-        ...(band.supersedes !== undefined
-          ? { supersedes: band.supersedes }
-          : {}),
+        ...(supersedes !== undefined ? { supersedes } : {}),
       },
     };
   }

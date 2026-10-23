@@ -51,9 +51,11 @@ never be able to modify what the gateway serves. It also has no WebSeed
 support, which removes the fallback the design depends on.
 
 Two findings from that test shaped the rest of the design. Engines treat a
-WebSeed as one more peer, and both drew about half of a band from it while a
-full-speed seeder was available; so torrents carry no WebSeed, and a
-subscriber adds the publisher's only when peers stall. And every file, the
+WebSeed as one more peer, which is why the torrents the sidecar builds and
+seeds carry no WebSeed. (Since Release 85 the gateway adds its own WebSeed
+to each `.torrent` it serves, for stock clients following a feed;
+subscribers drop it, and add the publisher's own only when peers stall. See
+[index-swarm.md](../index-swarm.md#publishing-torrents)). And every file, the
 last included, is padded to a piece boundary, which is what libtorrent
 itself does: a band built by the sidecar and one built by libtorrent from
 the same files share both infohashes and join one swarm.

@@ -27,6 +27,18 @@ export interface RecordSource {
    */
   records(from: number, to: number): AsyncIterable<BandRecord>;
   /**
+   * What the source reads beyond its name and rank (a URL, a path), for a
+   * grid re-settle's fingerprint: a source pointed elsewhere is another
+   * source.
+   */
+  readonly identity?: string;
+  /**
+   * A digest of the rows `records(from, to)` reads, cheaper than reading
+   * them: equal digests mean equal records (see `fingerprint.ts`). Without
+   * it, a fingerprint digests the records themselves.
+   */
+  fingerprint?(from: number, to: number): Promise<string>;
+  /**
    * What the source has given and left out since it was opened; open a
    * source per run for per-run counts.
    */
@@ -59,7 +71,13 @@ export type UnrepairedReason =
   /** A `root_parent_offset` that doesn't match the parent's. */
   | 'inconsistent'
   /** Nested more than one level, without a consistent chain to prove it. */
-  | 'deep';
+  | 'deep'
+  /**
+   * The row's own numbers can't frame an item: no size, a payload that
+   * doesn't start after the item, a header longer than the item, or an
+   * item that doesn't end where its payload does.
+   */
+  | 'layout';
 
 export interface SourceStats {
   /** Rows read from the source. */
@@ -74,6 +92,11 @@ export interface SourceStats {
   unrepaired: Partial<Record<UnrepairedReason, number>>;
   /** Rows left out, by reason. */
   dropped: Partial<Record<DropReason, number>>;
+  /**
+   * Reads split in two after running out of memory, so read otherwise than
+   * a fingerprint describes (see `fingerprint.ts`).
+   */
+  splits: number;
 }
 
 export const newSourceStats = (): SourceStats => ({
@@ -83,6 +106,7 @@ export const newSourceStats = (): SourceStats => ({
   repaired: 0,
   unrepaired: {},
   dropped: {},
+  splits: 0,
 });
 
 export function countDrop(stats: SourceStats, reason: DropReason): void {
@@ -109,6 +133,8 @@ export interface ItemRow {
   dataOffset?: number;
   /** The whole item, header and payload. */
   size?: number;
+  /** The item's payload size. */
+  dataSize?: number;
   rootParentOffset?: number;
   /** The parent's row, for a nested item; undefined if not in the index. */
   parent?: ParentRow;
@@ -190,6 +216,13 @@ export function toBandRecord(
     stats.rootOnly += 1;
     return record;
   }
+  // Before any placement: a row that can't frame its own item gets no
+  // offsets, wherever its parent's payload starts.
+  if (!framesItself(row, offset, dataOffset)) {
+    stats.unrepaired.layout = (stats.unrepaired.layout ?? 0) + 1;
+    stats.rootOnly += 1;
+    return record;
+  }
   const placed = placePayload(row, offset);
   if (typeof placed === 'string') {
     stats.unrepaired[placed] = (stats.unrepaired[placed] ?? 0) + 1;
@@ -206,13 +239,41 @@ export function toBandRecord(
   return record;
 }
 
+/** Where a row's offsets start in the root, as {@link placePayload} proves it. */
+export interface PayloadPlacement {
+  /** Added to the row's offsets, they are offsets into the root's data. */
+  base: number;
+  /** The offsets were relative though `rootParentOffset` said otherwise. */
+  repaired: boolean;
+}
+
 /**
- * Where a row's offsets start in the root, or why that can't be proven.
+ * Whether a row's offsets and sizes agree with each other: a size, a
+ * payload that starts after the item does, a header no longer than the
+ * item, and, where the payload's size is known, an item that ends where
+ * its payload does. They are relative to the same base, so this holds
+ * whatever the placement.
  */
-function placePayload(
+export function framesItself(
   row: ItemRow,
   offset: number,
-): { base: number; repaired: boolean } | UnrepairedReason {
+  dataOffset: number,
+): boolean {
+  const { size, dataSize } = row;
+  if (size === undefined || size === 0) return false;
+  if (dataOffset <= offset || dataOffset - offset > size) return false;
+  return dataSize === undefined || offset + size === dataOffset + dataSize;
+}
+
+/**
+ * Where a row's offsets start in the root, or why that can't be proven: the
+ * rules {@link toBandRecord} describes. Shared with the `parquet-l2`
+ * exporter (`item-location.ts`), so both indexes place an item the same way.
+ */
+export function placePayload(
+  row: ItemRow,
+  offset: number,
+): PayloadPlacement | UnrepairedReason {
   const rpo = row.rootParentOffset;
   if (row.parentId === undefined) return 'no_parent';
   if (!isNested(row)) {

@@ -41,7 +41,7 @@ client → (optional edge: nginx/CDN) → envoy :3000 → core :4000 → respons
                                                               ↘ webhook fan-out → optional sidecars
 ```
 
-Every served data response carries trust headers (`X-AR-IO-Verified`, `X-AR-IO-Trusted`, `X-AR-IO-Stable`, `X-AR-IO-Hops`, plus `X-Arweave-*` tag passthrough). Those headers are what HTTPSig signs — see `src/middleware/httpsig.ts` `TRIGGER_HEADERS`. Endpoints with no trust trigger (`/ar-io/info`, `/ar-io/healthcheck`, `/graphql` errors) are deliberately not signed.
+Every served data response carries trust headers (`X-AR-IO-Verified`, `X-AR-IO-Trusted`, `X-AR-IO-Stable`, `X-AR-IO-Hops`, plus `X-Arweave-*` tag passthrough). Those headers are what HTTPSig signs — see `src/lib/httpsig.ts` `TRIGGER_HEADERS`. Endpoints with no trust trigger (`/ar-io/info`, `/ar-io/healthcheck`, `/graphql` errors) are deliberately not signed.
 
 ### Data retrieval — composite source with fallback chain
 
@@ -59,7 +59,7 @@ Two write paths run side-by-side:
 
 **1. SQLite primary indexer (always on)** — `BlockImporter` worker imports blocks one at a time into `new_blocks`/`new_transactions` (the unstable head, ~last 18 blocks), and a separate process promotes them to `stable_blocks`/`stable_transactions` once they're past the reorg horizon. ANS-104 bundle unbundling is gated by `ANS104_UNBUNDLE_FILTER` (often narrow). Database access is in a worker thread (`StandaloneSqlite`) — never call SQLite synchronously from the main thread.
 
-**2. ClickHouse pipeline (optional, `--profile clickhouse`)** — Stable rows are exported to parquet then imported by `clickhouse-auto-import` (hourly cycles) into `staging_*` and finally `transactions`. **Streaming pipeline** (PR #699 / `clickhouse-streaming-unstable-head` branch) mirrors the unstable-head SQLite writes directly into ClickHouse `new_blocks` / `new_transactions` so GraphQL can query the head without waiting for the parquet round-trip. Activated by `CLICKHOUSE_STREAMING_ENABLED=true`. Reorgs trigger bounded `ALTER TABLE ... DELETE WHERE` on the `new_*` tables.
+**2. ClickHouse pipeline (optional, `--profile clickhouse`)** — Stable rows are exported to parquet then imported by `clickhouse-auto-import` (hourly cycles) into `staging_*` and finally `transactions`. **Streaming pipeline** (#699, in releases since r79) mirrors the unstable-head SQLite writes directly into ClickHouse `new_blocks` / `new_transactions` so GraphQL can query the head without waiting for the parquet round-trip. Activated by `CLICKHOUSE_STREAMING_ENABLED=true`. Reorgs trigger bounded `ALTER TABLE ... DELETE WHERE` on the `new_*` tables.
 
 ### GraphQL routing
 
@@ -109,9 +109,9 @@ Pipeline diagnostic: a single `curl -sf .../ar-io/__gateway_metrics | grep -E 'q
 
 ### ArNS resolution
 
-`CompositeArNSResolver` walks resolvers in order: `TrustedGatewayArNSResolver` (asks `TRUSTED_ARNS_GATEWAY_URL`, default `https://__NAME__.turbo-gateway.com`), then `OnDemandArNSResolver` (queries the on-chain `ario-arns` and `ario-ant` programs directly via `SOLANA_RPC_URL`). The base name set is paginated into an in-memory `ArNSNamesCache` at boot and refreshed on a debounce. Resolved IDs may be Arweave TXs (route to data path) or, on the streaming-head branch, IPFS CIDs (route to `/ipfs/<cid>` via the Kubo sidecar). Unknown names log `Unable to resolve name against all resolvers` — that's normal user-error traffic, not a service failure.
+`CompositeArNSResolver` walks resolvers in the order `ARNS_RESOLVER_PRIORITY_ORDER` sets, default `on-demand,gateway`: `OnDemandArNSResolver` (queries the on-chain `ario-arns` and `ario-ant` programs directly via `SOLANA_RPC_URL`), then `TrustedGatewayArNSResolver` (asks `TRUSTED_ARNS_GATEWAY_URL`, default `https://__NAME__.turbo-gateway.com`). The base name set is paginated into an in-memory `ArNSNamesCache` at boot and refreshed on a debounce. Resolved IDs are Arweave transaction or data item IDs, served through the data path. Unknown names log `Unable to resolve name against all resolvers` — that's normal user-error traffic, not a service failure.
 
-`/<name>` and `/<name>/<path>` requests carry `X-ArNS-*` trust headers in the response. Manifest path resolution still uses `StreamingManifestPathResolver`; the "from index" path is not implemented yet (logs warn `not implemented` then falls back to data-side resolution, which works).
+`/<name>` and `/<name>/<path>` requests carry `X-ArNS-*` trust headers in the response. Manifest path resolution uses `StreamingManifestPathResolver`: `resolveFromIndex` answers from an in-process cache of earlier resolutions and, for a manifest's root, from the stored resolution index; anything else is resolved by streaming the manifest (`resolveFromData`).
 
 ### Network identity, observer, and incentives
 
@@ -136,7 +136,7 @@ Observer service knobs:
 Network onboarding (operator side, only needed once):
 - `npm install -g @ar.io/sdk` — provides the `ar.io` CLI binary. Use `ar.io get-gateway --address <pubkey>` to read state, `ar.io join-network ...` to register.
 - The CLI accepts the operator key as either `--wallet-file <path>` (JSON) or `--private-key '<base58>'` (Phantom export — `bs58.decode` runs in-process).
-- Every Solana command needs `-t solana` and the four program IDs (`--core-program-id` / `--gar-program-id` / `--arns-program-id` / `--ant-program-id`) plus `--rpc-url`. As of `@ar.io/sdk@^4.0.0-solana.22` the bundled "mainnet" constants are still placeholders, so passing `--mainnet` alone resolves to non-existent addresses — always pass the explicit program IDs the network team publishes for whichever environment you're targeting (mainnet, staging-devnet, local devnet).
+- Every Solana command needs `-t solana` and the four program IDs (`--core-program-id` / `--gar-program-id` / `--arns-program-id` / `--ant-program-id`) plus `--rpc-url`. Pass the explicit program IDs the network team publishes for the environment you are targeting (mainnet, staging-devnet, local devnet) rather than relying on the SDK's bundled constants; the gateway's own `/ar-io/info` `programIds` shows what a running gateway uses. The gateway carries `@ar.io/sdk` `^4.5.0`.
 - Register via the CLI or the gateways.ar.io portal: operator wallet, observer wallet, FQDN, Properties Tx ID, label, stake (`--operator-stake 20000` in whole ARIO — the CLI converts to mARIO internally via `requiredMARIOFromOptions` → `new ARIOToken(...).toMARIO()`).
 - Gateway must be reachable at the registered FQDN with valid TLS, AND configured for the same `programIds` set you joined with. The usual cause of a "I joined but nothing's working" report is a gateway whose `.env` still pins the old network's program IDs.
 - Optional delegated staking — operators can accept delegations with a configurable reward share. `--min-delegated-stake` is mARIO directly (no ARIO→mARIO conversion); `--operator-stake` is the only stake-input flag that takes whole ARIO.
@@ -148,19 +148,19 @@ Two mutually-relevant env vars decide what `/` serves:
 - `APEX_ARNS_NAME` — resolve an ArNS name as the apex. Comma-separated values position-map to `ARNS_ROOT_HOST` entries when there's more than one host.
 - `ARNS_ROOT_HOST` — the gateway's primary domain(s) for ArNS subdomain resolution.
 
-### Index sharing sidecar (optional)
+### Index Sharing (optional)
 
-The `index-swarm` sidecar (compose profile `index-swarm`) publishes this gateway's CDB64 root-TX index bands, signed with the observer key, and subscribes to other gateways' bands, installing them under `data/indexes/installed/` where the gateway loads them without a restart. It resolves publishers through the gateway's own `/ar-io/peers`, so it makes no RPC calls. The gateway serves `/ar-io/indexes` (the signed document) and the byte routes, metered like data. The optional torrent engine (profile `index-swarm-torrent`; setting `INDEX_SWARM_ENGINE_AUTH` turns it on) adds a BitTorrent tier: peers first, the HTTP routes as fallback, every subscriber seeding what it installs. The engine runs on its own Docker network and filters private addresses; on a LAN-only swarm set `INDEX_SWARM_ENGINE_BLOCK_PRIVATE=false`. Health: `index_subscription_manifest_age_seconds` (publisher gone quiet), `index_swarm_installed_bands`, `index_subscription_bytes_total{transport}`, `index_swarm_engine_available`. On a publisher, who shares: `index_swarm_tracker_seeding_hosts` (other hosts seeding a band) and `index_swarm_tracker_seeders`. Full guide: `docs/index-swarm.md`.
+Full guide: `docs/index-swarm.md` (sidecar), `docs/index-export.md` (building bands), `docs/index-publication.md` (protocol). The essentials:
 
-**A fleet behind a load balancer** (docs/index-swarm.md, "Publishing torrents from a fleet"): only the node `/ar-io/indexes*` is pinned to publishes and runs the engine and tracker; its peer port goes to its own public IP, not through the LB (set `INDEX_SWARM_ENGINE_PUBLIC_HOST`), and the tracker is direct or `/announce` proxied with `INDEX_SWARM_TRACKER_TRUSTED_PROXIES`. Rate limiter and x402 need nothing new: byte routes and the WebSeed are metered, the document and `.torrent` are free. Other nodes that answer lookups subscribe over HTTP with `url` pointed at the publishing node, allowlisted in its `RATE_LIMITER_IPS_AND_CIDRS_ALLOWLIST`.
-
-**Ports and disk.** The engine's peer port (`INDEX_SWARM_ENGINE_PORT`, 6881 TCP+UDP) and the tracker's (`INDEX_SWARM_TRACKER_PORT`, 6969 TCP) are Docker-published, so ufw neither blocks nor protects them (filter where Docker forwards: the `DOCKER-USER` chain with Docker's default iptables backend; with its nftables backend, which has no `DOCKER-USER`, a chain in your own table on the `forward` hook at a priority before Docker's), and a port already held on the host stops the container starting. A publisher needs its peer port reachable, and the tracker port only when its torrents announce to it directly (`INDEX_SWARM_TRACKERS` naming this node's port): not when `/announce` is proxied through a load balancer, nor when it publishes with no tracker (it warns, and peers then meet only through DHT and the WebSeed). A subscriber needs neither (behind NAT it still downloads and seeds to peers it dials), and `index-swarm-status` reports a closed port as WARN, not FAIL. The engine has UPnP off. `INDEX_SWARM_MAX_DISK_BYTES` (50 GiB from the setup script) is a ceiling, not a reservation: nothing checks free space, so a full disk under `data/indexes` is the operator's to prevent. That directory must be one filesystem (renames, hard links); move it whole with `INDEX_SWARM_DATA_PATH`. Upload defaults to 10 MB/s and 100 GB a UTC day, up to about 3 TB a month.
-
-**Build and check bands with `./tools/ar-io-node`** (docs/cli.md, "For scripts and agents"): `index-band-build` (CSV records in, header check against `--gateway-url`, published into `data/indexes/published/root-tx-index`) and `index-band-verify`. JSON on stdout, exit 1 on failure, safe to rerun (an identical band reports `"unchanged": true`). Point `--gateway-url` at a gateway that holds the roots (`https://turbo-gateway.com`); a gateway that must fetch them times out and the band is refused as under-checked, not wrong. Any other command runs as the SDK's `ar.io` CLI.
-
-**Bands are built by the `index-export` service** (compose profile `index-export`; docs/index-swarm.md, "Producing bands"), once a day at `INDEX_EXPORT_RUN_AT_UTC` from `INDEX_EXPORT_SOURCES` (this gateway's ClickHouse, else SQLite; peers and a bundler overlay merge). It needs `INDEX_EXPORT_START_HEIGHT` for its first run and `INDEX_EXPORT_HEADER_CHECK_URL` always (a gateway holding the roots; not `core:4000` on a gateway that fetches them). Dry-run before starting: `docker compose --profile index-export run --rm index-export --once --dry-run`. Bring it up by name with `--no-deps`. Its `/healthz` is loop liveness only; outcomes are `index_export_runs_total{result,reason}` and `index_export_last_success_timestamp_seconds{kind="d"}` (alert past 2 days). `couldnt_check` retries itself (15 min doubling to 2 h); `rejected` (a wrong header, conflicts over 1%) never does and needs a look. A stale `data/indexes/export/lock` (5 min untouched) is cleared by the next run; `state.json` there is re-derivable except adoptions. With `parquet-l1` in `INDEX_EXPORT_KINDS` it also builds L1 bands from `core.db`, and adds lookup files (layout `l1-3`) to published L1 bands in place, keeping their ids (`index_export_runs_total{kind="derive"}`). Upgrade a gateway that subscribes to `parquet-l1` before its publisher writes `l1-3` (an older one refuses those bands, naming the layout, and keeps its copies), and a publisher's `index-swarm` with or before its `index-export` (an older sidecar can't describe an `l1-3` band, so it goes unpublished).
-
-**Set up and check with the scripts, not by hand:** `./tools/index-swarm-setup --subscribe <publisher wallet> --torrent --dry-run` shows the `.env` changes (subscription, CDB64 sources, lookup order, engine password); `--restart` applies them, recreating only what needs it with the running gateway's compose files. `./tools/index-swarm-status` is the first thing to run when asked whether index sharing works: read-only, ok/WARN/FAIL per check with the fix, exit 1 on a failure.
+- **Pieces.** The `index-swarm` sidecar (profile `index-swarm`) publishes and subscribes to signed bands; the torrent engine (profile `index-swarm-torrent`, on when `INDEX_SWARM_ENGINE_AUTH` is set) adds BitTorrent; `index-export` (profile `index-export`) builds the bands. All run the core image; start them by name with `--no-deps` and the gateway's own `-f` files.
+- **Set up and check with the scripts:** `./tools/index-swarm-setup --subscribe <wallet> --torrent --dry-run`, then `--restart`. `./tools/index-swarm-status` is the first thing to run when asked whether index sharing works (ok/WARN/FAIL with the fix; exit 1 on failure). It compares only **root-TX** bands with what the gateway has loaded (L1 bands are not loaded as an index; with `L1_BAND_IMPORT_ENABLED` they are filled into `core.db`), and also reports index-export's root-TX and L1 builds.
+- **index-export** builds root-TX bands (from ClickHouse or `bundles.db`) and, with `INDEX_EXPORT_KINDS=root-tx-index,parquet-l1`, L1 bands from `core.db`. It derives lookup files (layout `l1-3`) for published L1 bands first, in place, before any build. Dry-run with `docker compose --profile index-export run --rm -T index-export --once --dry-run`. Alert on `index_export_last_success_timestamp_seconds{kind="d"}` older than 2 days; `/healthz` is liveness only.
+- **Subscribers do not serve the byte routes.** Files by name, blob and WebSeed under `/ar-io/indexes` answer only on a publisher; a subscriber answers 404 and shares over BitTorrent.
+- **nginx: `proxy_cache off` for `location ^~ /ar-io/indexes`** (no trailing slash). A cache zone turns range requests into whole-file `200`s and then `402`s. Check the three layers innermost first: `curl -s -o /dev/null -w '%{http_code} %{size_download}' -r 0-99 <base>/ar-io/indexes/<band file>` against `:4000`, `:3000` and the public URL; `206 100` is right. Fix every server block (TLS and internal cache listeners often live in different files).
+- **Fleets:** only the signing node publishes; send `/ar-io/indexes*` to it, and set `INDEXES_ADVERTISE_FROM_URL` on every node that does not sign so `/ar-io/info` advertises the same `indexes` block.
+- **L1 history from bands:** `./tools/index-swarm-setup --subscribe <wallet> --l1` subscribes to `parquet-l1` and sets `L1_BAND_IMPORT_ENABLED=true`; core then runs `index-l1-import --fill` as a child process every `L1_BAND_IMPORT_INTERVAL_SECONDS`, writing only heights `core.db` lacks below the top of `stable_blocks`, while the gateway runs. With an empty `core.db` and no `START_HEIGHT`, the block importer starts at the chain tip. Watch `l1_band_import_runs_total{result}`, `l1_band_import_uncovered_heights`, and core logs from `L1BandImportWorker`. `index-l1-import` without `--fill` is the faster offline path (gateway stopped, `new_*` empty). Only one import or fill runs per `core.db` (a lock beside it). `index-l1-verify` and `index-l1-audit` are read-only. See `docs/cli.md`.
+- **Fleet peers in `TRUSTED_GATEWAYS_URLS` go `"trusted": false`.** A gateway marks bytes from a peer as trusted by that entry's `trusted` flag, not by anything the peer verified. A trusted flag on a fleet peer would pass its unverified bytes on as trusted.
+- **Ports:** 6881 TCP+UDP (engine) and 6969 TCP (tracker) are Docker-published, so ufw neither blocks nor protects them; filter in `DOCKER-USER` (see `docs/index-swarm.md#running-the-engine`).
 
 ### Filters and webhooks (the gateway's contract with sidecars)
 
@@ -180,7 +180,7 @@ Webhook events fired: `data-cached`, `tx-indexed`, `ans104-data-item-indexed`. `
 docker compose --profile clickhouse up -d
 ```
 
-The `--profile clickhouse` flag matters: without it, ClickHouse and the auto-import container stay down and the streaming pipeline goes silent. Other profiles (`grafana`, `bundler`, `litestream`, `ao`, `hb`) gate their own services.
+The `--profile clickhouse` flag matters: without it, ClickHouse and the auto-import container stay down and the streaming pipeline goes silent. The other profiles are `litestream`, `otel`, `index-swarm`, `index-swarm-torrent` and `index-export`. Grafana, the bundler and HyperBEAM are separate compose files (`docker-compose.grafana.yaml`, `docker-compose.bundler.yaml`, `docker-compose.hb.yaml`), each passed with its own `-f`.
 
 Wait for ready:
 ```bash
@@ -194,7 +194,7 @@ docker compose --profile clickhouse build core clickhouse-auto-import
 docker compose --profile clickhouse up -d --force-recreate core clickhouse-auto-import
 ```
 
-`--force-recreate` is required — without it, compose sees the same image *name* (`:latest`) and skips recreation even though the image *digest* changed. Confirm with `docker inspect <container> --format '{{.Image}}'` — the SHA must differ from before.
+`--force-recreate` is required — without it, compose sees the same image *name and tag* and skips recreation even though the image *digest* changed. Confirm with `docker inspect <container> --format '{{.Image}}'` — the SHA must differ from before.
 
 ### Disk pressure recovery (in order of safety)
 
@@ -214,10 +214,15 @@ Avoid `docker volume prune -af` without listing first (`docker volume ls -f dang
 ADMIN=$(grep '^ADMIN_API_KEY=' .env | cut -d= -f2-)
 TX=<arweave-tx-or-ipfs-cid>
 
-# Block (the gateway has PUT only — there is no DELETE handler today)
+# Block
 curl -sf -X PUT "http://localhost:4000/ar-io/admin/block-data" \
   -H "Authorization: Bearer $ADMIN" -H 'Content-Type: application/json' \
-  -d "{\"id\":\"$TX\",\"hash\":\"$TX\",\"source\":\"manual\",\"notes\":\"...\"}"
+  -d "{\"id\":\"$TX\",\"source\":\"manual\",\"notes\":\"...\"}"
+
+# Unblock, by id or by data hash (PUT, not DELETE)
+curl -sf -X PUT "http://localhost:4000/ar-io/admin/unblock-data" \
+  -H "Authorization: Bearer $ADMIN" -H 'Content-Type: application/json' \
+  -d "{\"id\":\"$TX\"}"
 ```
 
 If a moderation sidecar is present (and wired via `WEBHOOK_TARGET_SERVERS`), prefer routing the block through it — depending on the sidecar's config, it may also bust an edge cache after blocking.
@@ -235,10 +240,10 @@ Don't draw conclusions from `/ar-io/info` or `/ar-io/healthcheck` benchmarks —
 ## Pitfalls (apply to any deployment)
 
 1. **`clickhouse-auto-import` logs `Failed to connect to core port 4000 after 0 ms`** — the script's connection state goes stale when core is recreated mid-cycle, and auto-import sleeps 1 h between cycles, so the bad state lingers. Recreating just the auto-import container clears it; manual `curl http://core:4000/...` from inside the container will succeed even while the script is failing.
-2. **Streaming tables empty (`new_blocks` / `new_transactions = 0`) despite `CLICKHOUSE_STREAMING_ENABLED=true`** — running the published `:latest` core image instead of a local build. The streaming columns/tables are populated only by the dev-branch code. Rebuild + force-recreate.
+2. **Streaming tables empty (`new_blocks` / `new_transactions = 0`) despite `CLICKHOUSE_STREAMING_ENABLED=true`** — check the core image is r79 or later (`docker inspect <core> --format '{{.Config.Image}}'`) and that core was recreated after the setting changed; then check core's logs for `ClickHouseStreamer` errors.
 3. **Webhook error flood (`getaddrinfo ENOTFOUND <sidecar-host>`)** — a configured sidecar isn't running. Bring it up. Don't strip the target unless intentionally retiring the sidecar — those targets are how moderation and provenance subsystems work.
 4. **Bundle unbundling looks idle (low matched count)** — `ANS104_UNBUNDLE_FILTER` is intentionally narrow on most operator configs (e.g., one App-Name + one owner). Confirm via `/ar-io/info`. Not a bug.
-5. **Gateway has no `DELETE /ar-io/admin/block-data` handler** — only PUT. Sidecars that send DELETE (e.g. an unblock action) will see failures. Document but don't try to "fix" by changing the sidecar — the gateway is the side that needs the route.
+5. **Unblocking is `PUT /ar-io/admin/unblock-data`, not `DELETE /ar-io/admin/block-data`** — there is no DELETE handler. A sidecar that sends DELETE to unblock will see failures; point it at `unblock-data` (body `{"id": ...}` or `{"hash": ...}`).
 6. **`/ar-io/info` and `/ar-io/healthcheck` are unsigned** — they carry no trust-trigger headers, so HTTPSig signing skips them. Use `/raw/<id>` against a cached tx for HTTPSig benchmarks.
 7. **`docker logs <core> | tail` can dump megabytes of binary** — the streaming pipeline sometimes logs cert chains as raw byte arrays. Filter with `grep -viE '"buffer":|raw bytes|^[\[0-9, ]+$'`.
 8. **Five-edit dance for adding a database method** — SQL statement, worker impl in `StandaloneSqlite`, queue wrapper in main DB class, case in worker message handler, interface in `types.d.ts`. Skip any one and you get silent failures.
@@ -247,10 +252,10 @@ Don't draw conclusions from `/ar-io/info` or `/ar-io/healthcheck` benchmarks —
 11. **ArNS names return 404 even though `ar.io get-arns-record --name <name>` returns the record fine** — SDK version drift. `ArNSNamesCache.hydrate` paginates the on-chain registry; an SDK pin that's significantly older than the deployed `ario-arns` program may parse paginated responses incorrectly, hydrating "successfully" but with most entries missing. Logs show `Successfully hydrated ArNS names cache` quickly (~few seconds for thousands of records) followed by `Base name not found in ArNS names cache` on lookups. Fix: bump `@ar.io/sdk` in `package.json` to the latest `^4.0.0-solana.*` and rebuild.
 12. **`/ar-io/info` shows the OLD network's `programIds` after a migration / image swap** — the `.env` has explicit `CORE_IMAGE_TAG` / `ENVOY_IMAGE_TAG` / `OBSERVER_IMAGE_TAG` pins that shadow the compose defaults. Updating only the compose defaults won't move a gateway whose `.env` still pins old image tags. Either update both, or remove the explicit pins from `.env` and let compose defaults win.
 
-13. **Index bands installed but lookups still go to the network** — `ROOT_TX_LOOKUP_ORDER` must put `cdb` right after `db`, and `CDB64_ROOT_TX_INDEX_SOURCES` must start with `data/indexes/installed/root-tx-index`; both need a gateway restart. Bring them up by service name: the sidecar alone with `docker compose --profile index-swarm up -d index-swarm`, and with the torrent engine `docker compose --profile index-swarm --profile index-swarm-torrent up -d index-swarm index-swarm-engine` (its init runs first by dependency). A bare `up` with a profile starts every default service too.
+13. **Index bands installed but lookups still go to the network** — `ROOT_TX_LOOKUP_ORDER` needs `cdb` right after `db`, and `CDB64_ROOT_TX_INDEX_SOURCES` must start with `data/indexes/installed/root-tx-index`; both need a gateway restart. `./tools/index-swarm-setup --restart` does both. See `docs/index-swarm.md#lookup-order`.
 14. **Every visitor shares one rate-limit bucket, or all get 429/402 together** — the gateway believes `X-Forwarded-For` only from `TRUSTED_PROXIES` (default: loopback and private ranges). Behind a CDN or a load balancer on public addresses, the CDN's own address is then taken as the client. Add its published ranges to `TRUSTED_PROXIES` (keep the private defaults if nginx sits in between) and recreate core. Never set `TRUSTED_PROXIES=none` with the standard compose: every request through Envoy (port 3000) would carry Envoy's address and share one bucket. `none` is only for a core that clients reach directly. Allowlists match the client address only, never other addresses in its headers.
 
-15. **A range request on an index band file returns `200` with the whole file, and the next one returns `402`** - a proxy in front has a `proxy_cache` zone covering `/ar-io/indexes`. When a location has a cache zone, nginx strips the client's `Range` from the upstream request and fetches the whole object so it can store it, which happens before it sees any `Cache-Control`, so no response header can prevent it and `proxy_buffering off` alone does not fix it. Whether the *client* sees the full body depends on whether the response was cacheable: a metering gateway sends `private`, so nothing is stored and nginx returns `200` with everything on every request, while a gateway that does not meter sends `public` and nginx answers the range from cache, appearing to work while still pulling each whole file once and filling the zone with band files of up to 1.35 GB. Use `proxy_cache off` for the prefix (no trailing slash: with one, nginx answers the unslashed form with a `301`, and the document at `/ar-io/indexes` is what subscribers poll, with HTTPSig signing `@path`). Core and envoy both answer `206` correctly, so the default stack is fine and this only bites once an operator adds a cache or CDN. It fails silently, since a `200` with more bytes than asked for looks like success, and it breaks BitTorrent WebSeeds, media seeking and clients that query the Parquet bands in place over HTTP. **Check every server block that serves the gateway**: a TLS listener and an internal cache listener are often in different files, and fixing one leaves the other broken. After `systemctl reload nginx`, old workers finish their requests on the old config, so re-test a few seconds later before concluding a fix failed. The following `402` is metering, not misconfiguration: the accidental whole-file transfer consumed the address's allowance.
+15. **A range request on an index band file returns `200` with the whole file, and the next one returns `402`** — a proxy cache zone covers `/ar-io/indexes`. Use `proxy_cache off` for the prefix and run the three-layer `curl -r 0-99` check above. See `docs/index-swarm.md#running-behind-nginx`.
 
 ## When something breaks: where to look
 
@@ -259,7 +264,7 @@ Don't draw conclusions from `/ar-io/info` or `/ar-io/healthcheck` benchmarks —
 | 5xx from gateway | `docker logs --tail 50 <core-container>` (filtered), then envoy logs |
 | Indexer falling behind | SQLite `MAX(height)` per `block_importer` log, peer health, `/data` free space |
 | ClickHouse stale | `docker compose --profile clickhouse logs --tail 50 clickhouse-auto-import`; verify curl-to-core works from inside the container |
-| Streaming table stuck at 0 | image SHA — almost always the published `:latest` rather than local build |
+| Streaming table stuck at 0 | core image older than r79, or core not recreated after `CLICKHOUSE_STREAMING_ENABLED` changed |
 | Admin API 401/404 | `ADMIN_API_KEY` mismatch with `.env` |
 | Webhook silent | `WEBHOOK_TARGET_SERVERS` in gateway `.env`; sidecars must be on the same docker network and reachable by service name |
 | `/data` filling | `du -h -d 1 /data \| sort -hr` — usually the `contiguous` cache |

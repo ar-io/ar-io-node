@@ -109,6 +109,11 @@ export interface BandSampleEntry {
   rootDataOffset: number;
   /** The entry's sample tag; absent for the general sample. */
   tag?: string;
+  /**
+   * The height its band says its root is at, when the band says: a root
+   * source that finds roots in blocks checks it.
+   */
+  height?: number;
 }
 
 /** A band built and read back, not yet published. */
@@ -174,8 +179,21 @@ export interface BuildBandOptions {
    * in the general sample.
    */
   sampleSizes?: Record<string, number>;
+  /**
+   * Candidates to sample for each entry a sample is to hold (default 1):
+   * with more, each sample is a pool that {@link checkBandHeaders} walks
+   * until it has read the sample's size, passing over entries whose roots
+   * are gone.
+   */
+  samplePool?: number;
   /** Random source for sampling, in [0, 1). */
   random?: () => number;
+  /**
+   * Flush the band's files and directories to disk before renaming it into
+   * place (default true). Off only where nothing needs to survive a power
+   * cut, such as tests: a band is up to 256 files.
+   */
+  sync?: boolean;
   /**
    * The clock stamped into the manifest's `createdAt`. The service decides
    * when a band is due to fold from that stamp, so both must read the same
@@ -487,7 +505,9 @@ export async function buildBand({
   dryRun = false,
   sampleSize = 150,
   sampleSizes = {},
+  samplePool = 1,
   random = Math.random,
+  sync = true,
   now = Date.now,
 }: BuildBandOptions): Promise<BuiltBand> {
   const log = parentLog.child({ function: 'buildBand' });
@@ -505,6 +525,9 @@ export async function buildBand({
   }
   if (publisher.length === 0) {
     throw new Error('publisher is required');
+  }
+  if (!Number.isSafeInteger(samplePool) || samplePool < 1) {
+    throw new Error(`samplePool must be a positive integer: ${samplePool}`);
   }
   for (const [tag, size] of Object.entries(sampleSizes)) {
     if (tag.length === 0 || !Number.isSafeInteger(size) || size < 1) {
@@ -588,11 +611,14 @@ export async function buildBand({
     // Sort, deduplicate and write, one partition at a time.
     const bandDir = path.join(staging, 'band');
     await fs.mkdir(bandDir);
-    const sample = new Reservoir<BandSampleEntry>(sampleSize, random);
+    const sample = new Reservoir<BandSampleEntry>(
+      sampleSize * samplePool,
+      random,
+    );
     const tagSamples = new Map(
       Object.entries(sampleSizes).map(([tag, size]) => [
         tag,
-        new Reservoir<BandSampleEntry>(size, random),
+        new Reservoir<BandSampleEntry>(size * samplePool, random),
       ]),
     );
     const readBack = new Reservoir<{ key: Buffer; value: Buffer }>(
@@ -674,7 +700,7 @@ export async function buildBand({
       };
 
       const filename = `${indexToPrefix(partition)}.cdb`;
-      writer = new Cdb64Writer(path.join(bandDir, filename));
+      writer = new Cdb64Writer(path.join(bandDir, filename), { sync });
       await writer.open();
       let partitionRecords = 0;
       for (let first = 0; first < order.length; ) {
@@ -790,8 +816,10 @@ export async function buildBand({
     );
     // The partitions are synced by their writer; make the manifest and the
     // directory durable too, so a power cut can't publish an empty manifest.
-    await syncPath(path.join(bandDir, 'manifest.json'));
-    await syncPath(bandDir);
+    if (sync) {
+      await syncPath(path.join(bandDir, 'manifest.json'));
+      await syncPath(bandDir);
+    }
 
     // Read back.
     for (const partition of partitions) {
@@ -957,7 +985,7 @@ export async function buildBand({
       }
       throw error;
     }
-    await syncPath(publishDir);
+    if (sync) await syncPath(publishDir);
     log.info('Published band', {
       id,
       records: written,

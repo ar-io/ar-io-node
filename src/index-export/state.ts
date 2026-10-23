@@ -10,9 +10,17 @@ import * as path from 'node:path';
 import { Cdb64Manifest, parseManifest } from '../lib/cdb64-manifest.js';
 import { bandPublisherTag } from '../lib/index-band/build.js';
 import { supersededBands } from '../lib/index-publication.js';
+import type { BandFingerprint } from './kinds/root-tx/fingerprint.js';
 
-/** A band's role in the plan: history, recent (folded weekly) or delta (daily). */
-export type BandRole = 'h' | 'r' | 'd';
+/**
+ * A band's role in the plan: history, recent (folded weekly) or delta
+ * (daily); and, in the grid layout, `tip`, the band above the frozen ones.
+ */
+export type BandRole = 'h' | 'r' | 'd' | 'tip';
+
+/** The roles a layout's own bands can have; `tip` is the grid layout's alone. */
+export const LEGACY_ROLES: readonly BandRole[] = ['h', 'r', 'd'];
+export const GRID_ROLES: readonly BandRole[] = ['h', 'r', 'd', 'tip'];
 
 /** A band this service built, or adopted, and still offers. */
 export interface OwnBand {
@@ -81,6 +89,23 @@ export interface IndexState {
    * already holds that id; this is what stops them being rebuilt every run.
    */
   layoutConfirmed?: Record<string, string>;
+  /**
+   * Grid layout: when each frozen band was last re-settled and found
+   * unchanged, or rejected, by band id. A band is due again an interval
+   * after this or its own creation, whichever is later.
+   */
+  resettledAt?: Record<string, string>;
+  /**
+   * Grid layout: what each live frozen band settled against, per source,
+   * by band id; a due band whose sources still match is not rebuilt.
+   */
+  fingerprints?: Record<string, BandFingerprint>;
+  /**
+   * `parquet-l2`: gated re-settles a band with unreadable reads has passed
+   * since its last full rebuild, by band id (see
+   * `INDEX_EXPORT_L2_RECHECK_UNREADABLE_EVERY`).
+   */
+  unreadableRechecks?: Record<string, number>;
 }
 
 /** What the service remembers between runs, per index; the rest is derived from disk. */
@@ -145,38 +170,40 @@ export async function updateIndexState(
 
 const BAND_ID = /^([a-z0-9]{1,8})-h(\d+)-(\d+|tip)-([0-9a-f]{8})-[0-9a-f]{12}$/;
 
-const isRole = (value: string): value is BandRole =>
-  value === 'h' || value === 'r' || value === 'd';
-
 /**
  * The role a band id has for this publisher, or undefined when the band is
- * someone else's: its id must carry the publisher's tag and a known role,
- * unless it was adopted. Independent of supersession, so a band of this
- * publisher's that another supersedes is still its own.
+ * someone else's: its id must carry the publisher's tag and one of the
+ * layout's roles, unless it was adopted. Independent of supersession, so a
+ * band of this publisher's that another supersedes is still its own.
  */
 export function ownBandRole(
   id: string,
   publisher: string,
   adoptions: Record<string, Adoption>,
+  roles: readonly BandRole[] = LEGACY_ROLES,
 ): BandRole | undefined {
   const adoption = adoptions[id];
   if (adoption !== undefined) return adoption.as;
   const match = BAND_ID.exec(id);
   if (match === null || match[4] !== bandPublisherTag(publisher))
     return undefined;
-  return isRole(match[1]) ? match[1] : undefined;
+  return (roles as readonly string[]).includes(match[1])
+    ? (match[1] as BandRole)
+    : undefined;
 }
 
 /**
  * This publisher's bands as published: every directory in `publishDir`
  * holding a manifest (one without is being retired), less the ones another
  * band supersedes. A band is this publisher's when its id carries the
- * publisher's tag and its kind is h, r or d, or when it was adopted.
+ * publisher's tag and its kind is one of the layout's roles (h, r or d; and
+ * tip in the grid layout), or when it was adopted.
  */
 export async function deriveOwnBands(
   publishDir: string,
   publisher: string,
   adoptions: Record<string, Adoption>,
+  roles: readonly BandRole[] = LEGACY_ROLES,
 ): Promise<OwnBand[]> {
   const names = await fs.readdir(publishDir).catch(() => [] as string[]);
   const all: Array<{ id: string; dir: string; manifest: Cdb64Manifest }> = [];
@@ -215,7 +242,7 @@ export async function deriveOwnBands(
       continue;
     }
     const [from, to] = range as [number, number | null];
-    const role = ownBandRole(id, publisher, adoptions);
+    const role = ownBandRole(id, publisher, adoptions, roles);
     if (role === undefined) continue;
     own.push({
       id,

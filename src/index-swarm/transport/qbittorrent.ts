@@ -142,8 +142,10 @@ export class QBittorrentTransport implements TorrentTransport {
     if (!response.ok || body === 'Fails.' || setCookie === null) {
       throw new Error(
         `qBittorrent login refused (HTTP ${response.status}): check ` +
-          'INDEX_SWARM_ENGINE_AUTH, and that the engine is reached at the host ' +
-          'name and port it listens on',
+          'INDEX_SWARM_ENGINE_AUTH (or, unset, that the sidecar and the ' +
+          "engine's init read the same data/indexes/engine-auth, and both were " +
+          'recreated since it changed), and that the engine is reached at the ' +
+          'host name and port it listens on',
       );
     }
     this.cookie = setCookie.split(';')[0];

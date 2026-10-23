@@ -47,13 +47,17 @@ import {
 import {
   buildMultipartResponseParts,
   generateBoundary,
+  byteRangeHeader,
   calculateRangeResponseSize,
   contentEncodingMagicLength,
   contradictsContentEncoding,
   handleIfNoneMatch,
   hasContentEncodingMagic,
   honouredContentEncoding,
+  matchesContentEncodingMagic,
+  parseContentEncoding,
   parseNonNegativeInt,
+  taggedContentEncoding,
   dataEtag,
   wouldReturn304,
 } from '../../lib/http-utils.js';
@@ -61,6 +65,41 @@ import {
 const DEFAULT_CONTENT_TYPE = 'application/octet-stream';
 
 const REQUEST_METHOD_HEAD = 'HEAD';
+
+// The JSON types Express's `res.contentType` appends `; charset=utf-8` to
+// (send's `mime.charsets.lookup` tests `^application\/(javascript|json)`).
+const JSON_CONTENT_TYPE_REGEX = /^application\/json/i;
+
+/**
+ * Sets Content-Type on a data response to the type the data was uploaded
+ * with.
+ *
+ * Express's `res.contentType` appends `; charset=utf-8` to text, JavaScript
+ * and JSON types. For JSON the parameter means nothing: RFC 8259 §11
+ * defines no `charset` for `application/json`, and JSON is always UTF-8.
+ * It does break clients that compare the type exactly, among them Zora's
+ * metadata check, which accepts only `application/json` or `text/plain`.
+ * So a JSON type is sent verbatim.
+ *
+ * Measured with Playwright 1.47: `fetch`, XHR and JSON modules decode it
+ * as UTF-8 in Chromium, Firefox and WebKit, and Chromium and Firefox also
+ * display it as UTF-8 when it is opened in a tab. That WebKit displayed it
+ * as windows-1252, a bug WebKit fixed on 2026-09-07 (70cd4be688, "JSON
+ * displayed with wrong encoding"); until a Safari release carries the fix,
+ * non-ASCII JSON opened directly in a Safari tab can show as mojibake.
+ *
+ * Every other type still goes through `res.contentType`. Text and
+ * JavaScript keep the parameter, because without it all three browsers
+ * decode a UTF-8 text document as windows-1252, and a value without a `/`
+ * (`json`, `html`) is still expanded to its MIME type.
+ */
+export const setDataContentType = (res: Response, contentType: string) => {
+  if (JSON_CONTENT_TYPE_REGEX.test(contentType)) {
+    res.setHeader('Content-Type', contentType);
+  } else {
+    res.contentType(contentType);
+  }
+};
 
 /**
  * Handle rate limiting and x402 payment checks for data requests.
@@ -103,7 +142,9 @@ export async function handleDataRateLimitingAndPayment({
 
   // Generate boundary once for multipart requests (random but consistent within request)
   const boundary =
-    req.headers.range !== undefined ? generateBoundary() : undefined;
+    byteRangeHeader(req.headers.range) !== undefined
+      ? generateBoundary()
+      : undefined;
 
   // Store boundary in request for use in handleRangeRequest
   if (boundary !== undefined) {
@@ -130,7 +171,7 @@ export async function handleDataRateLimitingAndPayment({
       ? 0
       : calculateRangeResponseSize(
           size,
-          req.headers.range,
+          byteRangeHeader(req.headers.range),
           contentType,
           boundary,
         );
@@ -236,6 +277,25 @@ const setDigestStableVerifiedHeaders = ({
 
   // Set trusted header based on data source
   res.setHeader(headerNames.trusted, data.trusted ? 'true' : 'false');
+};
+
+/**
+ * Moves the whole-object digest from Content-Digest to Repr-Digest for a
+ * response that will not carry the whole object.
+ *
+ * Content-Digest covers the content actually sent (RFC 9530 section 2), so on
+ * a 206, 416 or 400 the whole-object hash is a false claim, and a signed one,
+ * since content-digest is co-signed. Repr-Digest (section 3) describes the
+ * selected representation, which a partial response still belongs to; it is
+ * co-signed too, which is what binds a signed 206 to the file it is part of.
+ * The /ar-io/indexes route already answers ranges this way.
+ */
+const useReprDigest = (res: Response) => {
+  const digest = res.getHeader(headerNames.contentDigest);
+  if (digest !== undefined) {
+    res.removeHeader(headerNames.contentDigest);
+    res.setHeader(headerNames.reprDigest, digest);
+  }
 };
 
 /**
@@ -466,7 +526,7 @@ export const sendsDataStream = (
   dataAttributes: ContiguousDataAttributes | undefined,
 ): boolean =>
   req.method !== REQUEST_METHOD_HEAD &&
-  req.headers.range === undefined &&
+  byteRangeHeader(req.headers.range) === undefined &&
   !wouldReturn304(
     req,
     dataAttributes?.hash !== undefined
@@ -506,6 +566,10 @@ export const sendsDataStream = (
  * no upstream is waited on; an uncached one declares the coding unchecked. If
  * that cached peek fails, it falls back to the declared coding rather than
  * failing a response that never needed the bytes, unless the client aborted.
+ *
+ * When neither the index nor the upstream supplied a coding, the item's own
+ * `Content-Encoding` tag is used, on positive evidence only: see
+ * {@link resolveTaggedContentEncoding}.
  */
 export const resolveServedContentEncoding = async ({
   data,
@@ -514,6 +578,7 @@ export const resolveServedContentEncoding = async ({
   log,
   signal,
   sendsStream,
+  tags,
 }: {
   data: ContiguousData;
   dataAttributes: ContiguousDataAttributes | undefined;
@@ -522,15 +587,28 @@ export const resolveServedContentEncoding = async ({
   signal?: AbortSignal;
   /** From {@link sendsDataStream}. */
   sendsStream: boolean;
+  /** The item's tags, from {@link awaitItemHeaders}. */
+  tags?: { name: string; value: string }[];
 }): Promise<string | undefined> => {
-  const declared = honouredContentEncoding(
-    dataAttributes?.contentEncoding ?? data.sourceContentEncoding,
-  );
-  if (
-    declared === undefined ||
-    !hasContentEncodingMagic(declared) ||
-    (!sendsStream && !data.cached)
-  ) {
+  const recorded =
+    dataAttributes?.contentEncoding ?? data.sourceContentEncoding;
+  const declared = honouredContentEncoding(recorded);
+  if (declared === undefined) {
+    // Only when nothing was recorded: a recorded coding the gateway does not
+    // name (a stacked `gzip, br`, say) is still served without the header.
+    if (parseContentEncoding(recorded) !== undefined) {
+      return undefined;
+    }
+    return resolveTaggedContentEncoding({
+      data,
+      id,
+      log,
+      signal,
+      sendsStream,
+      tags,
+    });
+  }
+  if (!hasContentEncodingMagic(declared) || (!sendsStream && !data.cached)) {
     return declared;
   }
   let head: Buffer;
@@ -562,12 +640,101 @@ export const resolveServedContentEncoding = async ({
   metrics.servedContentEncodingDroppedTotal.inc({
     encoding: declared,
     verified: String(data.verified),
+    source: 'recorded',
   });
   log.warn(
     'Body does not match its Content-Encoding; serving without the header',
     {
       id,
       encoding: declared,
+      verified: data.verified,
+      trusted: data.trusted,
+      cached: data.cached,
+    },
+  );
+  return undefined;
+};
+
+/**
+ * The coding an item's `Content-Encoding` tag names, served only when its
+ * bytes prove it.
+ *
+ * Bytes cached from an upstream that sent neither `Content-Encoding` nor the
+ * item's tags are stored with no coding recorded, and a cache hit reports
+ * none, so before this an item tagged `gzip` lost its header for as long as
+ * it stayed cached, while the gateway still sent
+ * `X-Arweave-Tag-Content-Encoding: gzip`. The tag is still only the
+ * uploader's claim, and the bytes may have been decoded upstream (the
+ * pre-#964 poison), so the coding is declared only for gzip and zstd, whose
+ * magic can be checked, and only when the body's first bytes carry the whole
+ * magic. A coding without magic, a short body, a body that does not match,
+ * an uncached HEAD/Range/304 response (which reads no bytes), or a failed
+ * cached peek all mean no header, as before. This gateway records nothing,
+ * so every hit decides again; a downstream gateway that trusts this one may
+ * record the header it receives, as it would any trusted upstream's, which
+ * the magic check bounds to bytes that really are gzip or zstd.
+ *
+ * The tags come from the item-header resolver, which exists only with
+ * ARWEAVE_TAG_RESPONSE_HEADERS_ENABLED (the default); without it there are no
+ * tags on a hit and this declares nothing.
+ */
+const resolveTaggedContentEncoding = async ({
+  data,
+  id,
+  log,
+  signal,
+  sendsStream,
+  tags,
+}: {
+  data: ContiguousData;
+  id: string;
+  log: Logger;
+  signal?: AbortSignal;
+  sendsStream: boolean;
+  tags?: { name: string; value: string }[];
+}): Promise<string | undefined> => {
+  const tagged = taggedContentEncoding(tags);
+  if (
+    tagged === undefined ||
+    !hasContentEncodingMagic(tagged) ||
+    (!sendsStream && !data.cached)
+  ) {
+    return undefined;
+  }
+  let head: Buffer;
+  try {
+    const peeked = await peekLeadingBytes(
+      data.stream,
+      contentEncodingMagicLength(tagged),
+      config.STREAM_STALL_TIMEOUT_MS,
+      signal,
+    );
+    head = peeked.head;
+    data.stream = peeked.stream;
+  } catch (error: any) {
+    if (sendsStream || signal?.aborted === true) {
+      throw error;
+    }
+    log.debug('Could not check the body against its Content-Encoding tag', {
+      id,
+      encoding: tagged,
+      message: error?.message,
+    });
+    return undefined;
+  }
+  if (matchesContentEncodingMagic(head, tagged)) {
+    return tagged;
+  }
+  metrics.servedContentEncodingDroppedTotal.inc({
+    encoding: tagged,
+    verified: String(data.verified),
+    source: 'tag',
+  });
+  log.warn(
+    'Body does not match its Content-Encoding tag; serving without the header',
+    {
+      id,
+      encoding: tagged,
       verified: data.verified,
       trusted: data.trusted,
       cached: data.cached,
@@ -645,7 +812,7 @@ const setDataHeaders = ({
   }
 
   // Use the content type from the L1 or data item index if available
-  res.contentType(contentType);
+  setDataContentType(res, contentType);
 
   if (contentEncoding !== undefined) {
     res.header('Content-Encoding', contentEncoding);
@@ -837,7 +1004,9 @@ export const getRequestAttributes = (
   } = {},
 ): RequestAttributes => {
   const hopsHeader = req.headers[headerNames.hops.toLowerCase()] as string;
-  const hops = parseInt(hopsHeader) || 0;
+  // Never below 0: a negative hop count would let a request through the
+  // hop limits (validateHopCount, the anchor's forwarded-request guard).
+  const hops = Math.max(0, parseInt(hopsHeader) || 0);
 
   // Get origin and originNodeRelease from request headers
   let origin = req.headers[headerNames.origin.toLowerCase()] as
@@ -974,6 +1143,382 @@ interface HandleRangeRequestArgs {
   parentSpan?: Span;
 }
 
+/**
+ * Writes the status and headers of a single-range 206 and, when the response
+ * needs no body (a matching If-None-Match, or HEAD), ends it.
+ *
+ * Shared by {@link handleRangeRequest} and {@link serveUncachedRange} so a
+ * 206 looks the same whichever path fetched its bytes. The caller has already
+ * set the data headers and moved any whole-object digest to Repr-Digest.
+ *
+ * @returns true when the response was ended and no body should be sent.
+ */
+const writeSingleRangeHead = ({
+  req,
+  res,
+  range,
+  totalSize,
+  contentType,
+}: {
+  req: Request;
+  res: Response;
+  range: rangeParser.Range;
+  /** The whole item's size, for Content-Range. */
+  totalSize: number;
+  contentType: string;
+}): boolean => {
+  const { start, end } = range;
+  res.status(206); // Partial Content
+  res.setHeader('Content-Range', `bytes ${start}-${end}/${totalSize}`);
+  res.setHeader('Accept-Ranges', 'bytes');
+  setDataContentType(res, contentType);
+  res.setHeader('Content-Length', (end - start + 1).toString());
+
+  // Handle If-None-Match for both HEAD and GET requests
+  if (handleIfNoneMatch(req, res)) {
+    res.end();
+    return true;
+  }
+
+  if (req.method === REQUEST_METHOD_HEAD) {
+    res.end();
+    return true;
+  }
+
+  return false;
+};
+
+/**
+ * Why a ranged GET could not take the {@link serveUncachedRange} fast path.
+ * Only the outcomes found after the ranged fetch are counted; the up-front
+ * eligibility checks are free and not worth a metric each.
+ */
+type UncachedRangeFallbackReason = 'size_mismatch' | 'cached';
+
+/**
+ * The single byte range a request may be served through
+ * {@link serveUncachedRange}, or undefined to take the full-object path.
+ *
+ * Eligible requests are GETs with a Range header naming exactly one
+ * satisfiable byte range of an item whose size is known and that has no
+ * stored hash. A stored hash means a local copy, or at least an ETag, may
+ * exist: such requests keep the full-object path, which is already fast for a
+ * cache hit and is what answers a matching If-None-Match with 304. HEAD,
+ * malformed, unsatisfiable and multipart requests keep it too, so their
+ * responses do not change.
+ *
+ * With `requireKnownType`, the item's content type must also be indexed and
+ * not a manifest: the data handler resolves a manifest path against an item of
+ * unknown type once its bytes arrive, which a ranged fetch cannot do.
+ */
+const uncachedRangeFastPathRange = ({
+  req,
+  dataAttributes,
+  requireKnownType,
+}: {
+  req: Request;
+  dataAttributes: ContiguousDataAttributes | undefined;
+  requireKnownType: boolean;
+}): { range: rangeParser.Range; size: number } | undefined => {
+  if (req.method !== 'GET') {
+    return undefined;
+  }
+  const rangeHeader = byteRangeHeader(req.headers.range);
+  if (rangeHeader === undefined) {
+    return undefined;
+  }
+  if (
+    dataAttributes === undefined ||
+    !Number.isSafeInteger(dataAttributes.size) ||
+    dataAttributes.size <= 0 ||
+    dataAttributes.hash !== undefined
+  ) {
+    return undefined;
+  }
+  if (
+    requireKnownType &&
+    (dataAttributes.contentType === undefined ||
+      dataAttributes.contentType === MANIFEST_CONTENT_TYPE ||
+      dataAttributes.isManifest)
+  ) {
+    return undefined;
+  }
+  const ranges = rangeParser(dataAttributes.size, rangeHeader);
+  if (
+    ranges === -1 ||
+    ranges === -2 ||
+    ranges.type !== 'bytes' ||
+    ranges.length !== 1
+  ) {
+    return undefined;
+  }
+  return { range: ranges[0], size: dataAttributes.size };
+};
+
+/**
+ * Serves a single-range GET of an uncached item with one ranged fetch.
+ *
+ * The full-object path first fetches the whole item, then discards that
+ * stream and fetches the range. On a cache miss that runs the upstream source
+ * cascade twice, and the first fetch can also park the request behind another
+ * request's in-flight download of the whole item, so a range of a large item
+ * waited on the whole download. Here only the range is fetched. The cache is
+ * filled separately: a ranged miss starts a background fetch of the whole item
+ * (see BACKGROUND_CACHE_RANGE_MAX_SIZE), which a concurrent full GET of the
+ * same item shares.
+ *
+ * The response is the one the full-object path sends for the same request:
+ * the same rate-limit or payment charge (the range's size), item headers,
+ * Content-Encoding, data headers and 206 headers. The data headers describe
+ * the fetch that supplied the bytes, as they do on that path.
+ *
+ * Returns false, having sent nothing and with no stream left open, when the
+ * request is not eligible (see {@link uncachedRangeFastPathRange}) or when the
+ * ranged fetch shows the full-object path is needed: the source returns a
+ * different length than requested or reports a different size for the item,
+ * or the bytes came from the cache and their Content-Encoding must be checked
+ * against the item's first bytes, which this range may not include. Errors
+ * from the ranged fetch are thrown for the caller to handle as it handles its
+ * own fetch failing.
+ *
+ * One difference remains: a range that starts past the item's real end, when
+ * the indexed size is larger than the item, fails the fetch and is answered
+ * 404, where the full-object path would answer 416. The source cascade reports
+ * every failure the same way, so this cannot be told apart from an item no
+ * source has, and retrying every failure with a full fetch would run the
+ * cascade twice for each unavailable item. It needs a wrong indexed size.
+ *
+ * @returns true when a response was sent (served, or refused by the rate
+ *   limiter or payment check).
+ */
+const serveUncachedRange = async ({
+  log,
+  req,
+  res,
+  dataSource,
+  dataAttributesSource,
+  id,
+  dataAttributes,
+  requestAttributes,
+  rateLimiter,
+  paymentProcessor,
+  negativeDataCache,
+  dataItemMetaResolver,
+  itemHeadersPromise,
+  requireKnownType,
+  refetchAttributes,
+  cacheControl,
+  parentSpan,
+}: {
+  log: Logger;
+  req: Request;
+  res: Response;
+  dataSource: ContiguousDataSource;
+  dataAttributesSource: DataAttributesSource;
+  id: string;
+  dataAttributes: ContiguousDataAttributes | undefined;
+  requestAttributes: RequestAttributes;
+  rateLimiter?: RateLimiter;
+  paymentProcessor?: PaymentProcessor;
+  negativeDataCache?: NegativeDataCache;
+  dataItemMetaResolver?: TxMetadataResolver;
+  /** From {@link fireItemHeaderResolution}. */
+  itemHeadersPromise: Promise<ResolvedItemHeaders | undefined>;
+  /** See {@link uncachedRangeFastPathRange}. */
+  requireKnownType: boolean;
+  /** Re-read the attributes after the fetch, as the caller's own path does. */
+  refetchAttributes: boolean;
+  /** A Cache-Control to send in place of the data headers' own. */
+  cacheControl?: string;
+  parentSpan?: Span;
+}): Promise<boolean> => {
+  const eligible = uncachedRangeFastPathRange({
+    req,
+    dataAttributes,
+    requireKnownType,
+  });
+  if (eligible === undefined) {
+    return false;
+  }
+  const { range, size } = eligible;
+
+  parentSpan?.addEvent('Fetching uncached range');
+  const fetchStartTime = Date.now();
+  const rangeData = await dataSource.getData({
+    id,
+    requestAttributes,
+    region: { offset: range.start, size: range.end - range.start + 1 },
+    parentSpan,
+    signal: req.signal,
+  });
+  parentSpan?.setAttributes({
+    'data.range_fast_path': true,
+    'data.retrieval.duration_ms': Date.now() - fetchStartTime,
+    'data.cached': rangeData.cached,
+    'data.trusted': rangeData.trusted,
+    'cache.status': rangeData.cached ? 'HIT' : 'MISS',
+  });
+  negativeDataCache?.evict(id);
+  negativeDataCache?.recordSuccess();
+
+  const fallBack = (reason: UncachedRangeFallbackReason, details: object) => {
+    rangeData.stream.destroy();
+    metrics.uncachedRangeFastPathTotal.inc({ outcome: `fallback_${reason}` });
+    parentSpan?.addEvent('Uncached range fast path fell back', { reason });
+    log.debug('Uncached range fast path fell back to a full fetch', {
+      id,
+      reason,
+      ...details,
+    });
+    return false;
+  };
+
+  try {
+    // Not every source reports the item's size: one serving the item from its
+    // root bundle clamps a range that runs past the item's real end and says
+    // so only through a shorter size. Either way the indexed size was wrong,
+    // and the 206 head computed from it would promise bytes the body lacks.
+    const requestedSize = range.end - range.start + 1;
+    if (rangeData.size !== requestedSize) {
+      log.warn('Ranged fetch returned a different length than requested', {
+        id,
+        indexedSize: size,
+        requestedSize,
+        returnedSize: rangeData.size,
+      });
+      return fallBack('size_mismatch', {
+        indexedSize: size,
+        requestedSize,
+        returnedSize: rangeData.size,
+      });
+    }
+    if (
+      typeof rangeData.totalSize === 'number' &&
+      rangeData.totalSize > 0 &&
+      rangeData.totalSize !== size
+    ) {
+      // The range was cut against the indexed size; a source that disagrees
+      // may be right, and the full-object path cuts against its size.
+      log.warn('Ranged fetch reported a different item size than indexed', {
+        id,
+        indexedSize: size,
+        reportedSize: rangeData.totalSize,
+      });
+      return fallBack('size_mismatch', {
+        indexedSize: size,
+        reportedSize: rangeData.totalSize,
+      });
+    }
+
+    let attributes = dataAttributes;
+    if (refetchAttributes) {
+      // Picks up offsets the fetch discovered, as the full-object path does.
+      try {
+        const updatedAttributes =
+          await dataAttributesSource.getDataAttributes(id);
+        if (updatedAttributes) {
+          attributes = updatedAttributes;
+        }
+      } catch (error: any) {
+        log.debug('Failed to re-fetch data attributes after getData:', {
+          dataId: id,
+          message: error.message,
+        });
+      }
+    }
+
+    // The item as the full-object path would describe it: this fetch's
+    // provenance (trust, hops, upstream type, encoding and tags) and the whole
+    // item's size, which Content-Range, the cache directive and the
+    // rate-limit charge are computed from.
+    const data: ContiguousData = { ...rangeData, size };
+
+    // Bytes that came from the local cache (a parent bundle's cached blob:
+    // the item itself has no hash) are fast on the full-object path, which
+    // also checks a coding with magic bytes, recorded or tagged, against the
+    // item's first bytes; this range may not start there. So the fast path
+    // only ever serves bytes fetched from upstream.
+    if (data.cached) {
+      return fallBack('cached', {});
+    }
+
+    const allowed = await handleDataRateLimitingAndPayment({
+      req,
+      res,
+      id,
+      data,
+      dataAttributes: attributes,
+      requestAttributes,
+      rateLimiter,
+      paymentProcessor,
+      parentSpan,
+      log,
+    });
+    if (!allowed) {
+      metrics.uncachedRangeFastPathTotal.inc({ outcome: 'refused' });
+      return true;
+    }
+
+    const itemHeaders = await awaitItemHeaders(
+      itemHeadersPromise,
+      data.upstreamTags,
+      id,
+      dataItemMetaResolver,
+    );
+
+    if (cacheControl !== undefined) {
+      res.setHeader('Cache-Control', cacheControl);
+    }
+
+    // A Range response does not send the item's first bytes, so an uncached
+    // item's coding is declared unchecked, as on the full-object path; the
+    // cached case that would peek fell back above.
+    const contentEncoding = await resolveServedContentEncoding({
+      data,
+      dataAttributes: attributes,
+      id,
+      log,
+      signal: req.signal,
+      sendsStream: false,
+    });
+
+    setDataHeaders({
+      req,
+      res,
+      dataAttributes: attributes,
+      data,
+      id,
+      itemHeaders,
+      contentEncoding,
+    });
+    // The response does not carry the whole object.
+    useReprDigest(res);
+
+    metrics.uncachedRangeFastPathTotal.inc({ outcome: 'served' });
+    if (
+      writeSingleRangeHead({
+        req,
+        res,
+        range,
+        totalSize: size,
+        contentType:
+          attributes?.contentType ??
+          data.sourceContentType ??
+          DEFAULT_CONTENT_TYPE,
+      })
+    ) {
+      rangeData.stream.destroy();
+      return true;
+    }
+
+    pipeStreamToResponse(data.stream, res, log, id);
+    return true;
+  } catch (error) {
+    rangeData.stream.destroy();
+    throw error;
+  }
+};
+
 const handleRangeRequest = async ({
   log,
   dataSource,
@@ -1000,6 +1545,8 @@ const handleRangeRequest = async ({
   );
 
   try {
+    // None of the responses below carries the whole object.
+    useReprDigest(res);
     const ranges = rangeParser(data.size, rangeHeader);
 
     // Malformed range header
@@ -1027,26 +1574,21 @@ const handleRangeRequest = async ({
       'application/octet-stream';
 
     setDigestStableVerifiedHeaders({ req, res, dataAttributes, data });
+    useReprDigest(res);
 
     if (isSingleRange) {
-      const totalSize = data.size;
       const start = ranges[0].start;
       const end = ranges[0].end;
 
-      res.status(206); // Partial Content
-      res.setHeader('Content-Range', `bytes ${start}-${end}/${totalSize}`);
-      res.setHeader('Accept-Ranges', 'bytes');
-      res.contentType(contentType);
-      res.setHeader('Content-Length', (end - start + 1).toString());
-
-      // Handle If-None-Match for both HEAD and GET requests
-      if (handleIfNoneMatch(req, res)) {
-        res.end();
-        return;
-      }
-
-      if (req.method === REQUEST_METHOD_HEAD) {
-        res.end();
+      if (
+        writeSingleRangeHead({
+          req,
+          res,
+          range: ranges[0],
+          totalSize: data.size,
+          contentType,
+        })
+      ) {
         return;
       }
 
@@ -1343,6 +1885,31 @@ export const createRawDataHandler = ({
         span.addEvent('Starting data retrieval');
         const dataStartTime = Date.now();
         try {
+          // A single range of an uncached item: fetch only the range.
+          if (
+            await serveUncachedRange({
+              log,
+              req,
+              res,
+              dataSource,
+              dataAttributesSource,
+              id,
+              dataAttributes,
+              requestAttributes,
+              rateLimiter,
+              paymentProcessor,
+              negativeDataCache,
+              dataItemMetaResolver,
+              itemHeadersPromise: tagsPromise,
+              requireKnownType: false,
+              refetchAttributes: true,
+              parentSpan: span,
+            })
+          ) {
+            span.setAttribute('http.status_code', res.statusCode);
+            return;
+          }
+
           data = await dataSource.getData({
             id,
             requestAttributes,
@@ -1411,10 +1978,11 @@ export const createRawDataHandler = ({
             log,
             signal: req.signal,
             sendsStream: sendsDataStream(req, res, data, dataAttributes),
+            tags: itemHeaders?.tags,
           });
 
           // Check if the request includes a Range header
-          const rangeHeader = req.headers.range;
+          const rangeHeader = byteRangeHeader(req.headers.range);
           if (rangeHeader !== undefined) {
             span.addEvent('Handling range request');
             span.setAttribute('data.request.range_request', true);
@@ -1704,8 +2272,62 @@ const sendManifestResponse = async ({
       }
     }
 
+    // URL→data-id mapping is mutable for fallback resolutions: a future
+    // manifest revision can add the missing path, changing what this URL
+    // resolves to. Override any ArNS-set ANT TTL with a short, must-revalidate
+    // directive so upstream proxies don't pin stale fallback content. Do NOT
+    // remove without understanding upstream-cache poisoning implications —
+    // see PE-9072.
+    const cacheControl =
+      resolutionType === 'fallback'
+        ? `public, max-age=${config.CACHE_NOT_FOUND_MAX_AGE}, must-revalidate`
+        : undefined;
+
+    // Resolve item headers for the inner data item so X-Arweave-Tag-*
+    // and owner/signature headers appear on manifest-resolved responses
+    // (e.g. ArNS apex/subdomain serving a manifest). Fired once, here, and
+    // shared by both paths below, so a fast path that falls back does not
+    // resolve them twice.
+    const itemHeadersPromise = fireItemHeaderResolution(
+      resolvedId,
+      dataItemMetaResolver,
+    );
+
+    // A failure here answers "not sent", and the caller then sends its own
+    // response (a 404, or the manifest's body). The fast path may already
+    // have set headers and a status by then, so they are put back as they
+    // were rather than leaking into that response.
+    const statusBefore = res.statusCode;
+    const headersBefore = res.getHeaders();
+
     // Retrieve data based on ID resolved from manifest path or index
     try {
+      // A single range of an uncached item: fetch only the range.
+      if (
+        await serveUncachedRange({
+          log,
+          req,
+          res,
+          dataSource,
+          dataAttributesSource,
+          id: resolvedId,
+          dataAttributes,
+          requestAttributes,
+          rateLimiter,
+          paymentProcessor,
+          negativeDataCache,
+          dataItemMetaResolver,
+          itemHeadersPromise,
+          requireKnownType: false,
+          refetchAttributes: false,
+          cacheControl,
+          parentSpan,
+        })
+      ) {
+        // Indicate response was sent
+        return true;
+      }
+
       data = await dataSource.getData({
         id: resolvedId,
         requestAttributes,
@@ -1715,8 +2337,9 @@ const sendManifestResponse = async ({
       negativeDataCache?.evict(resolvedId);
       negativeDataCache?.recordSuccess();
     } catch (error: any) {
-      // Re-throw AbortError to be handled by caller
-      if (error.name === 'AbortError') {
+      // Re-throw AbortError to be handled by caller, and anything that
+      // failed after the response started: it can no longer be replaced.
+      if (error.name === 'AbortError' || res.headersSent) {
         throw error;
       }
       log.warn('Unable to retrieve contiguous data:', {
@@ -1724,6 +2347,15 @@ const sendManifestResponse = async ({
         message: error.message,
         stack: error.stack,
       });
+      for (const name of res.getHeaderNames()) {
+        res.removeHeader(name);
+      }
+      for (const [name, value] of Object.entries(headersBefore)) {
+        if (value !== undefined) {
+          res.setHeader(name, value);
+        }
+      }
+      res.status(statusBefore);
       // Indicate response was NOT sent
       return false;
     }
@@ -1746,27 +2378,15 @@ const sendManifestResponse = async ({
       return true; // Response was sent (402 or 429)
     }
 
-    // Resolve item headers for the inner data item so X-Arweave-Tag-*
-    // and owner/signature headers appear on manifest-resolved responses
-    // (e.g. ArNS apex/subdomain serving a manifest).
     const itemHeaders = await awaitItemHeaders(
-      fireItemHeaderResolution(resolvedId, dataItemMetaResolver),
+      itemHeadersPromise,
       data?.upstreamTags,
       resolvedId,
       dataItemMetaResolver,
     );
 
-    // URL→data-id mapping is mutable for fallback resolutions: a future
-    // manifest revision can add the missing path, changing what this URL
-    // resolves to. Override any ArNS-set ANT TTL with a short, must-revalidate
-    // directive so upstream proxies don't pin stale fallback content. Do NOT
-    // remove without understanding upstream-cache poisoning implications —
-    // see PE-9072.
-    if (resolutionType === 'fallback') {
-      res.setHeader(
-        'Cache-Control',
-        `public, max-age=${config.CACHE_NOT_FOUND_MAX_AGE}, must-revalidate`,
-      );
+    if (cacheControl !== undefined) {
+      res.setHeader('Cache-Control', cacheControl);
     }
 
     // Set headers and stream data
@@ -1779,10 +2399,11 @@ const sendManifestResponse = async ({
         log,
         signal: req.signal,
         sendsStream: sendsDataStream(req, res, data, dataAttributes),
+        tags: itemHeaders?.tags,
       });
 
       // Check if the request includes a Range header
-      const rangeHeader = req.headers.range;
+      const rangeHeader = byteRangeHeader(req.headers.range);
       if (rangeHeader !== undefined) {
         // Range requests create new streams so the original is no longer
         // needed
@@ -2026,11 +2647,22 @@ export const createDataHandler = ({
         }
 
         // Attempt manifest path resolution from the index (without data parsing)
-        if (dataAttributes?.isManifest) {
+        // A manifest the index does not know is resolved from its body below,
+        // and that resolution is cached; when it came from trusted bytes, use
+        // it rather than fetching and parsing the body again.
+        const trustedCachedResolution =
+          dataAttributes?.isManifest === true
+            ? undefined
+            : manifestPathResolver.resolveFromTrustedCache(id, manifestPath);
+        if (
+          dataAttributes?.isManifest === true ||
+          trustedCachedResolution !== undefined
+        ) {
           span.addEvent('Resolving manifest path from index');
           const manifestStartTime = Date.now();
           const manifestResolution =
-            await manifestPathResolver.resolveFromIndex(id, manifestPath);
+            trustedCachedResolution ??
+            (await manifestPathResolver.resolveFromIndex(id, manifestPath));
           const manifestDuration = Date.now() - manifestStartTime;
           span.setAttribute(
             'manifest.resolution_duration_ms',
@@ -2087,6 +2719,32 @@ export const createDataHandler = ({
         span.addEvent('Starting data retrieval');
         const dataStartTime = Date.now();
         try {
+          // A single range of an uncached item whose type rules out a
+          // manifest: fetch only the range.
+          if (
+            await serveUncachedRange({
+              log,
+              req,
+              res,
+              dataSource,
+              dataAttributesSource,
+              id,
+              dataAttributes,
+              requestAttributes,
+              rateLimiter,
+              paymentProcessor,
+              negativeDataCache,
+              dataItemMetaResolver,
+              itemHeadersPromise: tagsPromise,
+              requireKnownType: true,
+              refetchAttributes: true,
+              parentSpan: span,
+            })
+          ) {
+            span.setAttribute('http.status_code', res.statusCode);
+            return;
+          }
+
           data = await dataSource.getData({
             id,
             requestAttributes,
@@ -2242,10 +2900,11 @@ export const createDataHandler = ({
           log,
           signal: req.signal,
           sendsStream: sendsDataStream(req, res, data, dataAttributes),
+          tags: itemHeaders?.tags,
         });
 
         // Check if the request includes a Range header
-        const rangeHeader = req.headers.range;
+        const rangeHeader = byteRangeHeader(req.headers.range);
         if (rangeHeader !== undefined && data !== undefined) {
           span.addEvent('Handling range request');
           span.setAttribute('data.range_request', true);

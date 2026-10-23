@@ -28,9 +28,108 @@ import {
   undeclaredTaggedEncoding,
   dataEtag,
   wouldReturn304,
+  byteRangeHeader,
+  matchesContentEncodingMagic,
+  taggedContentEncoding,
 } from './http-utils.js';
 
 describe('http-utils', () => {
+  describe('matchesContentEncodingMagic', () => {
+    it('needs the whole gzip or zstd magic', () => {
+      assert.equal(
+        matchesContentEncodingMagic(Buffer.from([0x1f, 0x8b, 8]), 'gzip'),
+        true,
+      );
+      assert.equal(
+        matchesContentEncodingMagic(
+          Buffer.from([0x28, 0xb5, 0x2f, 0xfd, 0]),
+          'zstd',
+        ),
+        true,
+      );
+      assert.equal(
+        matchesContentEncodingMagic(Buffer.from([0x1f]), 'gzip'),
+        false,
+      );
+      assert.equal(matchesContentEncodingMagic(Buffer.alloc(0), 'gzip'), false);
+      assert.equal(
+        matchesContentEncodingMagic(Buffer.from('{"a"'), 'gzip'),
+        false,
+      );
+    });
+
+    it('never matches a coding without magic', () => {
+      assert.equal(
+        matchesContentEncodingMagic(Buffer.from([0x1f, 0x8b]), 'br'),
+        false,
+      );
+      assert.equal(
+        matchesContentEncodingMagic(Buffer.from([0x1f, 0x8b]), undefined),
+        false,
+      );
+    });
+  });
+
+  describe('taggedContentEncoding', () => {
+    it('reads the first Content-Encoding tag, case-insensitively', () => {
+      assert.equal(
+        taggedContentEncoding([{ name: 'content-encoding', value: 'GZIP' }]),
+        'gzip',
+      );
+      assert.equal(
+        taggedContentEncoding([
+          { name: 'Content-Encoding', value: 'br' },
+          { name: 'Content-Encoding', value: 'gzip' },
+        ]),
+        'br',
+      );
+    });
+
+    it('returns undefined for no tag or a coding the gateway does not honour', () => {
+      assert.equal(taggedContentEncoding(undefined), undefined);
+      assert.equal(taggedContentEncoding([]), undefined);
+      assert.equal(
+        taggedContentEncoding([
+          { name: 'Content-Encoding', value: 'gzip, br' },
+        ]),
+        undefined,
+      );
+    });
+  });
+
+  describe('byteRangeHeader', () => {
+    it('passes a bytes range through', () => {
+      assert.equal(byteRangeHeader('bytes=0-99'), 'bytes=0-99');
+      assert.equal(byteRangeHeader('bytes=0-1,5-6'), 'bytes=0-1,5-6');
+    });
+
+    it('returns undefined without a header', () => {
+      assert.equal(byteRangeHeader(undefined), undefined);
+    });
+
+    it('normalizes the unit case', () => {
+      assert.equal(byteRangeHeader('BYTES=0-99'), 'bytes=0-99');
+      assert.equal(byteRangeHeader('Bytes=-500'), 'bytes=-500');
+    });
+
+    it('ignores a unit it does not understand', () => {
+      assert.equal(byteRangeHeader('items=0-5'), undefined);
+      assert.equal(byteRangeHeader('bytesx=0-5'), undefined);
+    });
+
+    it('passes an empty unit through for the parser to reject', () => {
+      assert.equal(byteRangeHeader('=0-5'), '=0-5');
+      assert.equal(byteRangeHeader(' =0-5'), ' =0-5');
+    });
+
+    it('leaves a header without a unit for the parser to reject', () => {
+      assert.equal(
+        byteRangeHeader('invalid-range-header'),
+        'invalid-range-header',
+      );
+    });
+  });
+
   describe('generateBoundary', () => {
     it('should generate 50 character boundaries', () => {
       const boundary = generateBoundary();
@@ -527,6 +626,20 @@ describe('http-utils', () => {
   });
 
   describe('calculateRangeResponseSize', () => {
+    it('charges a range with an ignored unit as the whole item', () => {
+      assert.equal(
+        calculateRangeResponseSize(1000, 'items=0-5', 'text/plain'),
+        1000,
+      );
+    });
+
+    it('charges an upper-case bytes range as the range', () => {
+      assert.equal(
+        calculateRangeResponseSize(1000, 'BYTES=0-499', 'text/plain'),
+        500,
+      );
+    });
+
     const contentType = 'application/octet-stream';
     const boundary = 'test-boundary-123';
 

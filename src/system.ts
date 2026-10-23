@@ -5,6 +5,8 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import { PublishedIndexes } from './routes/published-indexes.js';
+import { PublishedTorrents } from './routes/published-torrents.js';
+import { IndexBandFeedSource } from './feeds/index-bands.js';
 import { UpstreamPublishedIndexes } from './routes/upstream-published-indexes.js';
 import { default as Arweave } from 'arweave';
 import EventEmitter from 'node:events';
@@ -66,9 +68,15 @@ import {
   TurboRootTxIndex,
   CachedTurboOffsets,
   Cdb64RootTxIndex,
+  Cdb64LocalRootTxIndex,
+  Cdb64RemoteRootTxIndex,
   HyperBeamRootTxIndex,
   CachedHyperBeamOffsets,
 } from './discovery/index.js';
+import {
+  CDB_REMOTE_LOOKUP_SOURCE,
+  cdbLookupScope,
+} from './lib/root-tx-defaults.js';
 import { LRUCache } from 'lru-cache';
 import { makeContiguousMetadataStore } from './init/metadata-store.js';
 import { currentUnixTimestamp } from './lib/time.js';
@@ -100,6 +108,7 @@ import {
 import { Ans104DataIndexer } from './workers/ans104-data-indexer.js';
 import { Ans104Unbundler } from './workers/ans104-unbundler.js';
 import { BlockImporter } from './workers/block-importer.js';
+import { L1BandImportWorker } from './workers/l1-band-import-worker.js';
 import { BundleRepairWorker } from './workers/bundle-repair-worker.js';
 import { SymlinkCleanupWorker } from './workers/symlink-cleanup-worker.js';
 import { DataItemIndexer } from './workers/data-item-indexer.js';
@@ -556,8 +565,24 @@ export const blockImporter = new BlockImporter({
   chainIndex,
   eventEmitter,
   startHeight: config.START_HEIGHT,
+  // The history beneath comes from L1 bands, so a new gateway follows the
+  // tip from the start instead of walking the chain from 0.
+  startAtTip: config.L1_BAND_IMPORT_ENABLED && !config.START_HEIGHT_SET,
   stopHeight: config.STOP_HEIGHT,
 });
+
+export const l1BandImportWorker = config.L1_BAND_IMPORT_ENABLED
+  ? new L1BandImportWorker({
+      log,
+      coreDbPath: 'data/sqlite/core.db',
+      bandsDir: config.L1_BAND_IMPORT_BANDS_DIR,
+      intervalMs: config.L1_BAND_IMPORT_INTERVAL_SECONDS * 1000,
+      cacheMib: config.L1_BAND_IMPORT_CACHE_MIB,
+      allowUnverified: config.L1_BAND_IMPORT_ALLOW_UNVERIFIED,
+      sampleFrom: config.L1_BAND_IMPORT_SAMPLE_FROM,
+      allowUnsampled: config.L1_BAND_IMPORT_ALLOW_UNSAMPLED,
+    })
+  : undefined;
 
 export const envoyEndpointHealthWorker =
   config.ARWEAVE_PEER_DNS_RECORDS.length > 0
@@ -961,6 +986,31 @@ export const publishedIndexes = new PublishedIndexes({
 });
 
 /**
+ * The `.torrent` files served for published bands, each with this gateway's
+ * WebSeed added when its public origin is known, so a stock BitTorrent
+ * client can finish a band no peer is delivering. One instance backs the
+ * torrent route and the feeds, so an enclosure's length is the served one.
+ */
+export const publishedTorrents = new PublishedTorrents({
+  log,
+  publishedDir: config.INDEXES_PUBLISHED_DIR,
+  publicOrigin: config.INDEXES_TORRENT_WEBSEED
+    ? config.INDEXES_PUBLIC_URL
+    : undefined,
+});
+
+/**
+ * The RSS feeds of what this gateway publishes, one per index, built from
+ * the same view as the routes. No feeds without a public origin.
+ */
+export const indexFeedSource = new IndexBandFeedSource({
+  log,
+  published: publishedIndexes,
+  baseUrl: config.INDEXES_PUBLIC_URL,
+  torrents: publishedTorrents,
+});
+
+/**
  * On a node that does not sign, what the signing node publishes, so
  * /ar-io/info advertises it here too. Undefined unless configured.
  */
@@ -1079,11 +1129,20 @@ export const chunkMetadataStore = new FsChunkMetadataStore({
 // → chain (slowest).
 const dbBoundarySource = new DatabaseTxBoundarySource({ log, db });
 
-const txPathBoundarySource = new TxPathValidationSource({
-  log,
-  unvalidatedChunkSource: arIOChunkSource,
-  arweaveClient,
-});
+// tx_path validation fetches its chunk from AR.IO peers, so it follows the
+// operator's choice of chunk metadata sources: a gateway that takes
+// `ar-io-network` out of CHUNK_METADATA_RETRIEVAL_ORDER asks no AR.IO peer
+// for an offset at all. (It did regardless, which kept a loop between
+// gateways open after the operator had closed the obvious path.)
+const txPathBoundarySource = config.CHUNK_METADATA_RETRIEVAL_ORDER.includes(
+  'ar-io-network',
+)
+  ? new TxPathValidationSource({
+      log,
+      unvalidatedChunkSource: arIOChunkSource,
+      arweaveClient,
+    })
+  : undefined;
 
 const chainBoundarySource = config.CHUNK_OFFSET_CHAIN_FALLBACK_ENABLED
   ? new ChainTxBoundarySource({ log, arweaveClient })
@@ -1115,6 +1174,8 @@ const chunkMetadataAnchorSource =
         requestTimeoutMs: config.CHUNK_METADATA_ANCHOR_REQUEST_TIMEOUT_MS,
         cacheSize: config.CHUNK_METADATA_ANCHOR_TX_CACHE_SIZE,
         cacheTtlMs: config.CHUNK_METADATA_ANCHOR_TX_CACHE_TTL_SECONDS * 1000,
+        missCacheTtlMs:
+          config.CHUNK_METADATA_ANCHOR_MISS_CACHE_TTL_SECONDS * 1000,
         // Wrap the chain client to match anchorChunkMetadata's string-typed
         // contract — weave-scale offsets need to round-trip through BigInt
         // without Number.MAX_SAFE_INTEGER loss.
@@ -1246,7 +1307,44 @@ const cdb64HttpSemaphore = new Semaphore(
 metrics.registerSemaphoreMetrics('cdb64_remote', cdb64HttpSemaphore);
 
 // Build root TX indexes based on configuration
+//
+// One Cdb64RootTxIndex serves both `cdb` and `cdb-remote`, so every CDB64
+// file is opened and every directory watched once. Without `cdb-remote` in
+// the order, `cdb` is that index itself and asks every source, local and
+// remote, as it always has. With it, `cdb` asks only local-disk sources and
+// `cdb-remote` the ones read over the network (see cdb64SourceLocality).
 let cdb64RootTxIndex: Cdb64RootTxIndex | undefined;
+const cdbScope = cdbLookupScope(config.ROOT_TX_LOOKUP_ORDER);
+
+/**
+ * The shared CDB64 index, created on first use with its cleanup handler.
+ */
+function getCdb64RootTxIndex(): Cdb64RootTxIndex {
+  if (cdb64RootTxIndex === undefined) {
+    const index = new Cdb64RootTxIndex({
+      log,
+      sources: config.CDB64_ROOT_TX_INDEX_SOURCES,
+      watch: config.CDB64_ROOT_TX_INDEX_WATCH,
+      contiguousDataSource: cdb64BaseDataSource,
+      remoteCacheMaxRegions: config.CDB64_REMOTE_CACHE_MAX_REGIONS,
+      remoteCacheTtlMs: config.CDB64_REMOTE_CACHE_TTL_MS,
+      remoteRequestTimeoutMs: config.CDB64_REMOTE_REQUEST_TIMEOUT_MS,
+      remoteSemaphore: cdb64HttpSemaphore,
+      remoteSemaphoreTimeoutMs: config.CDB64_REMOTE_SEMAPHORE_TIMEOUT_MS,
+    });
+    registerCleanupHandler('cdb64-root-tx-index', async () => {
+      await index.close();
+    });
+    cdb64RootTxIndex = index;
+  }
+  return cdb64RootTxIndex;
+}
+
+/**
+ * The CDB64 index the `/ar-io/offsets/:id` route reads, set only when `cdb`
+ * is in `ROOT_TX_LOOKUP_ORDER` (a `cdb-remote`-only order leaves it unset).
+ */
+let offsetsCdb64RootTxIndex: Cdb64RootTxIndex | undefined;
 
 /**
  * Looks an ID up in the CDB64 index's sources on local disk only, with no
@@ -1256,7 +1354,7 @@ let cdb64RootTxIndex: Cdb64RootTxIndex | undefined;
 export const lookupLocalCdb64RootTx = async (
   id: string,
 ): Promise<RootTxLookupResult | undefined> =>
-  cdb64RootTxIndex?.getLocalRootTx(id);
+  offsetsCdb64RootTxIndex?.getLocalRootTx(id);
 const rootTxIndexes: DataItemRootIndex[] = [];
 
 for (const sourceName of config.ROOT_TX_LOOKUP_ORDER) {
@@ -1348,22 +1446,17 @@ for (const sourceName of config.ROOT_TX_LOOKUP_ORDER) {
       rootTxIndexes.push(db as DataItemRootIndex);
       break;
 
-    case 'cdb':
-      cdb64RootTxIndex = new Cdb64RootTxIndex({
-        log,
-        sources: config.CDB64_ROOT_TX_INDEX_SOURCES,
-        watch: config.CDB64_ROOT_TX_INDEX_WATCH,
-        contiguousDataSource: cdb64BaseDataSource,
-        remoteCacheMaxRegions: config.CDB64_REMOTE_CACHE_MAX_REGIONS,
-        remoteCacheTtlMs: config.CDB64_REMOTE_CACHE_TTL_MS,
-        remoteRequestTimeoutMs: config.CDB64_REMOTE_REQUEST_TIMEOUT_MS,
-        remoteSemaphore: cdb64HttpSemaphore,
-        remoteSemaphoreTimeoutMs: config.CDB64_REMOTE_SEMAPHORE_TIMEOUT_MS,
-      });
-      rootTxIndexes.push(cdb64RootTxIndex);
-      registerCleanupHandler('cdb64-root-tx-index', async () => {
-        await cdb64RootTxIndex!.close();
-      });
+    case 'cdb': {
+      const index = getCdb64RootTxIndex();
+      offsetsCdb64RootTxIndex = index;
+      rootTxIndexes.push(
+        cdbScope === 'all' ? index : new Cdb64LocalRootTxIndex(index),
+      );
+      break;
+    }
+
+    case CDB_REMOTE_LOOKUP_SOURCE:
+      rootTxIndexes.push(new Cdb64RemoteRootTxIndex(getCdb64RootTxIndex()));
       break;
 
     default:
@@ -2221,6 +2314,7 @@ export const shutdown = async (exitCode = 0) => {
     await envoyEndpointHealthWorker?.stop();
     await mempoolWatcher?.stop();
     await blockImporter.stop();
+    await l1BandImportWorker?.stop();
     await dataItemIndexer.stop();
     await txRepairWorker.stop();
     await txImporter.stop();

@@ -94,6 +94,7 @@ if (system.clickhouseStreamer !== undefined) {
 // Allow starting without writers to support SQLite replication
 if (config.START_WRITERS) {
   system.blockImporter.start();
+  system.l1BandImportWorker?.start();
   system.txOffsetRepairWorker.start();
   system.txRepairWorker.start();
   system.bundleRepairWorker.start();
@@ -167,6 +168,8 @@ app.use(
     rateLimiter: system.rateLimiter,
     rateLimitsEnabled: config.ENABLE_RATE_LIMITER,
     paymentProcessor: system.paymentProcessor,
+    indexFeed: system.indexFeedSource,
+    torrents: system.publishedTorrents,
   }),
 );
 app.use(datasetsRouter);

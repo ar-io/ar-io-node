@@ -2,7 +2,7 @@
 
 Tools for generating, exporting, verifying, and uploading CDB64 index files. See
 [cdb64-format.md](./cdb64-format.md) for the file format specification and
-[cdb64-guide.md](./cdb64-guide.md) for operational guidance.
+[cdb64.md](./cdb64.md) for configuration and operation.
 
 ## Overview
 

@@ -10,7 +10,9 @@
  * `parquet-l1` bands, so it starts from an index instead of walking the
  * chain block by block.
  *
- * Offline: the gateway must be stopped. The command refuses a database
+ * With `--fill`, alongside a running gateway: only the heights `core.db`
+ * lacks beneath what the gateway writes itself. Without it, offline, into
+ * a `core.db` the gateway has not run on: the command refuses a database
  * another writer holds rather than racing it.
  */
 import * as fsp from 'node:fs/promises';
@@ -20,14 +22,31 @@ import { Logger } from 'winston';
 
 import {
   applyImportPragmas,
+  ImportOutcome,
   ImportRefused,
+  type ImportVerification,
+  runFill,
   runImport,
 } from '../../lib/parquet-l1/import.js';
+import { VerifyRefused } from '../../lib/parquet-l1/checks.js';
 import type { IndexL1ImportCLIOptions, JsonSerializable } from '../types.js';
 import { requiredStringFromOptions } from '../utils.js';
+import type { FetchLike } from '../../lib/onchain/arweave-nodes.js';
+import {
+  allowances,
+  anchorMin,
+  anchorPool,
+  openBandsDuck,
+  sampleOptions,
+  spillReserveBytes,
+} from './indexL1VerifyCommands.js';
 
 export interface IndexL1ImportDeps {
   log: Logger;
+  /** Injected in tests: how anchor sources are fetched from. */
+  fetch?: FetchLike;
+  /** Injected in tests: every address a source's host name resolves to. */
+  lookupAll?: (host: string) => Promise<string[]>;
 }
 
 /**
@@ -37,10 +56,92 @@ export interface IndexL1ImportDeps {
  */
 export const DEFAULT_CACHE_MIB = 1024;
 
+/** How long `--fill` waits for the gateway to release the write lock. */
+export const FILL_BUSY_TIMEOUT_MS = 60_000;
+
+/**
+ * DuckDB's spill folders beside `core.db`, one per run; a folder a killed
+ * run left is removed once its heartbeat is a day old (`openBandsDuck`).
+ */
+const SPILL_PREFIX = '.duckdb-import-';
+
+/**
+ * Refuses an import or fill while another runs against the same `core.db`:
+ * two fills would plan the same holes and clear each other's rows, and a
+ * fill would take an offline import's spill directory for a dead run's.
+ *
+ * The lock is an exclusive transaction on a small SQLite file beside
+ * `core.db`. SQLite's locks are the kernel's, so they hold across
+ * containers sharing the directory and are released when the process
+ * holding one exits, however it exits — no stale lock file to clean up.
+ */
+export function takeImportLock(coreDb: string): Sqlite.Database {
+  const lockPath = path.join(path.dirname(coreDb), '.l1-import.lock');
+  const lock = new Sqlite(lockPath, { timeout: 0 });
+  try {
+    lock.pragma('locking_mode = EXCLUSIVE');
+    lock.exec('BEGIN EXCLUSIVE');
+  } catch (error) {
+    lock.close();
+    throw new ImportRefused(
+      `Another import or fill is running against ${coreDb} (${(error as Error).message})`,
+    );
+  }
+  return lock;
+}
+
+/** One band or range of a run, as the CLI contract reports it. */
+function describe(o: ImportOutcome) {
+  return {
+    id: o.id,
+    heightRange: o.heightRange,
+    ...(o.heights !== undefined ? { heights: o.heights } : {}),
+    result: o.result,
+    // A refused band imported nothing, and `undefined` would not survive
+    // the JSON the CLI contract promises.
+    ...(o.rows !== undefined ? { rows: o.rows } : {}),
+    ...(o.reason !== undefined ? { reason: o.reason } : {}),
+    // What bound the heights before they were written, what was accepted,
+    // what is left unbound or unchecked, and what the sample detects.
+    ...(o.check !== undefined
+      ? {
+          boundBy: o.check.boundBy,
+          binding: o.check.binding.kind,
+          accepted: o.check.accepted,
+          unbound: JSON.parse(
+            JSON.stringify(o.check.unbound),
+          ) as JsonSerializable,
+          skipped: o.check.skipped,
+          assurance: o.check.assurance,
+          ...(o.check.sample !== undefined
+            ? {
+                sample: JSON.parse(
+                  JSON.stringify(o.check.sample),
+                ) as JsonSerializable,
+              }
+            : {}),
+        }
+      : {}),
+    seconds: Math.round(o.seconds),
+  };
+}
+
 export async function indexL1ImportCLICommand(
   options: IndexL1ImportCLIOptions,
-  { log }: IndexL1ImportDeps,
+  deps: IndexL1ImportDeps,
 ): Promise<JsonSerializable> {
+  const { log } = deps;
+  const pool = anchorPool(options, deps, ImportRefused);
+  // Checked before the database, lock and spill folder are opened, so a
+  // bad option leaves nothing held.
+  const min = anchorMin(options.anchorMin, ImportRefused);
+  let sample: ReturnType<typeof sampleOptions>;
+  try {
+    sample = sampleOptions(options, pool, min);
+  } catch (error) {
+    if (error instanceof VerifyRefused) throw new ImportRefused(error.message);
+    throw error;
+  }
   const bandsDir = requiredStringFromOptions(options, 'bandsDir');
   const coreDb = requiredStringFromOptions(options, 'coreDb');
   const maxBands =
@@ -69,34 +170,118 @@ export async function indexL1ImportCLICommand(
     throw new Error('--cache-mib must be a positive whole number');
   }
 
+  const fill = options.fill === true;
   const started = Date.now();
   let db: Sqlite.Database;
   try {
-    db = new Sqlite(coreDb, { fileMustExist: true });
+    // Filling shares the database with a running gateway, whose flush can
+    // hold the write lock for a while; wait for it rather than fail.
+    db = new Sqlite(coreDb, {
+      fileMustExist: true,
+      ...(fill ? { timeout: FILL_BUSY_TIMEOUT_MS } : {}),
+    });
   } catch (error) {
     throw new ImportRefused(
       `Cannot open ${coreDb}: ${(error as Error).message}`,
     );
   }
   applyImportPragmas(db, cacheMib);
-
-  const { Database } = await import('duckdb-async');
-  const duck = await Database.create(':memory:');
+  let lock: Sqlite.Database;
   try {
-    // Without a temp directory DuckDB sorts entirely in memory whatever
-    // `memory_limit` says, as the Parquet exporter's own comment records.
-    // Spill beside the database, not into the container's layer.
-    const spill = path.join(path.dirname(coreDb), '.duckdb-import-tmp');
-    await fsp.mkdir(spill, { recursive: true });
-    await duck.exec(
-      `SET memory_limit = '1GB'; SET threads = 2; SET temp_directory = '${spill.replace(/'/g, "''")}'; SET max_temp_directory_size = '16GB'; SET autoinstall_known_extensions = false; SET autoload_known_extensions = false;`,
-    );
+    lock = takeImportLock(coreDb);
+  } catch (error) {
+    db.close();
+    throw error;
+  }
+
+  // Without a temp directory DuckDB sorts entirely in memory whatever
+  // `memory_limit` says, as the Parquet exporter's own comment records.
+  // The spill goes beside the database, in a folder of this run's own,
+  // capped by the free space there (`openBandsDuck`), and is removed
+  // however the run ends.
+  let session: Awaited<ReturnType<typeof openBandsDuck>>;
+  try {
+    session = await openBandsDuck({
+      tmpRoot: path.dirname(coreDb),
+      prefix: SPILL_PREFIX,
+      ...(options.spillMax !== undefined ? { spillMax: options.spillMax } : {}),
+      reserveBytes: spillReserveBytes(options.spillReserveGb),
+    });
+  } catch (error) {
+    db.close();
+    lock.close();
+    throw error;
+  }
+  const duck = session.duck;
+  const verification: ImportVerification = {
+    ...(pool !== undefined ? { pool } : {}),
+    anchorMin: min,
+    allow: {
+      ...allowances(options),
+      unsampled: options.allowUnsampled === true,
+    },
+    ...(sample !== undefined ? { sample } : {}),
+  };
+  try {
+    // The directory named must be readable: one that is not is an error,
+    // never "nothing to import".
+    try {
+      const stat = await fsp.stat(bandsDir);
+      if (!stat.isDirectory()) throw new Error('not a directory');
+    } catch (error) {
+      throw new ImportRefused(
+        `--bands-dir ${bandsDir}: ${(error as NodeJS.ErrnoException).code ?? (error as Error).message}`,
+      );
+    }
+    if (fill) {
+      log.info('Filling', { coreDb, cacheMib });
+      const run = await runFill({
+        db,
+        duck,
+        bandsDir,
+        log,
+        verification,
+        ...(maxBands !== undefined ? { limit: maxBands } : {}),
+        ...(from !== undefined ? { from } : {}),
+        ...(to !== undefined ? { to } : {}),
+        onBand: (outcome) =>
+          log.info('Range finished', {
+            heights: outcome.heights,
+            result: outcome.result,
+            rows: outcome.rows,
+            seconds: Math.round(outcome.seconds),
+          }),
+      });
+      const filled = run.outcomes.filter((o) => o.result === 'imported');
+      const refused = run.outcomes.find((o) => o.result === 'refused');
+      const answer = {
+        coreDb,
+        bandsDir,
+        mode: 'fill',
+        ceiling: run.ceiling,
+        filled: filled.length,
+        rows: filled.reduce((sum, o) => sum + (o.rows ?? 0), 0),
+        missingTransactions: filled.reduce(
+          (sum, o) => sum + (o.missingTransactions ?? 0),
+          0,
+        ),
+        uncovered: run.uncovered,
+        ...(refused !== undefined
+          ? { refused: refused.reason, refusal: refused.refusal ?? 'refused' }
+          : {}),
+        ranges: run.outcomes.map(describe),
+        seconds: Math.round((Date.now() - started) / 100) / 10,
+      };
+      if (refused !== undefined) throw answer;
+      return answer;
+    }
     log.info('Importing', { coreDb, cacheMib });
     const run = await runImport({
       db,
       duck,
       bandsDir,
       log,
+      verification,
       ...(maxBands !== undefined ? { limit: maxBands } : {}),
       ...(from !== undefined ? { from } : {}),
       ...(to !== undefined ? { to } : {}),
@@ -121,20 +306,15 @@ export async function indexL1ImportCLICommand(
         0,
       ),
       ...(run.holes.length > 0 ? { holes: run.holes } : {}),
+      ...(run.republished.length > 0 ? { republished: run.republished } : {}),
       skipped: run.skipped.map((b) => ({
         heightRange: b.heightRange,
         reason: b.reason,
       })),
-      ...(refused !== undefined ? { refused: refused.reason } : {}),
-      bands: run.outcomes.map((o) => ({
-        heightRange: o.heightRange,
-        result: o.result,
-        // A refused band imported nothing, and `undefined` would not
-        // survive the JSON the CLI contract promises.
-        ...(o.rows !== undefined ? { rows: o.rows } : {}),
-        ...(o.reason !== undefined ? { reason: o.reason } : {}),
-        seconds: Math.round(o.seconds),
-      })),
+      ...(refused !== undefined
+        ? { refused: refused.reason, refusal: refused.refusal ?? 'refused' }
+        : {}),
+      bands: run.outcomes.map(describe),
       seconds: Math.round((Date.now() - started) / 100) / 10,
     };
     // A refused band stops the run, so the command failed, even though
@@ -143,12 +323,9 @@ export async function indexL1ImportCLICommand(
     if (refused !== undefined) throw answer;
     return answer;
   } finally {
-    await duck.close();
-    await fsp.rm(path.join(path.dirname(coreDb), '.duckdb-import-tmp'), {
-      recursive: true,
-      force: true,
-    });
+    await session.close();
     db.pragma('locking_mode = NORMAL');
     db.close();
+    lock.close();
   }
 }

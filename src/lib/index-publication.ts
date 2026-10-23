@@ -48,6 +48,41 @@ export const INDEX_PUBLICATION_VERSION = 1;
  */
 export const INDEX_PUBLICATION_MAX_BYTES = 4 * 1024 * 1024;
 
+/**
+ * Read a publication response's body, refusing one over
+ * {@link INDEX_PUBLICATION_MAX_BYTES} before it is buffered. The cap is
+ * checked against the declared length and again while reading, because
+ * whoever serves the document controls both the header and the stream.
+ */
+export async function readPublicationBody(response: Response): Promise<Buffer> {
+  const declared = Number(response.headers.get('content-length') ?? '0');
+  if (Number.isFinite(declared) && declared > INDEX_PUBLICATION_MAX_BYTES) {
+    await response.body?.cancel().catch(() => undefined);
+    throw new Error(
+      `Publication declares ${declared} bytes, over the ${INDEX_PUBLICATION_MAX_BYTES} byte limit`,
+    );
+  }
+  if (response.body === null) {
+    throw new Error('Publication response had no body');
+  }
+  const chunks: Buffer[] = [];
+  let total = 0;
+  const reader = response.body.getReader();
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done === true) break;
+    total += value.length;
+    if (total > INDEX_PUBLICATION_MAX_BYTES) {
+      await reader.cancel();
+      throw new Error(
+        `Publication exceeded the ${INDEX_PUBLICATION_MAX_BYTES} byte limit`,
+      );
+    }
+    chunks.push(Buffer.from(value));
+  }
+  return Buffer.concat(chunks);
+}
+
 /** Ed25519 signatures are always 64 bytes. */
 const ED25519_SIGNATURE_BYTES = 64;
 
@@ -75,6 +110,18 @@ function isReservedName(value: string): boolean {
  * Dot-prefixed, so no index name can collide with it.
  */
 export const PUBLISHED_TORRENT_DIR = '.torrents';
+
+/**
+ * A publisher's BEP 19 WebSeed, relative to its origin. A client appends
+ * `<torrent name>/<file>`; the gateway answers it from the band's files.
+ */
+export const WEBSEED_PATH = '/ar-io/indexes/webseed/';
+
+/**
+ * Where a gateway serves the RSS feed of each index it publishes, relative
+ * to its origin: `<INDEX_FEED_PATH><index>.xml`.
+ */
+export const INDEX_FEED_PATH = '/ar-io/indexes/feed/';
 
 export const INDEX_PUBLICATION_MAX_INDEXES = 64;
 export const INDEX_PUBLICATION_MAX_BANDS_PER_INDEX = 1024;
@@ -765,25 +812,35 @@ export function verifyIndexPublication(
 }
 
 /**
- * The band ids that other bands in the set supersede.
- *
- * A self-reference is ignored, and so is every claim in a cycle (A replaces
- * B, B replaces A): honouring them would retire, then delete, every band in
- * it. A chain (C replaces B, B replaces A) retires A and B as intended.
+ * The band ids a band says it supersedes, as its metadata claims them: one
+ * id or a list. Anything else in the claim is ignored. A claim, not a
+ * verdict: {@link honouredSupersessions} decides which claims a set honours.
  */
-export function supersededBands(
+export function supersedesClaim(band: BandDescriptor): string[] {
+  const claim = band.metadata?.supersedes;
+  return (
+    typeof claim === 'string' ? [claim] : Array.isArray(claim) ? claim : []
+  ).filter((id): id is string => typeof id === 'string');
+}
+
+/**
+ * The claims of a set of bands that stand, by claiming band: what each band
+ * really supersedes.
+ *
+ * A self-reference is ignored, and so is every claim of a band on a cycle
+ * (A replaces B, B replaces A), whatever else it names: honouring them would
+ * retire, then delete, every band in it. A chain (C replaces B, B replaces A)
+ * stands as intended. A band whose claims all fall has no entry.
+ */
+export function honouredSupersessions(
   bands: BandDescriptor[],
   warn: (message: string, fields: Record<string, unknown>) => void = () =>
     undefined,
-): Set<string> {
+): Map<string, string[]> {
   const ids = new Set(bands.map((band) => band.id));
   const claims = new Map<string, string[]>();
   for (const band of bands) {
-    const claim = band.metadata?.supersedes;
-    const targets = (
-      typeof claim === 'string' ? [claim] : Array.isArray(claim) ? claim : []
-    ).filter((id): id is string => typeof id === 'string');
-    const valid = targets.filter((id) => {
+    const valid = supersedesClaim(band).filter((id) => {
       if (id === band.id) {
         warn('Band supersedes itself; ignoring that', { band: band.id });
         return false;
@@ -816,10 +873,18 @@ export function supersededBands(
     });
   }
 
-  const superseded = new Set<string>();
-  for (const [claimer, targets] of claims) {
-    if (onCycle.has(claimer)) continue;
-    for (const id of targets) superseded.add(id);
-  }
-  return superseded;
+  for (const claimer of onCycle) claims.delete(claimer);
+  return claims;
+}
+
+/**
+ * The band ids that other bands in the set supersede: the targets of
+ * {@link honouredSupersessions}.
+ */
+export function supersededBands(
+  bands: BandDescriptor[],
+  warn: (message: string, fields: Record<string, unknown>) => void = () =>
+    undefined,
+): Set<string> {
+  return new Set([...honouredSupersessions(bands, warn).values()].flat());
 }

@@ -10,8 +10,19 @@
  * starts from a published index instead of indexing the chain block by
  * block.
  *
- * Runs with the gateway stopped: it writes `stable_*` directly and makes no
- * network calls.
+ * Runs with the gateway stopped: it writes `stable_*` directly. `--fill`
+ * runs beside a running gateway instead, writing only the heights it lacks.
+ *
+ * **Nothing is written that was not verified first.** Before a band's first
+ * row reaches SQLite, the band is checked whole with the same code as
+ * `index-l1-verify --bands-dir` (`verify-bands.ts`, `judge.ts`), and bound
+ * to the chain: by the block the gateway already holds above it (its
+ * `previous_block` and `hash_list_merkle` must build on the band's top,
+ * and that block was synced from the gateway's own nodes), or, with none,
+ * by a network anchor (`--anchor-from`). It must also build on the block
+ * held below it. Blocks the checks cannot bind (`unbound`: below the 2.0
+ * fork, or holding a format-1 transaction with data) are refused unless
+ * accepted (`--allow-unbound`, `--allow-unverified-format1`).
  *
  * A band replaces its own height range, and is recorded in
  * `parquet_l1_imports` before its rows are written and completed after
@@ -23,6 +34,10 @@
  *
  * Bands are imported in height order and a gap is refused: the block
  * importer rewinds across one and gives up after `MAX_FORK_DEPTH`.
+ *
+ * A band that fails part way (its rows changed under the run, say) is
+ * cleared, rows and ledger row, offline as online: what a refused band
+ * wrote never stays behind to be served.
  */
 import crypto from 'node:crypto';
 import * as fs from 'node:fs/promises';
@@ -33,13 +48,33 @@ import { Logger } from 'winston';
 import {
   BAND_FILE,
   bandTablesDigest,
+  idHeightRange,
   PARQUET_L1_TABLES,
   ParquetL1Band,
-  readBandDirectory,
   TableSpec,
 } from './layout.js';
 import { IMPORT_ORDER, readTable } from './read.js';
-import { FORK_2_0 } from './chain.js';
+import {
+  type ChainBlock,
+  expectedHashListMerkle,
+  FORK_2_0,
+  PREDECESSOR_HAS_NO_MERKLE,
+} from './chain.js';
+import { anchorBlock } from './anchor.js';
+import { readL1Bands } from './bands-dir.js';
+import { BandsSource } from './bands-source.js';
+import { verifyBands } from './verify-bands.js';
+import type { L1Allowances } from './verify-run.js';
+import type { VerifyCheck } from './checks.js';
+import type { JudgeUnbound } from './judge.js';
+import {
+  MIN_CONFIRM,
+  runSample,
+  type SampleOptions,
+  type SampleSummary,
+} from './sample.js';
+import type { ArweaveNodePool } from '../onchain/arweave-nodes.js';
+import sleep from '../wait.js';
 
 /** A band on disk, ready to import. */
 export interface ImportableBand {
@@ -51,11 +86,78 @@ export interface ImportableBand {
 export interface ImportOutcome {
   id: string;
   heightRange: [number, number];
+  /** The heights written, when not the whole band. */
+  heights?: [number, number];
   result: 'imported' | 'refused';
   reason?: string;
+  /** For a refusal: `unreadable` when only the sample could not be read ({@link ImportRefused}). */
+  refusal?: 'refused' | 'unreadable';
   rows?: number;
   missingTransactions?: number;
+  /** What the check before writing found (bound by, accepted, unbound, sample). */
+  check?: ImportCheck;
   seconds: number;
+}
+
+const refusalOf = (error: unknown): 'refused' | 'unreadable' =>
+  error instanceof ImportRefused ? error.kind : 'refused';
+
+/**
+ * Forgets every unfinished ledger row whose heights (up to `ceiling`)
+ * completed imports started after it now cover between them — one of
+ * another grid spanning two bands, say — so it is neither redone nor
+ * held against the blocks those imports wrote.
+ */
+function forgetCoveredUnfinished(db: Sqlite.Database, ceiling: number): void {
+  const unfinished = db
+    .prepare(
+      `SELECT band_id, height_from AS a, height_to AS b, started_at
+       FROM parquet_l1_imports WHERE completed_at IS NULL`,
+    )
+    .all() as Array<{
+    band_id: string;
+    a: number;
+    b: number;
+    started_at: number;
+  }>;
+  if (unfinished.length === 0) return;
+  const completed = db.prepare(
+    `SELECT height_from AS a, height_to AS b FROM parquet_l1_imports
+     WHERE completed_at IS NOT NULL AND started_at >= ?
+       AND height_to >= ? AND height_from <= ?`,
+  );
+  const forget = db.prepare(
+    'DELETE FROM parquet_l1_imports WHERE band_id = ? AND completed_at IS NULL',
+  );
+  for (const row of unfinished) {
+    const top = Math.min(row.b, ceiling);
+    if (top < row.a) continue;
+    const over = (
+      completed.all(row.started_at, row.a, top) as Array<{
+        a: number;
+        b: number;
+      }>
+    ).map((r): [number, number] => [r.a, r.b]);
+    if (uncoveredBy(row.a, top, over).length === 0) forget.run(row.band_id);
+  }
+}
+
+/** The parts of `[from, to]` none of `ranges` covers, in order. */
+export function uncoveredBy(
+  from: number,
+  to: number,
+  ranges: ReadonlyArray<readonly [number, number]>,
+): Array<[number, number]> {
+  const out: Array<[number, number]> = [];
+  let next = from;
+  for (const [a, b] of [...ranges].sort((x, y) => x[0] - y[0])) {
+    if (b < next || a > to) continue;
+    if (a > next) out.push([next, a - 1]);
+    next = Math.max(next, b + 1);
+    if (next > to) break;
+  }
+  if (next <= to) out.push([next, to]);
+  return out;
 }
 
 /** A band on disk the run had no use for, and why. */
@@ -68,7 +170,19 @@ export interface SkippedBand {
     | 'above_the_requested_range';
 }
 
-export class ImportRefused extends Error {}
+/**
+ * Why a band was not written. `unreadable`: the sample could not be read
+ * (too many draws unanswered: an outage, not evidence against the band),
+ * so a caller may simply try again later; `refused`: anything else.
+ */
+export class ImportRefused extends Error {
+  constructor(
+    message: string,
+    readonly kind: 'refused' | 'unreadable' = 'refused',
+  ) {
+    super(message);
+  }
+}
 
 const spec = (name: string) =>
   PARQUET_L1_TABLES.find((t) => t.name === name) as TableSpec;
@@ -87,53 +201,90 @@ export const COMMIT_EVERY_ROWS = 2_000_000;
 export const PROGRESS_EVERY_MS = 60_000;
 
 /**
+ * Heights cleared per transaction when filling beneath a running gateway.
+ * The busiest band averages about 470 rows a height (46.6M over 100,000
+ * heights), so a window is typically under
+ * 100,000 rows: a second or so of the write lock at worst. A clear that
+ * finds nothing, the usual case, costs a few index probes.
+ */
+export const CLEAR_WINDOW_HEIGHTS = 200;
+
+/**
+ * The statements that clear a height range before a band rewrites it, in
+ * the order they run: links and tags before the blocks and transactions
+ * they are found through. Each must reach its rows through an index —
+ * online they run once per window of heights, so a scan would read the
+ * whole table hundreds of times a band. A test holds them to that.
+ */
+export const CLEAR_SQL = {
+  links: `DELETE FROM stable_block_transactions
+    WHERE block_indep_hash IN
+      (SELECT indep_hash FROM stable_blocks WHERE height BETWEEN ? AND ?)`,
+  // By transaction, not by height: the table's key leads with the tag
+  // hashes, so a height range is a scan of every tag the gateway holds.
+  // Every tag row belongs to a transaction at its height, and tags are
+  // written after and cleared before their transactions, so this finds
+  // them all.
+  tags: `DELETE FROM stable_transaction_tags
+    WHERE transaction_id IN
+      (SELECT id FROM stable_transactions WHERE height BETWEEN ? AND ?)`,
+  transactions: 'DELETE FROM stable_transactions WHERE height BETWEEN ? AND ?',
+  missing: 'DELETE FROM missing_transactions WHERE height BETWEEN ? AND ?',
+  blocks: 'DELETE FROM stable_blocks WHERE height BETWEEN ? AND ?',
+} as const;
+
+/**
+ * Rows read, and so written, per transaction when filling beneath a
+ * running gateway. Core waits up to 30 s for the write lock, and a batch
+ * this size holds it for well under one.
+ */
+export const FILL_BATCH_ROWS = 10_000;
+
+/**
+ * Pause after each fill transaction. SQLite grants the lock to whichever
+ * writer retries first, and the gateway's writers back off while they
+ * wait, so a writer that begins again at once can keep them out.
+ */
+export const FILL_YIELD_MS = 50;
+
+/**
  * A band's identity for the ledger. The same digest the band's id carries,
  * so a band recorded as imported cannot be a different band under the same
  * name.
  */
 export const bandDigest = bandTablesDigest;
 
-/**
- * The heights a band's directory name claims, or `undefined` if it is not a
- * band id. The name is whoever-published-it's, and it is the ledger's key,
- * so it has to agree with the band it names.
- */
-export function idHeightRange(id: string): [number, number] | undefined {
-  const m = /^l1-h(\d{1,15})-(\d{1,15})-[0-9a-f]{8}-[0-9a-f]{12}$/.exec(id);
-  if (m === null) return undefined;
-  return [Number(m[1]), Number(m[2])];
-}
+export { idHeightRange };
 
 /**
  * Every band of a `parquet-l1` directory, lowest first, with its band file
- * read.
+ * read (`readL1Bands`: an explicit listing, retired copies and stray
+ * directories ignored, one copy of each installed band).
  *
- * A directory whose name is not a band id, or whose name disagrees with the
- * band inside it, is passed over rather than refused: the directory holds
- * whatever a publisher and a subscriber left there, and one band nobody can
- * read must not stop the rest importing.
- *
- * The name has to agree with the band because the name is the ledger's key.
- * A band recorded under heights it does not hold would leave the planner
- * certain of a range nothing filled. The grid itself is not checked here —
+ * The name has to be the band's identity because the name is the ledger's
+ * key: a band recorded under heights or a digest it does not hold would
+ * leave the planner certain of rows nothing wrote. So any entry that is not
+ * a readable band named for what it holds refuses the run, named, rather
+ * than being passed over. The grid itself is not checked here —
  * {@link planImport} refuses a gap or an overlap whatever grid a band came
  * from, and a publisher that changes the grid should not strand the bands
  * already published.
+ *
+ * @throws ImportRefused for an entry that is not such a band; the
+ *   directory's own error (ENOENT, EACCES) when it cannot be read.
  */
 export async function readBands(dir: string): Promise<ImportableBand[]> {
-  const bands: ImportableBand[] = [];
-  for (const found of await readBandDirectory(dir)) {
-    const named = idHeightRange(found.id);
-    if (named === undefined) continue;
-    const [from, to] = found.band.heightRange;
-    if (from !== named[0] || to !== named[1]) continue;
-    bands.push(found);
+  const listing = await readL1Bands(dir);
+  if (listing.problems.length > 0) {
+    throw new ImportRefused(
+      `${dir} holds entries that are not bands named for what they hold: ${listing.problems.map((p) => `${p.entry}: ${p.problem}`).join('; ')}`,
+    );
   }
-  return bands.sort(
-    (a, b) =>
-      a.band.heightRange[0] - b.band.heightRange[0] ||
-      a.band.heightRange[1] - b.band.heightRange[1],
-  );
+  return listing.bands.map(({ id, dir: bandDir, band }) => ({
+    id,
+    dir: bandDir,
+    band,
+  }));
 }
 
 /**
@@ -159,7 +310,12 @@ export function planImport(
     to: stopAt,
   }: {
     haveTo: number;
-    held: ReadonlySet<string>;
+    /**
+     * Bands the ledger records as finished, by id, with the digest each
+     * was imported with: a band under the same id with other tables (a
+     * republished band) is not held.
+     */
+    held: ReadonlyMap<string, Buffer> | ReadonlySet<string>;
     /**
      * The highest height `stable_blocks` actually reaches, which can be
      * above `haveTo` when an unfinished band pulled that down. Used to
@@ -177,7 +333,12 @@ export function planImport(
     /** Stop after the band covering this height, so a backfill need not redo what is already held. */
     to?: number;
   },
-): { steps: ImportableBand[]; skipped: SkippedBand[] } {
+): {
+  steps: ImportableBand[];
+  skipped: SkippedBand[];
+  /** Bands the ledger holds under the same id with other tables, imported again. */
+  republished: string[];
+} {
   const steps: ImportableBand[] = [];
   const skipped: SkippedBand[] = [];
   // An empty database takes the lowest band's start as its own: the result
@@ -192,18 +353,31 @@ export function planImport(
   // Sorted by start then end, so a tip band comes before the whole band
   // that covers it. Drop any band another wholly contains, or the shorter
   // would be imported and the longer then import over it.
-  const covered = (b: ImportableBand) =>
-    bands.some(
-      (other) =>
-        other !== b &&
-        other.band.heightRange[0] <= b.band.heightRange[0] &&
-        other.band.heightRange[1] >= b.band.heightRange[1] &&
-        other.band.heightRange[1] - other.band.heightRange[0] >
-          b.band.heightRange[1] - b.band.heightRange[0],
-    );
+  const covered = (b: ImportableBand) => coveredByWider(b, bands);
+  const isHeld = (b: ImportableBand) => {
+    if (held instanceof Map) {
+      const digest = held.get(b.id);
+      return digest !== undefined && digest.equals(bandDigest(b.band));
+    }
+    return held.has(b.id);
+  };
+  // A band the ledger holds under its id, but with other tables: its
+  // publisher rebuilt it. Its range is imported again, wherever it lies —
+  // a band rewrites only its own heights — and it is never counted held.
+  const republished = bands.filter(
+    (b) =>
+      held instanceof Map &&
+      held.has(b.id) &&
+      !isHeld(b) &&
+      !coveredByWider(b, bands) &&
+      // Only within the heights asked for (--from/--to).
+      (startAt === undefined || b.band.heightRange[1] >= startAt) &&
+      (stopAt === undefined || b.band.heightRange[0] <= stopAt),
+  );
   for (const candidate of bands) {
+    if (republished.includes(candidate)) continue;
     const [from, to] = candidate.band.heightRange;
-    const reason = held.has(candidate.id)
+    const reason = isHeld(candidate)
       ? 'already_imported'
       : covered(candidate)
         ? 'covered_by_a_wider_band'
@@ -240,7 +414,13 @@ export function planImport(
     steps.push(candidate);
     next = to + 1;
   }
-  return { steps, skipped };
+  steps.push(...republished);
+  steps.sort(
+    (a, b) =>
+      a.band.heightRange[0] - b.band.heightRange[0] ||
+      a.band.heightRange[1] - b.band.heightRange[1],
+  );
+  return { steps, skipped, republished: republished.map((b) => b.id) };
 }
 
 /**
@@ -254,7 +434,11 @@ export const BYTES_PER_ROW = 300;
 /**
  * Free bytes an import keeps back beyond its estimate: the write-ahead log
  * a band in flight builds (1.9 GB at the largest band's chunk size), and
- * room for the gateway to start afterwards.
+ * room for the gateway to start afterwards. A band written over heights
+ * that already hold rows goes in one transaction, so its whole size is in
+ * the log at once; that is added per such band ({@link assertDiskSpace}'s
+ * `walRows`: measured 38 MB of log for 140,000 rows written over held
+ * rows, against 6.8 MB fresh).
  */
 export const DISK_HEADROOM_BYTES = 4 * 1024 ** 3;
 
@@ -275,20 +459,28 @@ export async function assertDiskSpace(
     statfs = fs.statfs,
     bytesPerRow = BYTES_PER_ROW,
     headroom = DISK_HEADROOM_BYTES,
+    rows: estimatedRows,
+    walRows,
   }: {
     log: Logger;
     statfs?: (path: string) => Promise<{ bsize: number; bavail: number }>;
     bytesPerRow?: number;
     headroom?: number;
+    /** Rows the run will write, where that is not every row of `steps`. */
+    rows?: number;
+    /** Rows written in one transaction each (bands over held rows): their log is kept whole. */
+    walRows?: number;
   },
 ): Promise<void> {
-  const rows = steps.reduce(
-    (sum, step) =>
-      sum +
-      Object.values(step.band.tables).reduce((n, table) => n + table.rows, 0),
-    0,
-  );
-  const needed = rows * bytesPerRow + headroom;
+  const rows =
+    estimatedRows ??
+    steps.reduce(
+      (sum, step) =>
+        sum +
+        Object.values(step.band.tables).reduce((n, table) => n + table.rows, 0),
+      0,
+    );
+  const needed = (rows + (walRows ?? 0)) * bytesPerRow + headroom;
   let free: number;
   try {
     const stat = await statfs(path.dirname(path.resolve(coreDbPath)));
@@ -399,9 +591,207 @@ export function heldRuns(db: Sqlite.Database): Array<[number, number]> {
   ).map((r) => [r.lo, r.hi]);
 }
 
-/** The migration this importer was written against; its table must exist. */
+/**
+ * The highest height an online fill may write, or -1 when the gateway holds
+ * no blocks yet and there is nothing to fill beneath.
+ *
+ * A running gateway writes its own heights from the tip down: the block
+ * importer adds `new_*` rows at the tip, and the flush moves them into
+ * `stable_*` once they are deep enough. Neither writes below the top of
+ * `stable_blocks`, so every height up to it is the fill's to write and
+ * none above it is. A gateway that has not flushed yet holds only
+ * `new_blocks`, and its lowest one is where it began.
+ */
+export function fillCeiling(db: Sqlite.Database): number {
+  const stableTop = db
+    .prepare('SELECT MAX(height) FROM stable_blocks')
+    .pluck()
+    .get() as number | null;
+  const newBottom = db
+    .prepare('SELECT MIN(height) FROM new_blocks')
+    .pluck()
+    .get() as number | null;
+  if (stableTop === null) return newBottom === null ? -1 : newBottom - 1;
+  return newBottom === null ? stableTop : Math.min(stableTop, newBottom - 1);
+}
+
+/** Inclusive ranges, merged where they overlap or touch, lowest first. */
+export function mergeRanges(
+  ranges: ReadonlyArray<readonly [number, number]>,
+): Array<[number, number]> {
+  const sorted = ranges
+    .filter(([a, b]) => b >= a)
+    .map(([a, b]): [number, number] => [a, b])
+    .sort((x, y) => x[0] - y[0]);
+  const merged: Array<[number, number]> = [];
+  for (const range of sorted) {
+    const last = merged[merged.length - 1];
+    if (last !== undefined && range[0] <= last[1] + 1) {
+      last[1] = Math.max(last[1], range[1]);
+    } else {
+      merged.push(range);
+    }
+  }
+  return merged;
+}
+
+/** The heights in `[lo, hi]` that `held` does not cover, as inclusive ranges. */
+export function missingRanges(
+  held: ReadonlyArray<readonly [number, number]>,
+  lo: number,
+  hi: number,
+): Array<[number, number]> {
+  const missing: Array<[number, number]> = [];
+  let next = lo;
+  for (const [a, b] of mergeRanges(held)) {
+    if (next > hi) break;
+    if (b < next) continue;
+    if (a > hi) break;
+    if (a > next) missing.push([next, a - 1]);
+    next = Math.max(next, b + 1);
+  }
+  if (next <= hi) missing.push([next, hi]);
+  return missing;
+}
+
+/**
+ * True when another band wholly contains this one and reaches further, as a
+ * whole band does the tip bands it replaced. The shorter is never imported:
+ * the longer would only import over it.
+ */
+function coveredByWider(
+  band: ImportableBand,
+  bands: ReadonlyArray<ImportableBand>,
+): boolean {
+  const [from, to] = band.band.heightRange;
+  return bands.some(
+    (other) =>
+      other !== band &&
+      other.band.heightRange[0] <= from &&
+      other.band.heightRange[1] >= to &&
+      other.band.heightRange[1] - other.band.heightRange[0] > to - from,
+  );
+}
+
+/** Heights one band fills beneath a running gateway. */
+export interface FillStep {
+  band: ImportableBand;
+  heights: [number, number];
+}
+
+/**
+ * The steps that fill what `core.db` is missing at or below `ceiling`, from
+ * the bands that hold it, lowest first.
+ *
+ * Only missing heights are written, so nothing the gateway indexed itself
+ * is rewritten — except `redo`, ranges a run left unfinished, which look
+ * held because a band writes its blocks long before their transactions.
+ * A band's tip may be published before its whole range is mined, so a
+ * band fills only up to `top`, the highest block it holds; anything above
+ * that waits for the band that replaces it.
+ *
+ * `uncovered` is what no band on disk can fill yet: bands still
+ * downloading, or the heights between the newest band and where the
+ * gateway began, which the publisher's next tip band will hold.
+ */
+export function planFill(
+  bands: ReadonlyArray<ImportableBand>,
+  {
+    held,
+    ceiling,
+    redo = [],
+    top = new Map(),
+    from = 0,
+    to = ceiling,
+  }: {
+    held: ReadonlyArray<readonly [number, number]>;
+    ceiling: number;
+    redo?: ReadonlyArray<readonly [number, number]>;
+    /** The highest height each band (by id) holds, where below its range's end. */
+    top?: ReadonlyMap<string, number>;
+    from?: number;
+    to?: number;
+  },
+): { steps: FillStep[]; uncovered: Array<[number, number]> } {
+  const lo = Math.max(0, from);
+  const hi = Math.min(ceiling, to);
+  if (hi < lo) return { steps: [], uncovered: [] };
+  let holes = mergeRanges([
+    ...missingRanges(held, lo, hi),
+    ...redo.map(([a, b]): [number, number] => [
+      Math.max(a, lo),
+      Math.min(b, hi),
+    ]),
+  ]);
+  const steps: FillStep[] = [];
+  for (const band of bands) {
+    if (coveredByWider(band, bands)) continue;
+    const [bandFrom, bandTo] = band.band.heightRange;
+    const reach = Math.min(bandTo, top.get(band.id) ?? bandTo);
+    const left: Array<[number, number]> = [];
+    for (const [a, b] of holes) {
+      const start = Math.max(a, bandFrom);
+      const end = Math.min(b, reach);
+      if (start > end) {
+        left.push([a, b]);
+        continue;
+      }
+      steps.push({ band, heights: [start, end] });
+      if (a < start) left.push([a, start - 1]);
+      if (end < b) left.push([end + 1, b]);
+    }
+    holes = mergeRanges(left);
+  }
+  steps.sort((x, y) => x.heights[0] - y.heights[0]);
+  return { steps, uncovered: holes };
+}
+
+/**
+ * The ledger key for heights a band filled: the band's own id when it
+ * filled its whole range, so the offline planner counts the band as held,
+ * and the id with the heights otherwise.
+ */
+export function fillLedgerKey(step: FillStep): string {
+  const [from, to] = step.band.band.heightRange;
+  return step.heights[0] === from && step.heights[1] === to
+    ? step.band.id
+    : `${step.band.id}@${step.heights[0]}-${step.heights[1]}`;
+}
+
+/**
+ * The migration this importer was written against; its table must exist.
+ * Named as `src/migrate.ts` records it in `migrations`: the file's name,
+ * `.sql` and all.
+ */
 export const LEDGER_MIGRATION =
-  '2026.10.04T12.00.00.core.add-parquet-l1-imports';
+  '2026.10.04T12.00.00.core.add-parquet-l1-imports.sql';
+
+/** The migration that records how each imported range was bound. */
+export const BINDING_MIGRATION =
+  '2026.10.22T12.00.00.core.add-parquet-l1-import-binding.sql';
+
+/**
+ * Refuses a `core.db` that has not run the ledger migration, so the gateway
+ * and the importer agree on the schema: an older `core.db` is missing
+ * columns an import writes.
+ */
+export function assertMigrated(db: Sqlite.Database): void {
+  const migrated = db
+    .prepare('SELECT 1 FROM migrations WHERE name = ?')
+    .pluck()
+    .get(LEDGER_MIGRATION);
+  const columns = new Set(
+    db
+      .prepare("SELECT name FROM pragma_table_info('parquet_l1_imports')")
+      .pluck()
+      .all() as string[],
+  );
+  if (migrated === undefined || !columns.has('binding')) {
+    throw new ImportRefused(
+      `core.db has not run ${migrated === undefined ? LEDGER_MIGRATION : BINDING_MIGRATION}: run \`yarn db:migrate up\` first, so the importer and the gateway agree on the schema`,
+    );
+  }
+}
 
 /**
  * Refuses a `core.db` an import would damage or silently half-fill.
@@ -418,15 +808,7 @@ export const LEDGER_MIGRATION =
  *   import releases its own lock at every chunk.
  */
 export function assertImportable(db: Sqlite.Database): void {
-  const migrated = db
-    .prepare('SELECT 1 FROM migrations WHERE name = ?')
-    .pluck()
-    .get(LEDGER_MIGRATION);
-  if (migrated === undefined) {
-    throw new ImportRefused(
-      `core.db has not run ${LEDGER_MIGRATION}: run \`yarn db:migrate up\` first, so the importer and the gateway agree on the schema`,
-    );
-  }
+  assertMigrated(db);
   // Any of the three: a transaction can arrive before its block, so
   // `new_blocks` alone can be empty while the others are not.
   const unstable = (
@@ -467,7 +849,8 @@ export function readProgress(db: Sqlite.Database): {
   blocksFrom: number;
   /** The highest height `stable_blocks` holds, before any unfinished band pulls it down. */
   blocksTo: number;
-  held: Set<string>;
+  /** Finished bands by id, with the digest each was imported with. */
+  held: Map<string, Buffer>;
   unfinished: Array<{ id: string; from: number }>;
 } {
   const span = db
@@ -475,13 +858,14 @@ export function readProgress(db: Sqlite.Database): {
     .get() as { lo: number | null; hi: number | null };
   const blocksFrom = span.lo ?? -1;
   const blocksTo = span.hi ?? -1;
-  const held = new Set(
-    db
-      .prepare(
-        'SELECT band_id FROM parquet_l1_imports WHERE completed_at IS NOT NULL',
-      )
-      .pluck()
-      .all() as string[],
+  const held = new Map(
+    (
+      db
+        .prepare(
+          'SELECT band_id, band_digest FROM parquet_l1_imports WHERE completed_at IS NOT NULL',
+        )
+        .all() as Array<{ band_id: string; band_digest: Buffer }>
+    ).map((r) => [r.band_id, r.band_digest]),
   );
   const unfinished = (
     db
@@ -509,7 +893,445 @@ const asBuffer = (value: unknown): Buffer =>
   Buffer.isBuffer(value) ? value : Buffer.from(value as Uint8Array);
 
 /**
- * Imports one band in a single transaction, ending with its ledger row.
+ * How a written range was bound to the chain, as its ledger row records
+ * it: `anchored` (a network anchor at its top), `held` (the block the
+ * gateway held above it, itself trusted), `unanchored` (accepted with
+ * --allow-unanchored), plus the flags that accepted something. Only a range
+ * bound `anchored` or `held` with nothing accepted may vouch, as the block
+ * above, for a band imported below it.
+ */
+export interface ImportBinding {
+  kind: 'anchored' | 'held' | 'unanchored';
+  accepted: string[];
+}
+
+/** How an import is bound to the chain before it writes, and what it may accept. */
+export interface ImportVerification {
+  /** Sources for a network anchor where `core.db` holds no block above. */
+  pool?: ArweaveNodePool;
+  /** Distinct machines that must agree on a network anchor (default 2). */
+  anchorMin?: number;
+  /** Gaps the operator accepts (`--allow-*`, or `L1_BAND_IMPORT_ALLOW_UNVERIFIED`). */
+  allow?: L1Allowances & {
+    /** `--allow-unsampled`: write with no sample of headers and signatures. */
+    unsampled?: boolean;
+  };
+  /** The sample drawn from the bands before writing; needs `pool`. */
+  sample?: SampleOptions;
+}
+
+type HeldBlock = Pick<
+  ChainBlock,
+  | 'height'
+  | 'indep_hash'
+  | 'previous_block'
+  | 'weave_size'
+  | 'tx_root'
+  | 'hash_list_merkle'
+>;
+
+/**
+ * The block the gateway holds at a height: from `stable_blocks`, or, above
+ * them, from `new_blocks` — both its block importer fetched from its own
+ * nodes. A `new_blocks` row on a fork that is later dropped does not build
+ * on a canonical band, so it refuses the fill, which the next run retries.
+ */
+const heldBlockAt = (
+  db: Sqlite.Database,
+  height: number,
+): HeldBlock | undefined => {
+  for (const table of ['stable_blocks', 'new_blocks']) {
+    const row = db
+      .prepare(
+        `SELECT height, indep_hash, previous_block, weave_size, tx_root, hash_list_merkle
+         FROM ${table} WHERE height = ? LIMIT 1`,
+      )
+      .get(height) as HeldBlock | undefined;
+    if (row !== undefined) return row;
+  }
+  return undefined;
+};
+
+/**
+ * Whether `upper` builds on `lower`: its `previous_block` is `lower`'s hash,
+ * and its `hash_list_merkle` is the one `lower` gives, where the era lets
+ * one be computed. `undefined` when it does, else why not.
+ */
+function buildsOn(lower: HeldBlock, upper: HeldBlock): string | undefined {
+  const asBuf = (v: Buffer | string | null) =>
+    v === null ? null : Buffer.isBuffer(v) ? v : Buffer.from(v, 'utf8');
+  const prev = asBuf(upper.previous_block);
+  const hash = asBuf(lower.indep_hash);
+  if (prev === null || hash === null || !prev.equals(hash)) {
+    return `the block at ${upper.height} does not name the one at ${lower.height} as its previous_block`;
+  }
+  const want = expectedHashListMerkle(
+    upper.height,
+    {
+      ...lower,
+      tx_root: asBuf(lower.tx_root),
+      hash_list_merkle: asBuf(lower.hash_list_merkle),
+    } as ChainBlock,
+    undefined,
+  );
+  if (want === PREDECESSOR_HAS_NO_MERKLE) {
+    return `the block at ${lower.height} has no hash_list_merkle`;
+  }
+  if (want === undefined) return undefined;
+  const got = asBuf(upper.hash_list_merkle);
+  const ok =
+    want === null
+      ? got === null || got.length === 0
+      : got !== null && want.equals(got);
+  return ok
+    ? undefined
+    : `the block at ${upper.height} has a hash_list_merkle the one at ${lower.height} does not give`;
+}
+
+/**
+ * Whether the block the gateway holds at `height` may vouch for a band
+ * beneath it: a block the gateway indexed itself (no imported range covers
+ * it), or one an import wrote bound `anchored` or `held` with nothing
+ * accepted. A range written unanchored, with gaps accepted, before
+ * bindings were recorded, or by an import that never finished vouches for
+ * nothing.
+ */
+function heldBlockVouches(
+  db: Sqlite.Database,
+  height: number,
+): string | undefined {
+  // An import that never finished (it crashed, or was refused part way
+  // online) left rows whose binding was never recorded: they vouch for
+  // nothing until it is redone.
+  // One a later import has since completed over these heights is
+  // superseded here: its leftovers there were replaced.
+  const unfinished = db
+    .prepare(
+      `SELECT u.band_id FROM parquet_l1_imports u
+       WHERE u.completed_at IS NULL AND u.height_from <= ? AND u.height_to >= ?
+         AND NOT EXISTS (
+           SELECT 1 FROM parquet_l1_imports c
+           WHERE c.completed_at IS NOT NULL
+             AND c.height_from <= ? AND c.height_to >= ?
+             AND c.started_at >= u.started_at)
+       LIMIT 1`,
+    )
+    .pluck()
+    .get(height, height, height, height) as string | undefined;
+  if (unfinished !== undefined) {
+    return `an import of ${unfinished} covering it never finished`;
+  }
+  const rows = db
+    .prepare(
+      `SELECT band_id, binding, accepted FROM parquet_l1_imports
+       WHERE completed_at IS NOT NULL AND height_from <= ? AND height_to >= ?`,
+    )
+    .all(height, height) as Array<{
+    band_id: string;
+    binding: string | null;
+    accepted: string | null;
+  }>;
+  for (const row of rows) {
+    // Accepting no sample leaves the block hashes, weave sizes and roots as
+    // bound as ever; accepting a gap in that binding does not.
+    let gaps: string[] = [];
+    try {
+      gaps = (JSON.parse(row.accepted ?? '[]') as string[]).filter((flag) =>
+        UNBINDING_FLAGS.includes(flag),
+      );
+    } catch {
+      gaps = ['an unreadable record'];
+    }
+    const trusted =
+      (row.binding === 'anchored' || row.binding === 'held') &&
+      row.accepted !== null &&
+      gaps.length === 0;
+    if (!trusted) {
+      return `it was imported from ${row.band_id} bound ${row.binding ?? 'by nothing recorded'}${gaps.length > 0 ? ` accepting ${gaps.join(', ')}` : ''}`;
+    }
+  }
+  return undefined;
+}
+
+/** Flags that accept a gap in a range's binding: such a range vouches for nothing below it. */
+export const UNBINDING_FLAGS = [
+  '--allow-unanchored',
+  '--allow-unbound',
+  '--allow-incomplete',
+  '--allow-unverified-format1',
+];
+
+/** What the check before an import found, as the import reports it. */
+export interface ImportCheck {
+  /** How the heights were bound, in words. */
+  boundBy: string;
+  binding: ImportBinding;
+  /** Every flag that accepted something for these heights. */
+  accepted: string[];
+  unbound: JudgeUnbound;
+  skipped: string[];
+  assurance: string[];
+  sample?: SampleSummary;
+}
+
+/**
+ * Checks bands before a row of them is written: whole, by the code
+ * `index-l1-verify --bands-dir` runs (lookups aside: nothing imports them),
+ * then against `core.db` at both edges of `heights`, bound to the chain —
+ * by the block the gateway holds above `heights` when that block may vouch
+ * ({@link heldBlockVouches}), else by a network anchor — and, through the
+ * sample, for what nothing else binds: transaction ids, their order and
+ * every transaction field.
+ *
+ * @throws ImportRefused naming every check that failed.
+ */
+export async function verifyBeforeImport(
+  db: Sqlite.Database,
+  duck: import('duckdb-async').Database,
+  bandsDir: string,
+  bands: ImportableBand[],
+  heights: [number, number],
+  verification: ImportVerification,
+  log: Logger,
+): Promise<ImportCheck> {
+  const allow = verification.allow ?? {};
+  // Sources that are fewer distinct machines than a refutation or an
+  // attestation needs can settle neither: a configuration to fix, said
+  // before the bands are read, not an outage to wait out.
+  if (verification.pool !== undefined) {
+    const pool = verification.pool;
+    await pool.ready();
+    const machines = new Set(pool.urls.map((u) => pool.addressOf(u))).size;
+    const need = Math.max(MIN_CONFIRM, verification.anchorMin ?? MIN_CONFIRM);
+    if (machines < need) {
+      throw new ImportRefused(
+        `the sources (--anchor-from) are ${machines} distinct machine${machines === 1 ? '' : 's'}, fewer than the ${need} the anchor and the sample need: add sources`,
+      );
+    }
+  }
+  const out = await verifyBands(duck, bandsDir, {
+    only: bands.map((b) => b.id),
+    lookups: false,
+    // Anchored here, below, against what core.db holds.
+    allow: { ...allow, unanchored: true },
+  });
+  const failing = out.checks.filter((c) => !c.ok);
+  const refuse = (what: string, checks: VerifyCheck[]) =>
+    new ImportRefused(
+      `${what}: ${checks
+        .map(
+          (c) =>
+            `${c.name} (${(c.failures ?? [])
+              .slice(0, 3)
+              .map((f) => `${f.height}: ${f.found}`)
+              .join('; ')})`,
+        )
+        .join('; ')}`,
+    );
+  if (failing.length > 0) throw refuse('the bands do not verify', failing);
+  const source = new BandsSource(duck, bands);
+  const [from, to] = heights;
+  const bandAt = async (h: number): Promise<HeldBlock | undefined> => {
+    const row = await source.blockAt(h);
+    return row === undefined
+      ? undefined
+      : {
+          height: row.height,
+          indep_hash: row.indep_hash as Buffer,
+          previous_block: row.previous_block,
+          weave_size: String(row.weave_size),
+          tx_root: row.tx_root,
+          hash_list_merkle: row.hash_list_merkle,
+        };
+  };
+  const bottom = await bandAt(from);
+  const top = await bandAt(to);
+  if (bottom === undefined || top === undefined) {
+    throw new ImportRefused(
+      `the bands hold no block at ${bottom === undefined ? from : to}`,
+    );
+  }
+  const below = from > 0 ? heldBlockAt(db, from - 1) : undefined;
+  if (below !== undefined) {
+    const problem = buildsOn(below, bottom);
+    if (problem !== undefined) {
+      throw new ImportRefused(
+        `the band does not build on the block core.db holds below it: ${problem}`,
+      );
+    }
+  }
+  // Lookups are not imported, and the anchor is decided here.
+  const accepted = out.accepted.filter(
+    (f) => f !== '--allow-unanchored' && f !== '--skip-lookups',
+  );
+  let binding: ImportBinding | undefined;
+  let boundBy = '';
+  const notes: string[] = [];
+  const above = heldBlockAt(db, to + 1);
+  if (above !== undefined) {
+    const problem = buildsOn(top, above);
+    if (problem !== undefined) {
+      throw new ImportRefused(
+        `the block core.db holds above the band does not build on it: ${problem}`,
+      );
+    }
+    const doubt = heldBlockVouches(db, to + 1);
+    if (doubt === undefined) {
+      binding = { kind: 'held', accepted };
+      boundBy = `the block core.db holds at ${to + 1} builds on the band's top`;
+    } else {
+      notes.push(`the block core.db holds at ${to + 1} cannot vouch: ${doubt}`);
+    }
+  }
+  if (binding === undefined && verification.pool !== undefined) {
+    const result = await anchorBlock(
+      verification.pool,
+      to,
+      await source.blockAt(to),
+      await source.idsAt(to),
+      verification.anchorMin ?? 2,
+    );
+    if (!result.ok) {
+      // Too few machines answered at all, and none said anything against
+      // the band: an outage to wait out, not a refusal of the band.
+      const outage =
+        result.mismatches.length === 0 &&
+        result.sources.every(
+          (src) =>
+            src.indepHash !== undefined ||
+            (src.error ?? '').startsWith('did not answer'),
+        ) &&
+        result.sources.some((src) =>
+          (src.error ?? '').startsWith('did not answer'),
+        ) &&
+        new Set(result.sources.flatMap((src) => src.indepHash ?? [])).size <=
+          1 &&
+        result.problems.every((p) => /distinct machine\(s\) answered/.test(p));
+      throw new ImportRefused(
+        `the band's top block at ${to} is not anchored: ${[...notes, ...result.problems].join('; ')}`,
+        outage ? 'unreadable' : 'refused',
+      );
+    }
+    binding = { kind: 'anchored', accepted };
+    boundBy = `the band's top block at ${to} is anchored: ${result.machines} machines agreed on ${result.indepHash ?? ''}, recomputed`;
+  }
+  if (binding === undefined) {
+    if (allow.unanchored !== true) {
+      throw new ImportRefused(
+        `nothing binds heights ${from}-${to} to the chain: ${notes.length > 0 ? notes.join('; ') : `core.db holds no block at ${to + 1} to build on them`}, and no --anchor-from was given (or --allow-unanchored)`,
+      );
+    }
+    log.warn('Importing bands bound to nothing (--allow-unanchored)', {
+      heights,
+    });
+    binding = {
+      kind: 'unanchored',
+      accepted: [...accepted, '--allow-unanchored'],
+    };
+    boundBy = 'nothing (--allow-unanchored)';
+  }
+
+  // The sample: what neither the judge nor the binding reaches.
+  const skipped = out.skipped.filter(
+    (s) => s !== 'anchor' && s !== 'sample' && s !== 'lookups',
+  );
+  const assurance = out.assurance.filter(
+    (a) => !a.startsWith('not anchored') && !a.startsWith('no sample'),
+  );
+  let sample: SampleSummary | undefined;
+  const options = verification.sample;
+  if (verification.pool !== undefined && options !== undefined) {
+    // A half-skipped sample is a skipped one, for the half. Without the
+    // transaction draw, nothing checks transaction ids or fields; without
+    // the format-1 draw, nothing catches a transaction relabelled into
+    // blocks whose tx_root is accepted unverified.
+    const format1 = options.format1PerStratum ?? options.txsPerStratum;
+    const gaps: Array<[string, string, string | undefined]> = [];
+    if (options.blocks <= 0) {
+      gaps.push(['sample_blocks', '--sample-blocks 0', undefined]);
+    }
+    if (options.txsPerStratum <= 0) {
+      gaps.push([
+        'sample_txs',
+        '--sample-txs 0',
+        'transaction ids and every transaction field would be unchecked',
+      ]);
+    }
+    if (format1 <= 0) {
+      gaps.push([
+        'sample_format1',
+        '--sample-format1 0',
+        out.unbound.txRootFormat1 !== undefined
+          ? 'a transaction relabelled format 1 in the blocks accepted with --allow-unverified-format1 would be unchecked'
+          : undefined,
+      ]);
+    }
+    const unchecked = gaps.flatMap(([, , why]) =>
+      why === undefined ? [] : [why],
+    );
+    if (unchecked.length > 0 && allow.unsampled !== true) {
+      throw new ImportRefused(
+        `the sample asked for leaves part of the bands unchecked (${gaps.map(([, flag]) => flag).join(', ')}): ${unchecked.join('; ')}; sample it, or --allow-unsampled`,
+      );
+    }
+    for (const [name, flag] of gaps) {
+      skipped.push(name);
+      binding.accepted.push(flag);
+    }
+    if (unchecked.length > 0) binding.accepted.push('--allow-unsampled');
+    const drawn = await runSample(
+      source,
+      verification.pool,
+      { from, to },
+      options,
+    );
+    if (drawn.refuted) {
+      throw refuse('the sample refutes the bands', [drawn.check]);
+    }
+    if (!drawn.check.ok) {
+      throw new ImportRefused(
+        `the sample could not be read, so the bands are not written yet (an outage is not a refutation; the next run tries again): ${drawn.check.failures
+          ?.slice(0, 3)
+          .map((f) => f.found)
+          .join('; ')}`,
+        'unreadable',
+      );
+    }
+    sample = drawn.summary;
+    skipped.push(...drawn.summary.empty);
+    assurance.push(...drawn.summary.warnings, ...drawn.summary.detects);
+  } else if (allow.unsampled === true) {
+    binding.accepted.push('--allow-unsampled');
+    skipped.push('sample');
+    assurance.push(
+      'no sample (--allow-unsampled): transaction ids, their order and every transaction field are unchecked against the chain',
+    );
+  } else {
+    throw new ImportRefused(
+      `no sample can be drawn (no --anchor-from): transaction ids, their order and every transaction field would be unchecked; give sources, or --allow-unsampled`,
+    );
+  }
+  return {
+    boundBy,
+    binding,
+    accepted: binding.accepted,
+    unbound: out.unbound,
+    skipped,
+    assurance: [boundBy, ...assurance],
+    ...(sample !== undefined ? { sample } : {}),
+  };
+}
+
+/**
+ * Imports one band, or the part of it `heights` names, ending with its
+ * ledger row.
+ *
+ * Offline, the band is written in chunks of `commitEvery` rows while the
+ * database is held for the run. `online` is for a gateway that is running:
+ * each batch read is its own short transaction, begun only once the batch
+ * is in hand and followed by a pause of `yieldMs`, so the gateway's own
+ * writers are never shut out for long, and the range is cleared a window
+ * of heights at a time for the same reason.
  *
  * Idempotent: every write is `INSERT OR REPLACE`/`OR IGNORE` keyed the way
  * the table is, and `missing_tx_count` is derived from the rows rather than
@@ -532,16 +1354,50 @@ export async function importBand(
     commitEvery = COMMIT_EVERY_ROWS,
     progressEveryMs = PROGRESS_EVERY_MS,
     now = Date.now,
+    heights,
+    ledgerKey = entry.id,
+    ceiling = Number.MAX_SAFE_INTEGER,
+    online = false,
+    yieldMs = 0,
+    clearWindow = CLEAR_WINDOW_HEIGHTS,
+    leftovers = [],
+    binding,
   }: {
     log: Logger;
     batchRows?: number;
     commitEvery?: number;
     progressEveryMs?: number;
     now?: () => number;
+    /** Write only these heights of the band (inclusive); all of it by default. */
+    heights?: [number, number];
+    /** The ledger row's key; the band's id by default. */
+    ledgerKey?: string;
+    /** The highest height this run may write; bounds which unfinished rows it settles. */
+    ceiling?: number;
+    /** The gateway is running: short transactions, with a pause after each. */
+    online?: boolean;
+    yieldMs?: number;
+    /** Heights cleared per transaction when online. */
+    clearWindow?: number;
+    /**
+     * Ranges an earlier run left unfinished (its ledger row never
+     * completed): rows there are that run's leftovers, which this one
+     * replaces. Online, any other row already in the heights refuses the
+     * band: a fill writes only what the gateway lacks.
+     */
+    leftovers?: ReadonlyArray<readonly [number, number]>;
+    /** How the band was bound to the chain, recorded in the ledger. */
+    binding?: ImportBinding;
   },
 ): Promise<{ rows: number; missingTransactions: number }> {
   const { band, dir } = entry;
-  const [from, to] = band.heightRange;
+  const [from, to] = heights ?? band.heightRange;
+  // A row outside the heights being written is read, so the band's digest
+  // is still checked whole, but not written.
+  const wanted =
+    heights === undefined
+      ? () => true
+      : (height: number) => height >= from && height <= to;
   // Format-1 data roots this gateway holds for the band's range, kept across
   // the clear below. A temporary table, not a map: a busy range can hold
   // hundreds of thousands of format-1 transactions. See `keepDataRoots`.
@@ -613,38 +1469,46 @@ export async function importBand(
       height_from, height_to, band_digest, rows_imported, started_at,
       completed_at) VALUES (?, ?, ?, ?, NULL, ?, NULL)`),
     completed: db.prepare(`UPDATE parquet_l1_imports
-      SET rows_imported = ?, completed_at = ? WHERE band_id = ?`),
+      SET rows_imported = ?, completed_at = ?, binding = ?, accepted = ?
+      WHERE band_id = ?`),
     // An earlier attempt at these heights is finished with: this band
     // cleared the range and rewrote it. Leaving the row would hold
     // `haveTo` below a band nothing can ever finish — a tip superseded
     // by a wider one is never imported again under its old id — and the
     // planner would then read the band above it as a gap, for ever.
+    forgetAttempt: db.prepare(
+      'DELETE FROM parquet_l1_imports WHERE band_id = ? AND completed_at IS NULL',
+    ),
     forgetSuperseded: db.prepare(`DELETE FROM parquet_l1_imports
-      WHERE completed_at IS NULL AND height_from >= ? AND height_to <= ?`),
+      WHERE completed_at IS NULL AND height_from >= ?
+        AND MIN(height_to, ?) <= ?`),
     // A band replaces its own height range. Whatever is already there came
     // from an earlier attempt at this band, a band of another grid, or a
     // fork the chain has since dropped; none of it should outlive this.
-    clearTags: db.prepare(
-      'DELETE FROM stable_transaction_tags WHERE height BETWEEN ? AND ?',
-    ),
-    clearTxs: db.prepare(
-      'DELETE FROM stable_transactions WHERE height BETWEEN ? AND ?',
-    ),
-    clearLinks: db.prepare(`DELETE FROM stable_block_transactions
-      WHERE block_indep_hash IN
-        (SELECT indep_hash FROM stable_blocks WHERE height BETWEEN ? AND ?)`),
-    clearMissing: db.prepare(
-      'DELETE FROM missing_transactions WHERE height BETWEEN ? AND ?',
-    ),
-    clearBlocks: db.prepare(
-      'DELETE FROM stable_blocks WHERE height BETWEEN ? AND ?',
-    ),
+    clearTags: db.prepare(CLEAR_SQL.tags),
+    // Whether anything at these heights needs clearing; each an index probe.
+    anyRows: db
+      .prepare(
+        `SELECT
+      EXISTS (SELECT 1 FROM stable_blocks WHERE height BETWEEN ? AND ?)
+      OR EXISTS (SELECT 1 FROM stable_transactions WHERE height BETWEEN ? AND ?)
+      OR EXISTS (SELECT 1 FROM missing_transactions WHERE height BETWEEN ? AND ?)
+      AS present`,
+      )
+      .pluck(),
+    clearTxs: db.prepare(CLEAR_SQL.transactions),
+    clearLinks: db.prepare(CLEAR_SQL.links),
+    clearMissing: db.prepare(CLEAR_SQL.missing),
+    clearBlocks: db.prepare(CLEAR_SQL.blocks),
   };
 
-  // When the band was built, not when it is being imported: importing the
-  // same band twice must leave the same rows, and the band's own time is
-  // the closest stable stand-in for when this gateway learned of them.
+  // The band's own time, not when it is being imported: importing the same
+  // band twice must leave the same rows. Its top block's time, so every
+  // publisher's copy of a band gives the same rows too (a band written
+  // before band files were the same for every publisher carries when it
+  // was built).
   const indexedAt = Math.floor(Date.parse(band.createdAt) / 1000);
+  const keptTxRoots = new Map<number, { indepHash: Buffer; txRoot: Buffer }>();
   let rows = 0;
   let missingTransactions = 0;
 
@@ -653,7 +1517,10 @@ export async function importBand(
   const hashColumn = blockColumns.findIndex((c) => c.name === 'indep_hash');
   const txRootColumn = blockColumns.findIndex((c) => c.name === 'tx_root');
 
-  const writers: Record<string, (batch: unknown[][]) => void> = {
+  // Each writer returns the rows it wrote. Owners carry no height, so a
+  // band's are all written whatever part of it is wanted: an owner row is
+  // keyed by address and written only if missing.
+  const writers: Record<string, (batch: unknown[][]) => number> = {
     wallets: (batch) => {
       for (const [address, modulus] of batch) {
         insert.wallets.run(
@@ -661,9 +1528,13 @@ export async function importBand(
           modulus === null ? null : asBuffer(modulus),
         );
       }
+      return batch.length;
     },
     blocks: (batch) => {
+      let written = 0;
       for (const r of batch) {
+        if (!wanted(Number(r[heightColumn]))) continue;
+        written += 1;
         const values = r.map((v, i) =>
           v === null || v === undefined
             ? null
@@ -692,8 +1563,10 @@ export async function importBand(
         }
         insert.blocks.run(...values);
       }
+      return written;
     },
     transactions: (batch) => {
+      let written = 0;
       for (const r of batch) {
         const [
           id,
@@ -714,6 +1587,8 @@ export async function importBand(
           tagCount,
           signature,
         ] = r;
+        if (!wanted(Number(height))) continue;
+        written += 1;
         insert.transactions.run(
           asBuffer(id),
           Number(bti),
@@ -740,14 +1615,18 @@ export async function importBand(
           indexedAt,
         );
       }
+      return written;
     },
     block_transactions: (batch) => {
+      let written = 0;
       // Looked up rather than held in memory: a 100,000-height band has
       // about a million transactions, and a map of their ids would be
       // hundreds of megabytes. These are primary-key reads inside the
       // transaction, so they see the rows written moments ago.
       for (const [height, bti, txId] of batch) {
         const h = Number(height);
+        if (!wanted(h)) continue;
+        written += 1;
         const indepHash = insert.hashAt.get(h) as Buffer | undefined;
         if (indepHash === undefined) {
           throw new ImportRefused(
@@ -761,13 +1640,17 @@ export async function importBand(
           missingTransactions += 1;
         }
       }
+      return written;
     },
     tags: (batch) => {
+      let written = 0;
       // The transaction's position comes from SQLite, where the band's
       // transactions already are. Joining the Parquet file for it would
       // re-scan every transaction of the band once per height window.
       for (const r of batch) {
         const [height, id, tagIndex, name, value] = r;
+        if (!wanted(Number(height))) continue;
+        written += 1;
         const bti = insert.btiOf.get(asBuffer(id));
         if (bti === null || bti === undefined) {
           throw new ImportRefused(
@@ -789,6 +1672,7 @@ export async function importBand(
           asBuffer(id),
         );
       }
+      return written;
     },
   };
 
@@ -798,84 +1682,159 @@ export async function importBand(
   const total = Object.values(expected).reduce((sum, n) => sum + n, 0);
   const startedAt = now();
   let lastProgress = startedAt;
-  let rowsBefore = 0;
+  let read = 0;
+  let readBefore = 0;
   let sinceCommit = 0;
-  db.exec('BEGIN IMMEDIATE');
-  // Recorded before a single row is written, so a crash leaves the band
-  // marked unfinished rather than looking done, and the range is cleared
-  // so what lands is the band's own content and nothing else.
-  insert.pending.run(
-    entry.id,
-    from,
-    to,
-    bandDigest(band),
-    Math.floor(Date.now() / 1000),
-  );
-  // An `l1-2` band holds no pre-fork `tx_root`: below the fork the field is
-  // not committed by the block hash, publishers disagree on it, and writing
-  // one value is what lets their digests match. A gateway that indexed the
-  // chain itself does have one, and importing a band must not erase it — so
-  // keep what is stored, before the range is cleared, and put it back.
-  const keptTxRoots = new Map<number, { indepHash: Buffer; txRoot: Buffer }>();
-  if (from < FORK_2_0) {
-    for (const row of insert.storedTxRoots.all(
-      from,
-      Math.min(to, FORK_2_0 - 1),
-    ) as Array<{
-      height: number;
-      indep_hash: Buffer | null;
-      tx_root: Buffer | string | null;
-    }>) {
-      const stored = row.tx_root;
-      if (row.indep_hash !== null && stored !== null && stored.length > 0) {
-        keptTxRoots.set(row.height, {
-          indepHash: row.indep_hash,
-          txRoot: Buffer.isBuffer(stored)
-            ? stored
-            : Buffer.from(stored, 'utf8'),
-        });
+  let open = false;
+  // Whether this attempt has committed anything yet: a failure before that
+  // is undone by the rollback alone.
+  let committed = false;
+  const begin = () => {
+    if (open) return;
+    db.exec('BEGIN IMMEDIATE');
+    open = true;
+  };
+  const commit = async () => {
+    if (!open) return;
+    db.exec('COMMIT');
+    open = false;
+    committed = true;
+    sinceCommit = 0;
+    if (yieldMs > 0) await sleep(yieldMs);
+  };
+  // After some errors, SQLITE_FULL or SQLITE_IOERR say, SQLite has already
+  // rolled the transaction back itself, and a ROLLBACK then throws. Thrown
+  // from the catch below, it would replace the error being handled and skip
+  // the online clear.
+  const rollback = () => {
+    open = false;
+    try {
+      if (db.inTransaction) db.exec('ROLLBACK');
+    } catch (rollbackError) {
+      log.warn('Could not roll back', {
+        id: entry.id,
+        error: (rollbackError as Error).message,
+      });
+    }
+  };
+  // Offline the whole range goes at once. Online, a window at a time, each
+  // its own transaction: clearing a range an earlier run left half written
+  // can mean millions of rows, and one statement deleting them would hold
+  // the gateway's writers off for minutes.
+  const window = online ? Math.max(1, clearWindow) : to - from + 1;
+  const clearRange = async () => {
+    for (let low = from; low <= to; low += window) {
+      const high = Math.min(to, low + window - 1);
+      begin();
+      insert.clearLinks.run(low, high);
+      insert.clearTags.run(low, high);
+      insert.clearTxs.run(low, high);
+      insert.clearMissing.run(low, high);
+      insert.clearBlocks.run(low, high);
+      if (online) await commit();
+    }
+  };
+  // Rows already in the heights, before this attempt. Offline, the band is
+  // then written as one transaction, so a failure leaves them exactly as
+  // they were (the gateway's own rows, or a band imported before); online,
+  // only rows an earlier unfinished run left may be replaced.
+  const preexisting = insert.anyRows.get(from, to, from, to, from, to) === 1;
+  if (preexisting && online) {
+    // Only an earlier unfinished run's heights may hold rows: every part of
+    // the range outside them must be empty.
+    for (const [a, b] of uncoveredBy(from, to, leftovers)) {
+      if (insert.anyRows.get(a, b, a, b, a, b) === 1) {
+        throw new ImportRefused(
+          `heights ${a}-${b} already hold rows that no unfinished import left: a fill writes only heights the gateway lacks`,
+        );
       }
     }
   }
-  insert.forgetKeptDataRoots.run();
-  insert.keepDataRoots.run(from, to);
-  insert.clearLinks.run(from, to);
-  insert.clearTags.run(from, to);
-  insert.clearTxs.run(from, to);
-  insert.clearMissing.run(from, to);
-  insert.clearBlocks.run(from, to);
-  const commitChunk = () => {
-    db.exec('COMMIT');
-    sinceCommit = 0;
-    db.exec('BEGIN IMMEDIATE');
-  };
+  const whole = preexisting && !online;
+  const commitAt = whole ? Number.POSITIVE_INFINITY : commitEvery;
   try {
+    begin();
+    // Recorded before a single row is written, so a crash leaves the band
+    // marked unfinished rather than looking done, and the range is cleared
+    // so what lands is the band's own content and nothing else.
+    insert.pending.run(
+      ledgerKey,
+      from,
+      to,
+      bandDigest(band),
+      Math.floor(Date.now() / 1000),
+    );
+    // An `l1-2` band holds no pre-fork `tx_root`: below the fork the field
+    // is not committed by the block hash, publishers disagree on it, and
+    // writing one value is what lets their digests match. A gateway that
+    // indexed the chain itself does have one, and importing a band must not
+    // erase it — so keep what is stored, before the range is cleared, and
+    // put it back.
+    if (from < FORK_2_0) {
+      for (const row of insert.storedTxRoots.all(
+        from,
+        Math.min(to, FORK_2_0 - 1),
+      ) as Array<{
+        height: number;
+        indep_hash: Buffer | null;
+        tx_root: Buffer | string | null;
+      }>) {
+        const stored = row.tx_root;
+        if (row.indep_hash !== null && stored !== null && stored.length > 0) {
+          keptTxRoots.set(row.height, {
+            indepHash: row.indep_hash,
+            txRoot: Buffer.isBuffer(stored)
+              ? stored
+              : Buffer.from(stored, 'utf8'),
+          });
+        }
+      }
+    }
+    insert.forgetKeptDataRoots.run();
+    insert.keepDataRoots.run(from, to);
+    // A hole the gateway never held, the usual case online, has nothing to
+    // clear: an earlier run that wrote anything there wrote its blocks first.
+    const clear =
+      !online || insert.anyRows.get(from, to, from, to, from, to) === 1;
+    if (clear) await clearRange();
+    // Online, nothing is held while the first batch is read, cleared or not.
+    if (online) await commit();
     for (const table of IMPORT_ORDER) {
-      rowsBefore = rows;
-      // The row count comes from the batches as they are written, not
-      // from `readTable`'s return: the progress line needs a running
-      // total part way through a table.
+      readBefore = read;
+      // The row count comes from the batches as they arrive, not from
+      // `readTable`'s return: the progress line needs a running total part
+      // way through a table.
       await readTable(
         duck,
         dir,
         table,
         band,
         async (batch) => {
-          writers[table.name](batch);
-          rows += batch.length;
-          sinceCommit += batch.length;
+          // Online, the write lock is taken only once a batch is in hand,
+          // never held while DuckDB reads the next one.
+          begin();
+          const written = writers[table.name](batch);
+          rows += written;
+          read += batch.length;
+          sinceCommit += written;
           // Never between a block and the links that need its hash, nor
           // between a transaction and its tags: each table is finished
           // before the next begins, so a chunk boundary inside one is safe.
-          if (sinceCommit >= commitEvery) commitChunk();
+          if (online) {
+            await commit();
+          } else if (sinceCommit >= commitAt) {
+            await commit();
+            begin();
+          }
           if (progressEveryMs > 0 && now() - lastProgress >= progressEveryMs) {
             lastProgress = now();
             log.info('Importing a band', {
               id: entry.id,
               heightRange: band.heightRange,
+              ...(heights !== undefined ? { heights } : {}),
               table: table.name,
-              tableRows: `${rows - rowsBefore}/${expected[table.name]}`,
-              rows,
+              tableRows: `${read - readBefore}/${expected[table.name]}`,
+              rows: read,
               ofRows: total,
               elapsedSeconds: Math.round((now() - startedAt) / 1000),
             });
@@ -884,20 +1843,49 @@ export async function importBand(
         batchRows,
       );
     }
+    begin();
     insert.restoreDataRoots.run();
     insert.forgetKeptDataRoots.run();
     insert.countMissing.run(from, to);
-    insert.completed.run(rows, Math.floor(Date.now() / 1000), entry.id);
+    insert.completed.run(
+      rows,
+      Math.floor(Date.now() / 1000),
+      binding?.kind ?? null,
+      binding === undefined ? null : JSON.stringify(binding.accepted),
+      ledgerKey,
+    );
     // After this band's own row is complete, so it is not caught by it.
-    insert.forgetSuperseded.run(from, to);
-    db.exec('COMMIT');
+    insert.forgetSuperseded.run(from, ceiling, to);
+    forgetCoveredUnfinished(db, ceiling);
+    await commit();
   } catch (error) {
-    db.exec('ROLLBACK');
+    rollback();
+    // Only what this attempt committed is removed. Nothing committed (the
+    // whole-band transaction over heights that held rows, or a failure
+    // before the first commit): the rollback restored everything, the
+    // ledger row included. Otherwise the heights held nothing before but
+    // leftovers this attempt replaced, so clearing them and the ledger row
+    // removes only this attempt's rows, and the run reports the hole.
+    if (!committed) throw error;
+    try {
+      await clearRange();
+      begin();
+      insert.forgetAttempt.run(ledgerKey);
+      await commit();
+    } catch (cleanupError) {
+      rollback();
+      log.error('Could not clear a range that failed to import', {
+        id: entry.id,
+        heights: [from, to],
+        error: (cleanupError as Error).message,
+      });
+    }
     throw error;
   }
   log.info('Imported a band', {
     id: entry.id,
     heightRange: band.heightRange,
+    ...(heights !== undefined ? { heights } : {}),
     rows,
     missingTransactions,
   });
@@ -909,6 +1897,8 @@ export interface ImportRunResult {
   outcomes: ImportOutcome[];
   /** Heights still missing after the run; the gateway must not be started on one. */
   holes: Array<[number, number]>;
+  /** Bands imported again because the ledger held other tables under their id. */
+  republished: string[];
   /** Bands on disk the run had no use for, with why. */
   skipped: Array<{
     id: string;
@@ -921,10 +1911,14 @@ export interface ImportRunResult {
  * Imports every band of `bandsDir` that `core.db` is missing, lowest first,
  * stopping at the first that fails.
  *
+ * Every planned band is verified and bound to the chain first
+ * ({@link verifyBeforeImport}); a plan that does not verify writes nothing.
+ *
  * Stopping matters: bands must be imported as a contiguous run, so carrying
  * on past a failure would leave a hole the block importer cannot cross.
- * What was imported before the failure is committed and the ledger records
- * it, so the next run picks up from there.
+ * Bands imported before the failure are committed and the ledger records
+ * them, so the next run picks up from there; the band that failed is
+ * cleared, and `holes` is read from what the database then holds.
  */
 export async function runImport({
   db,
@@ -938,11 +1932,14 @@ export async function runImport({
   to,
   onBand,
   disk,
+  verification = {},
 }: {
   db: Sqlite.Database;
   duck: import('duckdb-async').Database;
   bandsDir: string;
   log: Logger;
+  /** How the bands are bound to the chain before a row is written. */
+  verification?: ImportVerification;
   /** Import at most this many bands, for a first run an operator watches. */
   limit?: number;
   batchRows?: number;
@@ -961,7 +1958,7 @@ export async function runImport({
     throw new ImportRefused(`${bandsDir} holds no bands with a ${BAND_FILE}`);
   }
   const progress = readProgress(db);
-  const { steps, skipped } = planImport(bands, {
+  const { steps, skipped, republished } = planImport(bands, {
     ...progress,
     ...(from !== undefined ? { from } : {}),
     ...(to !== undefined ? { to } : {}),
@@ -998,25 +1995,105 @@ export async function runImport({
         'the block importer rewinds across a gap; close it before starting the gateway',
     });
   }
-  await assertDiskSpace(db.name, planned, { log, ...disk });
+  // A band over heights that already hold rows is one transaction: the
+  // log holds all of it at once.
+  // The same probe as importBand's `anyRows`, which decides that.
+  const holdsRows = db.prepare(
+    `SELECT EXISTS (SELECT 1 FROM stable_blocks WHERE height BETWEEN ? AND ?)
+       OR EXISTS (SELECT 1 FROM stable_transactions WHERE height BETWEEN ? AND ?)
+       OR EXISTS (SELECT 1 FROM missing_transactions WHERE height BETWEEN ? AND ?)`,
+  );
+  const walRows = planned.reduce((sum, step) => {
+    const [a, b] = step.band.heightRange;
+    return (holdsRows.pluck().get(a, b, a, b, a, b) as number) === 1
+      ? sum + Object.values(step.band.tables).reduce((n, t) => n + t.rows, 0)
+      : sum;
+  }, 0);
+  await assertDiskSpace(db.name, planned, { log, walRows, ...disk });
 
   const outcomes: ImportOutcome[] = [];
-  let haveTo = progress.haveTo;
+  const haveTo = progress.haveTo;
+  // Every planned band, checked whole and bound to the chain, before the
+  // first row is written: each contiguous run of the plan is checked as
+  // one, and bound once, at its top (a republished band is a run of its
+  // own, beneath blocks the database holds).
+  const runs: ImportableBand[][] = [];
+  for (const entry of planned) {
+    const last = runs.at(-1)?.at(-1);
+    if (
+      last !== undefined &&
+      entry.band.heightRange[0] === last.band.heightRange[1] + 1
+    ) {
+      runs[runs.length - 1].push(entry);
+    } else {
+      runs.push([entry]);
+    }
+  }
+  const checks = new Map<string, ImportCheck>();
+  for (const run of runs) {
+    const span: [number, number] = [
+      run[0].band.heightRange[0],
+      run[run.length - 1].band.heightRange[1],
+    ];
+    const started = Date.now();
+    try {
+      const check = await verifyBeforeImport(
+        db,
+        duck,
+        bandsDir,
+        run,
+        span,
+        verification,
+        log,
+      );
+      for (const entry of run) checks.set(entry.id, check);
+      log.info('Verified the bands before importing', {
+        heights: span,
+        boundBy: check.boundBy,
+        accepted: check.accepted,
+      });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      const outcome: ImportOutcome = {
+        id: run[0].id,
+        heightRange: run[0].band.heightRange,
+        result: 'refused',
+        reason,
+        refusal: refusalOf(error),
+        seconds: (Date.now() - started) / 1000,
+      };
+      onBand?.(outcome);
+      log.error('Import refused before writing', { error: reason });
+      return {
+        haveTo,
+        holes: remainingHoles(heldRuns(db), []),
+        outcomes: [outcome],
+        skipped: skipped.map((s) => ({
+          id: s.band.id,
+          heightRange: s.band.band.heightRange,
+          reason: s.reason,
+        })),
+        republished,
+      };
+    }
+  }
   for (const entry of planned) {
     const started = Date.now();
     const base = { id: entry.id, heightRange: entry.band.heightRange };
     try {
+      const check = checks.get(entry.id);
       const { rows, missingTransactions } = await importBand(db, duck, entry, {
         log,
         ...(batchRows !== undefined ? { batchRows } : {}),
         ...(commitEvery !== undefined ? { commitEvery } : {}),
+        ...(check !== undefined ? { binding: check.binding } : {}),
       });
-      haveTo = entry.band.heightRange[1];
       const outcome: ImportOutcome = {
         ...base,
         result: 'imported',
         rows,
         missingTransactions,
+        ...(check !== undefined ? { check } : {}),
         seconds: (Date.now() - started) / 1000,
       };
       outcomes.push(outcome);
@@ -1026,6 +2103,7 @@ export async function runImport({
         ...base,
         result: 'refused',
         reason: error instanceof Error ? error.message : String(error),
+        refusal: refusalOf(error),
         seconds: (Date.now() - started) / 1000,
       };
       outcomes.push(outcome);
@@ -1035,13 +2113,222 @@ export async function runImport({
     }
   }
   return {
-    haveTo,
-    holes,
+    // Read back, not tracked: finishing an interrupted band below held
+    // blocks raises the trustworthy top past that band.
+    haveTo: readProgress(db).haveTo,
+    // What the database holds now, not what the plan meant it to: a band
+    // refused part way was cleared, and leaves its heights missing.
+    holes: remainingHoles(heldRuns(db), []),
     outcomes,
+    republished,
     skipped: skipped.map((s) => ({
       id: s.band.id,
       heightRange: s.band.band.heightRange,
       reason: s.reason,
     })),
   };
+}
+
+export interface FillRunResult {
+  /** The highest height the run could write: the bottom of what the gateway writes itself. */
+  ceiling: number;
+  outcomes: ImportOutcome[];
+  /** Heights at or below the ceiling that no band on disk holds yet. */
+  uncovered: Array<[number, number]>;
+}
+
+/** The highest height each band holds, which for a tip band is below its range's end. */
+async function bandTops(
+  duck: import('duckdb-async').Database,
+  bands: ReadonlyArray<ImportableBand>,
+): Promise<Map<string, number>> {
+  const tops = new Map<string, number>();
+  const file = spec('blocks').file;
+  for (const entry of bands) {
+    const where = path.join(entry.dir, file).replace(/'/g, "''");
+    const [row] = await duck.all(
+      `SELECT CAST(max(height) AS VARCHAR) AS top FROM read_parquet('${where}')`,
+    );
+    const top = row?.top as string | null | undefined;
+    tops.set(entry.id, top === null || top === undefined ? -1 : Number(top));
+  }
+  return tops;
+}
+
+/**
+ * Fills what `core.db` is missing beneath a gateway from the bands in
+ * `bandsDir`, while the gateway runs.
+ *
+ * Writes only heights `stable_blocks` lacks at or below {@link fillCeiling},
+ * and ranges an earlier run left unfinished. Apart from such a range,
+ * which is rewritten whole, nothing the gateway indexed itself is
+ * rewritten, and nothing it is about to write is touched. Each
+ * band read is checked whole — its digests, the judge, and the blocks held
+ * on either side of the heights written ({@link verifyBeforeImport}) —
+ * even when only part of it is written. Ranges are filled from the top
+ * down, so each is bound by the block above it; the run stops at the first
+ * that fails, which is cleared, and what landed before it stays.
+ *
+ * Safe to run on a schedule: a run with nothing to fill reads the band
+ * directory, each band's block file, the ledger and the block height
+ * index, and writes nothing to `core.db`.
+ */
+export async function runFill({
+  db,
+  duck,
+  bandsDir,
+  log,
+  from,
+  to,
+  limit,
+  batchRows = FILL_BATCH_ROWS,
+  yieldMs = FILL_YIELD_MS,
+  onBand,
+  disk,
+  verification = {},
+}: {
+  db: Sqlite.Database;
+  duck: import('duckdb-async').Database;
+  bandsDir: string;
+  log: Logger;
+  /** How each range is bound to the chain before a row is written. */
+  verification?: ImportVerification;
+  from?: number;
+  to?: number;
+  /** Fill at most this many ranges, then stop. */
+  limit?: number;
+  batchRows?: number;
+  yieldMs?: number;
+  onBand?: (outcome: ImportOutcome) => void;
+  disk?: Partial<Parameters<typeof assertDiskSpace>[2]>;
+}): Promise<FillRunResult> {
+  assertMigrated(db);
+  const ceiling = fillCeiling(db);
+  if (ceiling < 0) {
+    log.info(
+      'core.db holds no blocks yet, so there is nothing to fill beneath',
+    );
+    return { ceiling, outcomes: [], uncovered: [] };
+  }
+  // A directory that cannot be read is an error, never an empty one: the
+  // worker decides beforehand whether a directory never created means a
+  // gateway with nothing installed yet.
+  const bands = await readBands(bandsDir);
+  const redo = (
+    db
+      .prepare(
+        'SELECT height_from AS a, height_to AS b FROM parquet_l1_imports WHERE completed_at IS NULL',
+      )
+      .all() as Array<{ a: number; b: number }>
+  ).map((r): [number, number] => [r.a, r.b]);
+  const { steps, uncovered } = planFill(bands, {
+    held: heldRuns(db),
+    ceiling,
+    redo,
+    top: await bandTops(duck, bands),
+    ...(from !== undefined ? { from } : {}),
+    ...(to !== undefined ? { to } : {}),
+  });
+  // Filled from the top down: each range is then bound by the block the
+  // gateway holds above it, its own or one the range above just wrote, and
+  // checked, so trust runs down from what the gateway synced itself.
+  // `limit` keeps the highest ranges, for the same reason.
+  const planned = steps.slice(
+    Math.max(0, steps.length - (limit ?? steps.length)),
+  );
+  log.info('Planned a fill', {
+    ceiling,
+    bandsOnDisk: bands.length,
+    toFill: planned.map((step) => step.heights),
+    ...(uncovered.length > 0 ? { uncovered } : {}),
+  });
+  if (planned.length === 0) return { ceiling, outcomes: [], uncovered };
+
+  // A share of each band's rows, by the share of its heights written.
+  const rows = planned.reduce((sum, step) => {
+    const [bandFrom, bandTo] = step.band.band.heightRange;
+    const share =
+      (step.heights[1] - step.heights[0] + 1) / (bandTo - bandFrom + 1);
+    const bandRows = Object.values(step.band.band.tables).reduce(
+      (n, table) => n + table.rows,
+      0,
+    );
+    return sum + Math.ceil(bandRows * share);
+  }, 0);
+  await assertDiskSpace(
+    db.name,
+    planned.map((step) => step.band),
+    { log, rows, ...disk },
+  );
+
+  const outcomes: ImportOutcome[] = [];
+  for (const step of [...planned].reverse()) {
+    const started = Date.now();
+    const base = {
+      id: step.band.id,
+      heightRange: step.band.band.heightRange,
+      heights: step.heights,
+    };
+    try {
+      const check = await verifyBeforeImport(
+        db,
+        duck,
+        bandsDir,
+        [step.band],
+        step.heights,
+        verification,
+        log,
+      );
+      log.info('Verified a band before filling from it', {
+        id: step.band.id,
+        heights: step.heights,
+        boundBy: check.boundBy,
+        accepted: check.accepted,
+      });
+      const { rows: written, missingTransactions } = await importBand(
+        db,
+        duck,
+        step.band,
+        {
+          log,
+          heights: step.heights,
+          ledgerKey: fillLedgerKey(step),
+          ceiling,
+          online: true,
+          yieldMs,
+          batchRows,
+          leftovers: redo,
+          binding: check.binding,
+        },
+      );
+      const outcome: ImportOutcome = {
+        ...base,
+        result: 'imported',
+        rows: written,
+        missingTransactions,
+        check,
+        seconds: (Date.now() - started) / 1000,
+      };
+      outcomes.push(outcome);
+      onBand?.(outcome);
+    } catch (error) {
+      const outcome: ImportOutcome = {
+        ...base,
+        result: 'refused',
+        reason: error instanceof Error ? error.message : String(error),
+        refusal: refusalOf(error),
+        seconds: (Date.now() - started) / 1000,
+      };
+      outcomes.push(outcome);
+      onBand?.(outcome);
+      log.error('Fill stopped', { id: step.band.id, error: outcome.reason });
+      break;
+    }
+  }
+  outcomes.sort(
+    (a, b) =>
+      (a.heights?.[0] ?? a.heightRange[0]) -
+      (b.heights?.[0] ?? b.heightRange[0]),
+  );
+  return { ceiling, outcomes, uncovered };
 }

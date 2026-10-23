@@ -19,8 +19,9 @@
  *
  * The trade: the view is as fresh as the gateway's last refresh (an hour at
  * most), and it lists the gateways the gateway itself would use, which
- * excludes the gateway's own wallet and, by default, gateways that are
- * leaving. Neither is something a subscriber should subscribe to anyway.
+ * by default excludes gateways that are leaving. The gateway's own wallet
+ * is never one of its peers; the peer list reports it apart, as `self`,
+ * which is how a fleet node subscribes to its own fleet's publication.
  */
 import { Logger } from 'winston';
 
@@ -65,8 +66,8 @@ export class CoreGatewayRegistry implements GatewayRegistry, GatewayLister {
   private readonly ttlMs: number;
   private readonly timeoutMs: number;
   private readonly now: () => number;
-  private cached: { at: number; gateways: RegistryGateway[] } | undefined;
-  private inFlight: Promise<RegistryGateway[]> | undefined;
+  private cached: { at: number; read: PeerListRead } | undefined;
+  private inFlight: Promise<PeerListRead> | undefined;
   private warnedOldCore = false;
 
   constructor(options: CoreGatewayRegistryOptions) {
@@ -84,8 +85,13 @@ export class CoreGatewayRegistry implements GatewayRegistry, GatewayLister {
    * every publisher unresolvable. With no good read yet, it throws.
    */
   async list(): Promise<RegistryGateway[]> {
+    return (await this.read()).gateways;
+  }
+
+  /** The peer list and this node's own entry, cached for the TTL. */
+  private async read(): Promise<PeerListRead> {
     if (this.cached !== undefined && this.now() - this.cached.at < this.ttlMs) {
-      return this.cached.gateways;
+      return this.cached.read;
     }
     // One request for concurrent callers: several subscriptions resolving
     // at once must not each fetch the whole peer list.
@@ -93,9 +99,9 @@ export class CoreGatewayRegistry implements GatewayRegistry, GatewayLister {
       this.inFlight = undefined;
     });
     try {
-      const gateways = await this.inFlight;
-      this.cached = { at: this.now(), gateways };
-      return gateways;
+      const read = await this.inFlight;
+      this.cached = { at: this.now(), read };
+      return read;
     } catch (error: any) {
       if (this.cached !== undefined) {
         this.log.warn(
@@ -104,15 +110,23 @@ export class CoreGatewayRegistry implements GatewayRegistry, GatewayLister {
             error: error?.message,
           },
         );
-        return this.cached.gateways;
+        return this.cached.read;
       }
       throw error;
     }
   }
 
+  /**
+   * A publisher by wallet. This node's own wallet is never among its peers,
+   * so it is resolved from the peer list's `self`: that is how a fleet node
+   * subscribes to its own fleet's publication.
+   */
   async lookup(wallet: string): Promise<PublisherRecord | undefined> {
     try {
-      const gateway = (await this.list()).find((g) => g.wallet === wallet);
+      const { gateways, self } = await this.read();
+      const gateway =
+        gateways.find((g) => g.wallet === wallet) ??
+        (self?.wallet === wallet ? self : undefined);
       if (gateway === undefined) return undefined;
       const { wallet: w, observerAddress, url, status } = gateway;
       return { wallet: w, observerAddress, url, status };
@@ -125,7 +139,7 @@ export class CoreGatewayRegistry implements GatewayRegistry, GatewayLister {
     }
   }
 
-  private async fetchPeers(): Promise<RegistryGateway[]> {
+  private async fetchPeers(): Promise<PeerListRead> {
     const response = await fetch(`${this.coreUrl}/ar-io/peers`, {
       signal: AbortSignal.timeout(this.timeoutMs),
     });
@@ -136,33 +150,18 @@ export class CoreGatewayRegistry implements GatewayRegistry, GatewayLister {
     }
     const body = (await response.json()) as {
       gateways?: Record<string, Record<string, unknown>>;
+      self?: Record<string, unknown>;
     };
     const entries = Object.values(body.gateways ?? {});
     const gateways: RegistryGateway[] = [];
     for (const entry of entries) {
-      const { url, wallet, observerAddress, operatorStake, status } = entry;
-      if (
-        typeof url !== 'string' ||
-        typeof wallet !== 'string' ||
-        typeof observerAddress !== 'string'
-      ) {
-        continue;
-      }
-      let fqdn: string;
-      try {
-        fqdn = new URL(url).hostname;
-      } catch {
-        continue;
-      }
-      gateways.push({
-        wallet,
-        observerAddress,
-        url: url.replace(/\/+$/, ''),
-        fqdn,
-        status: status === 'leaving' ? 'leaving' : 'joined',
-        operatorStake: typeof operatorStake === 'number' ? operatorStake : 0,
-      });
+      const gateway = registryGateway(entry);
+      if (gateway !== undefined) gateways.push(gateway);
     }
+    const self =
+      body.self !== undefined && body.self !== null
+        ? registryGateway(body.self)
+        : undefined;
     if (entries.length > 0 && gateways.length === 0 && !this.warnedOldCore) {
       // Peers without registry fields: a gateway that predates them.
       this.warnedOldCore = true;
@@ -171,6 +170,41 @@ export class CoreGatewayRegistry implements GatewayRegistry, GatewayLister {
         { coreUrl: this.coreUrl },
       );
     }
-    return gateways;
+    return { gateways, ...(self !== undefined ? { self } : {}) };
   }
+}
+
+/** One read of the gateway's peer list. */
+interface PeerListRead {
+  gateways: RegistryGateway[];
+  /** The gateway's own registry entry, which is never one of its peers. */
+  self?: RegistryGateway;
+}
+
+/** A peer list entry with the registry fields, or undefined without them. */
+function registryGateway(
+  entry: Record<string, unknown>,
+): RegistryGateway | undefined {
+  const { url, wallet, observerAddress, operatorStake, status } = entry;
+  if (
+    typeof url !== 'string' ||
+    typeof wallet !== 'string' ||
+    typeof observerAddress !== 'string'
+  ) {
+    return undefined;
+  }
+  let fqdn: string;
+  try {
+    fqdn = new URL(url).hostname;
+  } catch {
+    return undefined;
+  }
+  return {
+    wallet,
+    observerAddress,
+    url: url.replace(/\/+$/, ''),
+    fqdn,
+    status: status === 'leaving' ? 'leaving' : 'joined',
+    operatorStake: typeof operatorStake === 'number' ? operatorStake : 0,
+  };
 }

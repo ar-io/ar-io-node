@@ -4,13 +4,13 @@
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
-import crypto from 'node:crypto';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { parseArgs } from 'node:util';
 
 import { EnvFile } from './env-file.js';
 import { planSetup, SetupOptions } from './setup-plan.js';
+import { parsePublicOrigin } from '../../lib/public-origin.js';
 
 /**
  * The `.env` half of `tools/index-swarm-setup`. It runs inside the core image,
@@ -22,10 +22,18 @@ import { planSetup, SetupOptions } from './setup-plan.js';
 const HELP = `Usage: tools/index-swarm-setup [options]
 
 Sets up index sharing in .env, idempotently. Run it again to add a
-publisher or turn on torrents; it only changes what is missing.
+publisher; it only changes what is missing. Index sharing is on by
+default (the ar.io publisher's root-TX bands, over HTTP and BitTorrent),
+so a plain subscriber needs none of this.
 
   --subscribe <wallet>   Subscribe to a publisher's root-TX index, by its
-                         registered gateway wallet. Repeatable.
+                         registered gateway wallet. Repeatable. The
+                         default subscription is kept.
+  --l1                   With --subscribe: take the publishers' L1 bands
+                         too, and have the gateway fill its L1 history
+                         from them while it runs. On a new gateway, it
+                         then follows the chain tip from the start instead
+                         of indexing from height 0.
   --publish              Publish this gateway's root-TX index bands, built
                          by the index-export service.
   --start-height <n>     With --publish: the lowest height to build.
@@ -33,12 +41,18 @@ publisher or turn on torrents; it only changes what is missing.
                          read from before publishing (default
                          https://turbo-gateway.com; http://core:4000 only
                          if this gateway holds the root data).
-  --torrent              Move bands over BitTorrent too (generates the
-                         engine password).
+  --torrent              Accepted for older instructions: the torrent
+                         engine now runs by default, and its init
+                         generates its password.
+  --public-url <url>     This gateway's public origin (https://gateway.example).
+                         When publishing torrents, peers announce to its
+                         tracker through it, so no tracker port needs
+                         opening. Default: https://<ARNS_ROOT_HOST>.
   --public-host <addr>   This node's public IP, where peers reach its engine
-                         (and, when publishing, its tracker).
+                         (and, without a public URL, its tracker).
   --engine-port <n>      The engine's peer port (default 6881).
-  --max-disk-gib <n>     Disk for installed bands (default 50 GiB).
+  --max-disk-gib <n>     Disk for installed bands (default 64 GiB;
+                         100 GiB written with --l1).
   --no-gateway           Leave CDB64_ROOT_TX_INDEX_SOURCES and
                          ROOT_TX_LOOKUP_ORDER alone.
   --dry-run              Show the changes; write nothing.
@@ -50,6 +64,15 @@ publisher or turn on torrents; it only changes what is missing.
 function fail(message: string): never {
   process.stderr.write(`index-swarm-setup: ${message}\n`);
   process.exit(1);
+}
+
+/** A gateway's public origin, or exit naming the flag. */
+function publicOrigin(value: string): string {
+  try {
+    return parsePublicOrigin(value);
+  } catch (error: any) {
+    fail(`--public-url: ${error.message}`);
+  }
 }
 
 function positive(value: string | undefined, flag: string): number | undefined {
@@ -68,11 +91,13 @@ async function main(): Promise<void> {
         publish: { type: 'boolean' },
         torrent: { type: 'boolean' },
         'public-host': { type: 'string' },
+        'public-url': { type: 'string' },
         'engine-port': { type: 'string' },
         'max-disk-gib': { type: 'string' },
         'start-height': { type: 'string' },
         'header-check-url': { type: 'string' },
         'no-gateway': { type: 'boolean' },
+        l1: { type: 'boolean' },
         'dry-run': { type: 'boolean' },
         restart: { type: 'boolean' },
         // Not --env-file: Node 20 takes that flag for itself even after the
@@ -101,8 +126,12 @@ async function main(): Promise<void> {
     publish: values.publish === true,
     torrent: values.torrent === true,
     gateway: values['no-gateway'] !== true,
+    l1: values.l1 === true,
     ...(values['public-host'] !== undefined
       ? { publicHost: values['public-host'] as string }
+      : {}),
+    ...(values['public-url'] !== undefined
+      ? { publicUrl: publicOrigin(values['public-url'] as string) }
       : {}),
     ...(enginePort !== undefined ? { enginePort } : {}),
     ...(values['max-disk-gib'] !== undefined
@@ -159,9 +188,7 @@ async function main(): Promise<void> {
     }
   }
   const env = new EnvFile(text);
-  const plan = planSetup(env, options, () =>
-    crypto.randomBytes(24).toString('hex'),
-  );
+  const plan = planSetup(env, options);
 
   const say = (line = '') => process.stderr.write(`${line}\n`);
   for (const warning of plan.warnings) say(`warning: ${warning}`);

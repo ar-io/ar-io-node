@@ -100,9 +100,13 @@ jobs:
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
+      # Slack notifications. Dependabot runs cannot read repository secrets,
+      # so SLACK_WEBHOOK is empty there and the notify action fails, turning a
+      # green dependency bump red. Skip them for Dependabot.
+
       # Success notification
       - name: Send Slack success notification
-        if: success() && github.event_name != 'pull_request' && matrix.os == 'ubuntu-latest'
+        if: success() && github.event_name != 'pull_request' && matrix.os == 'ubuntu-latest' && github.actor != 'dependabot[bot]'
         env:
           SLACK_TITLE: Build succeeded!
           SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
@@ -110,7 +114,7 @@ jobs:
 
       # Failure notification
       - name: Send Slack failure notification
-        if: failure() && github.event_name != 'pull_request' && matrix.os == 'ubuntu-latest'
+        if: failure() && github.event_name != 'pull_request' && matrix.os == 'ubuntu-latest' && github.actor != 'dependabot[bot]'
         env:
           SLACK_TITLE: Build failed!
           SLACK_COLOR: danger
@@ -137,7 +141,13 @@ jobs:
       - run: brew install python-setuptools
       - run: yarn --immutable --immutable-cache
       - run: yarn build
+      # c8 merges every test process's coverage into one report after the
+      # tests finish. That peaks just over 2 GB, node's default heap on the
+      # 7 GB macOS runners (the Linux runners' default is higher), so the job
+      # died there twice with every test passed.
       - run: yarn test:ci
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
       - name: Send Slack failure notification
         if: failure()
         env:

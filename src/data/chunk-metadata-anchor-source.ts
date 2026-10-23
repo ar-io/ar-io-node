@@ -8,7 +8,7 @@ import { default as axios, AxiosInstance } from 'axios';
 import { LRUCache } from 'lru-cache';
 import winston from 'winston';
 
-import { TxBoundary, TxBoundarySource } from '../types.js';
+import { RequestAttributes, TxBoundary, TxBoundarySource } from '../types.js';
 import * as metrics from '../metrics.js';
 import { parseChunkHeaderMetadata } from '../lib/chunk-header-parser.js';
 import {
@@ -18,6 +18,7 @@ import {
 } from '../lib/chunk-metadata-anchor.js';
 import { createAgentPair } from '../lib/http-agent.js';
 import { discardResponseBody, normalizeAbortError } from '../lib/http-utils.js';
+import { generateRequestAttributes } from '../lib/request-attributes.js';
 
 // Largest absolute weave offset this source will probe via the
 // number-typed cache + chain cross-check path. The chain-anchored
@@ -41,6 +42,11 @@ const MAX_SAFE_OFFSET_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
  * - `metadata_missing` — peer didn't return required headers
  * - `mismatch`         — chain disagreed with peer headers (caught + falls through)
  * - `error`            — HTTP/network/abort failure (falls through)
+ * - `peer_origin`      — the request came from another gateway (hops >= 1):
+ *                        not probed, so a peer's miss is never forwarded on
+ * - `miss_cached`      — this offset missed within the miss cache's TTL:
+ *                        not probed again
+ * - `probe_shared`     — joined a probe of the same offset already in flight
  */
 type AnchorResult =
   | 'hit'
@@ -48,7 +54,10 @@ type AnchorResult =
   | 'metadata_missing'
   | 'mismatch'
   | 'peer_refused'
-  | 'error';
+  | 'error'
+  | 'peer_origin'
+  | 'miss_cached'
+  | 'probe_shared';
 
 /**
  * Thrown when the reference peer answered HEAD with a status that a ranged GET
@@ -64,6 +73,16 @@ class PeerRefusedHeadError extends Error {
     );
     this.name = 'PeerRefusedHeadError';
   }
+}
+
+/** A probe of one offset that concurrent lookups share. */
+interface SharedProbe {
+  /** Settles with the probe's result; rejects with AbortError if aborted. */
+  promise: Promise<TxBoundary | null>;
+  /** Aborts the probe's network requests once nobody is waiting. */
+  controller: AbortController;
+  /** Callers still waiting on {@link promise}. */
+  waiters: number;
 }
 
 /**
@@ -92,6 +111,10 @@ export class ChunkMetadataAnchorSource implements TxBoundarySource {
   private requestTimeoutMs: number;
   private axiosInstance: AxiosInstance;
   private cache: LRUCache<string, AnchoredChunkMetadata>;
+  /** Offsets that just missed, so they are not probed again at once. */
+  private misses: LRUCache<string, true> | undefined;
+  /** Probes in flight, by offset: concurrent lookups share one. */
+  private inFlight = new Map<string, SharedProbe>();
   private fetchTxOffset: (
     txId: string,
     signal?: AbortSignal,
@@ -107,6 +130,8 @@ export class ChunkMetadataAnchorSource implements TxBoundarySource {
     requestTimeoutMs,
     cacheSize,
     cacheTtlMs,
+    missCacheSize = 10_000,
+    missCacheTtlMs = 60_000,
     fetchTxOffset,
     fetchTransaction,
     axiosInstance,
@@ -121,6 +146,14 @@ export class ChunkMetadataAnchorSource implements TxBoundarySource {
     requestTimeoutMs: number;
     cacheSize: number;
     cacheTtlMs: number;
+    /**
+     * Offsets remembered after a miss (no headers, a refusal, an error or a
+     * chain mismatch), and for how long; a TTL of 0 turns the miss cache off.
+     * Every gateway on the defaults asks the same reference peer, so an
+     * offset none can resolve would otherwise be re-probed on every request.
+     */
+    missCacheSize?: number;
+    missCacheTtlMs?: number;
     /**
      * Chain `/tx/{id}/offset` fetcher. Returns `{ size, offset }` as
      * strings so they can round-trip through {@link BigInt} without
@@ -151,6 +184,13 @@ export class ChunkMetadataAnchorSource implements TxBoundarySource {
       max: cacheSize,
       ttl: cacheTtlMs,
     });
+    this.misses =
+      missCacheTtlMs > 0 && missCacheSize > 0
+        ? new LRUCache<string, true>({
+            max: missCacheSize,
+            ttl: missCacheTtlMs,
+          })
+        : undefined;
     this.axiosInstance =
       axiosInstance ??
       axios.create({
@@ -169,12 +209,26 @@ export class ChunkMetadataAnchorSource implements TxBoundarySource {
   async getTxBoundary(
     absoluteOffset: bigint,
     signal?: AbortSignal,
+    requestAttributes?: RequestAttributes,
   ): Promise<TxBoundary | null> {
     signal?.throwIfAborted();
     const log = this.log.child({
       method: 'getTxBoundary',
       absoluteOffset: absoluteOffset.toString(),
     });
+
+    // A chunk request another gateway forwarded is not probed for it. The
+    // reference peer is a gateway too, and every gateway on the defaults
+    // uses the same one, so probing here on a peer's behalf re-enters the
+    // network past the one-hop limit the chunk sources keep: two gateways
+    // missing the same chunk ask each other through the anchor without end.
+    if (
+      (requestAttributes?.hops ?? 0) >= 1 ||
+      requestAttributes?.skipRemoteForwarding === true
+    ) {
+      this.recordResult('peer_origin');
+      return null;
+    }
 
     // Guard against unsafe bigint → number coercion. The downstream
     // cache uses number-typed bounds and `anchorChunkMetadata` accepts
@@ -189,13 +243,119 @@ export class ChunkMetadataAnchorSource implements TxBoundarySource {
       return null;
     }
     const offsetNum = Number(absoluteOffset);
+    const offsetKey = absoluteOffset.toString();
+    if (this.misses?.has(offsetKey) === true) {
+      this.recordResult('miss_cached');
+      return null;
+    }
+    // Concurrent lookups of one offset share a probe: the incident's
+    // pattern was the same missing offset asked for many times at once.
+    // The shared probe has its own AbortController rather than any one
+    // caller's signal, so one caller cancelling does not fail the others.
+    // Waiters are counted: when the last one aborts, the probe is aborted
+    // too, so a lookup nobody is waiting for stops using the network.
+    let shared = this.inFlight.get(offsetKey);
+    if (shared === undefined) {
+      const controller = new AbortController();
+      const entry: SharedProbe = {
+        controller,
+        waiters: 0,
+        promise: this.probe(offsetNum, absoluteOffset, controller.signal, log)
+          .then((boundary) => {
+            // An aborted probe is not a miss: nothing was learned about the
+            // offset, so the next caller must be free to probe it.
+            if (boundary === null && !controller.signal.aborted) {
+              this.misses?.set(offsetKey, true);
+            }
+            return boundary;
+          })
+          .finally(() => this.dropInFlight(offsetKey, entry)),
+      };
+      // Once every waiter has aborted nobody awaits the probe, so its
+      // AbortError would otherwise surface as an unhandled rejection.
+      entry.promise.catch(() => undefined);
+      this.inFlight.set(offsetKey, entry);
+      shared = entry;
+    } else {
+      this.recordResult('probe_shared');
+    }
+    return this.waitFor(offsetKey, shared, signal);
+  }
 
+  /**
+   * Waits on a shared probe on behalf of one caller. A caller without a
+   * signal can never abort, so it holds its place until the probe settles.
+   * A caller whose signal aborts rejects with an AbortError at once and
+   * gives up its place; if it was the last waiter, the probe itself is
+   * aborted and dropped from {@link inFlight}, so a later lookup starts a
+   * fresh probe rather than joining one that is being torn down.
+   */
+  private waitFor(
+    offsetKey: string,
+    shared: SharedProbe,
+    signal: AbortSignal | undefined,
+  ): Promise<TxBoundary | null> {
+    shared.waiters++;
+    if (signal === undefined) return shared.promise;
+    return new Promise<TxBoundary | null>((resolve, reject) => {
+      const onAbort = () => {
+        shared.waiters--;
+        if (shared.waiters === 0) {
+          this.dropInFlight(offsetKey, shared);
+          shared.controller.abort();
+        }
+        const error = new Error('The operation was aborted');
+        error.name = 'AbortError';
+        reject(error);
+      };
+      signal.addEventListener('abort', onAbort, { once: true });
+      shared.promise.then(
+        (value) => {
+          signal.removeEventListener('abort', onAbort);
+          resolve(value);
+        },
+        (error) => {
+          signal.removeEventListener('abort', onAbort);
+          reject(error);
+        },
+      );
+    });
+  }
+
+  /**
+   * Removes `shared` from {@link inFlight} if it is still the entry for the
+   * offset. A probe aborted by its last waiter is dropped at once, and a new
+   * probe of the same offset may take its place before the old one settles;
+   * the identity check stops the old probe's cleanup removing the new one.
+   */
+  private dropInFlight(offsetKey: string, shared: SharedProbe): void {
+    if (this.inFlight.get(offsetKey) === shared) {
+      this.inFlight.delete(offsetKey);
+    }
+  }
+
+  /** One probe of the reference peer; null on any miss. */
+  private async probe(
+    offsetNum: number,
+    absoluteOffset: bigint,
+    signal: AbortSignal | undefined,
+    log: winston.Logger,
+  ): Promise<TxBoundary | null> {
     const peer = this.peerUrls[0];
     const url = `${peer}/chunk/${absoluteOffset}/data`;
+    // Only the hop count, one on: the peer then keeps its one-hop limit
+    // and makes no network request for this probe. Only reached at hop 0
+    // (forwarded requests return above), so this is always `1`. Nothing
+    // else of the client's request (ArNS name, root hints, via) is sent,
+    // and deliberately no X-AR-IO-Node-Release: peers' nginx limits key on
+    // that header, and turbo-gateway.com's was one bucket for the whole
+    // network, which would have refused nearly every anchor probe.
+    const requestHeaders: Record<string, string> =
+      generateRequestAttributes({ hops: 0, clientIps: [] })?.headers ?? {};
 
     let headers: Record<string, string | string[] | undefined>;
     try {
-      headers = await this.fetchPeerChunkHeaders(url, signal);
+      headers = await this.fetchPeerChunkHeaders(url, signal, requestHeaders);
     } catch (err: any) {
       // Normalize Axios's CanceledError (code ERR_CANCELED) into a
       // plain AbortError so signal cancellations propagate instead of
@@ -317,7 +477,8 @@ export class ChunkMetadataAnchorSource implements TxBoundarySource {
    */
   private async fetchPeerChunkHeaders(
     url: string,
-    signal?: AbortSignal,
+    signal: AbortSignal | undefined,
+    requestHeaders: Record<string, string>,
   ): Promise<Record<string, string | string[] | undefined>> {
     // Left undefined when HEAD throws, which is a genuine "HEAD didn't work"
     // and still earns the GET fallback. Set outside the catch below so the
@@ -328,6 +489,7 @@ export class ChunkMetadataAnchorSource implements TxBoundarySource {
       const headResponse = await this.axiosInstance.head(url, {
         signal,
         timeout: this.requestTimeoutMs,
+        headers: requestHeaders,
       });
       headStatus = headResponse.status;
       if (
@@ -371,7 +533,7 @@ export class ChunkMetadataAnchorSource implements TxBoundarySource {
     const getResponse = await this.axiosInstance.get(url, {
       signal,
       timeout: this.requestTimeoutMs,
-      headers: { Range: 'bytes=0-0' },
+      headers: { ...requestHeaders, Range: 'bytes=0-0' },
       responseType: 'stream',
     });
     await discardResponseBody(getResponse.data, {

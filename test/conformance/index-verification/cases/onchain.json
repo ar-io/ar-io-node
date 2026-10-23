@@ -1,0 +1,1514 @@
+[
+  {
+    "id": "audit-a-unmined-one-node",
+    "description": "A self-signed root no block holds, served by one node; the others don't have it at all, so they don't deny it either",
+    "tampered": "unmined root",
+    "kind": "onchain",
+    "roots": {
+      "F": {}
+    },
+    "nodes": {
+      "h1:1984": {
+        "header": {
+          "*": "404"
+        },
+        "status": {
+          "*": "404"
+        },
+        "offset": {
+          "*": "404"
+        },
+        "chunk": {
+          "*": "404"
+        }
+      },
+      "h2:1984": {
+        "header": {
+          "*": "404"
+        },
+        "status": {
+          "*": "404"
+        },
+        "offset": {
+          "*": "404"
+        },
+        "chunk": {
+          "*": "404"
+        }
+      },
+      "evil:1984": {}
+    },
+    "entries": [
+      {
+        "root": "F",
+        "repeat": 2
+      }
+    ],
+    "expect": {
+      "verdict": "unknown",
+      "check": "onchain",
+      "failing": [
+        "onchain"
+      ],
+      "reason": [
+        "unchecked"
+      ]
+    }
+  },
+  {
+    "id": "audit-b-format1-injected",
+    "description": "A format-1 header given a data_root after signing",
+    "tampered": "format-1 root",
+    "kind": "onchain",
+    "roots": {
+      "V": {
+        "format1Injected": true
+      }
+    },
+    "nodes": {
+      "h1:1984": {},
+      "h2:1984": {},
+      "h3:1984": {}
+    },
+    "entries": [
+      {
+        "root": "V",
+        "repeat": 2
+      }
+    ],
+    "expect": {
+      "verdict": "refuted",
+      "check": "onchain",
+      "failing": [
+        "onchain"
+      ],
+      "reason": [
+        "refuted"
+      ]
+    }
+  },
+  {
+    "id": "audit-c-made-up-roots",
+    "description": "Items under root ids no node has",
+    "tampered": "4 of 20 made-up roots",
+    "kind": "onchain",
+    "roots": {
+      "G": {}
+    },
+    "nodes": {
+      "h1:1984": {},
+      "h2:1984": {}
+    },
+    "entries": [
+      {
+        "root": "G",
+        "repeat": 16
+      },
+      {
+        "root": "G",
+        "madeUp": true,
+        "repeat": 4
+      }
+    ],
+    "expect": {
+      "verdict": "refuted",
+      "check": "onchain",
+      "failing": [
+        "onchain"
+      ],
+      "reason": [
+        "missing"
+      ]
+    }
+  },
+  {
+    "id": "d2-wrong-height-one-liar",
+    "description": "Items give a height one liar names; two machines place the root elsewhere",
+    "tampered": "items at 999, root at 1000",
+    "kind": "onchain",
+    "roots": {
+      "G": {}
+    },
+    "nodes": {
+      "h0:1984": {},
+      "liar:1984": {
+        "status": {
+          "*": "status:height=999"
+        }
+      },
+      "h2:1984": {}
+    },
+    "entries": [
+      {
+        "root": "G",
+        "height": 999,
+        "repeat": 20
+      }
+    ],
+    "expect": {
+      "verdict": "refuted",
+      "check": "onchain",
+      "failing": [
+        "onchain"
+      ],
+      "reason": [
+        "refuted"
+      ]
+    }
+  },
+  {
+    "id": "d3-holder-busy",
+    "description": "Nodes without data 404 /offset; the holder stays busy",
+    "tampered": "holder 503",
+    "kind": "onchain",
+    "roots": {
+      "G": {}
+    },
+    "nodes": {
+      "tip1:1984": {
+        "offset": {
+          "*": "404"
+        },
+        "chunk": {
+          "*": "404"
+        }
+      },
+      "tip2:1984": {
+        "offset": {
+          "*": "404"
+        },
+        "chunk": {
+          "*": "404"
+        }
+      },
+      "data1:1984": {
+        "offset": {
+          "*": "503"
+        }
+      }
+    },
+    "entries": [
+      {
+        "root": "G",
+        "repeat": 20
+      }
+    ],
+    "expect": {
+      "verdict": "unknown",
+      "check": "onchain",
+      "failing": [
+        "onchain"
+      ],
+      "reason": [
+        "unchecked"
+      ]
+    }
+  },
+  {
+    "id": "e1-unlocatable-root",
+    "description": "Fabricated items under a mined root whose /offset every node 404s",
+    "tampered": "4 of 20 fabricated",
+    "kind": "onchain",
+    "roots": {
+      "G": {},
+      "R": {}
+    },
+    "nodes": {
+      "n1:1984": {
+        "offset": {
+          "R": "404"
+        }
+      },
+      "n2:1984": {
+        "offset": {
+          "R": "404"
+        }
+      },
+      "n3:1984": {
+        "offset": {
+          "R": "404"
+        }
+      }
+    },
+    "entries": [
+      {
+        "root": "G",
+        "repeat": 16
+      },
+      {
+        "root": "R",
+        "fabricated": true,
+        "repeat": 4
+      }
+    ],
+    "expect": {
+      "verdict": "unknown",
+      "check": "onchain",
+      "failing": [
+        "onchain"
+      ],
+      "reason": [
+        "unchecked"
+      ]
+    }
+  },
+  {
+    "id": "e1c-unseeded-chunks",
+    "description": "Fabricated items under a root whose chunks no node holds",
+    "tampered": "4 of 20 fabricated",
+    "kind": "onchain",
+    "roots": {
+      "G": {},
+      "R": {}
+    },
+    "nodes": {
+      "n1:1984": {
+        "chunk": {
+          "R": "404"
+        }
+      },
+      "n2:1984": {
+        "chunk": {
+          "R": "404"
+        }
+      },
+      "n3:1984": {
+        "chunk": {
+          "R": "404"
+        }
+      }
+    },
+    "entries": [
+      {
+        "root": "G",
+        "repeat": 16
+      },
+      {
+        "root": "R",
+        "fabricated": true,
+        "repeat": 4
+      }
+    ],
+    "expect": {
+      "verdict": "unknown",
+      "check": "onchain",
+      "failing": [
+        "onchain"
+      ],
+      "reason": [
+        "unchecked"
+      ]
+    }
+  },
+  {
+    "id": "e2-holder-unheard",
+    "description": "Two nodes lack the header; the holder 503s throughout",
+    "tampered": "holder 503",
+    "kind": "onchain",
+    "roots": {
+      "G": {}
+    },
+    "nodes": {
+      "tip1:1984": {
+        "header": {
+          "*": "404"
+        }
+      },
+      "tip2:1984": {
+        "header": {
+          "*": "404"
+        }
+      },
+      "data1:1984": {
+        "header": {
+          "*": "503"
+        }
+      }
+    },
+    "entries": [
+      {
+        "root": "G",
+        "repeat": 20
+      }
+    ],
+    "expect": {
+      "verdict": "unknown",
+      "check": "onchain",
+      "failing": [
+        "onchain"
+      ],
+      "reason": [
+        "unchecked"
+      ]
+    }
+  },
+  {
+    "id": "e3-malformed-offsets-holder-busy",
+    "description": "Two nodes answer /offset malformed; the holder 503s",
+    "tampered": "malformed bodies",
+    "kind": "onchain",
+    "roots": {
+      "G": {}
+    },
+    "nodes": {
+      "tip1:1984": {
+        "offset": {
+          "*": "malformed"
+        }
+      },
+      "tip2:1984": {
+        "offset": {
+          "*": "malformed"
+        }
+      },
+      "data1:1984": {
+        "offset": {
+          "*": "503"
+        }
+      }
+    },
+    "entries": [
+      {
+        "root": "G",
+        "repeat": 20
+      }
+    ],
+    "expect": {
+      "verdict": "unknown",
+      "check": "onchain",
+      "failing": [
+        "onchain"
+      ],
+      "reason": [
+        "unchecked"
+      ]
+    }
+  },
+  {
+    "id": "e4-one-liar-size",
+    "description": "One node gives another size, one 404s, the holder 503s",
+    "tampered": "liar offset",
+    "kind": "onchain",
+    "roots": {
+      "G": {}
+    },
+    "nodes": {
+      "liar:1984": {
+        "offset": {
+          "*": "wrongSize"
+        }
+      },
+      "tip2:1984": {
+        "offset": {
+          "*": "404"
+        }
+      },
+      "data1:1984": {
+        "offset": {
+          "*": "503"
+        }
+      }
+    },
+    "entries": [
+      {
+        "root": "G",
+        "repeat": 20
+      }
+    ],
+    "expect": {
+      "verdict": "unknown",
+      "check": "onchain",
+      "failing": [
+        "onchain"
+      ],
+      "reason": [
+        "unchecked"
+      ]
+    }
+  },
+  {
+    "id": "e5-stacked-allowances",
+    "description": "Fabricated items behind an unlocatable root and behind unseeded chunks together",
+    "tampered": "8 of 24 fabricated",
+    "kind": "onchain",
+    "roots": {
+      "G": {},
+      "R": {},
+      "S": {}
+    },
+    "nodes": {
+      "n1:1984": {
+        "offset": {
+          "R": "404"
+        },
+        "chunk": {
+          "S": "404"
+        }
+      },
+      "n2:1984": {
+        "offset": {
+          "R": "404"
+        },
+        "chunk": {
+          "S": "404"
+        }
+      },
+      "n3:1984": {
+        "offset": {
+          "R": "404"
+        },
+        "chunk": {
+          "S": "404"
+        }
+      }
+    },
+    "entries": [
+      {
+        "root": "G",
+        "repeat": 16
+      },
+      {
+        "root": "R",
+        "fabricated": true,
+        "repeat": 4
+      },
+      {
+        "root": "S",
+        "fabricated": true,
+        "repeat": 4
+      }
+    ],
+    "expect": {
+      "verdict": "unknown",
+      "check": "onchain",
+      "failing": [
+        "onchain"
+      ],
+      "reason": [
+        "unchecked"
+      ]
+    }
+  },
+  {
+    "id": "header-size-mismatch",
+    "description": "A real item's header at offsets that give it more bytes than it has",
+    "tampered": "rootDataOffset 10 bytes past the payload's start",
+    "kind": "onchain",
+    "roots": {
+      "G": {}
+    },
+    "nodes": {
+      "h1:1984": {},
+      "h2:1984": {},
+      "h3:1984": {}
+    },
+    "entries": [
+      {
+        "root": "G",
+        "repeat": 19
+      },
+      {
+        "root": "G",
+        "headerExtra": 10
+      }
+    ],
+    "expect": {
+      "verdict": "refuted",
+      "check": "onchain",
+      "failing": [
+        "onchain"
+      ],
+      "reason": [
+        "not-the-item"
+      ]
+    }
+  },
+  {
+    "id": "n1-holder-refuses-connections",
+    "description": "Two nodes lack the header; the holder refuses every connection",
+    "tampered": "holder resets",
+    "kind": "onchain",
+    "roots": {
+      "G": {}
+    },
+    "nodes": {
+      "tip1:1984": {
+        "header": {
+          "*": "404"
+        }
+      },
+      "tip2:1984": {
+        "header": {
+          "*": "404"
+        }
+      },
+      "data1:1984": {
+        "default": "reset"
+      }
+    },
+    "entries": [
+      {
+        "root": "G",
+        "repeat": 20
+      }
+    ],
+    "expect": {
+      "verdict": "unknown",
+      "check": "onchain",
+      "failing": [
+        "onchain"
+      ],
+      "reason": [
+        "unchecked"
+      ]
+    }
+  },
+  {
+    "id": "n2-everything-allowed-unchecked",
+    "description": "Every chunk unseeded with every item allowed unchecked: nothing verified",
+    "tampered": "chunks 404, maxUnchecked 20",
+    "kind": "onchain",
+    "roots": {
+      "G": {}
+    },
+    "nodes": {
+      "n1:1984": {
+        "chunk": {
+          "*": "404"
+        }
+      },
+      "n2:1984": {
+        "chunk": {
+          "*": "404"
+        }
+      },
+      "n3:1984": {
+        "chunk": {
+          "*": "404"
+        }
+      }
+    },
+    "entries": [
+      {
+        "root": "G",
+        "repeat": 20
+      }
+    ],
+    "options": {
+      "maxUnchecked": 20
+    },
+    "expect": {
+      "verdict": "unknown",
+      "check": "onchain",
+      "failing": [
+        "onchain"
+      ],
+      "reason": [
+        "nothing-verified"
+      ]
+    }
+  },
+  {
+    "id": "n4-deadline",
+    "description": "A node hangs on every chunk past the band's deadline",
+    "tampered": "chunks hang",
+    "kind": "onchain",
+    "roots": {
+      "G": {}
+    },
+    "nodes": {
+      "n1:1984": {
+        "chunk": {
+          "*": "hang"
+        }
+      },
+      "n2:1984": {
+        "chunk": {
+          "*": "hang"
+        }
+      }
+    },
+    "entries": [
+      {
+        "root": "G",
+        "repeat": 20
+      }
+    ],
+    "options": {
+      "deadlineMs": 300,
+      "timeoutMs": 2000
+    },
+    "expect": {
+      "verdict": "unknown",
+      "check": "onchain",
+      "failing": [
+        "onchain"
+      ],
+      "reason": [
+        "unchecked"
+      ]
+    }
+  },
+  {
+    "id": "n5-nothing-drawn",
+    "description": "No entries drawn",
+    "tampered": "empty draw",
+    "kind": "onchain",
+    "roots": {
+      "G": {}
+    },
+    "nodes": {
+      "h1:1984": {},
+      "h2:1984": {},
+      "h3:1984": {}
+    },
+    "entries": [],
+    "expect": {
+      "verdict": "unknown",
+      "check": "onchain",
+      "failing": [
+        "onchain"
+      ],
+      "reason": [
+        "nothing-drawn"
+      ]
+    }
+  },
+  {
+    "id": "n6-machine-chain",
+    "description": "Three names whose addresses chain into one machine serve a fake root",
+    "tampered": "a fake root served by one machine under three names",
+    "kind": "onchain",
+    "roots": {
+      "F": {}
+    },
+    "nodes": {
+      "a:1984": {},
+      "c:1984": {},
+      "b:1984": {},
+      "h:1984": {
+        "default": "404"
+      }
+    },
+    "entries": [
+      {
+        "root": "F",
+        "repeat": 2
+      }
+    ],
+    "addresses": {
+      "a": [
+        "10.0.0.1"
+      ],
+      "c": [
+        "10.0.0.2"
+      ],
+      "b": [
+        "10.0.0.1",
+        "10.0.0.2"
+      ],
+      "h": [
+        "10.0.0.9"
+      ]
+    },
+    "expect": {
+      "verdict": "unknown",
+      "check": "onchain",
+      "failing": [
+        "onchain"
+      ],
+      "reason": [
+        "unchecked"
+      ]
+    }
+  },
+  {
+    "id": "onchain-honest",
+    "description": "An honest root, every node honest",
+    "tampered": "nothing",
+    "kind": "onchain",
+    "roots": {
+      "G": {}
+    },
+    "nodes": {
+      "h1:1984": {},
+      "h2:1984": {},
+      "h3:1984": {}
+    },
+    "entries": [
+      {
+        "root": "G",
+        "repeat": 20
+      }
+    ],
+    "expect": {
+      "verdict": "verified",
+      "reason": []
+    }
+  },
+  {
+    "id": "onchain-honest-busy-holder-recovers",
+    "description": "Two nodes lack the header; the holder is busy for its first two asks (E2b)",
+    "tampered": "holder 503 twice",
+    "kind": "onchain",
+    "roots": {
+      "G": {}
+    },
+    "nodes": {
+      "tip1:1984": {
+        "header": {
+          "*": "404"
+        }
+      },
+      "tip2:1984": {
+        "header": {
+          "*": "404"
+        }
+      },
+      "data1:1984": {
+        "header": {
+          "*": "503Twice"
+        }
+      }
+    },
+    "entries": [
+      {
+        "root": "G",
+        "repeat": 20
+      }
+    ],
+    "expect": {
+      "verdict": "verified",
+      "reason": []
+    }
+  },
+  {
+    "id": "onchain-honest-liar-bad-proof",
+    "description": "One node serves chunks whose proofs fail",
+    "tampered": "liar chunks",
+    "kind": "onchain",
+    "roots": {
+      "G": {}
+    },
+    "nodes": {
+      "bad:1984": {
+        "chunk": {
+          "*": "badproof"
+        }
+      },
+      "h1:1984": {},
+      "h2:1984": {}
+    },
+    "entries": [
+      {
+        "root": "G",
+        "repeat": 20
+      }
+    ],
+    "expect": {
+      "verdict": "verified",
+      "reason": []
+    }
+  },
+  {
+    "id": "onchain-honest-liar-format1",
+    "description": "One node serves a format-1 copy of the header",
+    "tampered": "liar header",
+    "kind": "onchain",
+    "roots": {
+      "G": {}
+    },
+    "nodes": {
+      "bad:1984": {
+        "header": {
+          "*": "format1"
+        }
+      },
+      "h1:1984": {},
+      "h2:1984": {}
+    },
+    "entries": [
+      {
+        "root": "G",
+        "repeat": 20
+      }
+    ],
+    "expect": {
+      "verdict": "verified",
+      "reason": []
+    }
+  },
+  {
+    "id": "onchain-liar-format1-404-holder-unheard",
+    "description": "One node serves a format-1 copy, one lacks the header, the holder 503s: two machines said something, only one of them served the root",
+    "tampered": "liar header, holder 503",
+    "kind": "onchain",
+    "roots": {
+      "G": {}
+    },
+    "nodes": {
+      "bad:1984": {
+        "header": {
+          "*": "format1"
+        }
+      },
+      "tip1:1984": {
+        "header": {
+          "*": "404"
+        }
+      },
+      "data1:1984": {
+        "header": {
+          "*": "503"
+        }
+      }
+    },
+    "entries": [
+      {
+        "root": "G",
+        "repeat": 20
+      }
+    ],
+    "expect": {
+      "verdict": "unknown",
+      "check": "onchain",
+      "failing": [
+        "onchain"
+      ],
+      "reason": [
+        "unchecked"
+      ]
+    }
+  },
+  {
+    "id": "onchain-liar-format1-404-holder-heard",
+    "description": "One node serves a format-1 copy, one lacks the header, the holder answers",
+    "tampered": "liar header",
+    "kind": "onchain",
+    "roots": {
+      "G": {}
+    },
+    "nodes": {
+      "bad:1984": {
+        "header": {
+          "*": "format1"
+        }
+      },
+      "tip1:1984": {
+        "header": {
+          "*": "404"
+        }
+      },
+      "h1:1984": {}
+    },
+    "entries": [
+      {
+        "root": "G",
+        "repeat": 20
+      }
+    ],
+    "expect": {
+      "verdict": "verified",
+      "reason": []
+    }
+  },
+  {
+    "id": "onchain-honest-liar-height",
+    "description": "One node names the right block at another height (D1)",
+    "tampered": "liar status height",
+    "kind": "onchain",
+    "roots": {
+      "G": {}
+    },
+    "nodes": {
+      "h0:1984": {},
+      "liar:1984": {
+        "status": {
+          "*": "status:height=999"
+        }
+      },
+      "h2:1984": {}
+    },
+    "entries": [
+      {
+        "root": "G",
+        "repeat": 20
+      }
+    ],
+    "expect": {
+      "verdict": "verified",
+      "reason": []
+    }
+  },
+  {
+    "id": "onchain-honest-liar-other-header",
+    "description": "One node serves another transaction's header",
+    "tampered": "liar header",
+    "kind": "onchain",
+    "roots": {
+      "G": {}
+    },
+    "nodes": {
+      "bad:1984": {
+        "header": {
+          "*": "otherHeader"
+        }
+      },
+      "h1:1984": {},
+      "h2:1984": {}
+    },
+    "entries": [
+      {
+        "root": "G",
+        "repeat": 20
+      }
+    ],
+    "expect": {
+      "verdict": "verified",
+      "reason": []
+    }
+  },
+  {
+    "id": "onchain-honest-liar-wrong-size",
+    "description": "One node gives another size for the root's place",
+    "tampered": "liar offset",
+    "kind": "onchain",
+    "roots": {
+      "G": {}
+    },
+    "nodes": {
+      "bad:1984": {
+        "offset": {
+          "*": "wrongSize"
+        }
+      },
+      "h1:1984": {},
+      "h2:1984": {}
+    },
+    "entries": [
+      {
+        "root": "G",
+        "repeat": 20
+      }
+    ],
+    "expect": {
+      "verdict": "verified",
+      "reason": []
+    }
+  },
+  {
+    "id": "onchain-honest-malformed-offsets",
+    "description": "Two nodes answer /offset with malformed bodies; the holder answers (E3b)",
+    "tampered": "malformed bodies",
+    "kind": "onchain",
+    "roots": {
+      "G": {}
+    },
+    "nodes": {
+      "tip1:1984": {
+        "offset": {
+          "*": "malformed"
+        }
+      },
+      "tip2:1984": {
+        "offset": {
+          "*": "malformed"
+        }
+      },
+      "data1:1984": {}
+    },
+    "entries": [
+      {
+        "root": "G",
+        "repeat": 20
+      }
+    ],
+    "expect": {
+      "verdict": "verified",
+      "reason": []
+    }
+  },
+  {
+    "id": "onchain-honest-reset-once",
+    "description": "Two nodes lack the header; the holder resets its first connection (N1b)",
+    "tampered": "one connection reset",
+    "kind": "onchain",
+    "roots": {
+      "G": {}
+    },
+    "nodes": {
+      "tip1:1984": {
+        "header": {
+          "*": "404"
+        }
+      },
+      "tip2:1984": {
+        "header": {
+          "*": "404"
+        }
+      },
+      "data1:1984": {
+        "header": {
+          "*": "resetOnce"
+        }
+      }
+    },
+    "entries": [
+      {
+        "root": "G",
+        "repeat": 20
+      }
+    ],
+    "expect": {
+      "verdict": "verified",
+      "reason": []
+    }
+  },
+  {
+    "id": "onchain-honest-tips-no-offset",
+    "description": "Nodes without data 404 /offset and chunks; the holder resets once (D3b)",
+    "tampered": "tips 404",
+    "kind": "onchain",
+    "roots": {
+      "G": {}
+    },
+    "nodes": {
+      "tip1:1984": {
+        "offset": {
+          "*": "404"
+        },
+        "chunk": {
+          "*": "404"
+        }
+      },
+      "tip2:1984": {
+        "offset": {
+          "*": "404"
+        },
+        "chunk": {
+          "*": "404"
+        }
+      },
+      "data1:1984": {
+        "offset": {
+          "*": "resetOnce"
+        }
+      }
+    },
+    "entries": [
+      {
+        "root": "G",
+        "repeat": 20
+      }
+    ],
+    "expect": {
+      "verdict": "verified",
+      "reason": []
+    }
+  },
+  {
+    "id": "onchain-honest-transient-503",
+    "description": "Every node 503s its first two asks of each kind (N3)",
+    "tampered": "transient 503",
+    "kind": "onchain",
+    "roots": {
+      "G": {}
+    },
+    "nodes": {
+      "n1:1984": {
+        "default": "503Twice"
+      },
+      "n2:1984": {
+        "default": "503Twice"
+      }
+    },
+    "entries": [
+      {
+        "root": "G",
+        "repeat": 20
+      }
+    ],
+    "expect": {
+      "verdict": "verified",
+      "reason": []
+    }
+  },
+  {
+    "id": "p1-dataless-root",
+    "description": "Items under a real root that carries no data",
+    "tampered": "4 of 20 under a transfer",
+    "kind": "onchain",
+    "roots": {
+      "G": {},
+      "T": {
+        "transfer": true
+      }
+    },
+    "nodes": {
+      "h1:1984": {},
+      "h2:1984": {}
+    },
+    "entries": [
+      {
+        "root": "G",
+        "repeat": 16
+      },
+      {
+        "root": "T",
+        "fabricated": true,
+        "repeat": 4
+      }
+    ],
+    "expect": {
+      "verdict": "refuted",
+      "check": "onchain",
+      "failing": [
+        "onchain"
+      ],
+      "reason": [
+        "refuted"
+      ]
+    }
+  },
+  {
+    "id": "p1b-unmined-fake-root",
+    "description": "Items under a root only one node serves and calls mined; the others don't have it, so can neither confirm nor deny",
+    "tampered": "4 of 20 under a root one node serves",
+    "kind": "onchain",
+    "roots": {
+      "G": {},
+      "F": {}
+    },
+    "nodes": {
+      "h1:1984": {
+        "header": {
+          "F": "404"
+        },
+        "status": {
+          "F": "404"
+        },
+        "offset": {
+          "F": "404"
+        },
+        "chunk": {
+          "F": "404"
+        }
+      },
+      "h2:1984": {
+        "header": {
+          "F": "404"
+        },
+        "status": {
+          "F": "404"
+        },
+        "offset": {
+          "F": "404"
+        },
+        "chunk": {
+          "F": "404"
+        }
+      },
+      "evil:1984": {}
+    },
+    "entries": [
+      {
+        "root": "G",
+        "repeat": 16
+      },
+      {
+        "root": "F",
+        "repeat": 4
+      }
+    ],
+    "expect": {
+      "verdict": "unknown",
+      "check": "onchain",
+      "failing": [
+        "onchain"
+      ],
+      "reason": [
+        "unchecked"
+      ]
+    }
+  },
+  {
+    "id": "p3-two-ports-one-address",
+    "description": "Two ports of one address are one machine",
+    "tampered": "a fake root served on two ports of 127.0.0.1",
+    "kind": "onchain",
+    "roots": {
+      "F": {}
+    },
+    "nodes": {
+      "127.0.0.1:1984": {},
+      "127.0.0.1:1985": {},
+      "h1:1984": {
+        "default": "404"
+      }
+    },
+    "entries": [
+      {
+        "root": "F",
+        "repeat": 2
+      }
+    ],
+    "addresses": {},
+    "expect": {
+      "verdict": "unknown",
+      "check": "onchain",
+      "failing": [
+        "onchain"
+      ],
+      "reason": [
+        "unchecked"
+      ]
+    }
+  },
+  {
+    "id": "p4-made-up-slow-node",
+    "description": "Made-up roots while a node times out: the slow node may hold them",
+    "tampered": "4 of 20 made-up, one node slow",
+    "kind": "onchain",
+    "roots": {
+      "G": {}
+    },
+    "nodes": {
+      "h1:1984": {},
+      "h2:1984": {},
+      "slow:1984": {
+        "default": "timeout"
+      }
+    },
+    "entries": [
+      {
+        "root": "G",
+        "repeat": 16
+      },
+      {
+        "root": "G",
+        "madeUp": true,
+        "repeat": 4
+      }
+    ],
+    "expect": {
+      "verdict": "unknown",
+      "check": "onchain",
+      "failing": [
+        "onchain"
+      ],
+      "reason": [
+        "unchecked"
+      ]
+    }
+  },
+  {
+    "id": "past-end",
+    "description": "An item whose header range runs past its root's end",
+    "tampered": "1 of 20 past the end",
+    "kind": "onchain",
+    "roots": {
+      "G": {}
+    },
+    "nodes": {
+      "h1:1984": {},
+      "h2:1984": {},
+      "h3:1984": {}
+    },
+    "entries": [
+      {
+        "root": "G",
+        "repeat": 19
+      },
+      {
+        "root": "G",
+        "pastEnd": true
+      }
+    ],
+    "expect": {
+      "verdict": "refuted",
+      "check": "onchain",
+      "failing": [
+        "onchain"
+      ],
+      "reason": [
+        "past-end"
+      ]
+    }
+  },
+  {
+    "id": "s1-holder-only",
+    "description": "An honest root one node holds; two nodes lack the transaction altogether (header, status, offset 404): their 404 for the status is no denial, and one machine can't confirm the block",
+    "tampered": "nothing",
+    "kind": "onchain",
+    "roots": {
+      "G": {}
+    },
+    "nodes": {
+      "tip1:1984": {
+        "header": {
+          "*": "404"
+        },
+        "status": {
+          "*": "404"
+        },
+        "offset": {
+          "*": "404"
+        }
+      },
+      "tip2:1984": {
+        "header": {
+          "*": "404"
+        },
+        "status": {
+          "*": "404"
+        },
+        "offset": {
+          "*": "404"
+        }
+      },
+      "data1:1984": {}
+    },
+    "entries": [
+      {
+        "root": "G",
+        "repeat": 20
+      }
+    ],
+    "expect": {
+      "verdict": "unknown",
+      "check": "onchain",
+      "failing": [
+        "onchain"
+      ],
+      "reason": [
+        "unchecked"
+      ]
+    }
+  },
+  {
+    "id": "unchecked-allowance-stated",
+    "description": "Fabricated items behind unseeded chunks pass when that many are allowed unchecked; the stated bound counts them as possibly fabricated: P(Bin(20,p) <= 4) <= 5% at p = 41%",
+    "tampered": "4 of 20 fabricated, chunks unseeded, maxUnchecked 4",
+    "kind": "onchain",
+    "roots": {
+      "G": {},
+      "R": {}
+    },
+    "nodes": {
+      "n1:1984": {
+        "chunk": {
+          "R": "404"
+        }
+      },
+      "n2:1984": {
+        "chunk": {
+          "R": "404"
+        }
+      },
+      "n3:1984": {
+        "chunk": {
+          "R": "404"
+        }
+      }
+    },
+    "entries": [
+      {
+        "root": "G",
+        "repeat": 16
+      },
+      {
+        "root": "R",
+        "fabricated": true,
+        "repeat": 4
+      }
+    ],
+    "options": {
+      "maxUnchecked": 4
+    },
+    "expect": {
+      "verdict": "verified",
+      "reason": [],
+      "assurancePercent": 41
+    }
+  },
+  {
+    "id": "unmined-root-refuted",
+    "description": "A root whose header three machines serve, two of which say it is in no block",
+    "tampered": "root not mined",
+    "kind": "onchain",
+    "roots": {
+      "F": {}
+    },
+    "nodes": {
+      "h1:1984": {
+        "status": {
+          "*": "404"
+        }
+      },
+      "h2:1984": {
+        "status": {
+          "*": "404"
+        }
+      },
+      "h3:1984": {}
+    },
+    "entries": [
+      {
+        "root": "F",
+        "repeat": 2
+      }
+    ],
+    "expect": {
+      "verdict": "refuted",
+      "check": "onchain",
+      "failing": [
+        "onchain"
+      ],
+      "reason": [
+        "refuted"
+      ]
+    }
+  },
+  {
+    "id": "unmined-status-unheard",
+    "description": "Two machines that serve the header say it is in no block; a third stays busy on status",
+    "tampered": "status 503 on one node",
+    "kind": "onchain",
+    "roots": {
+      "F": {}
+    },
+    "nodes": {
+      "h1:1984": {
+        "status": {
+          "*": "404"
+        }
+      },
+      "h2:1984": {
+        "status": {
+          "*": "404"
+        }
+      },
+      "h3:1984": {
+        "status": {
+          "*": "503"
+        }
+      }
+    },
+    "entries": [
+      {
+        "root": "F",
+        "repeat": 2
+      }
+    ],
+    "expect": {
+      "verdict": "unknown",
+      "check": "onchain",
+      "failing": [
+        "onchain"
+      ],
+      "reason": [
+        "unchecked"
+      ]
+    }
+  }
+]

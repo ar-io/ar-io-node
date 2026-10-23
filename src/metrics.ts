@@ -112,16 +112,16 @@ export const chunkServeLocalOnlyCounter = new promClient.Counter({
 
 // What enforcing CHUNK_PEER_ORIGIN_MODE would have done to a peer-origin
 // chunk request, recorded while `audit` leaves behavior unchanged.
-// `boundary` is whether offset resolution stayed local (the DB source) or
-// needed the network; `bytes` is whether the chunk came off local disk or a
-// remote source.
+// `boundary` is how the offset was resolved: a forwarded request is resolved
+// from the local database only, in every mode, so it is `local` or `none`
+// (no row). `bytes` is whether the chunk came off local disk or a remote
+// source.
 //
-// **`bytes="local"` is the cost of enforcing**, whatever the boundary label:
-// this gateway held the chunk and served it. `boundary="local"` means
-// enforcing would still have served it; `boundary="remote"` means it would
-// not, because the bytes were only locatable through a network offset
-// lookup that enforcing declines. Sum both when deciding whether a gateway
-// can enforce, and do not read `boundary="local",bytes="local"` alone.
+// **`bytes="remote"` is the cost of enforcing**: those are the requests
+// `enforce` would refuse, because the chunk data was only reachable from an
+// Arweave node. `bytes` reflects the data source only: a chunk whose data was
+// cached but whose metadata was not counts as `local`, yet `enforce` would
+// still 404 it, so treat `bytes="remote"` as a lower bound.
 //
 // `cancelled` means the retrieval was aborted, either by the caller
 // disconnecting or by an internal timeout. The service sees a merged signal
@@ -1147,8 +1147,8 @@ export const upstreamDecodedBodyRejectedTotal = new promClient.Counter({
 
 export const servedContentEncodingDroppedTotal = new promClient.Counter({
   name: 'served_content_encoding_dropped_total',
-  help: 'Count of data responses served without the Content-Encoding their item names, because the body does not start with that coding\'s magic bytes: an item tagged with a coding it does not use, or (verified="false") possibly a copy decoded upstream that should be purged.',
-  labelNames: ['encoding', 'verified'] as const,
+  help: 'Count of data responses served without the Content-Encoding their item names, because the body does not start with that coding\'s magic bytes: an item tagged with a coding it does not use, or (verified="false") possibly a copy decoded upstream that should be purged. source="recorded" is a coding the index or upstream recorded; source="tag" is the item\'s own tag, consulted when nothing recorded one.',
+  labelNames: ['encoding', 'verified', 'source'] as const,
 });
 
 // Time from an outbound gateway request needing a socket (Agent.addRequest) to a
@@ -1999,6 +1999,21 @@ export const backgroundRangeCacheSkippedTotal = new promClient.Counter({
   labelNames: ['reason'] as const,
 });
 
+/**
+ * Single-range GETs of uncached items answered with one ranged fetch, by
+ * outcome: `served`, `refused` (rate limit or payment), or
+ * `fallback_<reason>` when the ranged fetch showed the full-object path was
+ * needed (`size_mismatch`: the source returned a different length than
+ * requested, or reported a different item size than indexed; `cached`:
+ * the bytes came from the local cache, which the full-object path serves
+ * fast and checks the item's Content-Encoding on).
+ */
+export const uncachedRangeFastPathTotal = new promClient.Counter({
+  name: 'uncached_range_fast_path_total',
+  help: 'Single-range GETs of uncached items answered with one ranged fetch, by outcome',
+  labelNames: ['outcome'] as const,
+});
+
 //
 // Foreground (on-demand) cache write metrics
 //
@@ -2353,4 +2368,34 @@ export const manifestResolutionDurationSeconds = new promClient.Histogram({
   help: 'Manifest path resolution latency, by source',
   labelNames: ['source'] as const,
   buckets: [0.0005, 0.001, 0.005, 0.025, 0.1, 0.5, 2],
+});
+
+/**
+ * Runs of the L1 band import worker (`L1_BAND_IMPORT_ENABLED`), which fills
+ * the history beneath this gateway from installed `parquet-l1` bands, by
+ * result: `filled` wrote at least one range, `idle` found nothing to write,
+ * `failed` stopped on an error (the next run carries on from the ledger).
+ */
+export const l1BandImportRunsTotal = new promClient.Counter({
+  name: 'l1_band_import_runs_total',
+  help: 'L1 band import worker runs, by result (filled, idle, failed, deferred: a refused fill waiting for its bands to change, unreadable: the sample could not be read, tried again next interval)',
+  labelNames: ['result'] as const,
+});
+
+/** Rows the L1 band import worker has written into core.db. */
+export const l1BandImportRowsTotal = new promClient.Counter({
+  name: 'l1_band_import_rows_total',
+  help: 'Rows the L1 band import worker has written into core.db',
+});
+
+/**
+ * Heights beneath what this gateway indexes itself that it lacks and no
+ * installed band holds yet, as of the last run. Falls to 0 once the bands
+ * are installed and filled; a band still downloading, or the heights
+ * between the newest band and where the gateway began, keep it above 0
+ * until the publisher's next tip band covers them.
+ */
+export const l1BandImportUncoveredHeights = new promClient.Gauge({
+  name: 'l1_band_import_uncovered_heights',
+  help: 'Heights below the gateway that it lacks and no installed L1 band holds yet',
 });
