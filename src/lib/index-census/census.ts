@@ -151,7 +151,13 @@ export interface CensusResult {
     checked: number;
     /** With --roots, listed roots that are not (fully) indexed. */
     notIndexed: number;
-    /** Roots with a bundle still being unbundled, left out. */
+    /**
+     * Roots with a bundle not (yet) fully indexed, left out. Counted over the
+     * whole of bundles.db (or the --roots list), not the height range: the
+     * range is applied by root height, which these roots are not looked up
+     * for. Bundles that never unbundle at all (data tagged Bundle-Format,
+     * exhausted retries) keep their root here permanently.
+     */
     inProgress: number;
     /** Indexed roots whose height is outside the range, left out. */
     outOfRange: number;

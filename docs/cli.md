@@ -1286,7 +1286,10 @@ On a gateway with 240 million ClickHouse rows, the 250,000 heights above
 ```
 
 `roots.complete` counts the short roots stage 2 found complete as well as the
-roots stage 1 never flagged, so `complete + short = checked`. `stalledBundles`
+roots stage 1 never flagged, so `complete + short = checked`. `roots.inProgress`
+counts roots with a bundle not fully indexed across the whole `bundles.db` (or
+the `--roots` list), not just the height range; bundles that will never
+unbundle keep their root there permanently. `stalledBundles`
 counts bundles that were queued but never unbundled and haven't been queued
 again for a day: most are not bundles at all (data tagged `Bundle-Format`,
 ANS-102 JSON bundles) or their data is unavailable. It counts them; it does
