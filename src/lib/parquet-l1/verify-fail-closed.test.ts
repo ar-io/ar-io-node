@@ -36,7 +36,11 @@ import { ArweaveNodePool } from '../onchain/arweave-nodes.js';
 import { FORK_2_0 } from './chain.js';
 import { BAND_FILE } from './layout.js';
 import { chooseRange, verifyCoreDb } from './verify.js';
-import { verifyBands, type BandsVerifyResult } from './verify-bands.js';
+import {
+  BandsRefused,
+  verifyBands,
+  type BandsVerifyResult,
+} from './verify-bands.js';
 import type { L1VerifyReport } from './verify-run.js';
 
 const log = createTestLogger({ suite: 'l1-verify-fail-closed' });
@@ -186,7 +190,8 @@ describe('index-l1-verify --bands-dir fails closed', () => {
       'transactions',
       // Its data_root cleared too, as a band holds a format-1 one: one left
       // beside it fails `witnesses` on its own.
-      `SELECT * REPLACE (CASE WHEN height = ${h} AND block_transaction_index = 0 THEN 1::UTINYINT ELSE format END AS format, CASE WHEN height = ${h} AND block_transaction_index = 0 THEN NULL ELSE data_root END AS data_root) FROM SRC`,
+      // and the block's offsets dropped, which the relabel would move.
+      `SELECT * REPLACE (CASE WHEN height = ${h} AND block_transaction_index = 0 THEN 1::UTINYINT ELSE format END AS format, CASE WHEN height = ${h} AND block_transaction_index = 0 THEN NULL ELSE data_root END AS data_root, CASE WHEN height = ${h} THEN NULL ELSE "offset" END AS "offset") FROM SRC`,
     );
     await republish(duck, band(0));
     const out = await verify();
@@ -198,6 +203,32 @@ describe('index-l1-verify --bands-dir fails closed', () => {
     });
     assert.equal(accepted.ok, true, JSON.stringify(failed(accepted)));
     assert.ok(accepted.accepted.includes('--allow-unverified-format1'));
+  });
+
+  it("refuses an l1-1 band outright: its columns are its publisher's, not canonical", async () => {
+    const {
+      parseBandFile,
+      serializeBandFile,
+      PARQUET_L1_LOOKUPS,
+      PARQUET_L1_WITNESSES,
+    } = await import('./layout.js');
+    const file = path.join(band(0), BAND_FILE);
+    const parsed = parseBandFile(await fsp.readFile(file, 'utf8'));
+    for (const spec of [...PARQUET_L1_LOOKUPS, ...PARQUET_L1_WITNESSES]) {
+      await fsp.rm(path.join(band(0), spec.file), { force: true });
+    }
+    const { lookups: _l, witnesses: _w, ...rest } = parsed;
+    void _l;
+    void _w;
+    await fsp.writeFile(file, serializeBandFile({ ...rest, schema: 'l1-1' }));
+    await assert.rejects(
+      verify(),
+      (e: unknown) =>
+        e instanceof BandsRefused &&
+        /layout l1-1: these columns were written by the publisher and are not canonical; rebuild the band/.test(
+          e.message,
+        ),
+    );
   });
 
   it('A9: refuses a transactions file missing columns', async () => {

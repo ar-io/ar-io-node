@@ -650,7 +650,11 @@ gateway's own database hold the chain? `--bands-dir` is the **consumer's**:
 a directory of bands checked with no gateway and no database at all.
 Anyone deciding whether to install someone else's bands — another
 gateway, an analyst, an agent — can check them before importing a byte.
-Given both, the command checks `core.db`. Only bands carry
+Given both, the command checks `core.db`. A set holding an `l1-1` band is
+refused: that layout copied columns its publisher's gateway held (a
+pre-fork `tx_root`, a format-1 `data_root`, the last `Content-Type`), which
+no check can bind; rebuild it (`index-export` rebuilds `l1-1` bands once).
+The importer refuses it the same way. Only bands carry
 [witnesses](#what-binds-what) (`l1-4`): `--core-db` holds none, so there
 every pre-2.0 block is `unbound.pre20` and every block holding a format-1
 transaction with data `unbound.txRootFormat1`, as under `l1-3`.

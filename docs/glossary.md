@@ -303,7 +303,8 @@ an index. See [index-publication.md](index-publication.md#l2-bands).
 an [L1 band](#parquet-l1)'s `band.json`, naming its file set and rules.
 `l1-2` writes [canonical columns](#canonical-band-columns); `l1-3` adds
 [lookup files](#lookup-file); `l1-4` adds [witness files](#witness-files).
-Readers accept all four.
+Readers parse all four; `index-l1-verify` and the importer refuse `l1-1`,
+whose columns are not canonical, until it is rebuilt.
 
 <a id="artifact-kind"></a><a id="index-kind"></a> **Index Kind** — The `kind`
 field of a published index, selecting the code that validates and installs

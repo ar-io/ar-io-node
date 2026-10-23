@@ -38,6 +38,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   failing the new `canonical` check otherwise. The block sample now draws
   pre-2.0 heights too, attested by `--anchor-min` machines
   (`blocksAttested`): what binds a pre-2.0 block's transaction order.
+- `index-l1-verify --bands-dir` and `index-l1-import` refuse an `l1-1`
+  band: its columns were its publisher's gateway's, not canonical. Both
+  known publishers are on `l1-3`.
 - `--sample-format1 0` over format-1 transactions with data from the 2.0
   fork now needs `--allow-unsampled`, in `index-l1-import` (whatever their
   witnesses) and `index-l1-verify` (new flag there): only the format-1 draw

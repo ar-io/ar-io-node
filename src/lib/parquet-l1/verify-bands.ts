@@ -206,6 +206,17 @@ export async function verifyBands(
   const ordered = coverage.ordered.map(
     ({ id }) => byId.get(id) as L1BandOnDisk,
   );
+  // An l1-1 band copied columns the chain does not fix (a pre-fork
+  // tx_root, a format-1 data_root, a content type from the last matching
+  // tag) as its publisher's gateway held them. Read as they are, they are
+  // bound by nothing; judged by the rule every later layout writes, an
+  // honest one fails. Neither is a verdict, so the set is refused.
+  const legacy = ordered.filter((b) => b.band.schema === 'l1-1');
+  if (legacy.length > 0) {
+    throw new BandsRefused(
+      `${legacy.map((b) => b.id).join(', ')}: layout l1-1: these columns were written by the publisher and are not canonical; rebuild the band (index-export rebuilds l1-1 bands once)`,
+    );
+  }
   const low = options.from ?? span[0];
   const high = options.to ?? span[1];
   if (high <= low) {

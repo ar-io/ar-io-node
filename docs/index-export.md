@@ -523,7 +523,7 @@ gateway already holds.
 These are layout `l1-2`'s rules (`schema` in `band.json`). Layout `l1-3`
 keeps them and adds three [lookup files](index-publication.md#lookup-files)
 to every band. Lookup files add 10 to 20% to a band. A reader accepts
-`l1-1`, `l1-2` and `l1-3`.
+`l1-1`, `l1-2` and `l1-3` (verify and import refuse `l1-1`: see below).
 
 Every band built has lookup files (and, from `l1-4`, its witnesses when
 they can be had): the service writes the tables, derives the lookup files
@@ -570,8 +570,10 @@ files](index-publication.md#witness-files): the v1 data root of every
 format-1 transaction with data, and, in a band holding heights below the
 2.0 fork, each block's transition `tx_root` and the 2.0 seed fold. With
 them `index-l1-verify` and the importer bind every block of the chain, so a
-gateway fills its whole history with no `--allow-*` flag. A reader accepts
-`l1-1` to `l1-4`.
+gateway fills its whole history with no `--allow-*` flag. A reader parses
+`l1-1` to `l1-4`; `index-l1-verify` and the importer refuse an `l1-1` band
+(its columns are its publisher's gateway's, not canonical), so it must be
+rebuilt, which this service does once.
 
 The service builds a band's witnesses from what it is given, and publishes
 nothing the chain does not confirm:
