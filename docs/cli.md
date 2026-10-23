@@ -334,11 +334,12 @@ Before a band's first row reaches SQLite, both modes check it:
    is read: they can neither refute nor attest.
 5. **What nothing binds is refused unless accepted.** Blocks below the 2.0
    fork (`--allow-unbound`); blocks whose transactions or owners' keys the
-   band lacks (`--allow-incomplete`); post-2.0 blocks holding a format-1
+   band lacks (`--allow-incomplete`); blocks holding a format-1
    transaction with data (`--allow-unverified-format1`). See
-   [what the checks bind](#what-binds-what). Today's `l1-3` bands carry no
-   witnesses for the first and last, so **every band below height
-   2,000,000 is refused without these flags**.
+   [what the checks bind](#what-binds-what). An `l1-4` band's witnesses
+   bind the first and last, so a whole chain of `l1-4` bands imports with
+   **no `--allow-*` flag**. An `l1-3` band carries none, so every `l1-3`
+   band below height 2,000,000 is still refused without these flags.
 
 Each band's result carries what bound it (`boundBy`, `binding`), every flag
 that accepted something (`accepted`), what is left `unbound` or `skipped`,
@@ -500,9 +501,9 @@ underneath.
 | `--anchor-from` | Comma-separated sources to anchor the bands' top at, where `core.db` holds no block above them (as `index-l1-verify`) |
 | `--anchor-min` | Distinct machines that must agree on that anchor (default and minimum 2) |
 | `--allow-unanchored` | Import bands nothing binds to the chain (no block above, no anchor) |
-| `--allow-unbound` | Import pre-2.0 blocks |
+| `--allow-unbound` | Import pre-2.0 blocks no witnessed fold binds (every one in an `l1-3` band) |
 | `--allow-incomplete` | Import blocks whose transactions or owners' keys the band lacks |
-| `--allow-unverified-format1` | Import post-2.0 blocks whose `tx_root` cannot be recomputed (a format-1 transaction with data) |
+| `--allow-unverified-format1` | Import blocks whose `tx_root` cannot be recomputed (a format-1 transaction with data and no witnessed v1 root: every one in an `l1-3` band) |
 | `--allow-unsampled` | Import with no sample (no `--anchor-from`), or with `--sample-txs 0`, or with `--sample-format1 0` over accepted `txRootFormat1` blocks |
 | `--sample-blocks`, `--sample-txs`, `--sample-format1`, `--seed`, `--concurrency` | The sample, as `index-l1-verify` |
 | `--read-timeout` | Milliseconds each read from a source may take (default 30000) |
@@ -648,7 +649,10 @@ gateway's own database hold the chain? `--bands-dir` is the **consumer's**:
 a directory of bands checked with no gateway and no database at all.
 Anyone deciding whether to install someone else's bands — another
 gateway, an analyst, an agent — can check them before importing a byte.
-Given both, the command checks `core.db`.
+Given both, the command checks `core.db`. Only bands carry
+[witnesses](#what-binds-what) (`l1-4`): `--core-db` holds none, so there
+every pre-2.0 block is `unbound.pre20` and every block holding a format-1
+transaction with data `unbound.txRootFormat1`, as under `l1-3`.
 
 ```bash
 # the consumer's view: no gateway involved
@@ -709,9 +713,9 @@ Arweave's rules passes every self-check. What ties it to the real chain:
   range, pre-2.0 included, each fetched (`/tx/{id}`) and checked against
   its signature over the segment rebuilt from the index's columns, the id
   as the signature's SHA-256; and `--sample-format1` format-1 transactions
-  per band (default 200) drawn from blocks whose `tx_root` cannot be
-  recomputed, which catches a format-2 transaction relabelled format 1 to
-  escape `tx_root`. A draw whose owner key the index lacks is fetched all
+  with data per band (default 200) drawn from the 2.0 fork, which catches a
+  format-2 transaction relabelled format 1: to escape `tx_root` (no
+  witness), or with its own data root as a witness, which `tx_root` passes. A draw whose owner key the index lacks is fetched all
   the same: a signature hashing to its id shows the id is real, and its
   fields, and the owner address the index holds (the SHA-256 of the owner
   each answer states, or of the key an ECDSA signature recovers), are then
@@ -786,26 +790,56 @@ redirects is not followed (it counts as unheard), so a redirect cannot make
 one machine answer for two. The result names each source and the address
 it was counted as.
 
-**What it cannot bind at all under the `l1-3` layout** is reported in
-`unbound`, by class, and fails the run unless accepted:
+**The witnesses** (`l1-4` bands; see
+[index-publication.md](index-publication.md#witness-files)) bind the two
+kinds of block the rest cannot:
 
-- `pre20` — blocks below the 2.0 fork (`--allow-unbound`, which accepts
-  this class only). A pre-2.0
-  block's identity hash is a deep hash over its header fields **and the
-  full wallet list** at that height (below the 1.6 fork, the full hash
-  list too); a header carries only a digest of the list, so the hash
-  cannot be recomputed from a header or an index. Arweave binds those
-  blocks through its own list of their "2.0 hashes"
-  (`genesis_data/hash_list_1_0`) and the 2.0 seed of `hash_list_merkle`;
-  both need each block's transition `tx_root`, a witness `l1-3` does not
-  carry.
-- `txRootFormat1` — post-2.0 blocks holding a format-1 transaction with
-  data (`--allow-unverified-format1`): that leaf is the root of data the
-  index does not store, so **every field of every transaction in such a
-  block** is bound only by the sample (the format-1 draw is what catches a
-  transaction relabelled into the class). In the published bands this is
-  208,812 of 1,604,083 post-2.0 blocks, the last at height 1,999,999.
-  Closing it needs the v1 data roots, a later layout.
+- **A block holding a format-1 transaction with data.** Its `tx_root` leaf
+  is the root of that transaction's data, which no header carries. The
+  band's `witness_v1_data_roots` gives it; `tx_root` is recomputed with
+  it: equal, and the block is bound like any other; unequal, and `tx_root`
+  fails (never `unbound`). A row for anything but a format-1 transaction
+  with data at its height, a repeated row, or a row out of order fails
+  `witnesses`.
+- **A block below the 2.0 fork.** Its identity hash cannot be recomputed:
+  from the 1.6 fork it is a deep hash over its header fields and the full
+  wallet list; below it, a SHA-384 over the header as JSON with the full
+  hash list and wallet list; no header carries either list. Arweave's 2.0
+  fork bound them instead through the 2.0 seed of `hash_list_merkle`: block
+  422,250's is `block_index_to_merkle_root` over every pre-2.0 block's
+  `[indep_hash, weave_size, transition tx_root]`, folded from height 0.
+  The band's `witness_fork_2_0` gives each block's transition `tx_root`
+  (recomputed from its transactions and their witnessed v1 roots, and
+  required equal) and the fold after it (recomputed from the fold below,
+  and required equal). The fold starts from empty at height 0, or from a
+  fold pinned in this build at heights 99,999, 199,999, 299,999, 399,999
+  and 422,249 (recomputed from Arweave's own 2.0 checkpoint by a test); a
+  run of pre-2.0 blocks is bound once its fold reaches a value the chain
+  fixes — a pin, or block 422,250's `hash_list_merkle` (bound itself as the
+  blocks above it are) — and a fold that reaches another fails
+  `hash_list_merkle`. That binds each such block's hash, weave size and
+  transactions' sizes and data roots, as for a post-2.0 block. Block
+  422,250's `hash_list_merkle` is checked against the fold through 422,249
+  whenever the range holds both, witnesses or not.
+
+**What nothing binds** is reported in `unbound`, by class, and fails the
+run unless accepted:
+
+- `pre20` — blocks below the 2.0 fork that no witnessed fold binds
+  (`--allow-unbound`, which accepts this class only): every one in a band
+  without witnesses (`l1-3` and older); in an `l1-4` band, a block with no
+  `witness_fork_2_0` row, the blocks whose fold runs through it to the
+  next pin, and the first block of a run whose fold below is pinned by
+  nothing (a band starting at a height other than 0 or one above a pin).
+- `txRootFormat1` — blocks holding a format-1 transaction with data whose
+  v1 data root no witness gives (`--allow-unverified-format1`): that leaf
+  is the root of data the index does not store, so **every field of every
+  transaction in such a block** is bound only by the sample (the format-1
+  draw is what catches a transaction relabelled into the class). Under
+  `l1-3` this is every such post-2.0 block: 208,812 of 1,604,083 in the
+  published bands, the last at height 1,999,999. Under `l1-4`, only a
+  transaction whose data no node serves; a pre-2.0 block whose fold binds
+  its header but not its transactions is counted here.
 - `incomplete` — blocks the index holds only part of: a link whose
   transaction it lacks (so `tx_root` and the weave accounting cannot be
   checked), or a transaction whose owner's key it lacks (so its signature
@@ -829,11 +863,12 @@ on its own, and says so.
 | `files` | Bands: every entry is a readable band holding exactly its layout's files |
 | `schema` | Bands: every Parquet file has exactly its layout's columns, in order, with its types |
 | `tables` | Bands: each table's rows are in the table's order, inside the band's heights, and digest to what `band.json` says |
-| `lookups` | Bands of `l1-3`: each lookup file is in key order and holds exactly the rows its tables give and its `band.json` describes |
+| `lookups` | Bands of `l1-3` and `l1-4`: each lookup file is in key order and holds exactly the rows its tables give and its `band.json` describes |
 | `contiguous`, `linked` | Every height once; each `previous_block` is the hash below |
-| `hash_list_merkle` | The recurrence in each era's form, the 1.6 seed folded from height 0 when the range starts there |
+| `hash_list_merkle` | The recurrence in each era's form, the 1.6 seed folded from height 0 when the range starts there; the 2.0 seed against the fold through 422,249; a witnessed fold against each pinned fold it reaches |
 | `block_size`, `weave_accounting` | Each block grew the weave by its `block_size`, and (below the padding threshold) by its transactions' `data_size` |
-| `tx_root` | Recomputed from each post-2.0 block's transactions, with the 2.5 padding |
+| `tx_root` | Recomputed from each post-2.0 block's transactions, with the 2.5 padding and the witnessed v1 data roots; below the 2.0 fork, the transition `tx_root` from each block's transactions against its witness |
+| `witnesses` | Bands of `l1-4`: each witness file in its order, digesting to what `band.json` says, every row inside the band, well formed, and for a format-1 transaction with data at its height; each witnessed fold the fold of the block below and the block |
 | `nulls` | Every key and commitment column is set: a NULL is a failure, never read as zero. Also format 1 or 2, and no format 2 below the 2.0 fork |
 | `position`, `tx_count` | Each transaction sits at the link of its height and index, links run 0 to n-1, and `tx_count` is their number |
 | `tag_count`, `owners`, `wallets` | Tags match `tag_count` and run 0 to n-1, every tag belongs to a transaction at its height (bands); every transaction has an owner, and one whose key the index lacks puts its block in `unbound.incomplete`; every wallet key hashes to its address (RSA and ECDSA alike) |
@@ -885,10 +920,10 @@ its heartbeat is a day old.
 | `--anchor-from` | Comma-separated Arweave nodes or gateways (`/block/height/N`, `/block/hash/H`, `/tx/{id}`) to anchor and sample from |
 | `--anchor-min` | Distinct machines that must serve the anchor block, all with the same recomputed hash (default and minimum 2) |
 | `--allow-unanchored` | Pass without an anchor, or with one that did not bind |
-| `--allow-unbound` | Pass with pre-2.0 blocks |
+| `--allow-unbound` | Pass with pre-2.0 blocks no witnessed fold binds |
 | `--allow-incomplete` | Pass with blocks whose transactions or owners' keys the index lacks |
-| `--sample-format1` | Format-1 transactions per band drawn from blocks whose `tx_root` cannot be recomputed (default 200; 0 to skip) |
-| `--allow-unverified-format1` | Pass with post-2.0 blocks whose `tx_root` needs a format-1 data root |
+| `--sample-format1` | Format-1 transactions with data per band drawn from the 2.0 fork (default 200; 0 to skip): what catches a format-2 transaction relabelled format 1, witnessed or not |
+| `--allow-unverified-format1` | Pass with blocks whose `tx_root` needs a format-1 data root no witness gives |
 | `--sample-blocks` | Blocks whose headers are sampled (default 1000; 0 to skip). Needs `--anchor-from` |
 | `--sample-txs` | Transactions per band whose signatures are sampled (default 1000; 0 to skip). Needs `--anchor-from` |
 | `--seed` | Seeds the samples (the result reports the seed drawn when none is given) |
@@ -948,6 +983,7 @@ One shape in both views:
   "accountingChecked": 0,
   "accountingSkipped": 99999,
   "txRootChecked": 99899,
+  "foldBound": 0,
   "checks": [{ "name": "contiguous", "ok": true, "detail": "…" }, "…"],
   "seconds": 1234.5
 }
@@ -966,6 +1002,9 @@ One shape in both views:
   that differ from the chain's header; `problems` say why it did not bind.
 - `unbound` holds a class only when it has blocks: `blocks`, the first 20
   `heights`, and the `reason`.
+- `foldBound` is the number of pre-2.0 blocks a witnessed 2.0 seed fold
+  binds (`l1-4` bands; always 0 with `--core-db`, which holds no
+  witnesses).
 - `weaveSize` is the weave size at the top of the range and `weaveGrowth`
   its growth over the range (from the block below the range when the index
   holds it). `accountedFor` is the transactions' sizes over the blocks

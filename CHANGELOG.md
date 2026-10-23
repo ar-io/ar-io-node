@@ -8,7 +8,43 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **`parquet-l1` layout `l1-4`: witness files that bind every block of
+  the chain**, so a full mainnet band set verifies and imports with no
+  `--allow-*` flag. A band adds `witness_v1_data_roots.parquet` (the v1
+  data root of each format-1 transaction with data) and, below the 2.0
+  fork, `witness_fork_2_0.parquet` (each block's transition `tx_root` and
+  the 2.0 seed fold after it), described in `band.json` and added in place
+  without changing the band's id. `index-l1-verify --bands-dir` and
+  `index-l1-import` recompute `tx_root` with the witnessed roots (a wrong
+  one fails `tx_root`, never falls back to unbound), recompute each pre-2.0
+  block's transition `tx_root` from its transactions, and carry the 2.0
+  seed fold block to block until it reaches block 422,250's
+  `hash_list_merkle` or a fold pinned in this build (heights 99,999,
+  199,999, 299,999, 399,999, 422,249; the first four recomputed by a test
+  from Arweave's own 2.0 checkpoint, the last equal to block 422,250's
+  `hash_list_merkle`). A block whose witness is missing stays in its
+  `unbound` class. A new `witnesses` check covers the files; the result
+  gains `foldBound`. Block 422,250's `hash_list_merkle` is now checked
+  against the fold through 422,249 whenever a range holds both. Readers
+  accept `l1-1` to `l1-4`; `--core-db` holds no witnesses and is unchanged.
+  See [docs/index-publication.md](docs/index-publication.md#witness-files)
+  and [docs/cli.md](docs/cli.md#what-binds-what).
+- **`index-export` builds `l1-4` witnesses** for new bands and adds them
+  to published `l1-3` bands in place, from v1 roots in a witness directory
+  and Arweave nodes (`INDEX_EXPORT_L1_WITNESS_DIR`,
+  `INDEX_EXPORT_L1_WITNESS_NODES`, `INDEX_EXPORT_L1_WITNESS_MAX_MISSING`),
+  keeping only what the chain confirms and judging the band with them, as
+  its consumers do, before anything is published. Reported as
+  `l1Witnessed` and `index_export_runs_total{kind="witness"}`. See
+  [docs/index-export.md](docs/index-export.md#layout-l1-4-and-witness-files).
+
 ### Changed
+
+- `L1_BAND_IMPORT_ALLOW_UNVERIFIED` is needed only for bands without
+  witnesses (`l1-3` and older); `l1-4` bands fill under the strict default.
+- Wording: a pre-2.0 block hash is described per era (from the 1.6 fork a
+  deep hash over the header fields and the full wallet list; below it a
+  SHA-384 over the header as JSON with the full hash list and wallet list).
 
 ### Fixed
 

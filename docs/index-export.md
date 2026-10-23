@@ -525,8 +525,9 @@ keeps them and adds three [lookup files](index-publication.md#lookup-files)
 to every band. Lookup files add 10 to 20% to a band. A reader accepts
 `l1-1`, `l1-2` and `l1-3`.
 
-Every band built is `l1-3`: the service writes the tables, derives the
-lookup files from them, and writes `band.json` last. A published band whose
+Every band built has lookup files (and, from `l1-4`, its witnesses when
+they can be had): the service writes the tables, derives the lookup files
+from them, and writes `band.json` last. A published band whose
 tables are current but which has no lookup files (`l1-2`, or `l1-1`
 confirmed identical under `l1-2`) is not rebuilt. Each run derives its
 lookup files from its own tables, adds them in place, and keeps its id,
@@ -560,7 +561,61 @@ keeps its copy. As a publisher it cannot describe the band, so the band
 goes unpublished. Upgrade subscribers first, then a publisher's
 `index-swarm` with or before its `index-export`. A gateway filling its
 history from L1 bands (`L1_BAND_IMPORT_ENABLED`) reads them with the core
-image, so upgrade it with the subscriber.
+image, so upgrade it with the subscriber. The same holds for `l1-4`.
+
+### Layout `l1-4` and witness files
+
+Layout `l1-4` keeps `l1-3` and adds [witness
+files](index-publication.md#witness-files): the v1 data root of every
+format-1 transaction with data, and, in a band holding heights below the
+2.0 fork, each block's transition `tx_root` and the 2.0 seed fold. With
+them `index-l1-verify` and the importer bind every block of the chain, so a
+gateway fills its whole history with no `--allow-*` flag. A reader accepts
+`l1-1` to `l1-4`.
+
+The service builds a band's witnesses from what it is given, and publishes
+nothing the chain does not confirm:
+
+- **v1 data roots** from `roots-*.jsonl` files in
+  `INDEX_EXPORT_L1_WITNESS_DIR` (lines `{"h": <height>, "id": "<base64url>",
+  "root": "<base64url>"}`; other keys ignored; a file named
+  `roots-<band id>.jsonl` is read only for bands overlapping its heights),
+  then, for a transaction none has, its last chunk from the nodes in
+  `INDEX_EXPORT_L1_WITNESS_NODES` (`GET /chunk/{offset}`, the offset its
+  data ends at in the weave; the root its `data_path` proves, the path
+  checked to end at the transaction's size). Where a block's roots do not
+  reproduce its `tx_root`, its transactions are fetched whole
+  (`GET /tx/{id}`, up to 16 MiB each) and their roots computed from the
+  data: the genesis block's transactions, whose data the weave never held,
+  have no chunk at all. A root is kept only when its block's `tx_root`
+  recomputes with it (below the 2.0 fork, when the fold reaches the
+  pinned value); a block whose roots do not is left without them.
+- **Transition `tx_root`s** below the 2.0 fork are recomputed from each
+  block's transactions and their v1 roots. Where a root is missing they
+  come from Arweave's 2.0 checkpoint (`fork_2_0_checkpoint` in the witness
+  directory: `git -C repos/arweave show
+  d43ba2b9^:apps/arweave/priv/fork_2_0_checkpoint`, refused unless its
+  SHA-256 is Arweave's) for heights to 399,999, and from the nodes'
+  `GET /block_index/{from}/{to}` (`X-Block-Format: 3`) above. Given both,
+  they must agree, and the entry's hash and weave size must be the band's.
+- The **fold** runs from empty at height 0 or from the pinned fold below
+  the band, and must equal every pinned fold it reaches and, in a band
+  holding it, block 422,250's `hash_list_merkle`.
+
+Then the band with its witnesses is judged whole by the code every
+consumer runs (`index-l1-verify --bands-dir`), and must pass with no block
+left unbound beyond the roots `INDEX_EXPORT_L1_WITNESS_MAX_MISSING` allows
+(default 0). Only then are the files moved in and `band.json` replaced,
+under the band's id, by a rename. A published `l1-3` band gains its
+witnesses this way each run, with no `core.db`, before the builds and after
+them, reported under `l1Witnessed` and counted as
+`index_export_runs_total{kind="witness"}`: `published` when added,
+`skipped` (`witnesses_unavailable`) when the inputs lack what the band
+needs, and `couldnt_check` when an input contradicts the chain. A new band
+is built with its witnesses when they can be had, and as `l1-3`
+otherwise, saying why in its outcome's `details`; the witness step adds
+them later. A band above the 2.9.6 fork needs no input: its
+`witness_v1_data_roots` is empty.
 
 ### Time budget
 

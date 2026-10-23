@@ -299,10 +299,11 @@ their tags, owners' keys, and where each sits in its root transaction. The
 selection is in its `band.json` and its id, and the same for every band of
 an index. See [index-publication.md](index-publication.md#l2-bands).
 
-<a id="layout"></a> **Layout** (`l1-1`, `l1-2`, `l1-3`) — The `schema` value in
+<a id="layout"></a> **Layout** (`l1-1`, `l1-2`, `l1-3`, `l1-4`) — The `schema` value in
 an [L1 band](#parquet-l1)'s `band.json`, naming its file set and rules.
 `l1-2` writes [canonical columns](#canonical-band-columns); `l1-3` adds
-[lookup files](#lookup-file). Readers accept all three.
+[lookup files](#lookup-file); `l1-4` adds [witness files](#witness-files).
+Readers accept all four.
 
 <a id="artifact-kind"></a><a id="index-kind"></a> **Index Kind** — The `kind`
 field of a published index, selecting the code that validates and installs
@@ -442,7 +443,7 @@ deletes them after `INDEX_SWARM_SUPERSEDE_GRACE_SECONDS`; subscribers keep the
 old band until its successor installs, then retire it on the same grace, so a
 lookup in flight never loses its band.
 
-<a id="lookup-file"></a> **Lookup File** — A Parquet file in an `l1-3`
+<a id="lookup-file"></a> **Lookup File** — A Parquet file in an `l1-3` or `l1-4`
 [L1 band](#parquet-l1), derived from the band's tables and sorted by an
 unsigned 64-bit key in row groups of 16,384 rows. A reader finds one key by
 reading the footer and one or two row groups. The three are `lookup_tx_id`,
@@ -509,10 +510,11 @@ independent nodes.
 <a id="l1-unbound"></a> **Unbound (L1 verification)** — Blocks an L1
 verification could not bind, reported by class with the first heights and
 a reason, never passed silently: `pre20` (below the 2.0 fork, whose hash
-needs the full wallet list), `txRootFormat1` (a post-2.0 block holding a
-format-1 transaction with data, whose `tx_root` needs that data's root),
-`incomplete` (a link whose transaction, or a transaction whose owner's key,
-the index lacks). Each fails the run unless accepted (`--allow-unbound`,
+needs the full wallet list, and no [witnessed 2.0 seed
+fold](#fork-2-0-seed-fold) binds it), `txRootFormat1` (a block holding a
+format-1 transaction with data, whose `tx_root` needs that data's root, and
+no [witness](#witness-files) gives it), `incomplete` (a link whose
+transaction, or a transaction whose owner's key, the index lacks). Each fails the run unless accepted (`--allow-unbound`,
 `--allow-unverified-format1`, `--allow-incomplete`, one flag per class).
 
 <a id="l1-attested"></a> **Attested (L1 sample)** — A sampled transaction
@@ -531,13 +533,35 @@ sorted. Arweave ships all 422,250 of them in `genesis_data/hash_list_1_0`
 (SHA-256 `d161502a13e64fa49bcb2425420bcdcd6a4407e488aca3e14ba254f16418ca6f`,
 pinned by `test/arweave-consensus-pin.ts`). Checking an index against it
 needs a [witness](#witness) per block with transactions; the verifier does
-not check it yet.
+not check it: it binds pre-2.0 blocks through the [2.0 seed
+fold](#fork-2-0-seed-fold) instead.
 
 <a id="witness"></a> **Witness (untrusted input)** — A value a verifier
 needs but the index does not hold, supplied by anyone: a pre-2.0 block's
 transition `tx_root`, a format-1 transaction's data root. It needs no
 trust, because a wrong one changes a hash it must reproduce (SHA-384
 preimage and collision resistance).
+
+<a id="witness-files"></a> **Witness files** (`l1-4`) — The witnesses an
+`l1-4` [L1 band](#parquet-l1) carries beside its tables:
+`witness_v1_data_roots.parquet` (`height, id, data_root`: the v1 data root
+of each format-1 transaction with data) and, for a band holding heights
+below the 2.0 fork, `witness_fork_2_0.parquet` (`height, tx_root, fold`:
+each pre-2.0 block's transition `tx_root` and the [2.0 seed
+fold](#fork-2-0-seed-fold) after it). Described in `band.json` like the
+lookups and, like them, not part of the band's id, so a band gains them in
+place. Every row is checked; none is trusted. See
+[index-publication.md](index-publication.md#witness-files).
+
+<a id="fork-2-0-seed-fold"></a> **2.0 seed fold** — Block 422,250's
+`hash_list_merkle`: `block_index_to_merkle_root` over every pre-2.0 block's
+`[indep_hash, weave_size, transition tx_root]`, SHA-384-folded from empty at
+height 0. The running value after each height is what an `l1-4` band's
+`witness_fork_2_0` records, and what binds a pre-2.0 block to the chain once
+it reaches a value the chain fixes: block 422,250's `hash_list_merkle`, or a
+**pinned fold** (`FORK_2_0_FOLD_PINS` in `chain.ts`: heights 99,999,
+199,999, 299,999, 399,999 and 422,249, recomputed by a test from Arweave's
+own 2.0 checkpoint, `d43ba2b9^:apps/arweave/priv/fork_2_0_checkpoint`).
 
 <a id="fold"></a> **Fold** — Building a band from an earlier band's entries
 plus newer rows from the index, so entries the index has since dropped (such
