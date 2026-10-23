@@ -10,6 +10,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- better-sqlite3 is now 12.11.1, up from 9.6.0, which moves the
+  gateway's bundled SQLite from 3.45.3 to 3.53.2. 9.x does not compile
+  on Node.js 24, so this unblocks the move off Node.js 22 before its end
+  of life (2027-04-30). The database file format is unchanged: a gateway
+  can roll back to an earlier release without touching `data/sqlite`.
+
 ### Fixed
 
 - **`parquet-l2` layout `l2-2`: the stats derive no longer runs a large
