@@ -16,7 +16,7 @@
     ],
     "options": {
       "sample": {
-        "blocks": 0,
+        "blocks": 2,
         "txs": 0,
         "format1": 5
       }
@@ -67,7 +67,7 @@
     ],
     "options": {
       "sample": {
-        "blocks": 0,
+        "blocks": 2,
         "txs": 0,
         "format1": 0
       }
@@ -181,7 +181,8 @@
     "tampered": "transactions.format, a witness_v1_data_roots row (the transaction's tx_root leaf), data_root cleared, republished",
     "kind": "l1-bands",
     "options": {
-      "allowUnanchored": true
+      "allowUnanchored": true,
+      "allowUnsampled": true
     },
     "ops": [
       {
@@ -215,7 +216,8 @@
     "tampered": "transactions.format, a witness row, then data_root set to another value, republished",
     "kind": "l1-bands",
     "options": {
-      "allowUnanchored": true
+      "allowUnanchored": true,
+      "allowUnsampled": true
     },
     "ops": [
       {
@@ -253,11 +255,12 @@
   },
   {
     "id": "l1-bands-witness-format1-missing",
-    "description": "l1-4: a format-1 transaction with data and no witness row: the block stays unbound (txRootFormat1), never passed",
+    "description": "l1-4: a format-1 transaction with data and no witness row: an l1-4 band holds every root, so it fails witnesses; the block is never passed, and no --allow flag would accept it",
     "tampered": "transactions.format, data_root cleared, republished, no witness row",
     "kind": "l1-bands",
     "options": {
-      "allowUnanchored": true
+      "allowUnanchored": true,
+      "allowUnsampled": true
     },
     "ops": [
       {
@@ -279,10 +282,11 @@
       }
     ],
     "expect": {
-      "verdict": "unknown",
-      "check": "unbound",
+      "verdict": "refuted",
+      "check": "witnesses",
       "failing": [
-        "unbound"
+        "unbound",
+        "witnesses"
       ],
       "unbound": [
         "txRootFormat1"
@@ -295,7 +299,8 @@
     "tampered": "transactions.format, a witness_v1_data_roots row with another root, republished",
     "kind": "l1-bands",
     "options": {
-      "allowUnanchored": true
+      "allowUnanchored": true,
+      "allowUnsampled": true
     },
     "ops": [
       {
@@ -331,7 +336,8 @@
     "tampered": "a witness_v1_data_roots row for a format-2 transaction, republished",
     "kind": "l1-bands",
     "options": {
-      "allowUnanchored": true
+      "allowUnanchored": true,
+      "allowUnsampled": true
     },
     "ops": [
       {
@@ -361,7 +367,8 @@
     "tampered": "witness_v1_data_roots rows duplicated after republishing",
     "kind": "l1-bands",
     "options": {
-      "allowUnanchored": true
+      "allowUnanchored": true,
+      "allowUnsampled": true
     },
     "ops": [
       {
@@ -454,7 +461,8 @@
       "check": "hash_list_1_0",
       "failing": [
         "hash_list_1_0",
-        "unbound"
+        "unbound",
+        "witnesses"
       ]
     }
   },
@@ -485,7 +493,8 @@
       "check": "hash_list_1_0",
       "failing": [
         "hash_list_1_0",
-        "unbound"
+        "unbound",
+        "witnesses"
       ]
     }
   },
@@ -516,7 +525,8 @@
       "check": "hash_list_1_0",
       "failing": [
         "hash_list_1_0",
-        "unbound"
+        "unbound",
+        "witnesses"
       ]
     }
   },
@@ -547,7 +557,8 @@
       "check": "hash_list_1_0",
       "failing": [
         "hash_list_1_0",
-        "unbound"
+        "unbound",
+        "witnesses"
       ]
     }
   },
@@ -578,7 +589,8 @@
       "check": "hash_list_1_0",
       "failing": [
         "hash_list_1_0",
-        "unbound"
+        "unbound",
+        "witnesses"
       ]
     }
   },
@@ -609,7 +621,8 @@
       "check": "hash_list_1_0",
       "failing": [
         "hash_list_1_0",
-        "unbound"
+        "unbound",
+        "witnesses"
       ]
     }
   },
@@ -640,7 +653,8 @@
       "check": "hash_list_1_0",
       "failing": [
         "hash_list_1_0",
-        "unbound"
+        "unbound",
+        "witnesses"
       ]
     }
   },
@@ -671,7 +685,8 @@
       "check": "hash_list_1_0",
       "failing": [
         "hash_list_1_0",
-        "unbound"
+        "unbound",
+        "witnesses"
       ]
     }
   },
@@ -702,7 +717,8 @@
       "check": "hash_list_1_0",
       "failing": [
         "hash_list_1_0",
-        "unbound"
+        "unbound",
+        "witnesses"
       ]
     }
   },
@@ -723,7 +739,7 @@
   },
   {
     "id": "l1-pre20-missing-row",
-    "description": "a pre-2.0 height without a witness row: it and the blocks whose fold runs through it are unbound (pre20), never passed",
+    "description": "a pre-2.0 height without a witness row: an l1-4 band holds one for every height, so it fails witnesses; the blocks whose fold runs through it stay unbound, and no --allow flag accepts them",
     "tampered": "witness_fork_2_0 row at 422235 removed, described",
     "kind": "l1-bands",
     "chain": "pre20",
@@ -744,10 +760,11 @@
       }
     ],
     "expect": {
-      "verdict": "unknown",
-      "check": "unbound",
+      "verdict": "refuted",
+      "check": "witnesses",
       "failing": [
-        "unbound"
+        "unbound",
+        "witnesses"
       ],
       "unbound": [
         "pre20"
@@ -844,7 +861,8 @@
         "hash_list_1_0",
         "hash_list_merkle",
         "tx_root",
-        "unbound"
+        "unbound",
+        "witnesses"
       ]
     }
   },

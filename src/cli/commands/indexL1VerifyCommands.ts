@@ -338,7 +338,10 @@ export function anchorPool(
   });
 }
 
-/** The sample a run draws: none without sources, or with every count 0. */
+/**
+ * The sample a run draws: none without sources. Every count 0 is still a
+ * sample, of nothing, so the run's gates on an undrawn sample apply.
+ */
 export function sampleOptions(
   options: {
     sampleBlocks?: string;
@@ -355,9 +358,7 @@ export function sampleOptions(
   const txs = whole(options.sampleTxs, '--sample-txs') ?? DEFAULT_SAMPLE_TXS;
   const format1 =
     whole(options.sampleFormat1, '--sample-format1') ?? DEFAULT_SAMPLE_FORMAT1;
-  if (pool === undefined || (blocks === 0 && txs === 0 && format1 === 0)) {
-    return undefined;
-  }
+  if (pool === undefined) return undefined;
   return {
     seed: whole(options.seed, '--seed') ?? crypto.randomInt(2 ** 31),
     blocks,

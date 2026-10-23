@@ -74,8 +74,6 @@ export interface L1WitnessConfig {
   dir?: string;
   /** `INDEX_EXPORT_L1_WITNESS_NODES`: Arweave nodes for `/chunk` and `/block_index`. */
   nodes: string[];
-  /** `INDEX_EXPORT_L1_WITNESS_MAX_MISSING`: v1 roots a band may lack and still get witnesses. */
-  maxMissing: number;
 }
 
 const sha256 = (bytes: Buffer) =>

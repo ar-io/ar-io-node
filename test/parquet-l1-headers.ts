@@ -197,7 +197,8 @@ export function chainNode(
               previous_block: b(row.previous_block),
               timestamp: Number(row.block_timestamp),
               last_retarget: Number(row.last_retarget),
-              diff: String(row.diff),
+              // A node states the number; a gateway may store it as N.0.
+              diff: String(BigInt(String(row.diff).replace(/\.0+$/, ''))),
               height: row.height,
               hash: b(row.hash),
               indep_hash: b64(row.indep_hash),
@@ -211,7 +212,11 @@ export function chainNode(
               weave_size: String(row.weave_size),
               block_size: String(row.block_size),
               ...(row.cumulative_diff !== null
-                ? { cumulative_diff: String(row.cumulative_diff) }
+                ? {
+                    cumulative_diff: String(
+                      BigInt(String(row.cumulative_diff).replace(/\.0+$/, '')),
+                    ),
+                  }
                 : {}),
               hash_list_merkle: b(row.hash_list_merkle),
             },

@@ -66,7 +66,7 @@ const answered = <T>(p: Promise<unknown>) =>
 
 const sample = (extra: Partial<SampleOptions> = {}): SampleOptions => ({
   seed: 7,
-  blocks: 0,
+  blocks: 3,
   txsPerStratum: 1000,
   format1PerStratum: 0,
   v1BytesPerStratum: 1e9,

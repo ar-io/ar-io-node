@@ -193,13 +193,32 @@ describe('index-l1-verify --bands-dir fails closed', () => {
       // and the block's offsets dropped, which the relabel would move.
       `SELECT * REPLACE (CASE WHEN height = ${h} AND block_transaction_index = 0 THEN 1::UTINYINT ELSE format END AS format, CASE WHEN height = ${h} AND block_transaction_index = 0 THEN NULL ELSE data_root END AS data_root, CASE WHEN height = ${h} THEN NULL ELSE "offset" END AS "offset") FROM SRC`,
     );
-    await republish(duck, band(0));
+    let dir = await republish(duck, band(0));
+    // In an l1-4 band the missing witness fails, whatever is accepted.
+    const witnessed = await verify({
+      allow: { unanchored: true, unverifiedFormat1: true, unsampled: true },
+    });
+    assert.equal(witnessed.ok, false);
+    assert.ok(failed(witnessed).includes('witnesses'));
+    // As l1-3, without witnesses: unbound, and accepted by its flag.
+    const { parseBandFile, serializeBandFile, PARQUET_L1_WITNESSES } =
+      await import('./layout.js');
+    const file = path.join(dir, BAND_FILE);
+    const { witnesses: _w, ...rest } = parseBandFile(
+      await fsp.readFile(file, 'utf8'),
+    );
+    void _w;
+    for (const spec of PARQUET_L1_WITNESSES) {
+      await fsp.rm(path.join(dir, spec.file), { force: true });
+    }
+    await fsp.writeFile(file, serializeBandFile({ ...rest, schema: 'l1-3' }));
+    dir = await republish(duck, dir);
     const out = await verify();
     assert.equal(out.ok, false);
     assert.deepEqual(out.unbound.txRootFormat1?.heights, [h]);
     assert.ok(failed(out).includes('unbound'));
     const accepted = await verify({
-      allow: { unanchored: true, unverifiedFormat1: true },
+      allow: { unanchored: true, unverifiedFormat1: true, unsampled: true },
     });
     assert.equal(accepted.ok, true, JSON.stringify(failed(accepted)));
     assert.ok(accepted.accepted.includes('--allow-unverified-format1'));

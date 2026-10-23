@@ -187,7 +187,8 @@
     "tampered": "band made l1-3 (no witnesses), transactions.format, republished; that block's offsets dropped (NULL), as a forger would, so they do not give it away",
     "kind": "l1-bands",
     "options": {
-      "allowUnanchored": true
+      "allowUnanchored": true,
+      "allowUnsampled": true
     },
     "ops": [
       {
@@ -230,7 +231,8 @@
     "kind": "l1-bands",
     "options": {
       "allowUnanchored": true,
-      "allowUnverifiedFormat1": true
+      "allowUnverifiedFormat1": true,
+      "allowUnsampled": true
     },
     "ops": [
       {

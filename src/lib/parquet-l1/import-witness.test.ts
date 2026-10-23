@@ -35,7 +35,7 @@ import {
   scriptedLookup,
 } from '../../../test/parquet-l1-headers.js';
 import { ArweaveNodePool } from '../onchain/arweave-nodes.js';
-import { LEDGER_MIGRATION, runFill } from './import.js';
+import { LEDGER_MIGRATION, runFill, runImport } from './import.js';
 import { BAND_FILE, parseBandFile, serializeBandFile } from './layout.js';
 
 const log = createTestLogger({ suite: 'l1-import-witness' });
@@ -111,7 +111,7 @@ describe('the import with l1-4 witnesses', () => {
     });
   const sample = {
     seed: 7,
-    blocks: 0,
+    blocks: 3,
     txsPerStratum: 50,
     format1PerStratum: 0,
     v1BytesPerStratum: 1e9,
@@ -159,6 +159,62 @@ describe('the import with l1-4 witnesses', () => {
       accepted.outcomes[0].reason,
     );
     assert.ok(accepted.outcomes[0].check?.accepted.includes('--allow-unbound'));
+  });
+
+  it("writes an l1-4 band's witnessed roots over contradicting ones core.db kept", async () => {
+    // core.db already holds the range, with a format-1 data_root and a
+    // pre-2.0 tx_root of its own that are not the chain's (the test
+    // chain's stand-ins). Importing the band over it must not keep them.
+    const own = path.join(dir, 'own.db');
+    await fsp.copyFile(source, own);
+    {
+      const db = new Sqlite(own);
+      db.exec(fs.readFileSync(`migrations/${LEDGER_MIGRATION}`, 'utf8'));
+      db.prepare('INSERT INTO migrations (name) VALUES (?)').run(
+        LEDGER_MIGRATION,
+      );
+      db.close();
+    }
+    const [band] = await exportBands(source, bandsDir, [[V1, V1 + 9]]);
+    const foldPins = await witnessTestBand(duck, source, band.dir);
+    const db = new Sqlite(own, { timeout: 1000 });
+    try {
+      const out = await runImport({
+        db,
+        duck,
+        bandsDir,
+        log,
+        from: V1,
+        to: V1 + 9,
+        verification: { pool: pool(), sample, allow: {}, foldPins },
+      });
+      assert.equal(out.outcomes[0].result, 'imported', out.outcomes[0].reason);
+      const roots = (await duck.all(
+        `SELECT hex(id) AS id, hex(data_root) AS root FROM read_parquet('${band.dir}/witness_v1_data_roots.parquet')`,
+      )) as Array<{ id: string; root: string }>;
+      assert.ok(roots.length > 0);
+      for (const r of roots) {
+        const stored = db
+          .prepare(
+            'SELECT hex(data_root) FROM stable_transactions WHERE id = unhex(?)',
+          )
+          .pluck()
+          .get(r.id);
+        assert.equal(stored, r.root, `data_root of ${r.id}`);
+      }
+      const txRoots = (await duck.all(
+        `SELECT height, hex(tx_root) AS root FROM read_parquet('${band.dir}/witness_fork_2_0.parquet')`,
+      )) as Array<{ height: bigint; root: string }>;
+      for (const r of txRoots) {
+        const stored = db
+          .prepare('SELECT hex(tx_root) FROM stable_blocks WHERE height = ?')
+          .pluck()
+          .get(Number(r.height));
+        assert.equal(stored, r.root, `tx_root at ${r.height}`);
+      }
+    } finally {
+      db.close();
+    }
   });
 
   it('refuses a witnessed band whose transactions do not give its witnessed roots', async () => {

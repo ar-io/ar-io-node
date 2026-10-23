@@ -638,10 +638,12 @@ A row for anything else (a transaction that is not format 1 with data at
 its height, a height outside the band or at or above the fork), a repeated
 row, a row out of order or malformed, a file that does not digest to
 `band.json`, or a format-1 transaction whose `data_root` column is not
-NULL, fails the band. A missing row is allowed, and honest: the
-block (and, below the fork, the run of blocks whose fold passes through it)
-stays `unbound`. A band whose witnesses its publisher could not confirm is
-published as `l1-3` instead.
+NULL, fails the band. So does a missing row: an `l1-4` band holds one
+`witness_fork_2_0` row for every height below the fork and a v1 root for
+every format-1 transaction with data, and any of its blocks left unbound
+fails `witnesses`, whatever `--allow-*` flag is given (those accept bands
+without witnesses only). A band whose witnesses its publisher could not
+have or confirm in full is published as `l1-3` instead.
 
 Like lookups, witnesses are not part of a band's id: a publisher adds them
 to a published band in place, and only `band.json` and the new files

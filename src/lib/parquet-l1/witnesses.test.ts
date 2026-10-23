@@ -111,7 +111,7 @@ describe('buildBandWitnesses', () => {
     );
   });
 
-  it('takes a transition root from a block index where a root is missing, and counts the root missing', async () => {
+  it('refuses a band missing a root, even with a block index to complete its fold', async () => {
     const some = new Map(roots);
     const [id] = [...some.keys()];
     some.delete(id);
@@ -152,12 +152,15 @@ describe('buildBandWitnesses', () => {
       });
     }
     db.close();
+    // With a block index the fold completes, but the root is still
+    // missing: an l1-4 band holds every one, so the band gets none.
     await assert.rejects(
       build(some, {}, async () => entries),
-      /missing/,
+      (e: unknown) =>
+        e instanceof WitnessRefused &&
+        e.kind === 'unavailable' &&
+        /missing/.test(e.message),
     );
-    const built = await build(some, { maxMissing: 3 }, async () => entries);
-    assert.ok(built.missing >= 1 && built.missing <= 3);
     // A block index that names another block contradicts the band.
     const other = new Map(entries);
     other.set(V1 + 2, { ...entries.get(V1 + 2), hash: crypto.randomBytes(48) });

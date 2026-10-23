@@ -42,7 +42,7 @@ const V1 = 100_000;
 
 const sample = (extra: Partial<SampleOptions> = {}): SampleOptions => ({
   seed: 5,
-  blocks: 0,
+  blocks: 3,
   txsPerStratum: 1000,
   format1PerStratum: 0,
   v1BytesPerStratum: 1e9,

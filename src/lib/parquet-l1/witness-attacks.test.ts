@@ -42,7 +42,7 @@ import {
   scriptedLookup,
 } from '../../../test/parquet-l1-headers.js';
 import { ArweaveNodePool } from '../onchain/arweave-nodes.js';
-import { LEDGER_MIGRATION, runFill } from './import.js';
+import { LEDGER_MIGRATION, runFill, runImport } from './import.js';
 import { verifyBands } from './verify-bands.js';
 
 const log = createTestLogger({ suite: 'l1-witness-attacks' });
@@ -244,6 +244,200 @@ describe('attacks on l1-4 witnesses', () => {
       /block_transactions/,
     );
     assert.equal(sampled.sample?.blocksAttested, 10);
+  });
+
+  it('refuses an l1-4 band stripped of a witness row, whatever --allow flag is given', async () => {
+    await buildCoreDb(source, V1, 21, { verifiable: true });
+    holdBlocks(source, core, V1 + 10);
+    const [band] = await exportBands(source, bandsDir, [[V1, V1 + 9]]);
+    const foldPins = await witnessTestBand(duck, source, band.dir);
+    // A forged reward_addr, and its block's fork_2_0 row removed so its
+    // 2.0 hash is never compared, then described anew.
+    await rewriteTable(
+      duck,
+      band.dir,
+      'blocks',
+      `SELECT * REPLACE (CASE WHEN height = ${V1 + 5} THEN from_hex(repeat('ee', 32)) ELSE reward_addr END AS reward_addr) FROM SRC`,
+    );
+    const wf = path.join(band.dir, 'witness_fork_2_0.parquet');
+    await duck.exec(
+      `COPY (SELECT * FROM read_parquet('${wf}') WHERE height <> ${V1 + 5} ORDER BY height) TO '${wf}.x' (FORMAT PARQUET)`,
+    );
+    await fsp.rename(`${wf}.x`, wf);
+    await republish(duck, band.dir);
+    const verified = await verifyBands(duck, bandsDir, {
+      allow: { unanchored: true, unbound: true, unverifiedFormat1: true },
+      foldPins,
+    });
+    assert.equal(verified.ok, false);
+    assert.ok(
+      failing(verified).includes('witnesses'),
+      failing(verified).join(),
+    );
+    const out = await fill({
+      pool: pool(),
+      sample: sample(0),
+      allow: { unbound: true, unverifiedFormat1: true },
+      foldPins,
+    });
+    assert.equal(out.outcomes[0].result, 'refused');
+    assert.match(out.outcomes[0].reason ?? '', /witnesses/);
+  });
+
+  it('refuses an l1-4 band stripped of a v1 root, whatever --allow flag is given', async () => {
+    await buildCoreDb(source, V1, 21, { verifiable: true });
+    const [band] = await exportBands(source, bandsDir, [[V1, V1 + 9]]);
+    const foldPins = await witnessTestBand(duck, source, band.dir);
+    const wf = path.join(band.dir, 'witness_v1_data_roots.parquet');
+    await duck.exec(
+      `COPY (SELECT * FROM read_parquet('${wf}') WHERE height <> ${V1 + 3} ORDER BY height, id) TO '${wf}.x' (FORMAT PARQUET)`,
+    );
+    await fsp.rename(`${wf}.x`, wf);
+    await republish(duck, band.dir);
+    const verified = await verifyBands(duck, bandsDir, {
+      allow: { unanchored: true, unbound: true, unverifiedFormat1: true },
+      foldPins,
+    });
+    assert.equal(verified.ok, false);
+    assert.ok(
+      failing(verified).includes('witnesses'),
+      failing(verified).join(),
+    );
+  });
+
+  for (const [column, value] of [
+    ['diff', "'00' || diff"],
+    ['cumulative_diff', "cumulative_diff || '.000'"],
+    ['reward_pool', "'0' || reward_pool"],
+  ] as const) {
+    it(`refuses a re-spelt pre-2.0 ${column}, in verify and import`, async () => {
+      await buildCoreDb(source, V1, 21, { verifiable: true });
+      holdBlocks(source, core, V1 + 10);
+      const [band] = await exportBands(source, bandsDir, [[V1, V1 + 9]]);
+      const foldPins = await witnessTestBand(duck, source, band.dir);
+      await rewriteTable(
+        duck,
+        band.dir,
+        'blocks',
+        `SELECT * REPLACE (CASE WHEN height = ${V1 + 5} THEN ${value} ELSE ${column} END AS ${column}) FROM SRC`,
+      );
+      await republish(duck, band.dir);
+      const verified = await verifyBands(duck, bandsDir, {
+        allow: { unanchored: true },
+        foldPins,
+      });
+      // A number that no longer reads as one also leaves the 2.0 hash
+      // uncomputable: canonical fails either way.
+      assert.equal(verified.ok, false);
+      assert.ok(
+        failing(verified).includes('canonical'),
+        failing(verified).join(),
+      );
+      const out = await fill({
+        pool: pool(),
+        sample: sample(0),
+        allow: {},
+        foldPins,
+      });
+      assert.equal(out.outcomes[0].result, 'refused');
+      assert.match(out.outcomes[0].reason ?? '', /canonical/);
+    });
+  }
+
+  it('anchors a pre-2.0 band at its pinned top: verify and import with no --allow flag', async () => {
+    await buildCoreDb(source, V1, 21, { verifiable: true });
+    const [band] = await exportBands(source, bandsDir, [[V1, V1 + 9]]);
+    const foldPins = await witnessTestBand(duck, source, band.dir);
+    const verified = await verifyBands(duck, bandsDir, {
+      foldPins,
+      pool: pool(),
+      sample: sample(0),
+    });
+    assert.equal(verified.ok, true, failing(verified).join());
+    assert.equal(verified.anchored, true);
+    assert.equal(verified.anchor?.pinned, true);
+    assert.deepEqual(
+      verified.accepted.filter((f) => f.startsWith('--allow-')),
+      [],
+    );
+    // A band whose folds stop short of a pin is not anchored.
+    const short = { fold: new Map(foldPins.fold), h2: new Map(foldPins.h2) };
+    short.fold.delete(V1 + 9);
+    short.h2.delete(V1 + 9);
+    const unpinned = await verifyBands(duck, bandsDir, {
+      foldPins: short,
+      pool: pool(),
+      sample: sample(0),
+    });
+    assert.equal(unpinned.ok, false);
+    assert.equal(unpinned.anchored, false);
+    // Imported offline into an empty core.db, with nothing above it.
+    const db = new Sqlite(core, { timeout: 1000 });
+    try {
+      const run = await runImport({
+        db,
+        duck,
+        bandsDir,
+        log,
+        verification: { pool: pool(), sample: sample(0), allow: {}, foldPins },
+      });
+      assert.equal(run.outcomes[0].result, 'imported', run.outcomes[0].reason);
+      assert.equal(run.outcomes[0].check?.binding.kind, 'anchored');
+      assert.match(run.outcomes[0].check?.boundBy ?? '', /pinned/);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('refuses --sample-blocks 0 and an undrawn format-1 sample, in verify as in import', async () => {
+    await buildCoreDb(source, P2, 21, { verifiable: true });
+    holdBlocks(source, core, P2 + 10);
+    const [band] = await exportBands(source, bandsDir, [[P2, P2 + 9]]);
+    // A relabel: tx_root holds, only the format-1 draw would tell.
+    const [t] = (await duck.all(
+      `SELECT hex(id) AS id, hex(data_root) AS root FROM read_parquet('${band.dir}/transactions.parquet') WHERE height = ${P2 + 1}`,
+    )) as Array<{ id: string; root: string }>;
+    await rewriteTable(
+      duck,
+      band.dir,
+      'transactions',
+      `SELECT * REPLACE (CASE WHEN height = ${P2 + 1} THEN 1 ELSE format END AS format, CASE WHEN height = ${P2 + 1} THEN NULL ELSE data_root END AS data_root) FROM SRC`,
+    );
+    const wf = `${band.dir}/witness_v1_data_roots.parquet`;
+    await duck.exec(
+      `CREATE OR REPLACE TABLE w AS SELECT * FROM read_parquet('${wf}') UNION ALL SELECT ${P2 + 1}::UBIGINT, from_hex('${t.id}'), from_hex('${t.root}')`,
+    );
+    await duck.exec(
+      `COPY (SELECT * FROM w ORDER BY height, id) TO '${wf}' (FORMAT PARQUET)`,
+    );
+    await republish(duck, band.dir);
+    const none = { ...sample(0, 0), blocks: 0 };
+    // Every count 0, with sources: both gates.
+    const zero = await verifyBands(duck, bandsDir, {
+      allow: { unanchored: true },
+      pool: pool(),
+      sample: none,
+    });
+    assert.ok(failing(zero).includes('sample_format1'), failing(zero).join());
+    assert.ok(failing(zero).includes('sample_blocks'), failing(zero).join());
+    // No sample at all: the format-1 gate.
+    const unsampled = await verifyBands(duck, bandsDir, {
+      allow: { unanchored: true },
+    });
+    assert.deepEqual(failing(unsampled), ['sample_format1']);
+    const accepted = await verifyBands(duck, bandsDir, {
+      allow: { unanchored: true, unsampled: true },
+    });
+    assert.equal(accepted.ok, true, failing(accepted).join());
+    assert.ok(accepted.accepted.includes('--allow-unsampled'));
+    // The importer agrees.
+    const out = await fill({
+      pool: pool(),
+      sample: { ...sample(5), blocks: 0 },
+      allow: {},
+    });
+    assert.equal(out.outcomes[0].result, 'refused');
+    assert.match(out.outcomes[0].reason ?? '', /--sample-blocks 0/);
   });
 
   it('refuses a relabel imported with --sample-format1 0, and catches it when drawn', async () => {

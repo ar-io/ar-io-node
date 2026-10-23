@@ -73,6 +73,12 @@ export interface ColumnBinding {
   bindings: Record<Era, Binding>;
   /** Why, and the code that enforces it. */
   reason: string;
+  /**
+   * The one spelling a band stores, where a value could be spelt more
+   * than one way (a number as text, an absent value), enforced by the
+   * judge's `canonical` check (judge.ts checkCanonicalBlock).
+   */
+  representation?: string;
 }
 
 const all = (b: Binding): Record<Era, Binding> => ({
@@ -89,10 +95,11 @@ const pre20 = (before: Binding, after: Binding): Record<Era, Binding> => ({
 });
 
 /** A pre-2.0 header field the 2.0 hash covers, compared on sampled headers after. */
-const header = (column: string): ColumnBinding => ({
+const header = (column: string, representation?: string): ColumnBinding => ({
   table: 'blocks',
   column,
   core: [`stable_blocks.${column}`],
+  ...(representation !== undefined ? { representation } : {}),
   bindings: pre20('checkpoint', 'sample'),
   reason:
     "below 2.0: in the block's 2.0 hash (judge.ts recomputeH2, folded to FORK_2_0_H2_PINS), and compared on sampled headers; from 2.0: not in hash_list_merkle, compared field by field on the anchor block and sampled headers (anchor.ts compareHeaderWithBlock)",
@@ -120,6 +127,7 @@ export const COLUMN_BINDINGS: ColumnBinding[] = [
     table: 'blocks',
     column: 'previous_block',
     core: ['stable_blocks.previous_block'],
+    representation: 'empty bytes at genesis, never NULL',
     bindings: all('chain'),
     reason:
       "equal to the chain-bound indep_hash of the block below (judge.ts 'linked')",
@@ -128,11 +136,20 @@ export const COLUMN_BINDINGS: ColumnBinding[] = [
   header('hash'),
   header('block_timestamp'),
   header('last_retarget'),
-  header('diff'),
-  header('cumulative_diff'),
-  header('reward_addr'),
-  header('reward_pool'),
-  header('wallet_list'),
+  header(
+    'diff',
+    'decimal text: N.0 below the 1.8 fork (a float, as gateways stored it), N from it; no leading zero',
+  ),
+  header(
+    'cumulative_diff',
+    'NULL below the 1.6 fork; N.0 below 1.8; N from it; no leading zero',
+  ),
+  header(
+    'reward_addr',
+    'the address, or empty bytes for unclaimed: never NULL nor the word',
+  ),
+  header('reward_pool', 'decimal text N, no leading zero'),
+  header('wallet_list', 'the digest, never NULL'),
   {
     table: 'blocks',
     column: 'tx_count',
@@ -180,6 +197,7 @@ export const COLUMN_BINDINGS: ColumnBinding[] = [
     table: 'blocks',
     column: 'hash_list_merkle',
     core: ['stable_blocks.hash_list_merkle'],
+    representation: 'NULL below the 1.6 fork, never empty bytes',
     bindings: {
       'pre-1.6': 'canonical',
       '1.6–2.0': 'chain',
@@ -195,7 +213,9 @@ export const COLUMN_BINDINGS: ColumnBinding[] = [
     core: ['stable_blocks.tx_root'],
     bindings: pre20('canonical', 'chain'),
     reason:
-      "below 2.0: NULL, the protocol had none; the transition root is witness_fork_2_0's (judge.ts checkCanonicalBlock); from 2.0: recomputed from the block's transactions and in the recurrence",
+      "below 2.0: NULL in the band, the protocol had none; the import writes the witnessed transition root instead (fork_2_0.tx_root); from 2.0: recomputed from the block's transactions and in the recurrence",
+    representation:
+      'NULL below the 2.0 fork; empty bytes for a block without transactions from it',
   },
   // transactions
   {
@@ -396,6 +416,63 @@ export const COLUMN_BINDINGS: ColumnBinding[] = [
     reason: "false (verify-bands.ts 'canonical'); not written to core.db",
   },
   // wallets
+  // witnesses (l1-4)
+  {
+    table: 'v1_data_roots',
+    column: 'height',
+    core: [],
+    bindings: all('chain'),
+    reason:
+      'a format-1 transaction with data at that height (witnesses.ts checkBandWitnesses)',
+  },
+  {
+    table: 'v1_data_roots',
+    column: 'id',
+    core: [],
+    bindings: pre20('checkpoint', 'sample'),
+    reason:
+      "that transaction, bound as its id is; every one of the band's has a row",
+  },
+  {
+    table: 'v1_data_roots',
+    column: 'data_root',
+    core: ['stable_transactions.data_root'],
+    bindings: all('chain'),
+    reason:
+      'its leaf in the recomputed (transition) tx_root (judge.ts checkTxRoot); the import writes it over any root the gateway kept (import.ts IMPORT_SQL.witnessDataRoot)',
+  },
+  {
+    table: 'fork_2_0',
+    column: 'height',
+    core: [],
+    bindings: pre20('chain', 'canonical'),
+    reason:
+      'one row per pre-2.0 height of the band, none from 2.0 (witnesses.ts checkBandWitnesses)',
+  },
+  {
+    table: 'fork_2_0',
+    column: 'tx_root',
+    core: ['stable_blocks.tx_root'],
+    bindings: pre20('chain', 'canonical'),
+    reason:
+      "the transition tx_root, recomputed from the block's transactions and in the 2.0 seed fold to its pins (judge.ts stepFork20); the import writes it as the block's tx_root (import.ts IMPORT_SQL.witnessTxRoot)",
+  },
+  {
+    table: 'fork_2_0',
+    column: 'fold',
+    core: [],
+    bindings: pre20('chain', 'canonical'),
+    reason:
+      'recomputed from the fold below and the block, to the pins (judge.ts stepFork20)',
+  },
+  {
+    table: 'fork_2_0',
+    column: 'h2',
+    core: [],
+    bindings: pre20('checkpoint', 'canonical'),
+    reason:
+      "recomputed from the block's fields, and folded to hash_list_1_0's pins (judge.ts recomputeH2)",
+  },
   {
     table: 'wallets',
     column: 'address',
@@ -421,6 +498,22 @@ export const DERIVED_CORE_COLUMNS: Record<string, string> = {
   'stable_blocks.missing_tx_count':
     'the links whose transaction the band lacks, counted (import.ts countMissing)',
   'stable_transactions.indexed_at': 'when the import wrote the row',
+  'parquet_l1_kept_data_roots.id':
+    "the gateway's own format-1 roots, kept across the clear and restored for a band without witnesses; an l1-4 band's witnessed roots are written over them",
+  'parquet_l1_kept_data_roots.data_root': 'as parquet_l1_kept_data_roots.id',
+  ...Object.fromEntries(
+    [
+      'band_id',
+      'height_from',
+      'height_to',
+      'band_digest',
+      'rows_imported',
+      'started_at',
+      'completed_at',
+      'binding',
+      'accepted',
+    ].map((c) => [`parquet_l1_imports.${c}`, "the import's own ledger"]),
+  ),
 };
 
 /** The columns bound by `kind` in `era`, as `table.column`. */
@@ -461,7 +554,7 @@ export function renderBindingsTable(): string {
   ];
   for (const b of COLUMN_BINDINGS) {
     lines.push(
-      `| \`${b.table}.${b.column}\`${b.when !== undefined ? ` (${b.when})` : ''} | ${ERAS.map((era) => `\`${b.bindings[era]}\``).join(' | ')} | ${b.reason.replace(/\|/g, '\\|')} |`,
+      `| \`${b.table}.${b.column}\`${b.when !== undefined ? ` (${b.when})` : ''} | ${ERAS.map((era) => `\`${b.bindings[era]}\``).join(' | ')} | ${b.reason.replace(/\|/g, '\\|')}${b.representation !== undefined ? `. Stored as: ${b.representation}` : ''} |`,
     );
   }
   return lines.join('\n');

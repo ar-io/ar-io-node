@@ -36,17 +36,32 @@ import {
   renderBindingsTable,
 } from './column-bindings.js';
 import { IMPORT_SQL } from './import.js';
-import { PARQUET_L1_TABLES } from './layout.js';
+import { PARQUET_L1_TABLES, PARQUET_L1_WITNESSES } from './layout.js';
 import { verifyBands } from './verify-bands.js';
 
-/** `table.column` for every column an `INSERT ... INTO table (columns)` writes. */
+/**
+ * `table.column` for every column a statement the importer runs writes:
+ * an `INSERT ... INTO table (columns)` or an `UPDATE table SET column = …`.
+ */
 function writtenColumns(): Set<string> {
   const out = new Set<string>();
   for (const statement of Object.values(IMPORT_SQL)) {
-    const m = /INTO\s+(\w+)\s*\(([^)]*)\)/s.exec(statement);
-    assert.ok(m !== null, `cannot read ${statement}`);
-    for (const column of m[2].split(',').map((c) => c.trim())) {
-      out.add(`${m[1]}.${column}`);
+    const insert = /INSERT\b[^(]*?INTO\s+(\w+)\s*\(([^)]*)\)/s.exec(statement);
+    const update =
+      /UPDATE\s+(\w+)\s+SET\s+([\s\S]*?)(?:\bFROM\b|\bWHERE\b|$)/.exec(
+        statement,
+      );
+    if (insert !== null) {
+      for (const column of insert[2].split(',').map((c) => c.trim())) {
+        out.add(`${insert[1]}.${column}`);
+      }
+    } else if (update !== null) {
+      // `a = …, b = …`: the names before each `=` at the top level.
+      for (const m of update[2].matchAll(/(?:^|,)\s*(\w+)\s*=/g)) {
+        out.add(`${update[1]}.${m[1]}`);
+      }
+    } else {
+      assert.fail(`a write statement the guard cannot read: ${statement}`);
     }
   }
   return out;
@@ -58,7 +73,7 @@ describe('the declared column bindings', () => {
       COLUMN_BINDINGS.map((b) => `${b.table}.${b.column}`),
     );
     const layout = new Set(
-      PARQUET_L1_TABLES.flatMap((t) =>
+      [...PARQUET_L1_TABLES, ...PARQUET_L1_WITNESSES].flatMap((t) =>
         t.columns.map((c) => `${t.name}.${c.name}`),
       ),
     );
@@ -90,6 +105,37 @@ describe('the declared column bindings', () => {
       [],
       'bindings of core.db columns the importer does not write',
     );
+  });
+
+  it('name the stored spelling of every column a value could be spelt two ways in', () => {
+    // Text holding a number, and bytes where absence has two spellings.
+    for (const column of [
+      'diff',
+      'cumulative_diff',
+      'reward_pool',
+      'reward_addr',
+      'wallet_list',
+      'hash_list_merkle',
+      'previous_block',
+      'tx_root',
+    ]) {
+      const b = COLUMN_BINDINGS.find(
+        (x) => x.table === 'blocks' && x.column === column,
+      );
+      assert.ok(b?.representation !== undefined, `blocks.${column}`);
+    }
+    for (const t of PARQUET_L1_TABLES) {
+      for (const c of t.columns.filter((c) => c.type === 'VARCHAR')) {
+        const b = COLUMN_BINDINGS.find(
+          (x) => x.table === t.name && x.column === c.name,
+        );
+        assert.ok(
+          b?.representation !== undefined ||
+            ERAS.every((era) => b?.bindings[era] === 'canonical'),
+          `${t.name}.${c.name}: text with no stated spelling`,
+        );
+      }
+    }
   });
 
   it('leave no column bound by nothing', () => {
@@ -204,6 +250,35 @@ describe('a column declared bound cannot change unnoticed', () => {
       assert.ok(
         failing.some((name) => name !== 'anchor'),
         failing.join(),
+      );
+    });
+  }
+
+  // One spelling per value: re-spelt numbers and absent values fail.
+  for (const [column, set] of [
+    ['diff', "'00' || diff"],
+    ['cumulative_diff', "cumulative_diff || '.000'"],
+    ['reward_pool', "'0' || reward_pool"],
+    ['reward_addr', 'NULL'],
+    ['reward_addr', "'unclaimed'::BLOB"],
+    ['wallet_list', 'NULL'],
+  ] as const) {
+    it(`pre-2.0 blocks.${column} spelt ${set}`, async () => {
+      const out = await mutate(
+        V1,
+        true,
+        'blocks',
+        `height = ${V1 + 5}`,
+        set,
+        column,
+      );
+      assert.equal(out.ok, false, `blocks.${column} := ${set} passed`);
+      assert.ok(
+        out.checks.find((c) => c.name === 'canonical')?.ok === false,
+        out.checks
+          .filter((c) => !c.ok)
+          .map((c) => c.name)
+          .join(),
       );
     });
   }

@@ -74,6 +74,11 @@ export interface L1RunOptions {
    * (`FORK_2_0_FOLD_PINS`) otherwise. Never from a command line.
    */
   foldPins?: Fork20Pins;
+  /**
+   * The caller draws the sample itself, and gates an undrawn one (the
+   * importer): no `sample_blocks` or `sample_format1` gate here.
+   */
+  sampleGated?: boolean;
   /** Report the judge's `witnesses` check: the source reads `l1-4` bands. */
   witnesses?: boolean;
   /** Failures the caller found in rows the judge does not walk (wallets, stray tags), under the judge's check names. */
@@ -97,6 +102,11 @@ export interface L1VerifyReport {
     indepHash?: string;
     /** Each header served was recomputed from its own fields. */
     recomputed: true;
+    /**
+     * Below the 2.0 fork: anchored by the pinned folds both of the range's
+     * folds reach at its top, not by a header served.
+     */
+    pinned?: true;
     machines: number;
     sources: AnchorResult['sources'];
     mismatches: AnchorResult['mismatches'];
@@ -193,7 +203,22 @@ export async function runL1Verify(
   let refuted = false;
   let anchorReport: L1VerifyReport['anchor'];
   const anchorCheck: VerifyCheck = { name: 'anchor', ok: true, detail: '' };
-  if (options.pool === undefined) {
+  if (to < FORK_2_0 && judged.totals.pinnedAt === to) {
+    // No pre-2.0 header recomputes, but the range's two folds reach the
+    // values this build pins at its top, and those fold on to block
+    // 422,250's hash_list_merkle: the range is bound to the chain there.
+    anchored = true;
+    anchorReport = {
+      height: to,
+      recomputed: true,
+      pinned: true,
+      machines: 0,
+      sources: [],
+      mismatches: [],
+      problems: [],
+    };
+    anchorCheck.detail = `the range is bound at ${to} by its folds: the 2.0 seed fold and the fold of its 2.0 hashes reach the values pinned in this build there (FORK_2_0_FOLD_PINS, FORK_2_0_H2_PINS), which fold on to block 422,250's hash_list_merkle`;
+  } else if (options.pool === undefined) {
     skipped.push('anchor');
     anchorCheck.detail =
       'not anchored: no source was given (--anchor-from), so nothing outside this index vouches for it';
@@ -274,7 +299,12 @@ export async function runL1Verify(
       }
     }
   }
-  if (anchored) {
+  if (anchored && anchorReport?.pinned === true) {
+    checks.push(anchorCheck);
+    assurance.push(
+      `anchored at ${to} by the pinned folds: no header was fetched; every pre-2.0 block of the range is bound as the fold binds it (see below)`,
+    );
+  } else if (anchored) {
     checks.push(anchorCheck);
     assurance.push(
       `anchored at ${anchorReport?.height ?? to}: ${anchorReport?.machines ?? 0} distinct machines agreed on a header whose hash was recomputed from its fields, and the index equals it. Agreement means the sources' upstream nodes agree: two gateways proxying /block/ to their operators' chosen Arweave nodes are not two independent nodes.`,
@@ -365,33 +395,43 @@ export async function runL1Verify(
     );
   }
 
-  // Format 1 is checked only by the format-1 draw: a witnessed root binds
-  // a transaction's size and root, never that it is format 1, so a draw
-  // of none over a range that holds some leaves a relabel unchecked.
-  if (
-    options.sample !== undefined &&
-    (options.sample.format1PerStratum ?? options.sample.txsPerStratum) <= 0 &&
-    judged.totals.format1Txs > 0
-  ) {
-    const unsampled: VerifyCheck = {
-      name: 'sample_format1',
-      ok: true,
-      detail: `${judged.totals.format1Txs} format-1 transactions with data from the 2.0 fork, none drawn (--sample-format1 0)`,
-    };
+  // What only a draw checks, left undrawn, needs --allow-unsampled: the
+  // order of each block's transactions and the header fields no hash
+  // carries (the block draw), and that a format-1 transaction with data
+  // is one (the format-1 draw; a witnessed root binds its size and root,
+  // never its format). As the importer refuses them.
+  const sampled = options.pool !== undefined && options.sample !== undefined;
+  const gates: Array<[string, boolean, string, string]> = [
+    [
+      'sample_blocks',
+      sampled &&
+        (options.sample as SampleOptions).blocks <= 0 &&
+        judged.totals.blocks > 0,
+      `${judged.totals.blocks} blocks, none of their headers drawn (--sample-blocks 0): the order of their transactions and the header fields no hash carries are checked by nothing`,
+      'the block draw over them (--sample-blocks), or --allow-unsampled',
+    ],
+    [
+      'sample_format1',
+      judged.totals.format1Txs > 0 &&
+        (!sampled ||
+          ((options.sample as SampleOptions).format1PerStratum ??
+            (options.sample as SampleOptions).txsPerStratum) <= 0),
+      `${judged.totals.format1Txs} format-1 transactions with data from the 2.0 fork, none drawn (${sampled ? '--sample-format1 0' : 'no sample'}): that they are format 1 is checked by nothing, so a format-2 transaction relabelled format 1 would pass`,
+      'the format-1 draw over them (--anchor-from, --sample-format1), or --allow-unsampled',
+    ],
+  ];
+  for (const [name, gated, detail, expected] of gates) {
+    if (!gated || options.sampleGated === true) continue;
+    const gate: VerifyCheck = { name, ok: true, detail };
     if (allow.unsampled === true) {
-      accepted.push('--allow-unsampled');
-      assurance.push(
-        `--sample-format1 0, accepted (--allow-unsampled): ${judged.totals.format1Txs} format-1 transactions with data are checked to be format 1 by nothing; a format-2 transaction relabelled format 1 would pass`,
-      );
+      if (!accepted.includes('--allow-unsampled')) {
+        accepted.push('--allow-unsampled');
+      }
+      assurance.push(`accepted (--allow-unsampled): ${detail}`);
     } else {
-      addFailure(unsampled, {
-        height: to,
-        found: unsampled.detail,
-        expected:
-          'the format-1 draw over them (--sample-format1), or --allow-unsampled',
-      });
+      addFailure(gate, { height: to, found: detail, expected });
     }
-    checks.push(unsampled);
+    checks.push(gate);
   }
 
   // What was left unbound, and whether it was accepted.

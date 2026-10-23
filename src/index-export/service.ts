@@ -1541,7 +1541,7 @@ export class ExportService {
             workDir,
             dryRun,
             log,
-            witness: config.l1Witness ?? { nodes: [], maxMissing: 0 },
+            witness: config.l1Witness ?? { nodes: [] },
             ...(this.lock !== undefined
               ? { stillHeld: async () => this.lock?.held() ?? false }
               : {}),

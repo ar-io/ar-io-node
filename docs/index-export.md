@@ -616,8 +616,8 @@ nothing the chain does not confirm:
 
 Then the band with its witnesses is judged whole by the code every
 consumer runs (`index-l1-verify --bands-dir`), and must pass with no block
-left unbound beyond the roots `INDEX_EXPORT_L1_WITNESS_MAX_MISSING` allows
-(default 0). Only then are the files moved in and `band.json` replaced,
+left unbound: an `l1-4` band holds every witness, or is not given them (a
+transaction whose data no node serves keeps its band `l1-3`). Only then are the files moved in and `band.json` replaced,
 under the band's id, by a rename. A published `l1-3` band gains its
 witnesses this way each run, with no `core.db`, before the builds and after
 them, reported under `l1Witnessed` and counted as

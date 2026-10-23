@@ -38,7 +38,7 @@ import { bandPublisherTag } from '../../../lib/index-band/build.js';
 import { supersededBands } from '../../../lib/index-publication.js';
 import type { Database } from 'duckdb-async';
 
-import { FORK_2_0, type Fork20Pins } from '../../../lib/parquet-l1/chain.js';
+import type { Fork20Pins } from '../../../lib/parquet-l1/chain.js';
 import {
   BAND_FILE,
   bandSupersedes,
@@ -207,8 +207,17 @@ export function planL1(
   // A range is only covered by a band of the layout this build writes, so
   // upgrading a publisher rebuilds what the new layout changes instead of
   // leaving the network split across versions.
+  // A whole range band already published covers its sub-ranges too: with
+  // --to at a range boundary the top falls in a range a band covers, and
+  // building its sub-ranges beside it would publish an overlapping set,
+  // which subscribers refuse.
   const have = (from: number, to: number) =>
-    bands.some((b) => b.from === from && b.to === to && current(b));
+    bands.some(
+      (b) =>
+        current(b) &&
+        ((b.from === from && b.to === to) ||
+          (b.from <= from && b.to >= to && b.to === l1RangeOf(b.from)[1])),
+    );
 
   // Whole history ranges, oldest first.
   const [activeFrom] = l1RangeOf(top);
@@ -235,7 +244,10 @@ export function planL1(
       });
     }
   }
-  if (!bands.some((b) => b.from === tipFrom && b.to >= top && current(b))) {
+  if (
+    !bands.some((b) => b.from === tipFrom && b.to >= top && current(b)) &&
+    !have(tipFrom, top)
+  ) {
     steps.push({
       role: 'd',
       heightRange: [tipFrom, top],
@@ -350,7 +362,6 @@ export async function runL1Step(
           ...(witness !== undefined
             ? {
                 witnessInputs: l1WitnessInputs(witness, [from, to], log),
-                witnessMaxMissing: witness.maxMissing,
               }
             : {}),
         }),
@@ -799,8 +810,8 @@ export function planL1Witness(
  * Built in `workDir` and checked there before the band is touched: every
  * root confirmed by its block's `tx_root`, every fold by the chain's
  * (`buildBandWitnesses`), and then the band with them judged whole by the
- * code its consumers run, which must pass with no block left unbound
- * beyond the roots `maxMissing` allows. Only then are the files moved in
+ * code its consumers run, which must pass with no block left unbound.
+ * Only then are the files moved in
  * and `band.json` replaced, by a rename, so a reader sees the old band or
  * the new one. A band whose witnesses cannot be had or confirmed is left
  * as it is, and tried again next run.
@@ -846,7 +857,7 @@ export async function runL1Witness(
         )) as Array<{ n: number | bigint }>;
         return Number(row.n);
       });
-      if (needed > (band.from < FORK_2_0 ? 0 : witness.maxMissing)) {
+      if (needed > 0) {
         throw new WitnessRefused(
           `${needed} format-1 transactions with data need a v1 data root, and no witness input is configured (INDEX_EXPORT_L1_WITNESS_DIR, INDEX_EXPORT_L1_WITNESS_NODES)`,
           'unavailable',
@@ -865,10 +876,7 @@ export async function runL1Witness(
           band.band,
           judgedDir,
           l1WitnessInputs(witness, [band.from, band.to], log),
-          {
-            maxMissing: witness.maxMissing,
-            ...(foldPins !== undefined ? { foldPins } : {}),
-          },
+          foldPins !== undefined ? { foldPins } : {},
         );
         for (const table of PARQUET_L1_TABLES) {
           await fs.symlink(
@@ -909,8 +917,7 @@ export async function runL1Witness(
       Object.entries(built.witnesses).map(([name, w]) => [name, w.rows]),
     );
     const left =
-      (unbound.pre20?.blocks ?? 0) +
-      (built.missing === 0 ? (unbound.txRootFormat1?.blocks ?? 0) : 0);
+      (unbound.pre20?.blocks ?? 0) + (unbound.txRootFormat1?.blocks ?? 0);
     if (failing.length > 0 || left > 0) {
       throw new WitnessRefused(
         failing.length > 0

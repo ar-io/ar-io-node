@@ -1020,7 +1020,6 @@ services:
       # data/indexes, say) and Arweave nodes; nothing unconfirmed is published.
       - INDEX_EXPORT_L1_WITNESS_DIR=${INDEX_EXPORT_L1_WITNESS_DIR:-}
       - INDEX_EXPORT_L1_WITNESS_NODES=${INDEX_EXPORT_L1_WITNESS_NODES:-}
-      - INDEX_EXPORT_L1_WITNESS_MAX_MISSING=${INDEX_EXPORT_L1_WITNESS_MAX_MISSING:-}
       # parquet-l2: the selections to build, and where from (see envs.md).
       - INDEX_EXPORT_L2_INDEXES=${INDEX_EXPORT_L2_INDEXES:-}
       - INDEX_EXPORT_L2_SOURCE=${INDEX_EXPORT_L2_SOURCE:-}

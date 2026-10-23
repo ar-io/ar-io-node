@@ -137,7 +137,7 @@ const pool = (served: string, tamper?: Parameters<typeof chainNode>[1]) =>
 
 const sample = {
   seed: 7,
-  blocks: 0,
+  blocks: 3,
   txsPerStratum: 1000,
   v1BytesPerStratum: 1e6,
   concurrency: 2,

@@ -126,7 +126,7 @@ describe('l1WitnessInputs', () => {
     const chunks = await generateTransactionChunks(data);
     const asked: string[] = [];
     const inputs = l1WitnessInputs(
-      { dir, nodes: ['http://n.test'], maxMissing: 0 },
+      { dir, nodes: ['http://n.test'] },
       [100, 199],
       log,
       async (url: string) => {
@@ -163,7 +163,7 @@ describe('l1WitnessInputs', () => {
     const id = crypto.randomBytes(32);
     const short = crypto.randomBytes(32);
     const inputs = l1WitnessInputs(
-      { nodes: ['http://n.test'], maxMissing: 0 },
+      { nodes: ['http://n.test'] },
       [0, 99],
       log,
       async (url: string) =>
@@ -181,11 +181,7 @@ describe('l1WitnessInputs', () => {
   it('refuses a checkpoint or hash list that is not Arweave’s as a witness refusal, never a failed run', async () => {
     await fsp.writeFile(path.join(dir, CHECKPOINT_FILE), '[]');
     await fsp.writeFile(path.join(dir, HASH_LIST_1_0_FILE), '[]');
-    const inputs = l1WitnessInputs(
-      { dir, nodes: [], maxMissing: 0 },
-      [0, 99],
-      log,
-    );
+    const inputs = l1WitnessInputs({ dir, nodes: [] }, [0, 99], log);
     // A refused band is built without witnesses (l1-3); any other error
     // would stop the run.
     await assert.rejects(
@@ -201,7 +197,7 @@ describe('l1WitnessInputs', () => {
   it('pages /block_index from 400,000 with X-Block-Format 3', async () => {
     const seen: Array<[string, string | null]> = [];
     const inputs = l1WitnessInputs(
-      { nodes: ['http://n.test'], maxMissing: 0 },
+      { nodes: ['http://n.test'] },
       [400_000, 499_999],
       log,
       async (url: string, init?: RequestInit) => {

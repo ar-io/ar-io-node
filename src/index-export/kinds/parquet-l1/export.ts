@@ -279,7 +279,6 @@ export async function exportL1Band({
   windowHeights = EXPORT_WINDOW_HEIGHTS,
   requireComplete = false,
   witnessInputs = NO_WITNESS_INPUTS,
-  witnessMaxMissing = 0,
 }: {
   coreDbPath: string;
   workDir: string;
@@ -296,8 +295,6 @@ export async function exportL1Band({
   requireComplete?: boolean;
   /** Where the band's witnesses come from (`witness-inputs.ts`). */
   witnessInputs?: WitnessInputs;
-  /** v1 data roots the band may lack and still be given witnesses. */
-  witnessMaxMissing?: number;
 }): Promise<L1ExportResult> {
   const started = Date.now();
   const staging = await fs.mkdtemp(path.join(workDir, '.band-build-l1-'));
@@ -612,7 +609,7 @@ export async function exportL1Band({
             { heightRange: [from, to] },
             witnessDir,
             witnessInputs,
-            { maxMissing: witnessMaxMissing },
+            {},
           ),
         )
       ).witnesses;

@@ -284,7 +284,14 @@ describe('indexL1VerifyCLICommand', () => {
     ).run('999999999999', h);
     db.close();
     const result = await run(
-      { anchorFrom: ANCHORS, sampleBlocks: '0', sampleTxs: '100', seed: '5' },
+      {
+        anchorFrom: ANCHORS,
+        sampleBlocks: '0',
+        sampleTxs: '100',
+        seed: '5',
+        // No block drawn: accepted, so only the transaction draw speaks.
+        allowUnsampled: true,
+      },
       nodes(),
     );
     assert.equal(result.ok, false);

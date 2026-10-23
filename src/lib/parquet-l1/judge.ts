@@ -55,7 +55,7 @@ import {
 } from './chain.js';
 import { hash20Of10Block } from './block-hash.js';
 import { addFailure, VerifyCheck } from './checks.js';
-import { FORK_2_9_6 } from './tx-signature.js';
+import { FORK_1_8, FORK_2_9_6 } from './tx-signature.js';
 import type { L1BlockRow } from './anchor.js';
 import { type BandTag, firstTagValue } from './layout.js';
 
@@ -186,6 +186,12 @@ export interface JudgeTotals {
   txRootChecked: number;
   /** Pre-2.0 blocks whose fields a witnessed 2.0 seed fold binds to the chain. */
   foldBound: number;
+  /**
+   * The last height at which both folds reached their pins with no block
+   * below it left waiting: the pre-2.0 run up to it is bound to the chain
+   * there (the pins fold on to block 422,250's `hash_list_merkle`).
+   */
+  pinnedAt?: number;
   /**
    * Format-1 transactions with data at or above the 2.0 fork: what only the
    * format-1 draw checks is format 1 (a witnessed root binds its size and
@@ -394,10 +400,34 @@ export class L1Judge {
     const cls = this.unbound[kind];
     cls.blocks += 1;
     if (cls.heights.length < MAX_UNBOUND_HEIGHTS) cls.heights.push(height);
+    if (this.witnessed && kind !== 'incomplete') {
+      // An l1-4 band binds every block it holds, or fails: the flags that
+      // accept an unbound block (--allow-unbound,
+      // --allow-unverified-format1) are for bands without witnesses, and
+      // must not let a stripped l1-4 band through.
+      addFailure(this.checks.witnesses, {
+        height,
+        found: `a block of an l1-4 band left unbound (${kind})`,
+        expected:
+          'every block of an l1-4 band bound by its witnesses (the --allow flags accept bands without witnesses only)',
+      });
+    }
   }
+
+  /** Whether the block being judged is an l1-4 band's (it carries witnesses). */
+  private witnessed = false;
 
   /** The blocks waiting on the fold are bound by nothing after all: `pre20`. */
   private foldUnbound(): void {
+    if (this.foldPending.blocks > 0) {
+      // Pending blocks all carry witnesses: an l1-4 band's.
+      addFailure(this.checks.witnesses, {
+        height: this.foldPending.heights[0] ?? 0,
+        found: `${this.foldPending.blocks} pre-2.0 blocks of an l1-4 band whose folds reach no pinned value`,
+        expected:
+          'every block of an l1-4 band bound by its witnesses (the --allow flags accept bands without witnesses only)',
+      });
+    }
     const cls = this.unbound.pre20;
     cls.blocks += this.foldPending.blocks;
     for (const h of this.foldPending.heights) {
@@ -514,8 +544,10 @@ export class L1Judge {
       } else {
         reached = false;
       }
-      if (reached) this.foldConfirmed();
-      else this.foldUnbound();
+      if (reached) {
+        this.foldConfirmed();
+        this.totals.pinnedAt = h;
+      } else this.foldUnbound();
       // From here the folds are the chain's, whatever came before.
       if (pin !== undefined) this.fork20Fold = pin;
       if (h2Pin !== undefined) this.h2Fold = h2Pin;
@@ -657,6 +689,54 @@ export class L1Judge {
         expected: 'NULL: the chain has no such value at this height',
       });
     }
+    // One spelling for each value (column-bindings.ts, `representation`):
+    // a number re-spelled ('001', '2.000') or an absent value spelled two
+    // ways would verify as the same value and be imported as another.
+    const spelt: string[] = [];
+    const text = (name: string, value: unknown, form: RegExp | null) => {
+      if (form === null) {
+        if (value !== null)
+          spelt.push(`${name} ${JSON.stringify(value)}, not NULL`);
+      } else if (typeof value !== 'string' || !form.test(value)) {
+        spelt.push(`${name} ${JSON.stringify(value)}, not ${form.source}`);
+      }
+    };
+    const whole = /^(0|[1-9][0-9]*)$/;
+    const real = /^(0|[1-9][0-9]*)\.0$/;
+    // Below the 1.8 fork difficulty was a float, stored as N.0.
+    text('diff', row.diff, h < FORK_1_8 ? real : whole);
+    text(
+      'cumulative_diff',
+      row.cumulative_diff,
+      h < FORK_1_6 ? null : h < FORK_1_8 ? real : whole,
+    );
+    text('reward_pool', row.reward_pool, whole);
+    // `unclaimed` is empty bytes, never NULL or the word.
+    if (
+      row.reward_addr === null ||
+      row.reward_addr.equals(Buffer.from('unclaimed'))
+    ) {
+      spelt.push('reward_addr NULL or "unclaimed", not empty bytes');
+    }
+    if (row.wallet_list === null) spelt.push('wallet_list NULL');
+    if (h < FORK_1_6) {
+      if (row.hash_list_merkle !== null) {
+        spelt.push('hash_list_merkle set below the 1.6 fork, not NULL');
+      }
+    }
+    if (
+      h === 0 &&
+      (row.previous_block === null || row.previous_block.length > 0)
+    ) {
+      spelt.push('genesis previous_block not empty bytes');
+    }
+    if (spelt.length > 0) {
+      addFailure(this.checks.canonical, {
+        height: h,
+        found: spelt.join('; '),
+        expected: 'the one spelling a band writes for each value',
+      });
+    }
   }
 
   /**
@@ -752,6 +832,7 @@ export class L1Judge {
     const row = block.row;
     const h = row.height;
     this.totals.blocks += 1;
+    this.witnessed = block.witness !== undefined;
     this.checkNulls(block);
     const weave = big(row.weave_size);
     const size = big(row.block_size);

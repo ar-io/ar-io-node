@@ -403,9 +403,5 @@ function l1WitnessConfig(env: Env): L1WitnessConfig {
   return {
     ...(dir !== undefined ? { dir } : {}),
     nodes,
-    maxMissing: integer(env, 'INDEX_EXPORT_L1_WITNESS_MAX_MISSING', {
-      min: 0,
-      fallback: 0,
-    }) as number,
   };
 }

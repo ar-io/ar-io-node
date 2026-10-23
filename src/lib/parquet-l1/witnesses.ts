@@ -162,8 +162,38 @@ export async function checkBandWitnesses(
       });
     }
   }
+  if (declared.includes(V1_DATA_ROOTS_WITNESS)) {
+    // Every format-1 transaction with data has its root: a band with one
+    // left out would leave its block for an --allow flag to accept.
+    const txs = sql(path.join(dir, 'transactions.parquet'));
+    const lacking = await count(
+      `SELECT COUNT(*) AS n FROM read_parquet(${txs}) t
+       WHERE t.format = 1 AND t.data_size > 0 AND NOT EXISTS (
+         SELECT 1 FROM read_parquet(${file(V1_DATA_ROOTS_WITNESS)}) w
+         WHERE w.height = t.height AND w.id = t.id)`,
+    );
+    if (lacking > 0) {
+      problems.push({
+        height: from,
+        found: `${V1_DATA_ROOTS_WITNESS.file}: no row for ${lacking} format-1 transactions with data`,
+        expected:
+          'a v1 data root for every format-1 transaction with data in the band',
+      });
+    }
+  }
   if (declared.includes(FORK_2_0_WITNESS)) {
     const top = Math.min(to, FORK_2_0 - 1);
+    const rows = await count(
+      `SELECT COUNT(DISTINCT height) AS n FROM read_parquet(${file(FORK_2_0_WITNESS)})
+       WHERE height BETWEEN ${from} AND ${top}`,
+    );
+    if (rows !== top - from + 1) {
+      problems.push({
+        height: from,
+        found: `${FORK_2_0_WITNESS.file}: rows for ${rows} of the ${top - from + 1} heights below the 2.0 fork`,
+        expected: 'one row for every height of the band below the 2.0 fork',
+      });
+    }
     const malformed = await count(
       `SELECT COUNT(*) AS n FROM read_parquet(${file(FORK_2_0_WITNESS)})
        WHERE height IS NULL OR height < ${from} OR height > ${top}
@@ -261,7 +291,8 @@ const BUILD_WINDOW = 5_000;
  *
  * @throws WitnessRefused when the inputs contradict the band or the chain,
  *   when a fold below the 2.0 fork cannot be completed or does not reach
- *   the chain's, or when more than `maxMissing` v1 roots are missing.
+ *   the chain's, or when any v1 root is missing: an `l1-4` band holds
+ *   every one, or is not given witnesses.
  */
 export async function buildBandWitnesses(
   duck: Database,
@@ -270,11 +301,8 @@ export async function buildBandWitnesses(
   outDir: string,
   inputs: WitnessInputs,
   {
-    maxMissing = 0,
     foldPins = FORK_2_0_PINS,
   }: {
-    /** Format-1 transactions a band may be published without a root for. */
-    maxMissing?: number;
     /** The chain's folds; a test chain gives its own. */
     foldPins?: Fork20Pins;
   } = {},
@@ -612,9 +640,9 @@ export async function buildBandWitnesses(
       );
     }
   }
-  if (missing > maxMissing) {
+  if (missing > 0) {
     throw new WitnessRefused(
-      `${missing} v1 data roots are missing (at most ${maxMissing} allowed): no input had them`,
+      `${missing} v1 data roots are missing: no input had them, and an l1-4 band holds every one`,
       'unavailable',
     );
   }

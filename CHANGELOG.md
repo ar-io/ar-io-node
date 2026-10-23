@@ -38,6 +38,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   failing the new `canonical` check otherwise. The block sample now draws
   pre-2.0 heights too, attested by `--anchor-min` machines
   (`blocksAttested`): what binds a pre-2.0 block's transaction order.
+- An `l1-4` band must hold every witness (a `witness_fork_2_0` row per
+  pre-2.0 height, a v1 root per format-1 transaction with data); any of its
+  blocks left unbound fails `witnesses`, whatever `--allow-*` flag is given
+  (`--allow-unbound`, `--allow-unverified-format1` and
+  `L1_BAND_IMPORT_ALLOW_UNVERIFIED` accept bands without witnesses only).
+  The `INDEX_EXPORT_L1_WITNESS_MAX_MISSING` knob is gone.
+- A pre-2.0 range ending at a pinned height is anchored there by its
+  witnessed folds (`anchor.pinned`), so pre-2.0 bands verify and import
+  with no `--allow-unanchored`.
+- `--sample-blocks 0`, and an undrawn format-1 sample (no sources, or every
+  count 0), need `--allow-unsampled` in `index-l1-verify` as in
+  `index-l1-import`.
+- Bands store one spelling per value: difficulties as `N.0` below the 1.8
+  fork and `N` from it, no cumulative difficulty below 1.6, the reward pool
+  as `N`, an unclaimed reward address as empty bytes, a wallet list always,
+  no `hash_list_merkle` below 1.6 (the `canonical` check).
+- Under `l1-4` the importer writes the witnessed v1 roots and transition
+  `tx_root`s over whatever `core.db` kept.
 - `index-l1-verify --bands-dir` and `index-l1-import` refuse an `l1-1`
   band: its columns were its publisher's gateway's, not canonical. Both
   known publishers are on `l1-3`.
@@ -52,7 +70,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **`index-export` builds `l1-4` witnesses** for new bands and adds them
   to published `l1-3` bands in place, from v1 roots in a witness directory
   and Arweave nodes (`INDEX_EXPORT_L1_WITNESS_DIR`,
-  `INDEX_EXPORT_L1_WITNESS_NODES`, `INDEX_EXPORT_L1_WITNESS_MAX_MISSING`),
+  `INDEX_EXPORT_L1_WITNESS_NODES`),
   keeping only what the chain confirms and judging the band with them, as
   its consumers do, before anything is published. Reported as
   `l1Witnessed` and `index_export_runs_total{kind="witness"}`. See

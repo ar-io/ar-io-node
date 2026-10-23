@@ -123,7 +123,7 @@ async function buildChain(): Promise<Chain> {
         diff: '1',
         cumulative_diff: '1',
         last_retarget: 1,
-        reward_addr: null,
+        reward_addr: crypto.randomBytes(32),
         reward_pool: '0',
         block_size: size,
         weave_size: weave,
@@ -132,7 +132,7 @@ async function buildChain(): Promise<Chain> {
         scheduled_usd_to_ar_rate_dividend: null,
         scheduled_usd_to_ar_rate_divisor: null,
         hash_list_merkle: crypto.randomBytes(48),
-        wallet_list: null,
+        wallet_list: crypto.randomBytes(48),
         tx_root: h < FORK_2_0 ? null : root,
         tx_count: txs.length,
       },
@@ -243,7 +243,7 @@ describe('L1Judge with l1-4 witnesses', () => {
       h2: new Map([[FROM - 1, pins.h2.get(FROM - 1) as Buffer]]),
     };
     const out = await judgeChain(blocks, startOnly);
-    assert.deepEqual(out.failing, []);
+    assert.deepEqual(out.failing, ['witnesses']);
     assert.equal(out.unbound.pre20?.blocks, FORK_2_0 - FROM);
     assert.equal(out.totals.foldBound, 0);
   });
@@ -265,14 +265,14 @@ describe('L1Judge with l1-4 witnesses', () => {
       (b.row as any)[column] = forge(b.row[column]);
       // As witnessed, the 2.0 hash is not the one the forged fields give.
       let out = await judgeChain(blocks, pins);
-      assert.deepEqual(out.failing, ['hash_list_1_0']);
+      assert.deepEqual(out.failing, ['witnesses', 'hash_list_1_0']);
       assert.equal(out.unbound.pre20?.blocks, FORK_2_0 - FROM);
       assert.equal(out.totals.foldBound, 0);
       // With the forged block's 2.0 hash witnessed too, its fold does not
       // reach hash_list_1_0's pin.
       b.witness!.fork20!.h2 = h2Of(b, b.witness!.fork20!.txRoot);
       out = await judgeChain(blocks, pins);
-      assert.deepEqual(out.failing, ['hash_list_1_0']);
+      assert.deepEqual(out.failing, ['witnesses', 'hash_list_1_0']);
       assert.match(
         out.checks.find((c) => c.name === 'hash_list_1_0')?.failures?.[0]
           .found ?? '',
@@ -365,6 +365,7 @@ describe('L1Judge with l1-4 witnesses', () => {
     assert.deepEqual(out.failing, [
       'hash_list_merkle',
       'tx_root',
+      'witnesses',
       'hash_list_1_0',
     ]);
     assert.equal(out.totals.foldBound, 0);
@@ -400,7 +401,7 @@ describe('L1Judge with l1-4 witnesses', () => {
     const gap = FROM + 2;
     blocks[2].witness = { ...blocks[2].witness!, fork20: null };
     const out = await judgeChain(blocks, pins);
-    assert.deepEqual(out.failing, []);
+    assert.deepEqual(out.failing, ['witnesses']);
     // FROM and FROM + 1 waited on the folds through the gap; the gap
     // itself; above it the 2.0 hashes have no fold to continue from, so
     // nothing reaches their pin.
@@ -420,7 +421,7 @@ describe('L1Judge with l1-4 witnesses', () => {
     const post = blocks.find((b) => b.row.height === FORK_2_0 + 1)!;
     post.witness = { v1Roots: new Map() };
     const out = await judgeChain(blocks, pins);
-    assert.deepEqual(out.failing, []);
+    assert.deepEqual(out.failing, ['witnesses']);
     assert.deepEqual(out.unbound.txRootFormat1?.heights, [
       FROM + 1,
       FORK_2_0 + 1,
@@ -434,7 +435,7 @@ describe('L1Judge with l1-4 witnesses', () => {
     const noStart = { fold: new Map(pins.fold), h2: pins.h2 };
     noStart.fold.delete(FROM - 1);
     const out = await judgeChain(blocks, noStart);
-    assert.deepEqual(out.failing, []);
+    assert.deepEqual(out.failing, ['witnesses']);
     assert.deepEqual(out.unbound.pre20?.heights, [FROM]);
     assert.equal(out.totals.foldBound, FORK_2_0 - FROM - 1);
     // The 2.0 hashes have no witnessed fold to take: without their pin
@@ -442,7 +443,7 @@ describe('L1Judge with l1-4 witnesses', () => {
     const noH2Start = { fold: pins.fold, h2: new Map(pins.h2) };
     noH2Start.h2.delete(FROM - 1);
     const none = await judgeChain(blocks, noH2Start);
-    assert.deepEqual(none.failing, []);
+    assert.deepEqual(none.failing, ['witnesses']);
     assert.equal(none.unbound.pre20?.blocks, FORK_2_0 - FROM);
     assert.equal(none.totals.foldBound, 0);
   });
