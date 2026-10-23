@@ -37,7 +37,7 @@ describe('buildBandWitnesses', () => {
   let bandDir: string;
   let band: ParquetL1Band;
   let roots: Map<string, Buffer>;
-  let pins: Map<number, Buffer>;
+  let pins: { fold: Map<number, Buffer>; h2: Map<number, Buffer> };
   let duck: Database;
   let out: string;
   before(async () => {
@@ -170,9 +170,40 @@ describe('buildBandWitnesses', () => {
     );
   });
 
+  it('refuses a band whose header field is not the one its 2.0 hash pins', async () => {
+    // The fold of the 2.0 hashes through the band's top, as if one header
+    // field were other than the band's.
+    const other = { fold: pins.fold, h2: new Map(pins.h2) };
+    other.h2.set(V1 + 9, crypto.randomBytes(48));
+    await assert.rejects(
+      build(roots, { foldPins: other }),
+      (e: unknown) =>
+        e instanceof WitnessRefused &&
+        e.kind === 'contradicts' &&
+        /fold of the 2\.0 hashes/.test(e.message),
+    );
+    // And each block's against Arweave's list, when given.
+    await assert.rejects(
+      buildBandWitnesses(
+        duck,
+        bandDir,
+        band,
+        out,
+        {
+          v1Roots: async () => roots,
+          hashList10: async () =>
+            Array.from({ length: V1 + 10 }, () => crypto.randomBytes(48)),
+        },
+        { foldPins: pins },
+      ),
+      (e: unknown) =>
+        e instanceof WitnessRefused && /hash_list_1_0 lists/.test(e.message),
+    );
+  });
+
   it('refuses a band whose fold would reach no pin', async () => {
-    const noEnd = new Map(pins);
-    noEnd.delete(V1 + 9);
+    const noEnd = { fold: pins.fold, h2: new Map(pins.h2) };
+    noEnd.h2.delete(V1 + 9);
     await assert.rejects(
       build(roots, { foldPins: noEnd }),
       (e: unknown) =>

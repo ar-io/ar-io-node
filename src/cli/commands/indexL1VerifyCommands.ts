@@ -376,12 +376,14 @@ export function allowances(options: {
   allowUnbound?: boolean;
   allowIncomplete?: boolean;
   allowUnverifiedFormat1?: boolean;
+  allowUnsampled?: boolean;
 }): L1Allowances {
   return {
     unanchored: options.allowUnanchored === true,
     unbound: options.allowUnbound === true,
     incomplete: options.allowIncomplete === true,
     unverifiedFormat1: options.allowUnverifiedFormat1 === true,
+    unsampled: options.allowUnsampled === true,
   };
 }
 

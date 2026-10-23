@@ -184,7 +184,9 @@ describe('index-l1-verify --bands-dir fails closed', () => {
       duck,
       band(0),
       'transactions',
-      `SELECT * REPLACE (CASE WHEN height = ${h} AND block_transaction_index = 0 THEN 1::UTINYINT ELSE format END AS format) FROM SRC`,
+      // Its data_root cleared too, as a band holds a format-1 one: one left
+      // beside it fails `witnesses` on its own.
+      `SELECT * REPLACE (CASE WHEN height = ${h} AND block_transaction_index = 0 THEN 1::UTINYINT ELSE format END AS format, CASE WHEN height = ${h} AND block_transaction_index = 0 THEN NULL ELSE data_root END AS data_root) FROM SRC`,
     );
     await republish(duck, band(0));
     const out = await verify();

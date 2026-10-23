@@ -60,6 +60,7 @@ import {
   type ChainBlock,
   expectedHashListMerkle,
   FORK_2_0,
+  type Fork20Pins,
   PREDECESSOR_HAS_NO_MERKLE,
 } from './chain.js';
 import { anchorBlock } from './anchor.js';
@@ -925,7 +926,7 @@ export interface ImportVerification {
    * mainnet's (`FORK_2_0_FOLD_PINS`) otherwise. Never from a command line
    * or the environment.
    */
-  foldPins?: ReadonlyMap<number, Buffer>;
+  foldPins?: Fork20Pins;
 }
 
 type HeldBlock = Pick<
@@ -1272,8 +1273,8 @@ export async function verifyBeforeImport(
       gaps.push([
         'sample_format1',
         '--sample-format1 0',
-        out.unbound.txRootFormat1 !== undefined
-          ? 'a transaction relabelled format 1 in the blocks accepted with --allow-unverified-format1 would be unchecked'
+        out.unbound.txRootFormat1 !== undefined || out.format1Txs > 0
+          ? 'a transaction relabelled format 1 would be unchecked: only the format-1 draw checks a format-1 transaction with data is one, witnessed or not'
           : undefined,
       ]);
     }
@@ -1332,6 +1333,37 @@ export async function verifyBeforeImport(
     ...(sample !== undefined ? { sample } : {}),
   };
 }
+
+/**
+ * Every row an import writes to `core.db` from a band, by statement. One
+ * copy, read by `column-bindings.test.ts` to check that every column
+ * written has a declared binding (`column-bindings.ts`).
+ */
+export const IMPORT_SQL = {
+  wallets:
+    'INSERT OR IGNORE INTO wallets (address, public_modulus) VALUES (?, ?)',
+  blocks: `INSERT OR REPLACE INTO stable_blocks (indep_hash, height,
+      previous_block, nonce, hash, block_timestamp, tx_count, block_size, diff,
+      cumulative_diff, last_retarget, reward_addr, reward_pool, weave_size,
+      usd_to_ar_rate_dividend, usd_to_ar_rate_divisor,
+      scheduled_usd_to_ar_rate_dividend, scheduled_usd_to_ar_rate_divisor,
+      hash_list_merkle, wallet_list, tx_root, missing_tx_count)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+  transactions: `INSERT OR REPLACE INTO stable_transactions (id,
+      block_transaction_index, target, quantity, reward, last_tx, data_size,
+      content_type, format, height, owner_address, data_root, offset,
+      content_encoding, tag_count, signature, indexed_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  link: `INSERT OR IGNORE INTO stable_block_transactions
+      (block_indep_hash, transaction_id, block_transaction_index) VALUES (?, ?, ?)`,
+  missing: `INSERT OR IGNORE INTO missing_transactions
+      (block_indep_hash, transaction_id, height) VALUES (?, ?, ?)`,
+  tagName: 'INSERT OR IGNORE INTO tag_names (hash, name) VALUES (?, ?)',
+  tagValue: 'INSERT OR IGNORE INTO tag_values (hash, value) VALUES (?, ?)',
+  tag: `INSERT OR IGNORE INTO stable_transaction_tags (tag_name_hash,
+      tag_value_hash, height, block_transaction_index, transaction_tag_index,
+      transaction_id) VALUES (?, ?, ?, ?, ?, ?)`,
+} as const;
 
 /**
  * Imports one band, or the part of it `heights` names, ending with its
@@ -1415,35 +1447,14 @@ export async function importBand(
   db.exec(`CREATE TEMP TABLE IF NOT EXISTS parquet_l1_kept_data_roots
     (id BLOB PRIMARY KEY, data_root BLOB NOT NULL)`);
   const insert = {
-    wallets: db.prepare(
-      'INSERT OR IGNORE INTO wallets (address, public_modulus) VALUES (?, ?)',
-    ),
-    blocks:
-      db.prepare(`INSERT OR REPLACE INTO stable_blocks (indep_hash, height,
-      previous_block, nonce, hash, block_timestamp, tx_count, block_size, diff,
-      cumulative_diff, last_retarget, reward_addr, reward_pool, weave_size,
-      usd_to_ar_rate_dividend, usd_to_ar_rate_divisor,
-      scheduled_usd_to_ar_rate_dividend, scheduled_usd_to_ar_rate_divisor,
-      hash_list_merkle, wallet_list, tx_root, missing_tx_count)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`),
-    transactions: db.prepare(`INSERT OR REPLACE INTO stable_transactions (id,
-      block_transaction_index, target, quantity, reward, last_tx, data_size,
-      content_type, format, height, owner_address, data_root, offset,
-      content_encoding, tag_count, signature, indexed_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
-    link: db.prepare(`INSERT OR IGNORE INTO stable_block_transactions
-      (block_indep_hash, transaction_id, block_transaction_index) VALUES (?, ?, ?)`),
-    missing: db.prepare(`INSERT OR IGNORE INTO missing_transactions
-      (block_indep_hash, transaction_id, height) VALUES (?, ?, ?)`),
-    tagName: db.prepare(
-      'INSERT OR IGNORE INTO tag_names (hash, name) VALUES (?, ?)',
-    ),
-    tagValue: db.prepare(
-      'INSERT OR IGNORE INTO tag_values (hash, value) VALUES (?, ?)',
-    ),
-    tag: db.prepare(`INSERT OR IGNORE INTO stable_transaction_tags (tag_name_hash,
-      tag_value_hash, height, block_transaction_index, transaction_tag_index,
-      transaction_id) VALUES (?, ?, ?, ?, ?, ?)`),
+    wallets: db.prepare(IMPORT_SQL.wallets),
+    blocks: db.prepare(IMPORT_SQL.blocks),
+    transactions: db.prepare(IMPORT_SQL.transactions),
+    link: db.prepare(IMPORT_SQL.link),
+    missing: db.prepare(IMPORT_SQL.missing),
+    tagName: db.prepare(IMPORT_SQL.tagName),
+    tagValue: db.prepare(IMPORT_SQL.tagValue),
+    tag: db.prepare(IMPORT_SQL.tag),
     // Derived from the rows, not incremented: an import that runs twice
     // must land on the same number.
     countMissing: db.prepare(`UPDATE stable_blocks SET missing_tx_count =

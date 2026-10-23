@@ -103,6 +103,78 @@ export const FORK_2_0_FOLD_PINS: ReadonlyMap<number, Buffer> = new Map(
 );
 
 /**
+ * The fold of Arweave's "2.0 hashes" of the pre-2.0 blocks
+ * (`genesis_data/hash_list_1_0`, {@link HASH_LIST_1_0_SHA256}): from empty,
+ * `SHA-384(fold ‖ H2(h))` for heights 0 to `h`, where `H2(h)` is the
+ * entry for height `h` (at index `422250 - h - 1`), at the same heights as
+ * {@link FORK_2_0_FOLD_PINS}.
+ *
+ * `H2` is `hash20Of10Block`: the 2.0–2.4 `indep_hash` rule applied to the
+ * 1.0 header with its transition `tx_root` and sorted transaction ids,
+ * covering every header field (`ar_header_sync:download_block`,
+ * `ar_node:get_2_0_hash_of_1_0_block`). Arweave checks every pre-2.0
+ * header a node syncs against this list, which it ships; it is
+ * Arweave's checkpoint, not something the chain's own hashes reach. With
+ * these pins, a pre-2.0 band whose blocks' `H2`s fold to them has every
+ * header field, and its transaction ids, bound to that checkpoint.
+ *
+ * Computed 2026-10-23 from `genesis_data/hash_list_1_0` (SHA-256 checked);
+ * `fork-2-0-pins.test.ts` recomputes them whenever an Arweave checkout is
+ * at hand. Every pre-2.0 block of the published bands but the genesis
+ * block recomputed its entry from its own columns; the genesis block does
+ * once its empty `reward_addr` is read as `unclaimed`, as the chain has it.
+ */
+export const FORK_2_0_H2_PINS: ReadonlyMap<number, Buffer> = new Map(
+  (
+    [
+      [
+        99_999,
+        'tP4Ss_y8j-c6EPNQDFd-STooBLOy4B-dxTmWwdK-wzgQ04RhmVbVWw7fu_Bk2ip-',
+      ],
+      [
+        199_999,
+        'iNz57dW3y_JZUB3kvSFLCfLUunVnLM76LJixac82_83jD2kBWQTS7DbljA59ebQU',
+      ],
+      [
+        299_999,
+        '4HRV8yVq8rxRfqaS6g6ml6TZFxCBu0Y77V-pLGEqTlJ8WaJ4ZNP3p-wzJUeukUvi',
+      ],
+      [
+        399_999,
+        'GuZEzEU_BOTJa44c88OMw8lJvDoFELyzxLY4ljverSJBZVprRd06lDdd8K8UOJDM',
+      ],
+      [
+        FORK_2_0 - 1,
+        'Fznt4jqwgcOvFiFxtt05_vT7p9A3aE9FJPalyfkIfjBjOv3vC9Ay8AdbQZuJAH2r',
+      ],
+    ] as Array<[number, string]>
+  ).map(([height, fold]) => [height, Buffer.from(fold, 'base64url')]),
+);
+
+/** SHA-256 of `genesis_data/hash_list_1_0`, Arweave's list of the 422,250 pre-2.0 "2.0 hashes". */
+export const HASH_LIST_1_0_SHA256 =
+  'd161502a13e64fa49bcb2425420bcdcd6a4407e488aca3e14ba254f16418ca6f';
+
+/** One step of the {@link FORK_2_0_H2_PINS} fold. */
+export function foldH2(previous: Buffer, h2: Buffer): Buffer {
+  return sha384(previous, h2);
+}
+
+/** The pinned values a pre-2.0 run is bound by: both folds, at the same heights. */
+export interface Fork20Pins {
+  /** The 2.0 seed fold ({@link FORK_2_0_FOLD_PINS}). */
+  fold: ReadonlyMap<number, Buffer>;
+  /** The fold of the blocks' 2.0 hashes ({@link FORK_2_0_H2_PINS}). */
+  h2: ReadonlyMap<number, Buffer>;
+}
+
+/** Mainnet's pins. A test chain gives its own; nothing else does. */
+export const FORK_2_0_PINS: Fork20Pins = {
+  fold: FORK_2_0_FOLD_PINS,
+  h2: FORK_2_0_H2_PINS,
+};
+
+/**
  * SHA-256 of Arweave's 2.0 checkpoint file (`apps/arweave/priv/
  * fork_2_0_checkpoint` at `d43ba2b9^`, git blob b1de1ed6): a JSON list,
  * newest first, of `{tx_root, weave_size, hash}` for heights 399,999 down

@@ -454,6 +454,34 @@ export async function verifyBands(
           expected: 'every tag belongs to a transaction at its height',
         });
       }
+      // Columns with one value a band writes (column-bindings.ts): an
+      // is_data_item that is not false, or a signature whose SHA-256 is not
+      // the id, is bound by nothing.
+      const [stray] = (await duck.all(
+        `SELECT
+           (SELECT COUNT(*) FROM read_parquet('${txFile}') WHERE is_data_item IS DISTINCT FROM false) AS tx_items,
+           (SELECT COUNT(*) FROM read_parquet('${tagsFile}') WHERE is_data_item IS DISTINCT FROM false) AS tag_items,
+           (SELECT COUNT(*) FROM read_parquet('${txFile}')
+              WHERE signature IS NOT NULL AND (id IS NULL OR sha256(signature) <> lower(hex(id)))) AS signatures`,
+      )) as Array<Record<string, number | bigint>>;
+      for (const [what, n] of [
+        ['transactions with is_data_item not false', stray.tx_items],
+        ['tags with is_data_item not false', stray.tag_items],
+        [
+          'transactions whose signature does not hash to their id',
+          stray.signatures,
+        ],
+      ] as const) {
+        if (Number(n) > 0) {
+          judgeFailures.push({
+            check: 'canonical',
+            height: from,
+            found: `${id}: ${Number(n)} ${what}`,
+            expected:
+              'is_data_item false; a signature only where its SHA-256 is the id',
+          });
+        }
+      }
       // Witnesses, as files: what they say about the chain is the judge's.
       for (const problem of await checkBandWitnesses(duck, dir, band)) {
         judgeFailures.push({

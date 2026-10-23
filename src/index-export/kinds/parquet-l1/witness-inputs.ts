@@ -42,6 +42,7 @@ import {
   FORK_2_0,
   FORK_2_0_CHECKPOINT_SHA256,
   FORK_2_0_CHECKPOINT_TOP,
+  HASH_LIST_1_0_SHA256,
   v1DataRoot,
 } from '../../../lib/parquet-l1/chain.js';
 import { idHeightRange } from '../../../lib/parquet-l1/layout.js';
@@ -53,6 +54,9 @@ import type {
 
 /** The checkpoint's file name in the witness directory. */
 export const CHECKPOINT_FILE = 'fork_2_0_checkpoint';
+
+/** Arweave's list of pre-2.0 "2.0 hashes", in the witness directory. */
+export const HASH_LIST_1_0_FILE = 'hash_list_1_0';
 
 /** Heights per `GET /block_index` (a node refuses more). */
 export const BLOCK_INDEX_PAGE = 10_000;
@@ -216,6 +220,10 @@ export function l1WitnessInputs(
           ),
       );
       return out;
+    },
+
+    async hashList10(): Promise<Buffer[] | undefined> {
+      return readHashList10(config.dir);
     },
 
     async blockIndex(
@@ -387,4 +395,33 @@ async function readRootsDir(
     });
   }
   return out;
+}
+
+/**
+ * Arweave's `genesis_data/hash_list_1_0` from the witness directory,
+ * indexed by height, or undefined without one. Refused unless its SHA-256
+ * is the one Arweave ships.
+ */
+export async function readHashList10(
+  dir: string | undefined,
+): Promise<Buffer[] | undefined> {
+  if (dir === undefined) return undefined;
+  let bytes: Buffer;
+  try {
+    bytes = await fs.readFile(path.join(dir, HASH_LIST_1_0_FILE));
+  } catch {
+    return undefined;
+  }
+  const digest = sha256(bytes).toString('hex');
+  if (digest !== HASH_LIST_1_0_SHA256) {
+    throw new Error(
+      `${HASH_LIST_1_0_FILE} has SHA-256 ${digest}, not Arweave's ${HASH_LIST_1_0_SHA256}`,
+    );
+  }
+  const list = JSON.parse(bytes.toString('utf8')) as string[];
+  if (!Array.isArray(list) || list.length !== FORK_2_0) {
+    throw new Error(`${HASH_LIST_1_0_FILE} is not ${FORK_2_0} entries`);
+  }
+  // Newest first: height h is at FORK_2_0 - h - 1.
+  return list.map((_, h) => Buffer.from(list[FORK_2_0 - h - 1], 'base64url'));
 }

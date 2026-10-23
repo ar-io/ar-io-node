@@ -165,7 +165,7 @@ export const optionMap = {
   allowUnsampled: {
     alias: '--allow-unsampled',
     description:
-      'Write with no sample of headers and signatures (no --anchor-from, or every --sample-* 0): transaction ids, their order and every transaction field are then unchecked against the chain',
+      'Import: write with no sample of headers and signatures (no --anchor-from, or every --sample-* 0): transaction ids, their order and every transaction field are then unchecked against the chain. Both: accept --sample-format1 0 over format-1 transactions with data from the 2.0 fork, whose format nothing else checks',
   },
   sampleFormat1: {
     alias: '--sample-format1 <n>',
@@ -414,6 +414,7 @@ export const indexL1VerifyOptions: CommanderOption[] = [
   optionMap.allowUnbound,
   optionMap.allowIncomplete,
   optionMap.allowUnverifiedFormat1,
+  optionMap.allowUnsampled,
   optionMap.sampleBlocks,
   optionMap.sampleTxs,
   optionMap.sampleFormat1,

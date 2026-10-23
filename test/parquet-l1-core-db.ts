@@ -13,6 +13,7 @@ import {
   ChainBlock,
   computeTxRoot,
   FORK_2_0,
+  FORK_2_5,
   nextHashListMerkle,
 } from '../src/lib/parquet-l1/chain.js';
 import { syntheticHeader } from './parquet-l1-headers.js';
@@ -85,7 +86,7 @@ export async function buildCoreDb(
     usd_to_ar_rate_dividend, usd_to_ar_rate_divisor,
     scheduled_usd_to_ar_rate_dividend, scheduled_usd_to_ar_rate_divisor,
     hash_list_merkle, tx_root, tx_count, missing_tx_count)
-    VALUES (?, ?, ?, ?, ?, ?, '1', '2', 3, ?, '4', ?, ?, 1, 10, 1, 10, ?, ?, ?, 0)`);
+    VALUES (?, ?, ?, ?, ?, ?, '1', '2', 3, ?, '4', ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`);
   if (verifiable) {
     db.exec(
       'CREATE TABLE test_signatures (id BLOB PRIMARY KEY, signature BLOB NOT NULL, data BLOB)',
@@ -140,7 +141,19 @@ export async function buildCoreDb(
           'base64url',
         );
       }
-      insertRow.run(height, indepHash, ...values.slice(2));
+      // USD rates from the 2.5 fork, which introduced them.
+      const [dividend, divisor] = height >= FORK_2_5 ? [1, 10] : [null, null];
+      const rest = values.slice(2);
+      insertRow.run(
+        height,
+        indepHash,
+        ...rest.slice(0, 7),
+        dividend,
+        divisor,
+        dividend,
+        divisor,
+        ...rest.slice(7),
+      );
       return indepHash;
     },
   };

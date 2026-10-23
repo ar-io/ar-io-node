@@ -38,7 +38,7 @@ import { bandPublisherTag } from '../../../lib/index-band/build.js';
 import { supersededBands } from '../../../lib/index-publication.js';
 import type { Database } from 'duckdb-async';
 
-import { FORK_2_0 } from '../../../lib/parquet-l1/chain.js';
+import { FORK_2_0, type Fork20Pins } from '../../../lib/parquet-l1/chain.js';
 import {
   BAND_FILE,
   bandSupersedes,
@@ -821,7 +821,7 @@ export async function runL1Witness(
     stillHeld?: () => Promise<boolean>;
     witness: L1WitnessConfig;
     /** The chain's folds; a test chain gives its own. */
-    foldPins?: ReadonlyMap<number, Buffer>;
+    foldPins?: Fork20Pins;
   },
 ): Promise<L1WitnessOutcome> {
   const started = Date.now();

@@ -51,6 +51,106 @@
     }
   },
   {
+    "id": "l1-anchor-witness-relabel-unsampled",
+    "description": "l1-4: a relabelled format-2 transaction with its own root as witness, and --sample-format1 0: only the format-1 draw checks format 1, so a draw of none over format-1 transactions with data is refused unless --allow-unsampled",
+    "tampered": "transactions.format, a witness row (its tx_root leaf), data_root cleared, republished",
+    "kind": "l1-anchor",
+    "nodes": [
+      {
+        "name": "a",
+        "answer": "honest"
+      },
+      {
+        "name": "b",
+        "answer": "honest"
+      }
+    ],
+    "options": {
+      "sample": {
+        "blocks": 0,
+        "txs": 0,
+        "format1": 0
+      }
+    },
+    "ops": [
+      {
+        "op": "setFormat",
+        "band": 1,
+        "height": 1900013,
+        "bti": 0,
+        "format": 1
+      },
+      {
+        "op": "witnessV1",
+        "band": 1,
+        "height": 1900013,
+        "bti": 0,
+        "root": "leaf"
+      },
+      {
+        "op": "republish",
+        "band": 1
+      }
+    ],
+    "expect": {
+      "verdict": "unknown",
+      "check": "sample_format1",
+      "failing": [
+        "sample_format1"
+      ],
+      "anchored": true
+    }
+  },
+  {
+    "id": "l1-anchor-witness-unsampled-accepted",
+    "description": "the same with --allow-unsampled: accepted, and said so in accepted",
+    "tampered": "transactions.format, a witness row (its tx_root leaf), data_root cleared, republished",
+    "kind": "l1-anchor",
+    "nodes": [
+      {
+        "name": "a",
+        "answer": "honest"
+      },
+      {
+        "name": "b",
+        "answer": "honest"
+      }
+    ],
+    "options": {
+      "sample": {
+        "blocks": 0,
+        "txs": 0,
+        "format1": 0
+      },
+      "allowUnsampled": true
+    },
+    "ops": [
+      {
+        "op": "setFormat",
+        "band": 1,
+        "height": 1900013,
+        "bti": 0,
+        "format": 1
+      },
+      {
+        "op": "witnessV1",
+        "band": 1,
+        "height": 1900013,
+        "bti": 0,
+        "root": "leaf"
+      },
+      {
+        "op": "republish",
+        "band": 1
+      }
+    ],
+    "expect": {
+      "verdict": "verified",
+      "failing": [],
+      "anchored": true
+    }
+  },
+  {
     "id": "l1-bands-witness-file-missing",
     "description": "l1-4: a band without the witness file its layout declares",
     "tampered": "witness_v1_data_roots.parquet removed",
@@ -110,9 +210,9 @@
     }
   },
   {
-    "id": "l1-bands-witness-format1-missing",
-    "description": "l1-4: a format-1 transaction with data and no witness row: the block stays unbound (txRootFormat1), never passed",
-    "tampered": "transactions.format, republished, no witness row",
+    "id": "l1-bands-witness-format1-data-root",
+    "description": "l1-4: a format-1 transaction with a data_root beside its witness: the column is bound by nothing (tx_root takes the witness), so under l1-4 it must be NULL",
+    "tampered": "transactions.format, a witness row, then data_root set to another value, republished",
     "kind": "l1-bands",
     "options": {
       "allowUnanchored": true
@@ -124,6 +224,54 @@
         "height": 1900001,
         "bti": 0,
         "format": 1
+      },
+      {
+        "op": "witnessV1",
+        "band": 0,
+        "height": 1900001,
+        "bti": 0,
+        "root": "leaf"
+      },
+      {
+        "op": "rewrite",
+        "band": 0,
+        "table": "transactions",
+        "select": "SELECT * REPLACE (CASE WHEN height = 1900001 AND block_transaction_index = 0 THEN from_hex(repeat('de', 32)) ELSE data_root END AS data_root) FROM SRC"
+      },
+      {
+        "op": "republish",
+        "band": 0
+      }
+    ],
+    "expect": {
+      "verdict": "refuted",
+      "check": "witnesses",
+      "failing": [
+        "witnesses"
+      ]
+    }
+  },
+  {
+    "id": "l1-bands-witness-format1-missing",
+    "description": "l1-4: a format-1 transaction with data and no witness row: the block stays unbound (txRootFormat1), never passed",
+    "tampered": "transactions.format, data_root cleared, republished, no witness row",
+    "kind": "l1-bands",
+    "options": {
+      "allowUnanchored": true
+    },
+    "ops": [
+      {
+        "op": "setFormat",
+        "band": 0,
+        "height": 1900001,
+        "bti": 0,
+        "format": 1
+      },
+      {
+        "op": "rewrite",
+        "band": 0,
+        "table": "transactions",
+        "select": "SELECT * REPLACE (CASE WHEN height = 1900001 AND block_transaction_index = 0 THEN NULL ELSE data_root END AS data_root) FROM SRC"
       },
       {
         "op": "republish",
@@ -280,6 +428,285 @@
     }
   },
   {
+    "id": "l1-pre20-forged-block-timestamp",
+    "description": "a pre-2.0 block's block_timestamp forged and the band republished: nothing in the chain's hashes covers it, but the block's 2.0 hash does, and it no longer recomputes to the one witnessed nor folds to hash_list_1_0's pin",
+    "tampered": "blocks.block_timestamp at 422235, republished",
+    "kind": "l1-bands",
+    "chain": "pre20",
+    "options": {
+      "allowUnanchored": true
+    },
+    "ops": [
+      {
+        "op": "editBlockField",
+        "band": 0,
+        "height": 422235,
+        "column": "block_timestamp",
+        "value": "block_timestamp + 31536000"
+      },
+      {
+        "op": "republish",
+        "band": 0
+      }
+    ],
+    "expect": {
+      "verdict": "refuted",
+      "check": "hash_list_1_0",
+      "failing": [
+        "hash_list_1_0",
+        "unbound"
+      ]
+    }
+  },
+  {
+    "id": "l1-pre20-forged-cumulative-diff",
+    "description": "a pre-2.0 block's cumulative_diff forged and the band republished: nothing in the chain's hashes covers it, but the block's 2.0 hash does, and it no longer recomputes to the one witnessed nor folds to hash_list_1_0's pin",
+    "tampered": "blocks.cumulative_diff at 422235, republished",
+    "kind": "l1-bands",
+    "chain": "pre20",
+    "options": {
+      "allowUnanchored": true
+    },
+    "ops": [
+      {
+        "op": "editBlockField",
+        "band": 0,
+        "height": 422235,
+        "column": "cumulative_diff",
+        "value": "'9'"
+      },
+      {
+        "op": "republish",
+        "band": 0
+      }
+    ],
+    "expect": {
+      "verdict": "refuted",
+      "check": "hash_list_1_0",
+      "failing": [
+        "hash_list_1_0",
+        "unbound"
+      ]
+    }
+  },
+  {
+    "id": "l1-pre20-forged-diff",
+    "description": "a pre-2.0 block's diff forged and the band republished: nothing in the chain's hashes covers it, but the block's 2.0 hash does, and it no longer recomputes to the one witnessed nor folds to hash_list_1_0's pin",
+    "tampered": "blocks.diff at 422235, republished",
+    "kind": "l1-bands",
+    "chain": "pre20",
+    "options": {
+      "allowUnanchored": true
+    },
+    "ops": [
+      {
+        "op": "editBlockField",
+        "band": 0,
+        "height": 422235,
+        "column": "diff",
+        "value": "'7'"
+      },
+      {
+        "op": "republish",
+        "band": 0
+      }
+    ],
+    "expect": {
+      "verdict": "refuted",
+      "check": "hash_list_1_0",
+      "failing": [
+        "hash_list_1_0",
+        "unbound"
+      ]
+    }
+  },
+  {
+    "id": "l1-pre20-forged-hash",
+    "description": "a pre-2.0 block's hash forged and the band republished: nothing in the chain's hashes covers it, but the block's 2.0 hash does, and it no longer recomputes to the one witnessed nor folds to hash_list_1_0's pin",
+    "tampered": "blocks.hash at 422235, republished",
+    "kind": "l1-bands",
+    "chain": "pre20",
+    "options": {
+      "allowUnanchored": true
+    },
+    "ops": [
+      {
+        "op": "editBlockField",
+        "band": 0,
+        "height": 422235,
+        "column": "hash",
+        "value": "from_hex(repeat('bb', 32))"
+      },
+      {
+        "op": "republish",
+        "band": 0
+      }
+    ],
+    "expect": {
+      "verdict": "refuted",
+      "check": "hash_list_1_0",
+      "failing": [
+        "hash_list_1_0",
+        "unbound"
+      ]
+    }
+  },
+  {
+    "id": "l1-pre20-forged-last-retarget",
+    "description": "a pre-2.0 block's last_retarget forged and the band republished: nothing in the chain's hashes covers it, but the block's 2.0 hash does, and it no longer recomputes to the one witnessed nor folds to hash_list_1_0's pin",
+    "tampered": "blocks.last_retarget at 422235, republished",
+    "kind": "l1-bands",
+    "chain": "pre20",
+    "options": {
+      "allowUnanchored": true
+    },
+    "ops": [
+      {
+        "op": "editBlockField",
+        "band": 0,
+        "height": 422235,
+        "column": "last_retarget",
+        "value": "last_retarget + 1"
+      },
+      {
+        "op": "republish",
+        "band": 0
+      }
+    ],
+    "expect": {
+      "verdict": "refuted",
+      "check": "hash_list_1_0",
+      "failing": [
+        "hash_list_1_0",
+        "unbound"
+      ]
+    }
+  },
+  {
+    "id": "l1-pre20-forged-nonce",
+    "description": "a pre-2.0 block's nonce forged and the band republished: nothing in the chain's hashes covers it, but the block's 2.0 hash does, and it no longer recomputes to the one witnessed nor folds to hash_list_1_0's pin",
+    "tampered": "blocks.nonce at 422235, republished",
+    "kind": "l1-bands",
+    "chain": "pre20",
+    "options": {
+      "allowUnanchored": true
+    },
+    "ops": [
+      {
+        "op": "editBlockField",
+        "band": 0,
+        "height": 422235,
+        "column": "nonce",
+        "value": "from_hex(repeat('aa', 32))"
+      },
+      {
+        "op": "republish",
+        "band": 0
+      }
+    ],
+    "expect": {
+      "verdict": "refuted",
+      "check": "hash_list_1_0",
+      "failing": [
+        "hash_list_1_0",
+        "unbound"
+      ]
+    }
+  },
+  {
+    "id": "l1-pre20-forged-reward-addr",
+    "description": "a pre-2.0 block's reward_addr forged and the band republished: nothing in the chain's hashes covers it, but the block's 2.0 hash does, and it no longer recomputes to the one witnessed nor folds to hash_list_1_0's pin",
+    "tampered": "blocks.reward_addr at 422235, republished",
+    "kind": "l1-bands",
+    "chain": "pre20",
+    "options": {
+      "allowUnanchored": true
+    },
+    "ops": [
+      {
+        "op": "editBlockField",
+        "band": 0,
+        "height": 422235,
+        "column": "reward_addr",
+        "value": "from_hex(repeat('ee', 32))"
+      },
+      {
+        "op": "republish",
+        "band": 0
+      }
+    ],
+    "expect": {
+      "verdict": "refuted",
+      "check": "hash_list_1_0",
+      "failing": [
+        "hash_list_1_0",
+        "unbound"
+      ]
+    }
+  },
+  {
+    "id": "l1-pre20-forged-reward-pool",
+    "description": "a pre-2.0 block's reward_pool forged and the band republished: nothing in the chain's hashes covers it, but the block's 2.0 hash does, and it no longer recomputes to the one witnessed nor folds to hash_list_1_0's pin",
+    "tampered": "blocks.reward_pool at 422235, republished",
+    "kind": "l1-bands",
+    "chain": "pre20",
+    "options": {
+      "allowUnanchored": true
+    },
+    "ops": [
+      {
+        "op": "editBlockField",
+        "band": 0,
+        "height": 422235,
+        "column": "reward_pool",
+        "value": "'999999999999'"
+      },
+      {
+        "op": "republish",
+        "band": 0
+      }
+    ],
+    "expect": {
+      "verdict": "refuted",
+      "check": "hash_list_1_0",
+      "failing": [
+        "hash_list_1_0",
+        "unbound"
+      ]
+    }
+  },
+  {
+    "id": "l1-pre20-forged-wallet-list",
+    "description": "a pre-2.0 block's wallet_list forged and the band republished: nothing in the chain's hashes covers it, but the block's 2.0 hash does, and it no longer recomputes to the one witnessed nor folds to hash_list_1_0's pin",
+    "tampered": "blocks.wallet_list at 422235, republished",
+    "kind": "l1-bands",
+    "chain": "pre20",
+    "options": {
+      "allowUnanchored": true
+    },
+    "ops": [
+      {
+        "op": "editBlockField",
+        "band": 0,
+        "height": 422235,
+        "column": "wallet_list",
+        "value": "from_hex(repeat('cc', 48))"
+      },
+      {
+        "op": "republish",
+        "band": 0
+      }
+    ],
+    "expect": {
+      "verdict": "refuted",
+      "check": "hash_list_1_0",
+      "failing": [
+        "hash_list_1_0",
+        "unbound"
+      ]
+    }
+  },
+  {
     "id": "l1-pre20-honest",
     "description": "l1-4 below the 2.0 fork: each block's transition tx_root recomputes from its transactions and witnessed v1 roots, and the 2.0 seed fold runs from the pinned fold below the band to the pinned fold through 422,249: every block bound",
     "tampered": "nothing",
@@ -380,6 +807,7 @@
       "check": "witnesses",
       "failing": [
         "block_size",
+        "hash_list_1_0",
         "hash_list_merkle",
         "unbound",
         "weave_accounting",
@@ -412,6 +840,7 @@
       "verdict": "refuted",
       "check": "tx_root",
       "failing": [
+        "hash_list_1_0",
         "hash_list_merkle",
         "tx_root",
         "unbound"

@@ -74,6 +74,7 @@ import type { Case, Verdict } from './harness.js';
 import {
   type ChainBlock,
   foldBlockIndexEntry,
+  type Fork20Pins,
   FORK_2_0,
   nextHashListMerkle,
 } from '../../../src/lib/parquet-l1/chain.js';
@@ -120,7 +121,7 @@ export const PRE20_FIRST = FORK_2_0 - 20;
 
 interface HonestPre20 extends Honest {
   /** The chain's own pinned folds: the seed below the band, and the fold through its top. */
-  pins: Map<number, Buffer>;
+  pins: Fork20Pins;
 }
 let honestPre20Promise: Promise<HonestPre20> | undefined;
 
@@ -518,7 +519,7 @@ async function apply(
       // there rebuilt on it: a self-consistent witness of another root.
       const file = path.join(dir, FORK_2_0_WITNESS.file);
       const rows = (await duck.all(
-        `SELECT w.height, w.tx_root, w.fold, b.indep_hash, CAST(b.weave_size AS VARCHAR) AS weave_size
+        `SELECT w.height, w.tx_root, w.fold, w.h2, b.indep_hash, CAST(b.weave_size AS VARCHAR) AS weave_size
          FROM read_parquet('${file}') w
          JOIN read_parquet('${path.join(dir, 'blocks.parquet')}') b ON b.height = w.height
          ORDER BY w.height`,
@@ -539,14 +540,14 @@ async function apply(
           rowFold = fold;
         }
         values.push(
-          `(${Number(r.height)}::UBIGINT, from_hex('${txRoot.toString('hex')}'), from_hex('${rowFold.toString('hex')}'))`,
+          `(${Number(r.height)}::UBIGINT, from_hex('${txRoot.toString('hex')}'), from_hex('${rowFold.toString('hex')}'), from_hex('${Buffer.from(r.h2).toString('hex')}'))`,
         );
       }
       await rewriteWitness(
         duck,
         dir,
         FORK_2_0_WITNESS.name,
-        `SELECT * FROM (VALUES ${values.join(', ')}) v(height, tx_root, fold)`,
+        `SELECT * FROM (VALUES ${values.join(', ')}) v(height, tx_root, fold, h2)`,
       );
       return;
     }
@@ -662,7 +663,7 @@ function answering(coreDb: string, kind: string): (p: string) => NodeAnswer {
  * leaves something unestablished (README.md, "L1 verdicts").
  */
 function inconclusive(name: string, result: BandsVerifyResult): boolean {
-  if (name === 'unbound') return true;
+  if (name === 'unbound' || name === 'sample_format1') return true;
   if (name === 'anchor') {
     const a = result.anchor;
     if (a === undefined) return true;
@@ -696,7 +697,7 @@ export async function buildL1Case(
   bandsDir: string;
   coreDb: string;
   /** The chain's own pinned folds, for a chain that is not mainnet's below the 2.0 fork. */
-  foldPins?: Map<number, Buffer>;
+  foldPins?: Fork20Pins;
   publication?: NonNullable<Parameters<typeof verifyBands>[2]>['publication'];
 }> {
   const pre20 = c.chain === 'pre20' ? await honestPre20(root, duck) : undefined;
@@ -779,6 +780,7 @@ export async function runL1Case(
     allowUnbound?: boolean;
     allowIncomplete?: boolean;
     allowUnverifiedFormat1?: boolean;
+    allowUnsampled?: boolean;
     anchorMin?: number;
     sample?: { blocks: number; txs: number; format1?: number };
   };
@@ -833,6 +835,7 @@ export async function runL1Case(
         unbound: options.allowUnbound === true,
         incomplete: options.allowIncomplete === true,
         unverifiedFormat1: options.allowUnverifiedFormat1 === true,
+        unsampled: options.allowUnsampled === true,
       },
       ...(publication !== undefined ? { publication } : {}),
       ...(foldPins !== undefined ? { foldPins } : {}),

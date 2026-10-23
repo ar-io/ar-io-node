@@ -163,8 +163,8 @@ export class BandsSource implements L1Source {
       )) as Array<Record<string, unknown>>;
       const fork20 = declared.includes(FORK_2_0_WITNESS)
         ? ((await this.duck.all(
-            `SELECT height, tx_root, fold FROM read_parquet(${at(FORK_2_0_WITNESS.file)})
-             WHERE height BETWEEN ${lo} AND ${hi} AND tx_root IS NOT NULL AND fold IS NOT NULL
+            `SELECT height, tx_root, fold, h2 FROM read_parquet(${at(FORK_2_0_WITNESS.file)})
+             WHERE height BETWEEN ${lo} AND ${hi} AND tx_root IS NOT NULL AND fold IS NOT NULL AND h2 IS NOT NULL
              ORDER BY height`,
           )) as Array<Record<string, unknown>>)
         : undefined;
@@ -180,6 +180,7 @@ export class BandsSource implements L1Source {
                 height: Number(r.height),
                 tx_root: asBuffer(r.tx_root) as Buffer,
                 fold: asBuffer(r.fold) as Buffer,
+                h2: asBuffer(r.h2) as Buffer,
               })),
             }
           : {}),

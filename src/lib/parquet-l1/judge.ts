@@ -44,12 +44,16 @@ import {
   computeTxRoot,
   expectedHashListMerkle,
   foldBlockIndexEntry,
+  foldH2,
   foldSeed,
   FORK_1_6,
   FORK_2_0,
-  FORK_2_0_FOLD_PINS,
+  FORK_2_0_PINS,
+  FORK_2_5,
+  type Fork20Pins,
   PREDECESSOR_HAS_NO_MERKLE,
 } from './chain.js';
+import { hash20Of10Block } from './block-hash.js';
 import { addFailure, VerifyCheck } from './checks.js';
 import { FORK_2_9_6 } from './tx-signature.js';
 import type { L1BlockRow } from './anchor.js';
@@ -107,7 +111,7 @@ export interface JudgeWitness {
    * fold after it, or null when its band holds no row for it. Undefined at
    * and above the fork, and for a band that carries no `fork_2_0` witness.
    */
-  fork20?: { txRoot: Buffer; fold: Buffer } | null;
+  fork20?: { txRoot: Buffer; fold: Buffer; h2: Buffer } | null;
 }
 
 /** A block, its transactions in `block_transaction_index` order, and links with no transaction. */
@@ -154,7 +158,7 @@ export interface JudgeUnbound {
 }
 
 export const PRE20_REASON =
-  "a pre-2.0 block's hash commits to the full wallet list, so it cannot be recomputed; its fields are bound only through the 2.0 seed fold, which needs each block's transition tx_root and fold (an l1-4 band's witness_fork_2_0) reaching a value the chain fixes (a pinned fold, or block 422,250's hash_list_merkle), and this block has no such witness or its fold reaches none";
+  "a pre-2.0 block's hash commits to the full wallet list, so it cannot be recomputed; its fields are bound only through an l1-4 band's witness_fork_2_0: the 2.0 seed fold (hash, weave size, transition tx_root) and the fold of its 2.0 hashes (every header field and its transaction ids), both reaching their pinned values, and this block has no such witness, its 2.0 hash does not recompute, or a fold through it reaches no pin";
 export const FORMAT1_REASON =
   "format-1 transaction with data and no witnessed v1 data root: its data root comes from data the index does not hold, so the block tx_root cannot be recomputed, and every field of every transaction in the block (not only the format-1 ones) is bound only by the sample (a format-2 transaction relabelled format 1 moves its block here; the format-1 draw is what catches that). Closing it needs the v1 data roots, an l1-4 band's witness_v1_data_roots";
 export const INCOMPLETE_REASON =
@@ -169,6 +173,12 @@ export interface JudgeTotals {
   txRootChecked: number;
   /** Pre-2.0 blocks whose fields a witnessed 2.0 seed fold binds to the chain. */
   foldBound: number;
+  /**
+   * Format-1 transactions with data at or above the 2.0 fork: what only the
+   * format-1 draw checks is format 1 (a witnessed root binds its size and
+   * root, not its format).
+   */
+  format1Txs: number;
   /** The weave size at the first and last block judged. */
   weaveBase?: bigint;
   weaveTop?: bigint;
@@ -213,7 +223,9 @@ export class L1Judge {
     | 'owners'
     | 'wallets'
     | 'rows'
-    | 'witnesses',
+    | 'witnesses'
+    | 'canonical'
+    | 'hashList10',
     VerifyCheck
   >;
   private previous: JudgeBlockRow | undefined;
@@ -225,6 +237,12 @@ export class L1Judge {
    * a block had no witness.
    */
   private fork20Fold: Buffer | undefined;
+  /**
+   * The fold of the pre-2.0 blocks' recomputed 2.0 hashes through the block
+   * judged last: from empty at 0, or a pin. Undefined where a block's could
+   * not be recomputed or taken.
+   */
+  private h2Fold: Buffer | undefined;
   /** Pre-2.0 blocks whose fold step was checked, waiting for the fold to reach a value the chain fixes. */
   private readonly foldPending: { blocks: number; heights: number[] } = {
     blocks: 0,
@@ -238,6 +256,7 @@ export class L1Judge {
     accountingSkipped: 0,
     txRootChecked: 0,
     foldBound: 0,
+    format1Txs: 0,
     accountedFor: 0n,
   };
   private readonly unbound: Record<keyof JudgeUnbound, UnboundClass> = {
@@ -266,14 +285,15 @@ export class L1Judge {
        * ({@link FORK_2_0_FOLD_PINS}) unless a test chain gives its own.
        * Never taken from an index or a caller's input.
        */
-      foldPins?: ReadonlyMap<number, Buffer>;
+      foldPins?: Fork20Pins;
       /** Report the `witnesses` check (a reader of `l1-4` bands). */
       witnesses?: boolean;
     } = {},
   ) {
     this.seedFold = from === 0 ? Buffer.alloc(0) : undefined;
     this.fork20Fold =
-      from === 0 ? Buffer.alloc(0) : this.foldPins.get(from - 1);
+      from === 0 ? Buffer.alloc(0) : this.foldPins.fold.get(from - 1);
+    this.h2Fold = from === 0 ? Buffer.alloc(0) : this.foldPins.h2.get(from - 1);
     if (options.prior !== undefined) {
       this.previous = options.prior;
       this.totals.weaveBase = big(options.prior.weave_size) ?? undefined;
@@ -328,6 +348,14 @@ export class L1Judge {
         'every row lies inside the heights its table is read for, at a height with a block',
       ),
       witnesses: check('witnesses', ''),
+      canonical: check(
+        'canonical',
+        'every column with one value a band writes holds it: no tx_root below the 2.0 fork, no USD rates below the 2.5 fork, is_data_item false, and a signature only where its SHA-256 is the id (column-bindings.ts)',
+      ),
+      hashList10: check(
+        'hash_list_1_0',
+        "each pre-2.0 block's 2.0 hash recomputes from its own fields, sorted transaction ids and transition tx_root, and their fold reaches the fold of Arweave's genesis_data/hash_list_1_0 pinned in this build",
+      ),
     };
   }
 
@@ -335,8 +363,8 @@ export class L1Judge {
     return this.options.forkHeight ?? FORK_2_0;
   }
 
-  private get foldPins(): ReadonlyMap<number, Buffer> {
-    return this.options.foldPins ?? FORK_2_0_FOLD_PINS;
+  private get foldPins(): Fork20Pins {
+    return this.options.foldPins ?? FORK_2_0_PINS;
   }
 
   /** Records a failure a reader found outside the per-block walk (wallets, stray rows). */
@@ -367,9 +395,15 @@ export class L1Judge {
     this.foldPending.heights = [];
   }
 
-  /** The fold reached a value the chain fixes: the blocks waiting on it are bound. */
+  /**
+   * Both folds reached their pins: the blocks waiting on them are bound.
+   * Counted in `foldBound` only when their transition `tx_root`s were
+   * recomputed (not under `--skip-tx-root`).
+   */
   private foldConfirmed(): void {
-    this.totals.foldBound += this.foldPending.blocks;
+    if (this.options.txRoot !== false) {
+      this.totals.foldBound += this.foldPending.blocks;
+    }
     this.foldPending.blocks = 0;
     this.foldPending.heights = [];
   }
@@ -385,17 +419,37 @@ export class L1Judge {
     const h = row.height;
     const witness = block.witness?.fork20 ?? undefined;
     const weave = big(row.weave_size);
-    if (witness === undefined || row.indep_hash === null || weave === null) {
-      // Nothing binds this block, and the fold through it is lost: the
-      // blocks waiting on it cannot reach a pin past it either.
+    const h2 =
+      witness === undefined
+        ? undefined
+        : this.recomputeH2(block, witness.txRoot);
+    if (
+      witness === undefined ||
+      row.indep_hash === null ||
+      weave === null ||
+      h2 === undefined
+    ) {
+      // Nothing binds this block, and the folds through it are lost: the
+      // blocks waiting on them cannot reach a pin past it either.
       this.foldUnbound();
       this.note('pre20', h);
       this.fork20Fold = undefined;
+      this.h2Fold = undefined;
     } else {
-      if (this.fork20Fold === undefined) {
+      if (!h2.equals(witness.h2)) {
+        addFailure(this.checks.hashList10, {
+          height: h,
+          found: `the block's fields give the 2.0 hash ${b64(h2)}`,
+          expected: `${b64(witness.h2)}, its witness_fork_2_0 h2`,
+        });
+      }
+      this.h2Fold =
+        this.h2Fold === undefined ? undefined : foldH2(this.h2Fold, h2);
+      if (this.fork20Fold === undefined || this.h2Fold === undefined) {
         // Nothing below is known: the witness's fold is taken as given, so
         // the blocks above can be checked, but this block's own fields are
-        // bound by nothing (the fold below it is what would bind them).
+        // bound by nothing (the folds below it are what would bind them).
+        this.foldUnbound();
         this.note('pre20', h);
         this.fork20Fold = witness.fold;
       } else {
@@ -419,22 +473,91 @@ export class L1Judge {
       }
       await this.checkTransitionTxRoot(block, witness.txRoot);
     }
-    const pin = this.foldPins.get(h);
-    if (pin !== undefined) {
-      if (this.fork20Fold !== undefined) {
-        if (this.fork20Fold.equals(pin)) {
-          this.foldConfirmed();
-        } else {
+    const pin = this.foldPins.fold.get(h);
+    const h2Pin = this.foldPins.h2.get(h);
+    if (pin !== undefined || h2Pin !== undefined) {
+      let reached = pin !== undefined && h2Pin !== undefined;
+      if (pin !== undefined && this.fork20Fold !== undefined) {
+        if (!this.fork20Fold.equals(pin)) {
+          reached = false;
           addFailure(this.checks.merkle, {
             height: h,
             found: `the 2.0 seed fold through ${h} is ${b64(this.fork20Fold)}`,
             expected: `${b64(pin)}, the chain's (pinned)`,
           });
-          this.foldUnbound();
         }
+      } else {
+        reached = false;
       }
-      // From here the fold is the chain's, whatever came before.
-      this.fork20Fold = pin;
+      if (h2Pin !== undefined && this.h2Fold !== undefined) {
+        if (!this.h2Fold.equals(h2Pin)) {
+          reached = false;
+          addFailure(this.checks.hashList10, {
+            height: h,
+            found: `the fold of the 2.0 hashes through ${h} is ${b64(this.h2Fold)}`,
+            expected: `${b64(h2Pin)}, hash_list_1_0's (pinned)`,
+          });
+        }
+      } else {
+        reached = false;
+      }
+      if (reached) this.foldConfirmed();
+      else this.foldUnbound();
+      // From here the folds are the chain's, whatever came before.
+      if (pin !== undefined) this.fork20Fold = pin;
+      if (h2Pin !== undefined) this.h2Fold = h2Pin;
+    }
+  }
+
+  /**
+   * A pre-2.0 block's 2.0 hash (`hash20Of10Block`) from its own fields, the
+   * ids its links name (sorted there) and its witnessed transition
+   * `tx_root`; undefined when a field it needs is missing (the `nulls`
+   * check names it).
+   */
+  private recomputeH2(block: JudgeBlock, txRoot: Buffer): Buffer | undefined {
+    const row = block.row;
+    if (
+      row.nonce === null ||
+      row.hash === null ||
+      row.block_timestamp === null ||
+      row.last_retarget === null ||
+      row.diff === null ||
+      row.reward_pool === null ||
+      big(row.block_size) === null ||
+      big(row.weave_size) === null
+    ) {
+      return undefined;
+    }
+    const ids = [
+      ...block.txs.map((tx) => tx.link ?? tx.id),
+      ...block.strayLinks.map((l) => l.id),
+    ];
+    if (ids.some((id) => id === null)) return undefined;
+    try {
+      return hash20Of10Block(
+        {
+          height: row.height,
+          previous_block: row.previous_block,
+          nonce: row.nonce,
+          hash: row.hash,
+          block_timestamp: row.block_timestamp,
+          last_retarget: row.last_retarget,
+          diff: row.diff,
+          cumulative_diff: row.cumulative_diff,
+          reward_addr: row.reward_addr,
+          reward_pool: row.reward_pool,
+          block_size: row.block_size as number | bigint | string,
+          weave_size: row.weave_size as number | bigint | string,
+          wallet_list: row.wallet_list,
+          hash_list_merkle: row.hash_list_merkle,
+        },
+        ids as Buffer[],
+        txRoot,
+      );
+    } catch {
+      // A stored number that is not whole: not this block's 2.0 hash.
+      return undefined;
     }
   }
 
@@ -472,6 +595,57 @@ export class L1Judge {
     }
   }
 
+  /**
+   * Under `l1-4` a format-1 transaction's `data_root` column is NULL, the
+   * one value a band writes for it: its root is the witness's, which
+   * `tx_root` checks, and a column beside it would be read by an importer
+   * and bound by nothing.
+   */
+  private checkCanonicalFormat1(block: JudgeBlock): void {
+    const stray = block.txs.filter(
+      (tx) => tx.format === 1 && tx.data_root !== null,
+    );
+    if (stray.length > 0) {
+      addFailure(this.checks.witnesses, {
+        height: block.row.height,
+        found: `${stray.length} format-1 transaction(s) with a data_root (first ${b64(stray[0].id)}: ${b64(stray[0].data_root)})`,
+        expected:
+          'NULL: a format-1 data root is given only by witness_v1_data_roots, which tx_root checks',
+      });
+    }
+  }
+
+  /**
+   * A band's block columns that have one value a band writes
+   * (`column-bindings.ts`): below the 2.0 fork no `tx_root` (the protocol
+   * had none; the transition root is a witness), below the 2.5 fork no USD
+   * rates (no header carried them). A value there is bound by nothing.
+   * Bands only: a gateway's `core.db` holds whatever its header source gave.
+   */
+  private checkCanonicalBlock(block: JudgeBlock): void {
+    const row = block.row;
+    const h = row.height;
+    const stray: string[] = [];
+    if (h < this.forkHeight && row.tx_root !== null) stray.push('tx_root');
+    if (h < FORK_2_5) {
+      for (const name of [
+        'usd_to_ar_rate_dividend',
+        'usd_to_ar_rate_divisor',
+        'scheduled_usd_to_ar_rate_dividend',
+        'scheduled_usd_to_ar_rate_divisor',
+      ] as const) {
+        if (row[name] !== null) stray.push(name);
+      }
+    }
+    if (stray.length > 0) {
+      addFailure(this.checks.canonical, {
+        height: h,
+        found: `${stray.join(', ')} set`,
+        expected: 'NULL: the chain has no such value at this height',
+      });
+    }
+  }
+
   private chainTxs(block: JudgeBlock): ChainTransaction[] {
     return block.txs.map((tx) => ({
       id: tx.id ?? Buffer.alloc(0),
@@ -496,6 +670,13 @@ export class L1Judge {
     this.totals.weaveTop = weave ?? this.totals.weaveTop;
 
     this.checkTransactions(block);
+    if (block.witness !== undefined) this.checkCanonicalFormat1(block);
+    if (this.options.witnesses === true) this.checkCanonicalBlock(block);
+    if (h >= this.forkHeight) {
+      this.totals.format1Txs += block.txs.filter(
+        (tx) => tx.format === 1 && (big(tx.data_size) ?? 0n) > 0n,
+      ).length;
+    }
     const incomplete =
       block.strayLinks.length > 0 || block.txs.some((tx) => !tx.ownerKnown);
     if (incomplete) this.note('incomplete', h);
@@ -505,7 +686,8 @@ export class L1Judge {
     const previous = this.previous;
     if (previous !== undefined && h !== previous.height + 1) {
       this.foldUnbound();
-      this.fork20Fold = this.foldPins.get(h - 1);
+      this.fork20Fold = this.foldPins.fold.get(h - 1);
+      this.h2Fold = this.foldPins.h2.get(h - 1);
     }
     if (h < this.forkHeight) await this.stepFork20(block);
 
@@ -579,10 +761,9 @@ export class L1Judge {
           expected: want === null ? 'empty' : b64(want),
         });
       }
-      if (h === this.forkHeight) {
-        if (ok) this.foldConfirmed();
-        else this.foldUnbound();
-      }
+      // A run still waiting here reached no pin of the 2.0 hashes: it
+      // stays unbound, whatever the merkle says.
+      if (h === this.forkHeight) this.foldUnbound();
     }
 
     const below = big(previous.weave_size);
@@ -814,6 +995,14 @@ export class L1Judge {
         ...(this.options.witnesses === true ||
         (this.checks.witnesses.failures?.length ?? 0) > 0
           ? [this.checks.witnesses]
+          : []),
+        ...(this.options.witnesses === true ||
+        (this.checks.hashList10.failures?.length ?? 0) > 0
+          ? [this.checks.hashList10]
+          : []),
+        ...(this.options.witnesses === true ||
+        (this.checks.canonical.failures?.length ?? 0) > 0
+          ? [this.checks.canonical]
           : []),
       ],
       totals: this.totals,

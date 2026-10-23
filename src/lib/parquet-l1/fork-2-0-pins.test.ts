@@ -27,9 +27,13 @@ import { describe, it } from 'node:test';
 
 import {
   foldBlockIndexEntry,
+  foldH2,
+  FORK_2_0,
   FORK_2_0_CHECKPOINT_SHA256,
   FORK_2_0_CHECKPOINT_TOP,
   FORK_2_0_FOLD_PINS,
+  FORK_2_0_H2_PINS,
+  HASH_LIST_1_0_SHA256,
 } from './chain.js';
 
 const CHECKPOINT = 'd43ba2b9^:apps/arweave/priv/fork_2_0_checkpoint';
@@ -104,6 +108,51 @@ describe('the pinned 2.0 seed folds', () => {
         tx_root: Buffer.from(entry.tx_root, 'base64url'),
       });
       const pin = FORK_2_0_FOLD_PINS.get(h);
+      if (pin !== undefined) {
+        assert.equal(
+          fold.toString('base64url'),
+          pin.toString('base64url'),
+          `the pin at ${h}`,
+        );
+      }
+    }
+  });
+});
+
+describe('the pinned folds of the 2.0 hashes', () => {
+  const repo = findArweave();
+  const file =
+    repo === undefined
+      ? undefined
+      : path.join(repo, 'genesis_data/hash_list_1_0');
+  if (file === undefined || !fs.existsSync(file)) {
+    it('cannot be recomputed without an Arweave checkout', () => {
+      assert.ok(true, 'no genesis_data/hash_list_1_0; run `mr update`');
+    });
+
+    return;
+  }
+  const bytes = fs.readFileSync(file);
+
+  it('reads the list the build pins', () => {
+    assert.equal(
+      crypto.createHash('sha256').update(bytes).digest('hex'),
+      HASH_LIST_1_0_SHA256,
+    );
+  });
+
+  it('folds out of it at every pinned height', () => {
+    const list = JSON.parse(bytes.toString('utf8')) as string[];
+    assert.equal(list.length, FORK_2_0);
+    assert.deepEqual(
+      [...FORK_2_0_H2_PINS.keys()],
+      [...FORK_2_0_FOLD_PINS.keys()],
+    );
+    let fold: Buffer = Buffer.alloc(0);
+    // Newest first: height h is at FORK_2_0 - h - 1.
+    for (let h = 0; h < FORK_2_0; h++) {
+      fold = foldH2(fold, Buffer.from(list[FORK_2_0 - h - 1], 'base64url'));
+      const pin = FORK_2_0_H2_PINS.get(h);
       if (pin !== undefined) {
         assert.equal(
           fold.toString('base64url'),

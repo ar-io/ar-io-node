@@ -361,10 +361,13 @@ checks a signature); block hashes are random (no pre-2.0 hash
 recomputes). It is exported as one band, heights 422,230 to 422,249,
 and given its `l1-4` witnesses: each format-1 transaction's v1 data root
 from its data (Arweave's `chunk_binary`), each block's transition
-`tx_root` from its transactions, and the 2.0 seed fold from
-`SHA-384("pre20")` below the band. The chain is not mainnet's, so the
-verifier is given **its pinned folds** in place of mainnet's: that seed at
-422,229 and the fold through 422,249. A conforming implementation takes
+`tx_root` from its transactions, the 2.0 seed fold from `SHA-384("pre20")`
+below the band, and each block's 2.0 hash (`hash20Of10Block`, the 2.0–2.4
+`indep_hash` rule over its 1.0 header with its transition `tx_root` and
+sorted transaction ids) folded `SHA-384(fold ‖ h2)` from
+`SHA-384("pre20-h2")`. The chain is not mainnet's, so the verifier is given
+**its pinned folds** in place of mainnet's: both seeds at 422,229 and both
+folds through 422,249. A conforming implementation takes
 those two as its pins for these cases and no other.
 
 **`ops`** change the bands before signing, **`after`** after it, in order:
@@ -408,7 +411,7 @@ dot-files by name, size and SHA-256, signed by a fresh Ed25519 key given as
 the publisher key.
 
 **`options`**: `from`, `to`, `lookups` (false: skipped), `allowUnanchored`,
-`allowUnbound`, `allowIncomplete`, `allowUnverifiedFormat1`, `anchorMin`
+`allowUnbound`, `allowIncomplete`, `allowUnverifiedFormat1`, `allowUnsampled`, `anchorMin`
 (default 2), and `sample` (`{ blocks, txs, format1? }`: headers drawn over
 the range, signatures drawn per band, format-1 transactions drawn per band
 from blocks whose `tx_root` cannot be recomputed; seed 1, a format-1 byte
@@ -440,6 +443,9 @@ in `accepted`, included). `refuted` when the set is refused outright
 every failing check only leaves something unestablished:
 
 - `unbound`: blocks nothing binds, not accepted;
+- `sample_format1`: `--sample-format1 0` over format-1 transactions with
+  data from the 2.0 fork, not accepted (`allowUnsampled`): nothing then
+  checks they are format 1;
 - `anchor`, unless the index is shown wrong by it: not anchored because no
   source was given, too few distinct machines answered with a header that
   recomputes, or the sources disagree or served headers that do not

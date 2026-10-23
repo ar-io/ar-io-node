@@ -20,6 +20,8 @@
 import type { ArweaveNodePool } from '../onchain/arweave-nodes.js';
 import { anchorBlock, type AnchorResult } from './anchor.js';
 import { FORK_2_0 } from './block-hash.js';
+import type { Fork20Pins } from './chain.js';
+import { bindingsAssurance } from './column-bindings.js';
 import { addFailure, type VerifyCheck } from './checks.js';
 import { L1Judge, type JudgeBlockRow, type JudgeUnbound } from './judge.js';
 import { runSample, type SampleOptions, type SampleSummary } from './sample.js';
@@ -38,6 +40,12 @@ export interface L1Allowances {
   incomplete?: boolean;
   /** `--allow-unverified-format1`: blocks whose tx_root needs a v1 data root. */
   unverifiedFormat1?: boolean;
+  /**
+   * `--allow-unsampled`: with a sample asked for, `--sample-format1 0` over
+   * a range holding format-1 transactions with data from the 2.0 fork,
+   * whose format nothing else checks.
+   */
+  unsampled?: boolean;
 }
 
 export interface L1RunOptions {
@@ -65,7 +73,7 @@ export interface L1RunOptions {
    * The chain's 2.0 seed folds, for a test chain; mainnet's
    * (`FORK_2_0_FOLD_PINS`) otherwise. Never from a command line.
    */
-  foldPins?: ReadonlyMap<number, Buffer>;
+  foldPins?: Fork20Pins;
   /** Report the judge's `witnesses` check: the source reads `l1-4` bands. */
   witnesses?: boolean;
   /** Failures the caller found in rows the judge does not walk (wallets, stray tags), under the judge's check names. */
@@ -111,6 +119,8 @@ export interface L1VerifyReport {
   txRootChecked: number;
   /** Pre-2.0 blocks a witnessed 2.0 seed fold binds to the chain (`l1-4`). */
   foldBound: number;
+  /** Format-1 transactions with data from the 2.0 fork, which only the format-1 draw checks are format 1. */
+  format1Txs: number;
   checks: VerifyCheck[];
   seconds: number;
 }
@@ -293,9 +303,11 @@ export async function runL1Verify(
     }
   }
 
+  // Bands: what no check binds, by column (column-bindings.ts).
+  if (options.witnesses === true) assurance.push(...bindingsAssurance());
   if (t0.foldBound > 0) {
     assurance.push(
-      `${t0.foldBound} pre-2.0 blocks have their indep_hash, weave_size and transition tx_root bound to the chain through the witnessed 2.0 seed fold, which reaches a value the chain fixes (a fold pinned in this build, or block 422,250's hash_list_merkle, itself bound as the blocks above it are); their transactions' data sizes and data roots through the transition tx_root, recomputed`,
+      `${t0.foldBound} pre-2.0 blocks: indep_hash, weave_size and transition tx_root bound to the chain through the witnessed 2.0 seed fold, which reaches the folds pinned in this build (the last equal to block 422,250's hash_list_merkle); every other header field and the block's transaction ids bound to Arweave's checkpoint of them (genesis_data/hash_list_1_0, whose fold of 2.0 hashes is pinned in this build), Arweave-checkpointed rather than chain-bound; their transactions' data sizes and data roots through the transition tx_root, recomputed`,
     );
   }
 
@@ -351,6 +363,35 @@ export async function runL1Verify(
     assurance.push(
       'no sample: transaction ids, their order and every transaction field are unchecked against the chain',
     );
+  }
+
+  // Format 1 is checked only by the format-1 draw: a witnessed root binds
+  // a transaction's size and root, never that it is format 1, so a draw
+  // of none over a range that holds some leaves a relabel unchecked.
+  if (
+    options.sample !== undefined &&
+    (options.sample.format1PerStratum ?? options.sample.txsPerStratum) <= 0 &&
+    judged.totals.format1Txs > 0
+  ) {
+    const unsampled: VerifyCheck = {
+      name: 'sample_format1',
+      ok: true,
+      detail: `${judged.totals.format1Txs} format-1 transactions with data from the 2.0 fork, none drawn (--sample-format1 0)`,
+    };
+    if (allow.unsampled === true) {
+      accepted.push('--allow-unsampled');
+      assurance.push(
+        `--sample-format1 0, accepted (--allow-unsampled): ${judged.totals.format1Txs} format-1 transactions with data are checked to be format 1 by nothing; a format-2 transaction relabelled format 1 would pass`,
+      );
+    } else {
+      addFailure(unsampled, {
+        height: to,
+        found: unsampled.detail,
+        expected:
+          'the format-1 draw over them (--sample-format1), or --allow-unsampled',
+      });
+    }
+    checks.push(unsampled);
   }
 
   // What was left unbound, and whether it was accepted.
@@ -414,6 +455,7 @@ export async function runL1Verify(
     accountingSkipped: t.accountingSkipped,
     txRootChecked: t.txRootChecked,
     foldBound: t.foldBound,
+    format1Txs: t.format1Txs,
     checks,
     seconds: (Date.now() - started) / 1000,
   };

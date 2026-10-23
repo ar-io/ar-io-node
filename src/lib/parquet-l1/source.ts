@@ -88,7 +88,12 @@ export interface WindowRows {
    */
   witnesses?: {
     v1: Array<{ height: number; id: Buffer; data_root: Buffer }>;
-    fork20?: Array<{ height: number; tx_root: Buffer; fold: Buffer }>;
+    fork20?: Array<{
+      height: number;
+      tx_root: Buffer;
+      fold: Buffer;
+      h2: Buffer;
+    }>;
   };
 }
 
@@ -179,7 +184,7 @@ export function groupWindow(rows: WindowRows, judge: L1Judge): JudgeBlock[] {
               fork20:
                 row === undefined
                   ? null
-                  : { txRoot: row.tx_root, fold: row.fold },
+                  : { txRoot: row.tx_root, fold: row.fold, h2: row.h2 },
             }
           : {}),
       };

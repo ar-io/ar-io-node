@@ -667,7 +667,7 @@ export interface Block10Columns {
   last_retarget: number | bigint | string;
   diff: number | bigint | string;
   cumulative_diff: number | bigint | string | null;
-  /** `null` for `unclaimed`. */
+  /** `null` (or empty) for `unclaimed`. */
   reward_addr: Buffer | null;
   reward_pool: number | bigint | string;
   block_size: number | bigint | string;
@@ -712,7 +712,12 @@ export function hash20Of10Block(
     sorted,
     ib(storedInt(block.block_size)),
     ib(storedInt(block.weave_size)),
-    block.reward_addr ?? Buffer.from('unclaimed'),
+    // `unclaimed`, which an index holds as no address: NULL, or the empty
+    // bytes an indexer writes for the genesis block. An address is 32
+    // bytes, so neither can be one.
+    block.reward_addr === null || block.reward_addr.length === 0
+      ? Buffer.from('unclaimed')
+      : block.reward_addr,
     [],
     [ib(1n), Buffer.alloc(0), Buffer.alloc(0), Buffer.alloc(0)],
   ]);

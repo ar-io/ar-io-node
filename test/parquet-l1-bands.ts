@@ -144,11 +144,16 @@ export async function testChainWitnesses(
   from: number,
   to: number,
   seedLabel = 'pre20',
-): Promise<{ roots: Map<string, Buffer>; pins: Map<number, Buffer> }> {
+): Promise<{
+  roots: Map<string, Buffer>;
+  pins: { fold: Map<number, Buffer>; h2: Map<number, Buffer> };
+}> {
   const crypto = await import('node:crypto');
   const { default: Sqlite } = await import('better-sqlite3');
-  const { computeTxRoot, foldBlockIndexEntry, v1DataRoot } = await import(
-    '../src/lib/parquet-l1/chain.js'
+  const { computeTxRoot, foldBlockIndexEntry, foldH2, v1DataRoot } =
+    await import('../src/lib/parquet-l1/chain.js');
+  const { hash20Of10Block } = await import(
+    '../src/lib/parquet-l1/block-hash.js'
   );
   const db = new Sqlite(coreDb, { readonly: true });
   const roots = new Map<string, Buffer>();
@@ -157,7 +162,11 @@ export async function testChainWitnesses(
     Array<{ id: Buffer; format: number; data_size: number; data_root: null }>
   >();
   let fold = crypto.createHash('sha384').update(seedLabel).digest();
-  const pins = new Map<number, Buffer>([[from - 1, fold]]);
+  let h2Fold = crypto.createHash('sha384').update(`${seedLabel}-h2`).digest();
+  const pins = {
+    fold: new Map<number, Buffer>([[from - 1, fold]]),
+    h2: new Map<number, Buffer>([[from - 1, h2Fold]]),
+  };
   try {
     for (const row of db
       .prepare(
@@ -185,29 +194,40 @@ export async function testChainWitnesses(
       });
       txsAt.set(row.height, list);
     }
+    const links = db.prepare(
+      'SELECT transaction_id FROM stable_block_transactions WHERE block_indep_hash = ?',
+    );
     for (const block of db
       .prepare(
-        'SELECT height, indep_hash, weave_size FROM stable_blocks WHERE height BETWEEN ? AND ? ORDER BY height',
+        'SELECT * FROM stable_blocks WHERE height BETWEEN ? AND ? ORDER BY height',
       )
-      .all(from, to) as Array<{
-      height: number;
-      indep_hash: Buffer;
-      weave_size: number;
-    }>) {
+      .all(from, to) as Array<Record<string, any>>) {
+      const txRoot = (await computeTxRoot(
+        block.height,
+        txsAt.get(block.height) ?? [],
+        roots,
+      )) as Buffer;
       fold = foldBlockIndexEntry(fold, {
         indep_hash: block.indep_hash,
         weave_size: block.weave_size,
-        tx_root: (await computeTxRoot(
-          block.height,
-          txsAt.get(block.height) ?? [],
-          roots,
-        )) as Buffer,
+        tx_root: txRoot,
       });
+      h2Fold = foldH2(
+        h2Fold,
+        hash20Of10Block(
+          { ...block, height: block.height } as never,
+          (
+            links.all(block.indep_hash) as Array<{ transaction_id: Buffer }>
+          ).map((l) => l.transaction_id),
+          txRoot,
+        ),
+      );
     }
   } finally {
     db.close();
   }
-  pins.set(to, fold);
+  pins.fold.set(to, fold);
+  pins.h2.set(to, h2Fold);
   return { roots, pins };
 }
 
@@ -221,7 +241,7 @@ export async function witnessTestBand(
   coreDb: string,
   bandDir: string,
   seedLabel = 'pre20',
-): Promise<Map<number, Buffer>> {
+): Promise<{ fold: Map<number, Buffer>; h2: Map<number, Buffer> }> {
   const { buildBandWitnesses } = await import(
     '../src/lib/parquet-l1/witnesses.js'
   );

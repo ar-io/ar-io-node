@@ -37,7 +37,9 @@ import {
   computeTxRoot,
   foldBlockIndexEntry,
   FORK_2_0,
-  FORK_2_0_FOLD_PINS,
+  foldH2,
+  FORK_2_0_PINS,
+  type Fork20Pins,
   FORK_2_5,
 } from './chain.js';
 import {
@@ -47,6 +49,7 @@ import {
   WitnessSpec,
   witnessesOf,
 } from './layout.js';
+import { hash20Of10Block } from './block-hash.js';
 import { digestBandTable } from './read.js';
 
 const CHUNK = 256 * 1024;
@@ -165,13 +168,14 @@ export async function checkBandWitnesses(
       `SELECT COUNT(*) AS n FROM read_parquet(${file(FORK_2_0_WITNESS)})
        WHERE height IS NULL OR height < ${from} OR height > ${top}
           OR tx_root IS NULL OR octet_length(tx_root) NOT IN (0, 32)
-          OR fold IS NULL OR octet_length(fold) <> 48`,
+          OR fold IS NULL OR octet_length(fold) <> 48
+          OR h2 IS NULL OR octet_length(h2) <> 48`,
     );
     if (malformed > 0) {
       problems.push({
         height: from,
-        found: `${FORK_2_0_WITNESS.file}: ${malformed} rows outside heights ${from}-${top}, or with a tx_root not empty or 32 bytes, or a fold not 48 bytes`,
-        expected: `one row per height below the 2.0 fork, a tx_root of 0 or 32 bytes and a 48-byte fold`,
+        found: `${FORK_2_0_WITNESS.file}: ${malformed} rows outside heights ${from}-${top}, or with a tx_root not empty or 32 bytes, or a fold or h2 not 48 bytes`,
+        expected: `one row per height below the 2.0 fork, a tx_root of 0 or 32 bytes, a 48-byte fold and a 48-byte h2`,
       });
     }
   }
@@ -216,6 +220,12 @@ export interface WitnessInputs {
     from: number,
     to: number,
   ): Promise<Map<number, BlockIndexEntryIn>>;
+  /**
+   * Arweave's `genesis_data/hash_list_1_0`, indexed by height (entry
+   * `422250 - h - 1` is height `h`), when it has it: each block's 2.0 hash
+   * is then checked at its height, as well as through the pinned fold.
+   */
+  hashList10?(): Promise<Buffer[] | undefined>;
 }
 
 /** A band's witnesses, built and checked against the chain, in files. */
@@ -261,12 +271,12 @@ export async function buildBandWitnesses(
   inputs: WitnessInputs,
   {
     maxMissing = 0,
-    foldPins = FORK_2_0_FOLD_PINS,
+    foldPins = FORK_2_0_PINS,
   }: {
     /** Format-1 transactions a band may be published without a root for. */
     maxMissing?: number;
     /** The chain's folds; a test chain gives its own. */
-    foldPins?: ReadonlyMap<number, Buffer>;
+    foldPins?: Fork20Pins;
   } = {},
 ): Promise<BuiltWitnesses> {
   const [from, to] = band.heightRange;
@@ -274,15 +284,17 @@ export async function buildBandWitnesses(
   const pre20Top = Math.min(to, FORK_2_0 - 1);
   const hasPre20 = from < FORK_2_0;
   let fold: Buffer | undefined;
+  let h2Fold: Buffer | undefined;
   if (hasPre20) {
-    fold = from === 0 ? Buffer.alloc(0) : foldPins.get(from - 1);
-    if (fold === undefined) {
+    fold = from === 0 ? Buffer.alloc(0) : foldPins.fold.get(from - 1);
+    h2Fold = from === 0 ? Buffer.alloc(0) : foldPins.h2.get(from - 1);
+    if (fold === undefined || h2Fold === undefined) {
       throw new WitnessRefused(
         `no pinned 2.0 seed fold at ${from - 1}, below the band, to start its fold from`,
         'unavailable',
       );
     }
-    if (!foldPins.has(pre20Top)) {
+    if (!foldPins.fold.has(pre20Top) || !foldPins.h2.has(pre20Top)) {
       throw new WitnessRefused(
         `the band's fold through ${pre20Top} would reach no pinned value, so nothing could confirm it`,
         'unavailable',
@@ -293,6 +305,12 @@ export async function buildBandWitnesses(
     hasPre20 && inputs.blockIndex !== undefined
       ? await inputs.blockIndex(from, pre20Top)
       : new Map<number, BlockIndexEntryIn>();
+  // Arweave's own list of the 2.0 hashes, when given: each block's is then
+  // checked where it is, not only through the pinned fold.
+  const hashList10 =
+    hasPre20 && inputs.hashList10 !== undefined
+      ? await inputs.hashList10()
+      : undefined;
 
   const v1Csv = path.join(outDir, `${V1_DATA_ROOTS_WITNESS.name}.csv`);
   const forkCsv = path.join(outDir, `${FORK_2_0_WITNESS.name}.csv`);
@@ -313,10 +331,26 @@ export async function buildBandWitnesses(
       const hi = Math.min(to, lo + BUILD_WINDOW - 1);
       const blocks = (await duck.all(
         `SELECT height, indep_hash, CAST(weave_size AS VARCHAR) AS weave_size,
-                CAST(block_size AS VARCHAR) AS block_size, tx_root, hash_list_merkle
+                CAST(block_size AS VARCHAR) AS block_size, tx_root, hash_list_merkle,
+                previous_block, nonce, hash, CAST(block_timestamp AS VARCHAR) AS block_timestamp,
+                CAST(last_retarget AS VARCHAR) AS last_retarget, diff, cumulative_diff,
+                reward_addr, reward_pool, wallet_list
          FROM read_parquet(${blocksFile}) WHERE height BETWEEN ${lo} AND ${hi}
          ORDER BY height`,
       )) as Array<Record<string, unknown>>;
+      // Each pre-2.0 block's transaction ids, for its 2.0 hash.
+      const idsAt = new Map<number, Buffer[]>();
+      if (lo < FORK_2_0) {
+        for (const r of (await duck.all(
+          `SELECT height, transaction_id FROM read_parquet(${sql(path.join(bandDir, 'block_transactions.parquet'))})
+           WHERE height BETWEEN ${lo} AND ${Math.min(hi, FORK_2_0 - 1)}`,
+        )) as Array<Record<string, unknown>>) {
+          const h = Number(r.height);
+          const list = idsAt.get(h) ?? [];
+          list.push(asBuffer(r.transaction_id) ?? Buffer.alloc(0));
+          idsAt.set(h, list);
+        }
+      }
       // Every transaction below the 2.0 fork (each block's transition root
       // needs them all); above it, only blocks holding a format-1
       // transaction with data, the only ones a v1 root changes.
@@ -469,6 +503,15 @@ export async function buildBandWitnesses(
               computed !== undefined));
         if (own.length > 0 && !keep) missing += own.length;
         if (h < FORK_2_0) {
+          if (
+            chainRoot !== undefined &&
+            computed !== undefined &&
+            !computed.equals(chainRoot)
+          ) {
+            throw new WitnessRefused(
+              `block ${h}'s transactions give the transition tx_root ${b64(computed)}, the block index given says ${b64(chainRoot)}: the roots given, the band's transactions or the block index are wrong`,
+            );
+          }
           const txRoot = chainRoot ?? computed;
           if (txRoot === undefined) {
             throw new WitnessRefused(
@@ -481,15 +524,60 @@ export async function buildBandWitnesses(
             weave_size: weave,
             tx_root: txRoot,
           });
-          const pin = foldPins.get(h);
+          const pin = foldPins.fold.get(h);
           if (pin !== undefined && !pin.equals(fold)) {
             throw new WitnessRefused(
               `the 2.0 seed fold through ${h} is ${b64(fold)}, not the chain's ${b64(pin)}: the band's blocks or the transition tx_roots given are not the chain's`,
             );
           }
+          // The block's 2.0 hash, from its own fields: every header field,
+          // its sorted ids and its transition root.
+          let h2: Buffer;
+          try {
+            h2 = hash20Of10Block(
+              {
+                height: h,
+                previous_block: asBuffer(block.previous_block),
+                nonce: asBuffer(block.nonce) ?? Buffer.alloc(0),
+                hash: asBuffer(block.hash) ?? Buffer.alloc(0),
+                block_timestamp: String(block.block_timestamp),
+                last_retarget: String(block.last_retarget),
+                diff: String(block.diff),
+                cumulative_diff:
+                  block.cumulative_diff === null
+                    ? null
+                    : String(block.cumulative_diff),
+                reward_addr: asBuffer(block.reward_addr),
+                reward_pool: String(block.reward_pool),
+                block_size: String(block.block_size),
+                weave_size: String(block.weave_size),
+                wallet_list: asBuffer(block.wallet_list),
+                hash_list_merkle: asBuffer(block.hash_list_merkle),
+              },
+              idsAt.get(h) ?? [],
+              txRoot,
+            );
+          } catch (error) {
+            throw new WitnessRefused(
+              `block ${h}'s 2.0 hash cannot be taken from its fields: ${(error as Error).message}`,
+            );
+          }
+          const listed = hashList10?.[h];
+          if (listed !== undefined && !listed.equals(h2)) {
+            throw new WitnessRefused(
+              `block ${h}'s fields give the 2.0 hash ${b64(h2)}, Arweave's hash_list_1_0 lists ${b64(listed)}`,
+            );
+          }
+          h2Fold = foldH2(h2Fold as Buffer, h2);
+          const h2Pin = foldPins.h2.get(h);
+          if (h2Pin !== undefined && !h2Pin.equals(h2Fold)) {
+            throw new WitnessRefused(
+              `the fold of the 2.0 hashes through ${h} is ${b64(h2Fold)}, not hash_list_1_0's ${b64(h2Pin)}: a header field of the band's blocks is not Arweave's`,
+            );
+          }
           await line(
             forkOut as ReturnType<typeof createWriteStream>,
-            `${h},${txRoot.toString('hex')},${fold.toString('hex')}`,
+            `${h},${txRoot.toString('hex')},${fold.toString('hex')},${h2.toString('hex')}`,
           );
         }
         if (h === FORK_2_0 && fold !== undefined) {

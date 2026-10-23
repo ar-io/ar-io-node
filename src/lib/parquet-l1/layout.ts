@@ -460,7 +460,10 @@ export const V1_DATA_ROOTS_WITNESS: WitnessSpec = {
   ],
 };
 
-/** `witness_fork_2_0`: below the 2.0 fork, each block's transition `tx_root` and the 2.0 seed fold after it. */
+/**
+ * `witness_fork_2_0`: below the 2.0 fork, each block's transition
+ * `tx_root`, the 2.0 seed fold after it, and its 2.0 hash (`h2`).
+ */
 export const FORK_2_0_WITNESS: WitnessSpec = {
   name: 'fork_2_0',
   file: 'witness_fork_2_0.parquet',
@@ -469,6 +472,7 @@ export const FORK_2_0_WITNESS: WitnessSpec = {
     col('height', 'UBIGINT'),
     col('tx_root', 'BLOB'),
     col('fold', 'BLOB'),
+    col('h2', 'BLOB'),
   ],
 };
 
@@ -485,14 +489,18 @@ export const FORK_2_0_WITNESS: WitnessSpec = {
  *   transaction whose data no node serves has no row, and its block stays
  *   unbound (`txRootFormat1`), as under `l1-3`.
  * - `fork_2_0` (a band holding heights below the 2.0 fork): one row
- *   `(height, tx_root, fold)` per pre-2.0 height: the block's transition
- *   `tx_root` (empty for a block without transactions), recomputed from its
- *   transactions and their v1 roots, and the 2.0 seed fold after it
- *   (`foldBlockIndexEntry` of the fold below and `[indep_hash, weave_size,
- *   tx_root]`). The fold at 422,249 is block 422,250's `hash_list_merkle`,
- *   and is pinned with others ({@link FORK_2_0_FOLD_PINS}), so the fold
- *   binds each pre-2.0 block's hash, weave size and transactions to the
- *   chain.
+ *   `(height, tx_root, fold, h2)` per pre-2.0 height: the block's
+ *   transition `tx_root` (empty for a block without transactions),
+ *   recomputed from its transactions and their v1 roots; the 2.0 seed fold
+ *   after it (`foldBlockIndexEntry` of the fold below and `[indep_hash,
+ *   weave_size, tx_root]`), whose value at 422,249 is block 422,250's
+ *   `hash_list_merkle`, pinned with others (`FORK_2_0_FOLD_PINS`); and the
+ *   block's 2.0 hash (`hash20Of10Block`: every header field, its sorted
+ *   transaction ids and its transition `tx_root`), which Arweave lists in
+ *   `genesis_data/hash_list_1_0` and whose fold is pinned too
+ *   (`FORK_2_0_H2_PINS`). The first binds each pre-2.0 block's hash,
+ *   weave size and transactions to the chain; the second binds every other
+ *   header field to Arweave's checkpoint of them.
  *
  * Every row is checked; none is trusted. Both are derived from the chain,
  * not from the tables, so they are left out of the band's id.

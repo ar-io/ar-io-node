@@ -20,10 +20,13 @@ import { describe, it } from 'node:test';
 import {
   computeTxRoot,
   foldBlockIndexEntry,
+  foldH2,
+  type Fork20Pins,
   FORK_2_0,
   FORK_2_0_FOLD_PINS,
   nextHashListMerkle,
 } from './chain.js';
+import { hash20Of10Block } from './block-hash.js';
 import { JudgeBlock, JudgeTx, L1Judge } from './judge.js';
 
 const FROM = FORK_2_0 - 5;
@@ -53,8 +56,8 @@ interface Chain {
   blocks: JudgeBlock[];
   /** The v1 data root of every format-1 transaction with data, by base64url id. */
   roots: Map<string, Buffer>;
-  /** The test chain's pins: the fold below FROM and through FORK_2_0 - 1. */
-  pins: Map<number, Buffer>;
+  /** The test chain's pins: both folds below FROM and through FORK_2_0 - 1. */
+  pins: { fold: Map<number, Buffer>; h2: Map<number, Buffer> };
 }
 
 /**
@@ -64,9 +67,12 @@ interface Chain {
  */
 async function buildChain(): Promise<Chain> {
   const roots = new Map<string, Buffer>();
-  const pins = new Map<number, Buffer>();
   let fold = crypto.randomBytes(48);
-  pins.set(FROM - 1, fold);
+  let h2Fold = crypto.randomBytes(48);
+  const pins = {
+    fold: new Map<number, Buffer>([[FROM - 1, fold]]),
+    h2: new Map<number, Buffer>([[FROM - 1, h2Fold]]),
+  };
   let previous: JudgeBlock | undefined;
   let weave = 1_000_000n;
   const blocks: JudgeBlock[] = [];
@@ -155,9 +161,13 @@ async function buildChain(): Promise<Chain> {
               return [id, roots.get(id) as Buffer];
             }),
         ),
-        fork20: { txRoot: root, fold },
+        fork20: { txRoot: root, fold, h2: h2Of(block, root) },
       };
-      if (h === FORK_2_0 - 1) pins.set(h, fold);
+      h2Fold = foldH2(h2Fold, block.witness.fork20!.h2);
+      if (h === FORK_2_0 - 1) {
+        pins.fold.set(h, fold);
+        pins.h2.set(h, h2Fold);
+      }
     } else {
       block.row.hash_list_merkle =
         h === FORK_2_0
@@ -183,12 +193,25 @@ async function buildChain(): Promise<Chain> {
   return { blocks, roots, pins };
 }
 
+/** A pre-2.0 block's 2.0 hash, as the chain lists it. */
+const h2Of = (block: JudgeBlock, txRoot: Buffer): Buffer =>
+  hash20Of10Block(
+    block.row as never,
+    block.txs.map((t) => t.id as Buffer),
+    txRoot,
+  );
+
 async function judgeChain(
   blocks: JudgeBlock[],
-  pins: ReadonlyMap<number, Buffer>,
+  pins: Fork20Pins,
   from = FROM,
+  options: { txRoot?: boolean } = {},
 ) {
-  const judge = new L1Judge(from, TO, { foldPins: pins, witnesses: true });
+  const judge = new L1Judge(from, TO, {
+    foldPins: pins,
+    witnesses: true,
+    ...options,
+  });
   for (const b of blocks) await judge.step(b);
   const out = judge.finish();
   const failing = out.checks.filter((c) => !c.ok).map((c) => c.name);
@@ -213,13 +236,75 @@ describe('L1Judge with l1-4 witnesses', () => {
     assert.ok(out.checks.some((c) => c.name === 'witnesses' && c.ok));
   });
 
-  it('binds through block 422,250 alone when no pin is crossed but the start', async () => {
+  it('binds nothing through block 422,250 alone: the 2.0 hashes reach no pin', async () => {
     const { blocks, pins } = await buildChain();
-    const startOnly = new Map([[FROM - 1, pins.get(FROM - 1) as Buffer]]);
+    const startOnly = {
+      fold: new Map([[FROM - 1, pins.fold.get(FROM - 1) as Buffer]]),
+      h2: new Map([[FROM - 1, pins.h2.get(FROM - 1) as Buffer]]),
+    };
     const out = await judgeChain(blocks, startOnly);
     assert.deepEqual(out.failing, []);
-    assert.deepEqual(out.unbound, {});
-    assert.equal(out.totals.foldBound, FORK_2_0 - FROM);
+    assert.equal(out.unbound.pre20?.blocks, FORK_2_0 - FROM);
+    assert.equal(out.totals.foldBound, 0);
+  });
+
+  for (const [column, forge] of [
+    ['block_timestamp', (v: any) => Number(v) + 86_400],
+    ['reward_addr', () => Buffer.alloc(32, 0xee)],
+    ['diff', () => '2'],
+    ['cumulative_diff', () => '9'],
+    ['last_retarget', (v: any) => Number(v) + 1],
+    ['nonce', () => Buffer.alloc(32, 0xaa)],
+    ['hash', () => Buffer.alloc(32, 0xbb)],
+    ['reward_pool', () => '999'],
+    ['wallet_list', () => Buffer.alloc(48, 0xcc)],
+  ] as Array<[keyof JudgeBlock['row'], (v: unknown) => unknown]>) {
+    it(`refutes a forged pre-2.0 ${String(column)}, its 2.0 hash witnessed or not`, async () => {
+      const { blocks, pins } = await buildChain();
+      const b = blocks[2];
+      (b.row as any)[column] = forge(b.row[column]);
+      // As witnessed, the 2.0 hash is not the one the forged fields give.
+      let out = await judgeChain(blocks, pins);
+      assert.deepEqual(out.failing, ['hash_list_1_0']);
+      assert.equal(out.unbound.pre20?.blocks, FORK_2_0 - FROM);
+      assert.equal(out.totals.foldBound, 0);
+      // With the forged block's 2.0 hash witnessed too, its fold does not
+      // reach hash_list_1_0's pin.
+      b.witness!.fork20!.h2 = h2Of(b, b.witness!.fork20!.txRoot);
+      out = await judgeChain(blocks, pins);
+      assert.deepEqual(out.failing, ['hash_list_1_0']);
+      assert.match(
+        out.checks.find((c) => c.name === 'hash_list_1_0')?.failures?.[0]
+          .found ?? '',
+        /fold of the 2\.0 hashes/,
+      );
+      assert.equal(out.totals.foldBound, 0);
+    });
+  }
+
+  it('refutes a transaction id the 2.0 hash does not list', async () => {
+    const { blocks, pins } = await buildChain();
+    const b = blocks[2];
+    const tx = b.txs[1];
+    tx.id = crypto.randomBytes(32);
+    tx.link = tx.id;
+    const out = await judgeChain(blocks, pins);
+    assert.ok(out.failing.includes('hash_list_1_0'), out.failing.join());
+  });
+
+  it('fails a format-1 transaction that carries a data_root beside its witness', async () => {
+    const { blocks, pins } = await buildChain();
+    const post = blocks.find((b) => b.row.height === FORK_2_0 + 1)!;
+    post.txs.find((t) => t.format === 1)!.data_root = crypto.randomBytes(32);
+    const out = await judgeChain(blocks, pins);
+    assert.deepEqual(out.failing, ['witnesses']);
+  });
+
+  it('counts nothing as fold-bound under --skip-tx-root', async () => {
+    const { blocks, pins } = await buildChain();
+    const out = await judgeChain(blocks, pins, FROM, { txRoot: false });
+    assert.deepEqual(out.failing, []);
+    assert.equal(out.totals.foldBound, 0);
   });
 
   it('leaves an l1-3 chain where it was: pre20 and txRootFormat1 unbound', async () => {
@@ -260,7 +345,7 @@ describe('L1Judge with l1-4 witnesses', () => {
   it('fails a wrong transition tx_root, even with every fold rebuilt on it', async () => {
     const { blocks, pins } = await buildChain();
     // A forger changes one witnessed tx_root and recomputes the folds above.
-    let fold = pins.get(FROM - 1) as Buffer;
+    let fold = pins.fold.get(FROM - 1) as Buffer;
     for (const b of blocks.filter((x) => x.row.height < FORK_2_0)) {
       const w = b.witness!.fork20!;
       const txRoot =
@@ -270,12 +355,18 @@ describe('L1Judge with l1-4 witnesses', () => {
         weave_size: b.row.weave_size as bigint,
         tx_root: txRoot,
       });
-      b.witness = { ...b.witness!, fork20: { txRoot, fold } };
+      b.witness = {
+        ...b.witness!,
+        fork20: { txRoot, fold, h2: h2Of(b, txRoot) },
+      };
     }
     const out = await judgeChain(blocks, pins);
-    // Its transactions do not give it, and the fold no longer reaches the
-    // chain's: both the pin and block 422,250's merkle refute it.
-    assert.deepEqual(out.failing, ['hash_list_merkle', 'tx_root']);
+    // Its transactions do not give it, and neither fold reaches its pin.
+    assert.deepEqual(out.failing, [
+      'hash_list_merkle',
+      'tx_root',
+      'hash_list_1_0',
+    ]);
     assert.equal(out.totals.foldBound, 0);
   });
 
@@ -298,8 +389,8 @@ describe('L1Judge with l1-4 witnesses', () => {
 
   it('fails a fold that reaches a value other than the pinned one', async () => {
     const { blocks, pins } = await buildChain();
-    const wrong = new Map(pins);
-    wrong.set(FORK_2_0 - 1, crypto.randomBytes(48));
+    const wrong = { fold: new Map(pins.fold), h2: pins.h2 };
+    wrong.fold.set(FORK_2_0 - 1, crypto.randomBytes(48));
     const out = await judgeChain(blocks, wrong);
     assert.ok(out.failing.includes('hash_list_merkle'), out.failing.join());
   });
@@ -310,15 +401,17 @@ describe('L1Judge with l1-4 witnesses', () => {
     blocks[2].witness = { ...blocks[2].witness!, fork20: null };
     const out = await judgeChain(blocks, pins);
     assert.deepEqual(out.failing, []);
-    // FROM and FROM + 1 waited on the fold through the gap; the gap itself;
-    // FROM + 3 took its fold as given; FROM + 4 is bound through the pin.
+    // FROM and FROM + 1 waited on the folds through the gap; the gap
+    // itself; above it the 2.0 hashes have no fold to continue from, so
+    // nothing reaches their pin.
     assert.deepEqual(out.unbound.pre20?.heights, [
       FROM,
       FROM + 1,
       gap,
       gap + 1,
+      gap + 2,
     ]);
-    assert.equal(out.totals.foldBound, 1);
+    assert.equal(out.totals.foldBound, 0);
   });
 
   it('leaves a block whose v1 root is missing in txRootFormat1, its header still bound', async () => {
@@ -338,12 +431,20 @@ describe('L1Judge with l1-4 witnesses', () => {
 
   it('takes the first fold as given when nothing pins the one below the run', async () => {
     const { blocks, pins } = await buildChain();
-    const noStart = new Map(pins);
-    noStart.delete(FROM - 1);
+    const noStart = { fold: new Map(pins.fold), h2: pins.h2 };
+    noStart.fold.delete(FROM - 1);
     const out = await judgeChain(blocks, noStart);
     assert.deepEqual(out.failing, []);
     assert.deepEqual(out.unbound.pre20?.heights, [FROM]);
     assert.equal(out.totals.foldBound, FORK_2_0 - FROM - 1);
+    // The 2.0 hashes have no witnessed fold to take: without their pin
+    // below, nothing of the run is bound.
+    const noH2Start = { fold: pins.fold, h2: new Map(pins.h2) };
+    noH2Start.h2.delete(FROM - 1);
+    const none = await judgeChain(blocks, noH2Start);
+    assert.deepEqual(none.failing, []);
+    assert.equal(none.unbound.pre20?.blocks, FORK_2_0 - FROM);
+    assert.equal(none.totals.foldBound, 0);
   });
 
   it("checks block 422,250's hash_list_merkle against mainnet's pin even without witnesses", async () => {
