@@ -147,3 +147,13 @@ export interface IndexBandExportCLIOptions extends GlobalCLIOptions {
   output?: string;
   force?: boolean;
 }
+
+export interface IndexCensusCLIOptions extends GlobalCLIOptions {
+  bundlesDb?: string;
+  from?: string;
+  to?: string;
+  roots?: string;
+  output?: string;
+  force?: boolean;
+  bucket?: string;
+}

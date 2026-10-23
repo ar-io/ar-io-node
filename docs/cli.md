@@ -34,6 +34,7 @@ The wrapper mounts only what a command needs:
 | `index-band-*` | `INDEX_SWARM_DATA_PATH` (default `./data/indexes`) at `data/indexes`, and the gateway's Docker network (`DOCKER_NETWORK_NAME`, default `ar-io-network`), so `--gateway-url http://core:4000` reaches the gateway |
 | `index-band-export` | Also `SQLITE_DATA_PATH` (default `./data/sqlite`) read-only at `data/sqlite`; `CLICKHOUSE_URL`, `CLICKHOUSE_USER` and `CLICKHOUSE_PASSWORD`, passed by name, so not on the command line (`docker inspect` of the running container shows them); and `INDEX_EXPORT_SECRETS_DIR`, if set, read-only at `/run/secrets/index-export` for peers' password files |
 | `index-l1-*` | `INDEX_SWARM_DATA_PATH` read-only at `data/indexes`; `SQLITE_DATA_PATH` at `data/sqlite`, read-write for `index-l1-import` and read-only for `index-l1-verify` and `index-l1-audit`; for `index-l1-verify --bands-dir`, a spill folder (below); and the gateway's Docker network, so `--data-from`, `--anchor-from` or `--registry-url` can name `http://core:4000`. A `--publication` file is mapped like the other paths |
+| `index-census` | `SQLITE_DATA_PATH` read-only at `data/sqlite`; `CLICKHOUSE_URL`, `CLICKHOUSE_USER` and `CLICKHOUSE_PASSWORD`, passed by name; `INDEX_SWARM_DATA_PATH` at `data/indexes`, the only place `--output` may go; and the gateway's Docker network, where `CLICKHOUSE_URL` points |
 | `index-l2-*` | `INDEX_SWARM_DATA_PATH` read-only at `data/indexes`, and the gateway's Docker network, so `--gateway-url` can name `http://core:4000` |
 | any `ar.io` command | Nothing, except the file a `--wallet-file` (`-w`) names, read-only. A relative path is taken from where you ran the wrapper |
 
@@ -1200,6 +1201,105 @@ but more unchecked items than `--max-unchecked` is listed in
 one with nothing verified at all. `onchain.bands` gives each band's located
 share, how many items were drawn (`drawn`, of them `drawnUniform` over
 every located item, the rest nested items on top), and how each ended.
+
+## `index-census`
+
+Checks that this gateway's ClickHouse holds every data item its bundle
+indexer says it indexed. Read-only on `bundles.db` and ClickHouse, so the
+gateway can stay up.
+
+The indexer unbundles into SQLite, and the ClickHouse import exports the
+stable rows and then prunes them from SQLite. Nothing afterwards checks
+that the rows arrived. A row pruned without being exported is gone from
+both, the bundle stays fully indexed so nothing retries it, and every index
+built from ClickHouse, along with every gateway subscribed to one, silently
+lacks the item. The first gateway this ran on was missing 1.4 million items
+from bundles unbundled over two months, none of which any other check had
+noticed.
+
+```bash
+# the whole index above a height, short roots written for re-queuing
+./tools/ar-io-node index-census --from 1778191 \
+  --output data/indexes/census/short-roots.tsv
+
+# re-check roots after re-queuing them
+./tools/ar-io-node index-census --roots data/indexes/census/requeued.txt
+```
+
+| Option | Meaning |
+| --- | --- |
+| `--bundles-db <path>` | The indexer's `bundles.db`, opened read-only (default `data/sqlite/bundles.db`) |
+| `--from <height>`, `--to <height>` | Check only roots in these heights (default: everything up to the top ClickHouse holds). Short roots with no L1 row in ClickHouse are reported only without a range |
+| `--roots <path>` | Check only these root transactions, one id per line or the first column of a TSV (`-` reads stdin). Each is checked item by item, complete or not |
+| `--output <path>` | Write each short root as a TSV line; with `--force`, replace an existing file |
+| `--bucket <blocks>` | Height bucket for `missingByHeight` (default 100000) |
+
+It needs ClickHouse's `transaction_ids` table backfilled (see
+`src/database/clickhouse/schema.sql`), which the census uses to look items
+up by id.
+
+**How it decides.** Stage 1 compares, per root transaction, the indexer's
+matched item count (summed over the root's bundles, nested ones included)
+with the distinct ids ClickHouse holds under that root, a window of heights
+at a time. Roots with a bundle still being unbundled are left out. Stage 2
+takes only the roots that came up short and looks up every item id
+`bundle_data_items` lists for them, which the indexer keeps when it prunes the
+item rows. Each item is then one of:
+
+| State | Meaning | What to do |
+| --- | --- | --- |
+| `here` | In `transactions` under this root | Nothing |
+| `elsewhere` | In `transactions` under another root only. An item in two bundles is stored once, under the first flushed, so the second bundle only *looks* short | Nothing |
+| `expired` | In `transaction_ids` but not `transactions`: imported, then removed (by the TTL rules, unless you removed it yourself). `transaction_ids` has no TTL | Nothing, if your TTL rules meant it |
+| `missing` | In neither: never imported | Re-queue the bundle: `POST /ar-io/admin/queue-bundle` |
+
+A root's `class` is its worst item: `missing`, else `expired`, else
+`duplicate`, else `complete` (the indexer's count was high), or `unlisted`
+when `bundles.db` lists no items for it. Re-queuing is safe to repeat: the
+SQLite flush ignores rows it already has and ClickHouse keeps one row per
+key. Re-queue just after an import cycle finishes, then run the census again
+with `--roots` after the next cycle to confirm.
+
+It reads `transactions` in windows of 10,000 heights and ids in chunks of
+1,000, with the same low priority and memory caps as `index-band-export`.
+On a gateway with 240 million ClickHouse rows, the 250,000 heights above
+1,778,191 took nine minutes.
+
+### `index-census` result
+
+```json
+{
+  "bundlesDb": "data/sqlite/bundles.db",
+  "output": "data/indexes/census/short-roots.tsv",
+  "heightRange": [1778191, 2025573],
+  "roots": {
+    "indexed": 820805, "checked": 119618, "notIndexed": 0, "inProgress": 24147,
+    "outOfRange": 701187, "complete": 104761, "short": 14857,
+    "byClass": { "missing": 7713, "expired": 0, "duplicate": 7144, "complete": 1, "unlisted": 0 },
+    "withoutL1Row": 0
+  },
+  "items": { "expected": 48742937, "here": 47315652, "elsewhere": 14392, "expired": 0, "missing": 1412891 },
+  "missingByHeight": { "1800000": 96581, "1900000": 1316308, "2000000": 2 },
+  "stalledBundles": { "topLevel": 16896, "nested": 28611 },
+  "seconds": 525.7
+}
+```
+
+`roots.complete` counts the short roots stage 2 found complete as well as the
+roots stage 1 never flagged, so `complete + short = checked`. `roots.inProgress`
+counts roots with a bundle not fully indexed across the whole `bundles.db` (or
+the `--roots` list), not just the height range; bundles that will never
+unbundle keep their root there permanently. `stalledBundles`
+counts bundles that were queued but never unbundled and haven't been queued
+again for a day: most are not bundles at all (data tagged `Bundle-Format`,
+ANS-102 JSON bundles) or their data is unavailable. It counts them; it does
+not judge them. The TSV has the columns `root`, `height`, `expected`,
+`held_under_root`, `listed`, `here`, `elsewhere`, `expired`, `missing` and
+`class`. The roots to re-queue are those of class `missing`:
+
+```bash
+awk -F'\t' '$10 == "missing" { print $1 }' short-roots.tsv
+```
 
 ## For scripts and agents
 
