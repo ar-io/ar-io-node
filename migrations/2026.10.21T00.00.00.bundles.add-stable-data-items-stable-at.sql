@@ -1,0 +1,25 @@
+-- up migration
+--
+-- Record when each stable data item row was written (flushed), so the
+-- ClickHouse import can prune exactly what its export read.
+--
+-- The import reads a threshold, exports a height range of stable_data_items,
+-- then deletes the rows in that range below the threshold. It used
+-- `indexed_at`, but the flush copies `indexed_at` from new_data_items: a row
+-- keeps the time its item was first indexed, not the time it became stable.
+-- A bundle unbundled earlier (or re-queued) and flushed while a batch is
+-- exporting lands with an `indexed_at` below the threshold, after the export
+-- has read the range: the prune deletes it, it is never exported, and its
+-- bundle stays fully indexed, so nothing retries it. turbo-gateway.com lost
+-- items this way that only a per-item census (`ar-io-node index-census`)
+-- found.
+--
+-- `stable_at` is stamped by the flush statement itself, while it holds the
+-- write lock, so a row stamped below a threshold read from committed rows was
+-- committed before that read, and any export started after the read sees it.
+--
+-- Nullable and unindexed: ADD COLUMN is instant on a large table, rows from
+-- before this migration read as 0 (they predate any threshold), and the prune
+-- reads by height range, which is indexed.
+
+ALTER TABLE stable_data_items ADD COLUMN stable_at INTEGER;

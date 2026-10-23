@@ -122,14 +122,15 @@ batch_has_data_items() {
     [ "$found" = "1" ]
 }
 
-# Prints how many stable data items in [start, end] have indexed_at below
-# (or at/above, with "newer") the given threshold, or nothing on any error.
+# Prints how many stable data items in [start, end] have the prune column
+# ($prune_column, set per batch) below (or at/above, with "newer") the given
+# threshold, or nothing on any error.
 count_stable_items_in_range() {
     local start=$1 end=$2 threshold=$3 cmp="<"
     [ "${4:-}" = newer ] && cmp=">="
     [ -f "$bundles_db_path" ] || return 0
     sqlite3 "$bundles_db_path" \
-        "SELECT count(*) FROM stable_data_items WHERE height >= $start AND height <= $end AND indexed_at $cmp $threshold;" 2>/dev/null
+        "SELECT count(*) FROM stable_data_items WHERE height >= $start AND height <= $end AND ${prune_column:-indexed_at} $cmp $threshold;" 2>/dev/null
 }
 
 # Block until the gateway's parquet-export singleton is no longer 'running',
@@ -380,10 +381,14 @@ while true; do
         fi
 
         # Step 0: Refresh debug info for this batch so the prune threshold
-        # is taken *before* this batch's export runs. The export will see
-        # at least every item with indexed_at <= batch_max_indexed_at, so
-        # using that same value for the subsequent prune call guarantees
-        # prune can never remove un-exported items.
+        # is taken *before* this batch's export runs. The threshold is
+        # maxStableDataItemStableAt: stable_at is stamped when a row is
+        # flushed, under the write lock, so every row below it was committed
+        # before it was read, and the export (which starts after) sees it.
+        # A gateway without stable_at falls back to maxStableDataItemIndexedAt,
+        # which does not give that guarantee: the flush copies indexed_at from
+        # new_data_items, so a bundle unbundled earlier and flushed during the
+        # export lands below the threshold and is pruned unexported.
         batch_debug_start_time=$(date +%s)
         batch_debug_info="$(fetch_debug_info)"
         batch_debug_status=$?
@@ -403,6 +408,17 @@ while true; do
         fi
 
         batch_max_indexed_at="$(echo "$batch_debug_info" | jq -r '.db.timestamps.maxStableDataItemIndexedAt' 2>/dev/null)"
+        batch_max_stable_at="$(echo "$batch_debug_info" | jq -r '.db.timestamps.maxStableDataItemStableAt // empty' 2>/dev/null)"
+        if [[ "$batch_max_stable_at" =~ ^[0-9]+$ ]]; then
+            prune_field="stableAtThreshold"
+            prune_threshold="$batch_max_stable_at"
+            prune_column="IFNULL(stable_at, 0)"
+        else
+            # Older gateway, or no row flushed since the upgrade.
+            prune_field="indexedAtThreshold"
+            prune_threshold="$batch_max_indexed_at"
+            prune_column="indexed_at"
+        fi
         pre_prune_min_stable="$(echo "$batch_debug_info" | jq -r '.db.heights.minStableDataItem' 2>/dev/null)"
 
         if [ -z "$batch_max_indexed_at" ] || [ "$batch_max_indexed_at" = "null" ] || [ -z "$pre_prune_min_stable" ] || [ "$pre_prune_min_stable" = "null" ]; then
@@ -592,9 +608,8 @@ while true; do
             import_success=false
         fi
 
-        # Step 4: Prune stable data items (only if import succeeded).
-        # Uses $batch_max_indexed_at captured BEFORE this batch's export, so
-        # the prune threshold is never newer than what the export snapshot saw.
+        # Step 4: Prune stable data items (only if import succeeded), below
+        # the threshold captured BEFORE this batch's export (see Step 0).
         if [ "$import_success" = true ]; then
             echo "Pruning stable data items from height $current_height to $end_height..."
             prune_start_time=$(date +%s)
@@ -602,7 +617,7 @@ while true; do
                 -H "Authorization: Bearer $ADMIN_API_KEY" \
                 -H "Content-Type: application/json" \
                 -d "{
-                    \"indexedAtThreshold\": $batch_max_indexed_at,
+                    \"$prune_field\": $prune_threshold,
                     \"startHeight\": $current_height,
                     \"endHeight\": $end_height
                 }"
@@ -626,8 +641,8 @@ while true; do
                 range_left=""
                 range_newer=""
                 if [ "$skip_empty_batches" = true ]; then
-                    range_left="$(count_stable_items_in_range "$current_height" "$end_height" "$batch_max_indexed_at")"
-                    range_newer="$(count_stable_items_in_range "$current_height" "$end_height" "$batch_max_indexed_at" newer)"
+                    range_left="$(count_stable_items_in_range "$current_height" "$end_height" "$prune_threshold")"
+                    range_newer="$(count_stable_items_in_range "$current_height" "$end_height" "$prune_threshold" newer)"
                 fi
                 if [[ "$range_left" =~ ^[0-9]+$ ]] && [[ "$range_newer" =~ ^[0-9]+$ ]]; then
                     if [ "$range_left" -eq 0 ]; then
