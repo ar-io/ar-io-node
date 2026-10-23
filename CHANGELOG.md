@@ -32,6 +32,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **The block importer stored a rounded `reward_pool` for blocks 585,633
+  to 633,719.** Headers before the 2.4 fork (633,720) write `reward_pool`
+  as a bare JSON number, and from 585,633 it passes 2^53, so `JSON.parse`
+  rounded an odd value to an even neighbour (600,570 was stored as
+  `...668`; the chain has `...667`). Block headers are now parsed with long
+  integers kept exact, a cached header holding a rounded number is fetched
+  again, and `sanityCheckBlock` refuses one. Gateways that indexed those
+  heights themselves, or imported L1 bands built from them, hold the
+  rounded values; `index-l1-verify` reports them as sample mismatches on
+  `reward_pool`. The shared parser also stopped quoting digits inside JSON
+  strings, which made such text unparseable.
+
 - **`index-l1-verify` and `index-l1-import` could pass, or write, an L1
   index that was not the chain's; both now fail closed.** Three audits
   (2026-10-22) found ways through. Fixed:
