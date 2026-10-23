@@ -4,7 +4,49 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased]
+## [Release 86] - 2026-10-23
+
+This is an **urgent, recommended release** focused on **the Node.js
+Brotli remote-code-execution fix (CVE-2026-111497), index verification
+that fails closed, and exact chain data**. Key highlights include the core
+image moving from the end-of-life Node.js 20 to 22.23.4, and the default
+observer image (`2aa908dc`, which also cranks epochs) moving to 22.23.4,
+closing the Brotli decoder RCE and the TLS hostname-check bypasses from
+Node's October 21 security release (**upgrade both images today**);
+`index-l1-verify` and `index-l1-import` binding an L1 index to the chain
+(anchor headers recomputed and agreed by two machines, every transaction
+bound or sampled) and failing closed; `index-l2-verify`, which checks a
+`parquet-l2` index against a signed publication and reads the roots it
+names from Arweave nodes with every byte proven; a pre-2.4 block's
+`reward_pool` stored exactly instead of rounded; `parquet-l2` layout
+`l2-2` with a key lookup and stats per band; opting out of Index Sharing
+now also stops seeding; and an upstream ArNS undername limit of 0 no
+longer read as 10.
+
+### Security
+
+- **The core image now runs Node.js 22.23.4, up from 20.19.6.** Node's
+  October 21, 2026 security release fixes an out-of-bounds write in its
+  bundled Brotli decoder that permits remote code execution
+  (CVE-2026-111497), plus two TLS hostname-check bypasses and a
+  `dns.resolve` truncation bug. Node 20 reached end of life in April 2026
+  and gets no fix. A gateway is exposed: its HTTP clients ask peers,
+  trusted gateways and Arweave nodes for Brotli-compressed responses and
+  decode them, and any gateway on the network can act as a peer. The
+  runtime stage now copies the pinned `node` binary onto
+  `distroless/cc-debian12` instead of using `distroless/nodejs22-debian12`,
+  whose floating tag still carried an unpatched 22.22.0 the day after the
+  fix shipped. The binary stays at `/nodejs/bin/node`, so compose files,
+  `docker-entrypoint.sh` and the `tools/` scripts are unchanged. Operators
+  who stopped Brotli decoding with a `NODE_OPTIONS=--require` shim can
+  drop it once they run this image. Running from source now wants Node 22
+  (`.nvmrc`).
+
+- **The observer moves to Node.js 22.23.4 for the same fixes.**
+  `OBSERVER_IMAGE_TAG` now pins an observer image built on
+  `node:22.23.4-bookworm-slim`, up from 22.13.0. The observer fetches from
+  every gateway on the network, and on a gateway that cranks epochs the
+  same process signs with the operator wallet.
 
 ### Added
 
@@ -29,6 +71,92 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   node and trusted gateways) and `L1_BAND_IMPORT_ALLOW_UNSAMPLED` (default
   false). A core migration adds `binding` and `accepted` to
   `parquet_l1_imports`. See [docs/cli.md](docs/cli.md#index-l1-verify).
+
+- **`parquet-l2` layout `l2-2`: a key lookup and stats per band, derived
+  for tag names the publisher chooses.** `lookup_key.parquet` holds, for
+  each value of the index's `keyTags` (an ArDrive `Drive-Id`,
+  `Parent-Folder-Id`), the heights at which items carry it and how many, so
+  a reader finds a value spread over a band in a row group or two and then
+  reads only the `tags` row groups at those heights, where `lookup_tag`
+  gave only the first and last height and a wide drive cost the whole band.
+  `stats.parquet` holds items and bytes per 1,000 heights, in all and by
+  each value of the index's `statTags` (`App-Name`, `Content-Type`,
+  `Entity-Type`), so a question over the whole index is answered from the
+  small files alone. Both are configured per index in
+  `INDEX_EXPORT_L2_INDEXES` (`keyTags`, `statTags`, none unless given) and
+  recorded in `band.json`; neither enters a band's id. Every band built is
+  `l2-2`, and a published `l2-1` band, or an `l2-2` band derived for other
+  tag names, is upgraded in place under its id: the two files derived from
+  its own tables, checked, moved in, and `band.json` replaced, before any
+  build and outside the time budget (`derived` in the report,
+  `index_export_runs_total{kind="derive"}`). A subscriber that does not
+  know `l2-2` refuses the band and keeps its copy: upgrade subscribers
+  first. `index-l2-verify` checks the two files as it checks the other
+  lookups. See
+  [docs/index-publication.md](docs/index-publication.md#l2-key-lookup-and-stats).
+- **`index-l2-verify`: check an L2 index (a directory of `parquet-l2`
+  bands, such as `ardrive-l2`) as anyone holding it can.** It needs no
+  gateway and no database. Each band:
+  - its id is checked against its contents, and the set for overlaps and
+    holes;
+  - every table is read row by row, in order, against `band.json`, and every
+    owner key against its address;
+  - every item's location must be laid out as ANS-104 requires, with its
+    `data_size` the payload it gives;
+  - every nested item must name a parent bundle that `parents` describes
+    where its payload starts, and every `parents` row's payload must start
+    inside it;
+  - the lookups are checked against the tables;
+  - a sample of items per band (`--onchain <n>`, 20 when not given) is read
+    at their recorded locations from Arweave nodes and checked against their
+    ids. The items are drawn uniformly over every located item of the band,
+    then nested items are added until half the draw is nested, so rare
+    nested items are always read; `--seed` repeats a run.
+  `--spill-max` sets how much the lookup check may spill (128 GB unless
+  set; the 69-million-item h1.8M band of `ardrive-l2` peaks at about 65 GB,
+  past the 16 GB `index-l1-verify` allowed before, which it now shares).
+  A band that its own publisher's newer band supersedes is left out. For L1
+  bands, `index-l1-verify` checks the chain's own commitments instead. See
+  [docs/index-verification.md](docs/index-verification.md), new, which
+  covers every index kind: what each check proves, how to reproduce a band
+  and how to repair one.
+- **Reading roots from Arweave nodes, every byte proven**
+  (`index-band-verify --arweave-nodes`, and `index-l2-verify` by default),
+  so a header check trusts no gateway:
+  - a root's signature must hash to its id and verify, binding its
+    `data_root`, and the root must be format 2 and found in a block by two
+    machines (see Fixed);
+  - every chunk's proof is validated against that `data_root` under the
+    consensus rules for its weave offset, and the chunk must hash to the
+    proof;
+  - a node serving a chunk that fails is passed over;
+  - a root or chunk counts as gone (`unreadable`) only when every node that
+    answered said 404. Busy nodes (429, 5xx) and chunks no node could prove
+    are errors, never missing data, and a missing chunk is only that item's,
+    not its root's.
+
+### Changed
+
+- The `CHUNK_METADATA_ANCHOR_*` settings now pass through
+  `docker-compose.yaml` to core, so they can be set from `.env`. Before this,
+  only a direct `yarn start` saw them.
+- A lookup of an ArNS name that is not registered no longer logs a warning
+  and an error. "Base name not found in ArNS names cache" is now `debug` (the
+  `arns_name_cache_miss_total` counter still counts it), "Unable to resolve
+  name against all resolvers" is now `info`, and "Error during parallel
+  resolution" is logged only when a resolver timed out or was aborted, not
+  when every resolver simply found no record. A resolver that throws still
+  logs its own error.
+- **Opting out of Index Sharing stops seeding.** With
+  `INDEX_SWARM_SUBSCRIBE=[]` (or on the default publisher, whose default
+  subscription skips itself) the `index-swarm` sidecar now takes the
+  subscriber's torrents out of the engine once per start, files kept:
+  installed bands stay installed and the gateway still searches them, but
+  they are no longer seeded, and a download in progress stops. Torrents a
+  publisher seeds from `published/` are unaffected. Subscribing again seeds
+  the installed bands from their kept `.torrent` files, nothing fetched
+  again. Previously the engine went on seeding installed bands after an
+  opt-out.
 
 ### Fixed
 
@@ -161,136 +289,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   Gateways with `L1_BAND_IMPORT_ENABLED=true` now refuse today's `l1-3`
   bands below height 2,000,000 unless `L1_BAND_IMPORT_ALLOW_UNVERIFIED=true`.
   See [docs/cli.md](docs/cli.md#index-l1-verify).
-
-## [Release 86] - 2026-10-22
-
-This is an **urgent, recommended release** focused on **the Node.js
-Brotli remote-code-execution fix (CVE-2026-111497), checking L2 indexes
-you did not build, and ArNS undername limits**. Key highlights include the
-core image moving from the end-of-life Node.js 20 to 22.23.4, and the
-default observer image (`2aa908dc`, which also cranks epochs) moving to
-22.23.4, closing the Brotli decoder RCE and the TLS hostname-check
-bypasses from Node's October 21 security release (**upgrade both images
-today**); `index-l2-verify`, which checks a `parquet-l2` index against a
-signed publication and reads the roots it names from Arweave nodes with
-every byte proven, and fails closed; `parquet-l2` layout `l2-2` with a key
-lookup and stats per band; opting out of Index Sharing now also stops
-seeding; and an upstream ArNS undername limit of 0 no longer read as 10.
-
-### Security
-
-- **The core image now runs Node.js 22.23.4, up from 20.19.6.** Node's
-  October 21, 2026 security release fixes an out-of-bounds write in its
-  bundled Brotli decoder that permits remote code execution
-  (CVE-2026-111497), plus two TLS hostname-check bypasses and a
-  `dns.resolve` truncation bug. Node 20 reached end of life in April 2026
-  and gets no fix. A gateway is exposed: its HTTP clients ask peers,
-  trusted gateways and Arweave nodes for Brotli-compressed responses and
-  decode them, and any gateway on the network can act as a peer. The
-  runtime stage now copies the pinned `node` binary onto
-  `distroless/cc-debian12` instead of using `distroless/nodejs22-debian12`,
-  whose floating tag still carried an unpatched 22.22.0 the day after the
-  fix shipped. The binary stays at `/nodejs/bin/node`, so compose files,
-  `docker-entrypoint.sh` and the `tools/` scripts are unchanged. Operators
-  who stopped Brotli decoding with a `NODE_OPTIONS=--require` shim can
-  drop it once they run this image. Running from source now wants Node 22
-  (`.nvmrc`).
-
-- **The observer moves to Node.js 22.23.4 for the same fixes.**
-  `OBSERVER_IMAGE_TAG` now pins an observer image built on
-  `node:22.23.4-bookworm-slim`, up from 22.13.0. The observer fetches from
-  every gateway on the network, and on a gateway that cranks epochs the
-  same process signs with the operator wallet.
-
-### Added
-
-- **`parquet-l2` layout `l2-2`: a key lookup and stats per band, derived
-  for tag names the publisher chooses.** `lookup_key.parquet` holds, for
-  each value of the index's `keyTags` (an ArDrive `Drive-Id`,
-  `Parent-Folder-Id`), the heights at which items carry it and how many, so
-  a reader finds a value spread over a band in a row group or two and then
-  reads only the `tags` row groups at those heights, where `lookup_tag`
-  gave only the first and last height and a wide drive cost the whole band.
-  `stats.parquet` holds items and bytes per 1,000 heights, in all and by
-  each value of the index's `statTags` (`App-Name`, `Content-Type`,
-  `Entity-Type`), so a question over the whole index is answered from the
-  small files alone. Both are configured per index in
-  `INDEX_EXPORT_L2_INDEXES` (`keyTags`, `statTags`, none unless given) and
-  recorded in `band.json`; neither enters a band's id. Every band built is
-  `l2-2`, and a published `l2-1` band, or an `l2-2` band derived for other
-  tag names, is upgraded in place under its id: the two files derived from
-  its own tables, checked, moved in, and `band.json` replaced, before any
-  build and outside the time budget (`derived` in the report,
-  `index_export_runs_total{kind="derive"}`). A subscriber that does not
-  know `l2-2` refuses the band and keeps its copy: upgrade subscribers
-  first. `index-l2-verify` checks the two files as it checks the other
-  lookups. See
-  [docs/index-publication.md](docs/index-publication.md#l2-key-lookup-and-stats).
-- **`index-l2-verify`: check an L2 index (a directory of `parquet-l2`
-  bands, such as `ardrive-l2`) as anyone holding it can.** It needs no
-  gateway and no database. Each band:
-  - its id is checked against its contents, and the set for overlaps and
-    holes;
-  - every table is read row by row, in order, against `band.json`, and every
-    owner key against its address;
-  - every item's location must be laid out as ANS-104 requires, with its
-    `data_size` the payload it gives;
-  - every nested item must name a parent bundle that `parents` describes
-    where its payload starts, and every `parents` row's payload must start
-    inside it;
-  - the lookups are checked against the tables;
-  - a sample of items per band (`--onchain <n>`, 20 when not given) is read
-    at their recorded locations from Arweave nodes and checked against their
-    ids. The items are drawn uniformly over every located item of the band,
-    then nested items are added until half the draw is nested, so rare
-    nested items are always read; `--seed` repeats a run.
-  `--spill-max` sets how much the lookup check may spill (128 GB unless
-  set; the 69-million-item h1.8M band of `ardrive-l2` peaks at about 65 GB,
-  past the 16 GB `index-l1-verify` allowed before, which it now shares).
-  A band that its own publisher's newer band supersedes is left out. For L1
-  bands, `index-l1-verify` checks the chain's own commitments instead. See
-  [docs/index-verification.md](docs/index-verification.md), new, which
-  covers every index kind: what each check proves, how to reproduce a band
-  and how to repair one.
-- **Reading roots from Arweave nodes, every byte proven**
-  (`index-band-verify --arweave-nodes`, and `index-l2-verify` by default),
-  so a header check trusts no gateway:
-  - a root's signature must hash to its id and verify, binding its
-    `data_root`, and the root must be format 2 and found in a block by two
-    machines (see Fixed);
-  - every chunk's proof is validated against that `data_root` under the
-    consensus rules for its weave offset, and the chunk must hash to the
-    proof;
-  - a node serving a chunk that fails is passed over;
-  - a root or chunk counts as gone (`unreadable`) only when every node that
-    answered said 404. Busy nodes (429, 5xx) and chunks no node could prove
-    are errors, never missing data, and a missing chunk is only that item's,
-    not its root's.
-
-### Changed
-
-- The `CHUNK_METADATA_ANCHOR_*` settings now pass through
-  `docker-compose.yaml` to core, so they can be set from `.env`. Before this,
-  only a direct `yarn start` saw them.
-- A lookup of an ArNS name that is not registered no longer logs a warning
-  and an error. "Base name not found in ArNS names cache" is now `debug` (the
-  `arns_name_cache_miss_total` counter still counts it), "Unable to resolve
-  name against all resolvers" is now `info`, and "Error during parallel
-  resolution" is logged only when a resolver timed out or was aborted, not
-  when every resolver simply found no record. A resolver that throws still
-  logs its own error.
-- **Opting out of Index Sharing stops seeding.** With
-  `INDEX_SWARM_SUBSCRIBE=[]` (or on the default publisher, whose default
-  subscription skips itself) the `index-swarm` sidecar now takes the
-  subscriber's torrents out of the engine once per start, files kept:
-  installed bands stay installed and the gateway still searches them, but
-  they are no longer seeded, and a download in progress stops. Torrents a
-  publisher seeds from `published/` are unaffected. Subscribing again seeds
-  the installed bands from their kept `.torrent` files, nothing fetched
-  again. Previously the engine went on seeding installed bands after an
-  opt-out.
-
-### Fixed
 
 - **`index-l2-verify` could report `ok: true` on bad data; it now fails
   closed.** Three audits found ways through. Fixed:
