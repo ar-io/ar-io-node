@@ -95,7 +95,7 @@ const header = (column: string): ColumnBinding => ({
   core: [`stable_blocks.${column}`],
   bindings: pre20('checkpoint', 'sample'),
   reason:
-    "below 2.0: in the block's 2.0 hash (judge.ts recomputeH2, folded to FORK_2_0_H2_PINS); from 2.0: not in hash_list_merkle, compared field by field on the anchor block and sampled headers (anchor.ts compareHeaderWithBlock)",
+    "below 2.0: in the block's 2.0 hash (judge.ts recomputeH2, folded to FORK_2_0_H2_PINS), and compared on sampled headers; from 2.0: not in hash_list_merkle, compared field by field on the anchor block and sampled headers (anchor.ts compareHeaderWithBlock)",
 });
 
 export const COLUMN_BINDINGS: ColumnBinding[] = [
@@ -210,9 +210,9 @@ export const COLUMN_BINDINGS: ColumnBinding[] = [
     table: 'transactions',
     column: 'block_transaction_index',
     core: ['stable_transactions.block_transaction_index'],
-    bindings: pre20('none', 'sample'),
+    bindings: all('sample'),
     reason:
-      "the link's position (judge.ts 'position'); below 2.0 the 2.0 hash sorts the ids, so no hash binds their order; from 2.0 the order is compared on sampled headers",
+      "the link's position (judge.ts 'position'); no hash binds the order below 2.0 (the 2.0 hash sorts the ids), so on every era it is compared with sampled headers' txs (sample.ts; below 2.0 attested: the header --anchor-min machines agree on)",
   },
   {
     table: 'transactions',
@@ -293,18 +293,18 @@ export const COLUMN_BINDINGS: ColumnBinding[] = [
       table: 'transactions',
       column,
       core: [`stable_transactions.${column}`],
-      bindings: all('none'),
+      bindings: all('canonical'),
       reason:
-        'derived by the exporter from the first such tag (layout.ts firstTagValue); no reader recomputes it from the tags',
+        "derived from tags: the first such tag by position, names compared without case, NULL without one (layout.ts firstTagValue), recomputed from the band's tags (judge.ts checkDerivedColumns, 'canonical'); the tags themselves are bound as their transaction is (signature, sampled)",
     }),
   ),
   {
     table: 'transactions',
     column: 'offset',
     core: ['stable_transactions.offset'],
-    bindings: all('none'),
+    bindings: all('chain'),
     reason:
-      "the gateway's weave offset, copied from core.db; nothing recomputes it",
+      "NULL, or the weave offset its data ends at, recomputed from the chain-bound weave_size, block_size and the block's sizes in tx_root order with the 2.5 padding (judge.ts checkDerivedColumns, 'canonical'); NULL with no data and in the genesis block",
   },
   {
     table: 'transactions',
@@ -331,9 +331,9 @@ export const COLUMN_BINDINGS: ColumnBinding[] = [
     table: 'block_transactions',
     column: 'block_transaction_index',
     core: ['stable_block_transactions.block_transaction_index'],
-    bindings: pre20('none', 'sample'),
+    bindings: all('sample'),
     reason:
-      'as transactions.block_transaction_index: no hash binds the order below 2.0',
+      "as transactions.block_transaction_index: compared with sampled headers' txs, below 2.0 attested",
   },
   {
     table: 'block_transactions',
@@ -443,10 +443,13 @@ export function bindingsAssurance(): string[] {
     })
       .filter((x) => x !== undefined)
       .join('; ');
+  const none = list('none');
   return [
-    `columns bound only by the sample (column-bindings.ts): ${list('sample')}`,
+    `columns bound only by the sample (column-bindings.ts; below the 2.0 fork the headers are attested by --anchor-min machines, not recomputed): ${list('sample')}`,
     `columns bound only by their signature, checked on the sample: ${list('signature')}`,
-    `columns bound by nothing, as their publisher wrote them: ${list('none')}`,
+    ...(none.length > 0
+      ? [`columns bound by nothing, as their publisher wrote them: ${none}`]
+      : []),
   ];
 }
 

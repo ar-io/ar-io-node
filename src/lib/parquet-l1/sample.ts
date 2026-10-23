@@ -81,7 +81,11 @@ export const MIN_CONFIRM = 2;
 export interface SampleOptions {
   /** Seeds the draws, so a run can be repeated; reported. */
   seed: number;
-  /** Blocks whose headers are fetched, over the whole range (post-2.0 heights: below, no header recomputes). */
+  /**
+   * Blocks whose headers are fetched, over the whole range: from the 2.0
+   * fork recomputed; below it, as `confirm` machines serve them alike
+   * (attested, `blocksAttested`).
+   */
   blocks: number;
   /** Transactions whose signatures are fetched, per stratum (band), over the whole range. */
   txsPerStratum: number;
@@ -112,6 +116,12 @@ export interface SampleSummary {
   confirm: number;
   blocksDrawn: number;
   blocksChecked: number;
+  /**
+   * Of `blocksChecked`, pre-2.0 headers, which no hash recomputes: checked
+   * against the same header from `confirm` machines, their word rather
+   * than a proof (as `txsAttested`).
+   */
+  blocksAttested: number;
   blocksUnreadable: number;
   txsDrawn: number;
   /** Proven by a signature over the index's fields. */
@@ -503,6 +513,7 @@ export async function runSample(
     confirm,
     blocksDrawn: 0,
     blocksChecked: 0,
+    blocksAttested: 0,
     blocksUnreadable: 0,
     txsDrawn: 0,
     txsChecked: 0,
@@ -688,9 +699,9 @@ export async function runSample(
 
   // Blocks: a keyed uniform draw of heights, each header fetched by the
   // index's own hash.
-  if (options.blocks > 0 && to >= low) {
+  if (options.blocks > 0 && to >= from) {
     const heights = (function* () {
-      for (let h = low; h <= to; h += 1) yield h;
+      for (let h = from; h <= to; h += 1) yield h;
     })();
     const drawn = drawByKey(
       heights,
@@ -712,6 +723,65 @@ export async function runSample(
       if (row === undefined || row.indep_hash === null) {
         // The judge has failed this already; the draw cannot be read.
         lostBlock(height, `block ${height}: no indep_hash in the index`);
+        return;
+      }
+      if (height < FORK_2_0) {
+        // No pre-2.0 header recomputes: the one `confirm` machines serve
+        // alike, compared field by field and by transaction order.
+        let survey: Survey<{ key: string; header: VerifiedHeader }>;
+        try {
+          survey = await pool.survey(
+            `/block/height/${height}`,
+            (body) => {
+              const header = statedPre20Header(body, height);
+              // Agreement on what is compared, whatever else differs.
+              const key = JSON.stringify(header, (_k, v: unknown) =>
+                typeof v === 'bigint'
+                  ? v.toString()
+                  : v !== null &&
+                      typeof v === 'object' &&
+                      (v as { type?: string }).type === 'Buffer'
+                    ? Buffer.from((v as { data: number[] }).data).toString(
+                        'base64url',
+                      )
+                    : v,
+              );
+              return { key, header };
+            },
+            {
+              enough: (s) => agreedHeader(s.answers, confirm) !== undefined,
+            },
+          );
+        } catch (error) {
+          lostBlock(height, `block ${height}: ${(error as Error).message}`);
+          return;
+        }
+        const header = agreedHeader(survey.answers, confirm);
+        if (header === undefined) {
+          lostBlock(
+            height,
+            `block ${height}: no header ${confirm} machines agree on (${survey.answers.length} answered)`,
+          );
+          return;
+        }
+        summary.blocksChecked += 1;
+        summary.blocksAttested += 1;
+        const mismatches = compareHeaderWithBlock(
+          header,
+          // The transition tx_root is a witness; the header's own is not
+          // the band's (canonically NULL) column.
+          { ...row, tx_root: header.txRoot },
+          await source.idsAt(height),
+        );
+        if (mismatches.length > 0) {
+          fail({
+            height,
+            found: `the index differs from the block ${confirm} machines serve in ${mismatches
+              .map((m) => `${m.field} (index ${m.index}, chain ${m.chain})`)
+              .join('; ')}`,
+            expected: `the header ${confirm} machines agree on`,
+          });
+        }
         return;
       }
       const hash = row.indep_hash.toString('base64url');
@@ -766,10 +836,8 @@ export async function runSample(
       }
     });
     summary.detects.push(
-      `blocks: ${summary.blocksDrawn} drawn uniformly from ${low}-${to}, ${summary.blocksChecked} checked, ${summary.blocksUnreadable} unreadable (counted as possibly forged); a range in which ${share(summary.blocksDrawn, summary.blocksUnreadable)} or more of the blocks carry a forged field or transaction list would have been caught with 95% probability`,
+      `blocks: ${summary.blocksDrawn} drawn uniformly from ${from}-${to}, ${summary.blocksChecked} checked (${summary.blocksAttested} below the 2.0 fork attested: the header ${confirm} machines agree on, compared field by field and by transaction order, as no pre-2.0 header recomputes), ${summary.blocksUnreadable} unreadable (counted as possibly forged); a range in which ${share(summary.blocksDrawn, summary.blocksUnreadable)} or more of the blocks carry a forged field or transaction list would have been caught with 95% probability`,
     );
-  } else if (options.blocks > 0 && to >= from) {
-    summary.empty.push('sample_blocks');
   }
 
   // Transactions: a keyed uniform draw per stratum over the whole range,
@@ -913,4 +981,85 @@ export async function runSample(
       ? `; unreadable: ${all.slice(0, 3).join('; ')}${all.length > 3 ? ` and ${all.length - 3} more` : ''}`
       : '');
   return { check, summary, refuted };
+}
+
+/** The header `need` machines served alike, if any. */
+function agreedHeader(
+  answers: Array<{
+    machine: string;
+    value: { key: string; header: VerifiedHeader };
+  }>,
+  need: number,
+): VerifiedHeader | undefined {
+  const groups = new Map<string, Set<string>>();
+  for (const a of answers) {
+    groups.set(
+      a.value.key,
+      (groups.get(a.value.key) ?? new Set()).add(a.machine),
+    );
+  }
+  for (const [key, machines] of groups) {
+    if (machines.size >= need) {
+      return answers.find((a) => a.value.key === key)?.value.header;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * A pre-2.0 header as a node states it, read into the fields an index
+ * stores (nothing recomputes it: it is the sources' word). A field the
+ * era's header lacks (`cumulative_diff` and `hash_list_merkle` below 1.6,
+ * the USD rates below 2.5) is read as absent.
+ *
+ * @throws when the answer is not a header of this height.
+ */
+export function statedPre20Header(
+  body: unknown,
+  height: number,
+): VerifiedHeader {
+  const j = (body ?? {}) as Record<string, unknown>;
+  if (j.height !== height)
+    throw new Error(`served the block at ${String(j.height)}`);
+  const bin = (key: string) => {
+    const v = j[key];
+    if (v === undefined) return Buffer.alloc(0);
+    if (typeof v !== 'string') throw new Error(`${key} is not a string`);
+    return Buffer.from(v, 'base64url');
+  };
+  const int = (key: string): bigint | undefined => {
+    const v = j[key];
+    if (v === undefined) return undefined;
+    const text = String(v);
+    if (!/^\d+$/.test(text)) throw new Error(`${key} is not a whole number`);
+    return BigInt(text);
+  };
+  const need = (key: string) => {
+    const v = int(key);
+    if (v === undefined) throw new Error(`no ${key}`);
+    return v;
+  };
+  if (typeof j.indep_hash !== 'string') throw new Error('no indep_hash');
+  if (!Array.isArray(j.txs) || !j.txs.every((t) => typeof t === 'string')) {
+    throw new Error('no txs');
+  }
+  return {
+    height,
+    indepHash: bin('indep_hash'),
+    previousBlock: bin('previous_block'),
+    nonce: bin('nonce'),
+    hash: bin('hash'),
+    timestamp: need('timestamp'),
+    diff: need('diff'),
+    cumulativeDiff: int('cumulative_diff') as bigint,
+    lastRetarget: need('last_retarget'),
+    rewardAddr: j.reward_addr === 'unclaimed' ? null : bin('reward_addr'),
+    rewardPool: need('reward_pool'),
+    blockSize: need('block_size'),
+    weaveSize: need('weave_size'),
+    txRoot: bin('tx_root'),
+    walletList: bin('wallet_list'),
+    hashListMerkle: bin('hash_list_merkle'),
+    txs: (j.txs as string[]).map((t) => Buffer.from(t, 'base64url')),
+  };
 }

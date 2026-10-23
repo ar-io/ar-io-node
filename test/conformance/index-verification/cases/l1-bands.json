@@ -183,7 +183,7 @@
   },
   {
     "id": "l1-bands-format1-flip",
-    "description": "A8: a format-2 transaction with data relabelled format 1, republished so every digest matches",
+    "description": "A8: a format-2 transaction with data relabelled format 1, republished so every digest matches (the stored offsets, placed by the old order, give it away: canonical)",
     "tampered": "band made l1-3 (no witnesses), transactions.format, republished",
     "kind": "l1-bands",
     "options": {
@@ -207,19 +207,17 @@
       }
     ],
     "expect": {
-      "verdict": "unknown",
-      "check": "unbound",
+      "verdict": "refuted",
+      "check": "canonical",
       "failing": [
+        "canonical",
         "unbound"
-      ],
-      "unbound": [
-        "txRootFormat1"
       ]
     }
   },
   {
     "id": "l1-bands-format1-flip-accepted",
-    "description": "A8: the same relabelled band, format-1 blocks accepted (--allow-unverified-format1): the gap is accepted, not hidden",
+    "description": "A8: the same relabelled band, format-1 blocks accepted (--allow-unverified-format1): the gap is accepted, not hidden (the stored offsets, placed by the old order, give it away: canonical)",
     "tampered": "band made l1-3 (no witnesses), transactions.format, republished",
     "kind": "l1-bands",
     "options": {
@@ -244,11 +242,11 @@
       }
     ],
     "expect": {
-      "verdict": "verified",
-      "failing": [],
-      "unbound": [
-        "txRootFormat1"
-      ]
+      "verdict": "refuted",
+      "failing": [
+        "canonical"
+      ],
+      "check": "canonical"
     }
   },
   {
@@ -528,6 +526,7 @@
       "verdict": "refuted",
       "check": "tx_root",
       "failing": [
+        "canonical",
         "tx_root"
       ]
     }
@@ -584,8 +583,9 @@
       "verdict": "refuted",
       "check": "block_size",
       "failing": [
-        "hash_list_merkle",
         "block_size",
+        "canonical",
+        "hash_list_merkle",
         "weave_accounting"
       ]
     }

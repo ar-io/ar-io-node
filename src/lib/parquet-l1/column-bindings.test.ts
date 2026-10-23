@@ -92,6 +92,16 @@ describe('the declared column bindings', () => {
     );
   });
 
+  it('leave no column bound by nothing', () => {
+    // Every column written is bound, or unbound behind a flag.
+    assert.deepEqual(
+      COLUMN_BINDINGS.filter((b) =>
+        ERAS.some((era) => b.bindings[era] === 'none'),
+      ).map((b) => `${b.table}.${b.column}`),
+      [],
+    );
+  });
+
   it('give each column one binding per era, with a reason', () => {
     for (const b of COLUMN_BINDINGS) {
       assert.deepEqual(Object.keys(b.bindings).sort(), [...ERAS].sort());
@@ -201,6 +211,9 @@ describe('a column declared bound cannot change unnoticed', () => {
   // Transactions below the fork, and the format-1 data_root.
   for (const [column, set] of [
     ['data_size', 'data_size + 1'],
+    ['content_type', "'image/png'"],
+    ['content_encoding', "'gzip'"],
+    ['offset', '"offset" + 1'],
     ['format', '2'],
     ['id', "from_hex(repeat('ab', 32))"],
     ['data_root', "from_hex(repeat('de', 32))"],
@@ -227,6 +240,9 @@ describe('a column declared bound cannot change unnoticed', () => {
     ['blocks', 'hash_list_merkle', "from_hex(repeat('ab', 48))"],
     ['transactions', 'data_size', 'data_size + 1'],
     ['transactions', 'data_root', "from_hex(repeat('de', 32))"],
+    ['transactions', 'content_type', "'image/png'"],
+    ['transactions', 'content_encoding', "'gzip'"],
+    ['transactions', 'offset', '"offset" + 1'],
   ] as const) {
     it(`post-2.0 ${table}.${column}`, async () => {
       const out = await mutate(

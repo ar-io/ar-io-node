@@ -22,6 +22,7 @@ import crypto from 'node:crypto';
 import Sqlite from 'better-sqlite3';
 
 import {
+  FORK_2_0,
   FORK_2_9,
   recomputeIndepHash,
 } from '../src/lib/parquet-l1/block-hash.js';
@@ -185,6 +186,37 @@ export function chainNode(
           )
           .pluck()
           .all(row.height) as Buffer[];
+        if (row.height < FORK_2_0) {
+          // A pre-2.0 header as a node states it: no hash recomputes, so
+          // every field a verifier compares, as stored.
+          const b = (v: Buffer | null) => (v === null ? '' : b64(v));
+          return {
+            status: 200,
+            body: {
+              nonce: b(row.nonce),
+              previous_block: b(row.previous_block),
+              timestamp: Number(row.block_timestamp),
+              last_retarget: Number(row.last_retarget),
+              diff: String(row.diff),
+              height: row.height,
+              hash: b(row.hash),
+              indep_hash: b64(row.indep_hash),
+              txs: ids.map((id) => b64(id)),
+              tx_root: '',
+              wallet_list: b(row.wallet_list),
+              reward_addr:
+                row.reward_addr === null ? 'unclaimed' : b64(row.reward_addr),
+              tags: [],
+              reward_pool: String(row.reward_pool),
+              weave_size: String(row.weave_size),
+              block_size: String(row.block_size),
+              ...(row.cumulative_diff !== null
+                ? { cumulative_diff: String(row.cumulative_diff) }
+                : {}),
+              hash_list_merkle: b(row.hash_list_merkle),
+            },
+          };
+        }
         if (row.height < FORK_2_9) {
           // Below the era test headers recompute in, a header as a node
           // states it: its hash and its transaction list, nothing more a

@@ -57,6 +57,7 @@ import { hash20Of10Block } from './block-hash.js';
 import { addFailure, VerifyCheck } from './checks.js';
 import { FORK_2_9_6 } from './tx-signature.js';
 import type { L1BlockRow } from './anchor.js';
+import { type BandTag, firstTagValue } from './layout.js';
 
 /**
  * The weave offset past which Arweave pads each transaction's data to a
@@ -100,6 +101,18 @@ export interface JudgeTx {
   };
   /** Whether a wallet row holds the owner's key. */
   ownerKnown: boolean;
+  /**
+   * Bands only: the columns a band derives (`content_type`,
+   * `content_encoding` from the tags, `offset` from the weave), and the
+   * tags they derive from (those whose name could be `Content-Type` or
+   * `Content-Encoding`: 12 or 16 bytes), for the `canonical` check.
+   */
+  derived?: {
+    contentType: string | null;
+    contentEncoding: string | null;
+    offset: bigint | null;
+    tags: BandTag[];
+  };
 }
 
 /** What an `l1-4` band witnesses about one block. */
@@ -646,6 +659,85 @@ export class L1Judge {
     }
   }
 
+  /**
+   * The columns a band derives, recomputed (`column-bindings.ts`):
+   * `content_type` and `content_encoding`, the first tag of that name by
+   * position, names compared without case, NULL without one
+   * (`firstTagValue`, the exporter's rule); and `offset`, NULL or the
+   * weave offset its data ends at: the weave below the block
+   * (`weave_size - block_size`), then the block's transactions in tx_root
+   * order (format, then id), each padded to a chunk from the 2.5 fork, as
+   * `computeTxRoot` places them. NULL without data, and in the genesis
+   * block, whose data the weave never held. A NULL offset is what a
+   * gateway that never learnt one writes, and is imported as NULL.
+   */
+  private checkDerivedColumns(block: JudgeBlock): void {
+    const h = block.row.height;
+    const wrong: string[] = [];
+    for (const tx of block.txs) {
+      const d = tx.derived;
+      if (d === undefined) continue;
+      const type = firstTagValue(d.tags, 'Content-Type');
+      const encoding = firstTagValue(d.tags, 'Content-Encoding');
+      if (d.contentType !== type) {
+        wrong.push(
+          `content_type of ${b64(tx.id)}: ${JSON.stringify(d.contentType)}, its tags give ${JSON.stringify(type)}`,
+        );
+      }
+      if (d.contentEncoding !== encoding) {
+        wrong.push(
+          `content_encoding of ${b64(tx.id)}: ${JSON.stringify(d.contentEncoding)}, its tags give ${JSON.stringify(encoding)}`,
+        );
+      }
+    }
+    // Offsets need every transaction of the block, in place.
+    const weave = big(block.row.weave_size);
+    const size = big(block.row.block_size);
+    if (
+      block.strayLinks.length === 0 &&
+      weave !== null &&
+      size !== null &&
+      block.txs.every(
+        (tx) =>
+          tx.id !== null && tx.format !== null && big(tx.data_size) !== null,
+      )
+    ) {
+      const sorted = [...block.txs].sort(
+        (a, b) =>
+          (a.format as number) - (b.format as number) ||
+          Buffer.compare(a.id as Buffer, b.id as Buffer),
+      );
+      let position = weave - size;
+      for (const tx of sorted) {
+        const dataSize = big(tx.data_size) as bigint;
+        const end = position + dataSize;
+        const stored = tx.derived?.offset;
+        if (stored !== undefined && stored !== null) {
+          const want = dataSize === 0n || h === 0 ? null : end;
+          if (want === null || stored !== want) {
+            wrong.push(
+              `offset of ${b64(tx.id)}: ${stored}, ${want === null ? 'NULL (no data in the weave)' : `its data ends at ${want}`}`,
+            );
+          }
+        }
+        position =
+          h >= FORK_2_5 && dataSize > 0n
+            ? position + ((dataSize + 262_143n) / 262_144n) * 262_144n
+            : end;
+      }
+    }
+    if (wrong.length > 0) {
+      addFailure(this.checks.canonical, {
+        height: h,
+        found:
+          wrong.slice(0, 3).join('; ') +
+          (wrong.length > 3 ? ` and ${wrong.length - 3} more` : ''),
+        expected:
+          'content_type and content_encoding from the first such tag; offset NULL, or where its data ends in the weave',
+      });
+    }
+  }
+
   private chainTxs(block: JudgeBlock): ChainTransaction[] {
     return block.txs.map((tx) => ({
       id: tx.id ?? Buffer.alloc(0),
@@ -671,7 +763,10 @@ export class L1Judge {
 
     this.checkTransactions(block);
     if (block.witness !== undefined) this.checkCanonicalFormat1(block);
-    if (this.options.witnesses === true) this.checkCanonicalBlock(block);
+    if (this.options.witnesses === true) {
+      this.checkCanonicalBlock(block);
+      this.checkDerivedColumns(block);
+    }
     if (h >= this.forkHeight) {
       this.totals.format1Txs += block.txs.filter(
         (tx) => tx.format === 1 && (big(tx.data_size) ?? 0n) > 0n,

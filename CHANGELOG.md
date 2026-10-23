@@ -31,6 +31,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `data_root` column must be NULL. A block whose witness is missing stays
   in its `unbound` class. New `witnesses` and `hash_list_1_0` checks; the
   result gains `foldBound` and `format1Txs`.
+- Every column a band carries has a declared binding
+  (`column-bindings.ts`, shown in docs/cli.md), checked by a test. Bands'
+  `content_type` and `content_encoding` are recomputed from their tags,
+  and `offset` (NULL, or where the data ends in the weave) from the weave,
+  failing the new `canonical` check otherwise. The block sample now draws
+  pre-2.0 heights too, attested by `--anchor-min` machines
+  (`blocksAttested`): what binds a pre-2.0 block's transaction order.
 - `--sample-format1 0` over format-1 transactions with data from the 2.0
   fork now needs `--allow-unsampled`, in `index-l1-import` (whatever their
   witnesses) and `index-l1-verify` (new flag there): only the format-1 draw

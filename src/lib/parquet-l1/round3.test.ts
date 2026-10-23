@@ -278,7 +278,7 @@ describe('round 3: fail-opens closed (H)', () => {
       ),
     );
 
-  it('H1: a pre-2.0 range samples its transactions, and lists the block sample it cannot draw', async () => {
+  it('H1: a pre-2.0 range samples its transactions, and its headers as attested', async () => {
     const v1 = path.join(dir, 'v1.db');
     await buildCoreDb(v1, V1, 12, { verifiable: true });
     const db = new Sqlite(v1, { readonly: true });
@@ -292,7 +292,11 @@ describe('round 3: fail-opens closed (H)', () => {
       assert.ok(out.summary.txsDrawn > 0);
       assert.equal(out.summary.txsAttested, out.summary.txsDrawn);
       assert.equal(out.check.ok, true, JSON.stringify(out.check));
-      assert.deepEqual(out.summary.empty, ['sample_blocks']);
+      // No pre-2.0 header recomputes: each drawn is the one two machines
+      // serve alike.
+      assert.deepEqual(out.summary.empty, []);
+      assert.equal(out.summary.blocksAttested, 5);
+      assert.equal(out.summary.blocksChecked, 5);
     } finally {
       db.close();
     }
@@ -520,7 +524,7 @@ describe('round 3: the import (G4, H1, H2, H5, I1, I2)', () => {
       allow: { unbound: true, unverifiedFormat1: true },
     });
     assert.equal(out.outcomes[0].result, 'imported', out.outcomes[0].reason);
-    assert.ok(out.outcomes[0].check?.skipped.includes('sample_blocks'));
+    assert.equal(out.outcomes[0].check?.sample?.blocksAttested, 3);
   });
 
   it('G4 (P2): sample sources that cannot be reached are an outage, not a refutation', async () => {
@@ -549,7 +553,9 @@ describe('round 3: the import (G4, H1, H2, H5, I1, I2)', () => {
       duck,
       band.dir,
       'tags',
-      `SELECT * REPLACE (CASE WHEN tag_index = 0 THEN 'FORGED'::BLOB ELSE tag_value END AS tag_value) FROM SRC`,
+      // Not tag 0, the Content-Type the row's content_type derives from: a
+      // forgery the band's own checks cannot see, only the sample.
+      `SELECT * REPLACE (CASE WHEN tag_index = 1 THEN 'FORGED'::BLOB ELSE tag_value END AS tag_value) FROM SRC`,
     );
     await republish(duck, band.dir);
     const out = await answered<Record<string, any>>(

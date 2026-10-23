@@ -328,6 +328,19 @@ export async function buildCoreDb(
       block.tx_root,
       txs.length,
     );
+    // Where each transaction's data ends in the weave: the weave below,
+    // then the block's transactions in tx_root order, padded from 2.5.
+    const offsets = new Map<string, number>();
+    let position = Number(previous.weave_size);
+    for (const tx of [...txs].sort(
+      (a, b) => a.format - b.format || Buffer.compare(a.id, b.id),
+    )) {
+      offsets.set(tx.id.toString('hex'), position + tx.data_size);
+      position +=
+        h >= FORK_2_5
+          ? Math.ceil(tx.data_size / 262144) * 262144
+          : tx.data_size;
+    }
     for (const tx of txs) {
       insertLink.run(block.indep_hash, tx.id, tx.bti);
       insertTx.run(
@@ -340,7 +353,7 @@ export async function buildCoreDb(
         tx.data_size,
         tx.data_root,
         2,
-        h * 10 + tx.bti,
+        offsets.get(tx.id.toString('hex')) as number,
         verifiable ? null : tx.signature,
       );
       if (tx.signature !== null) {

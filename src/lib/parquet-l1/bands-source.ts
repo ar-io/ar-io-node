@@ -17,6 +17,7 @@ import * as path from 'node:path';
 import { BLOCK_ROW_COLUMNS, type L1BlockRow } from './anchor.js';
 import type { L1BandOnDisk } from './bands-dir.js';
 import {
+  type BandTag,
   FORK_2_0_WITNESS,
   V1_DATA_ROOTS_WITNESS,
   witnessesOf,
@@ -128,7 +129,8 @@ export class BandsSource implements L1Source {
     const txs = (await this.duck.all(
       `SELECT t.height, t.block_transaction_index, t.id, t.format,
               CAST(t.data_size AS VARCHAR) AS data_size, t.data_root,
-              t.owner_address, t.tag_count,
+              t.owner_address, t.tag_count, t.content_type, t.content_encoding,
+              CAST(t."offset" AS VARCHAR) AS "offset",
               (t.quantity IS NULL OR t.reward IS NULL OR t.anchor IS NULL) AS null_amounts,
               coalesce(g.n, 0) AS n, g.mn, g.mx,
               (w.address IS NOT NULL AND w.public_modulus IS NOT NULL) AS owner_known
@@ -150,6 +152,25 @@ export class BandsSource implements L1Source {
        WHERE height BETWEEN ${lo} AND ${hi}
        ORDER BY height, block_transaction_index`,
     )) as Array<Record<string, unknown>>;
+    // The tags `content_type` and `content_encoding` derive from: only a
+    // name of 12 or 16 bytes can be `Content-Type` or `Content-Encoding`
+    // compared without case (no other character lowercases to the ASCII
+    // letters they hold).
+    const headTags = new Map<string, BandTag[]>();
+    for (const r of (await this.duck.all(
+      `SELECT height, id, tag_index, tag_name, tag_value
+       FROM read_parquet(${fileOf(band, 'tags')})
+       WHERE height BETWEEN ${lo} AND ${hi} AND octet_length(tag_name) IN (12, 16)`,
+    )) as Array<Record<string, unknown>>) {
+      const key = `${Number(r.height)}:${(asBuffer(r.id) ?? Buffer.alloc(0)).toString('hex')}`;
+      const list = headTags.get(key) ?? [];
+      list.push({
+        index: Number(r.tag_index),
+        name: asBuffer(r.tag_name) ?? Buffer.alloc(0),
+        value: asBuffer(r.tag_value) ?? Buffer.alloc(0),
+      });
+      headTags.set(key, list);
+    }
     // Witnesses, by the band's layout: a file a band of its layout lacks
     // fails the files check, and reading it fails the band's rows here.
     const declared = witnessesOf(band.band.schema, band.band.heightRange);
@@ -207,6 +228,15 @@ export class BandsSource implements L1Source {
           distinct: Number(r.n),
         },
         ownerKnown: r.owner_known === true,
+        derived: {
+          contentType: (r.content_type as string | null) ?? null,
+          contentEncoding: (r.content_encoding as string | null) ?? null,
+          offset: r.offset === null ? null : BigInt(r.offset as string),
+          tags:
+            headTags.get(
+              `${Number(r.height)}:${(asBuffer(r.id) ?? Buffer.alloc(0)).toString('hex')}`,
+            ) ?? [],
+        },
       })),
       links: links.map((r) => ({
         height: Number(r.height),

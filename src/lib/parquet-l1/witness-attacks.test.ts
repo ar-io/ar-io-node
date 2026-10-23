@@ -210,6 +210,42 @@ describe('attacks on l1-4 witnesses', () => {
     assert.match(out.outcomes[0].reason ?? '', /witnesses/);
   });
 
+  it('catches a pre-2.0 block whose transactions are reordered, by the attested header sample', async () => {
+    await buildCoreDb(source, V1, 21, { verifiable: true });
+    const [band] = await exportBands(source, bandsDir, [[V1, V1 + 9]]);
+    const foldPins = await witnessTestBand(duck, source, band.dir);
+    // The 2.0 hash sorts ids, so the order survives every hash: a block of
+    // three, reversed, links and all.
+    const h = V1 + 3;
+    for (const table of ['transactions', 'block_transactions']) {
+      await rewriteTable(
+        duck,
+        band.dir,
+        table,
+        `SELECT * REPLACE (CASE WHEN height = ${h} THEN 2 - block_transaction_index ELSE block_transaction_index END AS block_transaction_index) FROM SRC`,
+      );
+    }
+    await republish(duck, band.dir);
+    const unsampled = await verifyBands(duck, bandsDir, {
+      allow: { unanchored: true },
+      foldPins,
+    });
+    assert.deepEqual(failing(unsampled), []);
+    const sampled = await verifyBands(duck, bandsDir, {
+      allow: { unanchored: true },
+      foldPins,
+      pool: pool(),
+      sample: { ...sample(0, 0), blocks: 10 },
+    });
+    assert.ok(failing(sampled).includes('sample'), failing(sampled).join());
+    assert.match(
+      sampled.checks.find((c) => c.name === 'sample')?.failures?.[0].found ??
+        '',
+      /block_transactions/,
+    );
+    assert.equal(sampled.sample?.blocksAttested, 10);
+  });
+
   it('refuses a relabel imported with --sample-format1 0, and catches it when drawn', async () => {
     await buildCoreDb(source, P2, 21, { verifiable: true });
     holdBlocks(source, core, P2 + 10);

@@ -325,7 +325,9 @@ describe('round 2: import never removes what was there (A)', () => {
       duck,
       band.dir,
       'tags',
-      `SELECT * REPLACE (CASE WHEN tag_index = 0 THEN 'FORGED'::BLOB ELSE tag_value END AS tag_value) FROM SRC`,
+      // Not tag 0, the Content-Type content_type derives from, which the
+      // band's own checks would catch: one only the sample can.
+      `SELECT * REPLACE (CASE WHEN tag_index = 1 THEN 'FORGED'::BLOB ELSE tag_value END AS tag_value) FROM SRC`,
     );
     await republish(duck, band.dir);
     const fill = async (
@@ -409,6 +411,12 @@ describe('round 2: import never removes what was there (A)', () => {
       Buffer.alloc(32, 0xee),
       ids[0],
     );
+    // The relabel moves the transaction in tx_root order; offsets placed by
+    // the old order would give it away to the band's own checks, so the
+    // forger drops them (NULL is what a gateway without them holds).
+    db.prepare(
+      'UPDATE stable_transactions SET offset = NULL WHERE height = ?',
+    ).run(h);
     db.close();
     await exportBands(forged, bandsDir, [[F, F + 9]]);
     const out = await answered<Record<string, any>>(

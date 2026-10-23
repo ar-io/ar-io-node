@@ -483,6 +483,7 @@
       "verdict": "refuted",
       "check": "sample",
       "failing": [
+        "canonical",
         "sample"
       ]
     }
@@ -616,6 +617,7 @@
       "verdict": "refuted",
       "check": "sample",
       "failing": [
+        "canonical",
         "sample"
       ]
     }
