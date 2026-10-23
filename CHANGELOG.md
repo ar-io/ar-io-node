@@ -12,6 +12,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **`parquet-l2` layout `l2-2`: the stats derive no longer runs a large
+  band out of memory.** Each item's first value of a stat tag was taken
+  with `arg_min(tag_value, tag_index)`, an aggregate whose BLOB state
+  DuckDB 1.4.2 cannot spill, so the 69-million-item h1.8M band of
+  `ardrive-l2` failed at the build's 2 GB limit, both in the in-place
+  upgrade and in a rebuild. It is now the lowest `tag_index` per item and
+  tag, joined back for the value: the same rows, and the same band derives
+  in about 6 minutes at 2 GB.
 - The `--publication` examples in `docs/cli.md`,
   `docs/index-publication.md`, `docs/index-verification.md`, the
   `index-l2-verify` help, and the `--publication` option description gave
