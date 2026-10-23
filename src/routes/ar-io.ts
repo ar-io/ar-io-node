@@ -25,6 +25,7 @@ import {
 } from './ar-io-offsets-builder.js';
 import { validateOptimisticTxBatch } from './optimistic-tx-validation.js';
 import { evaluateDataItemQueueAdmission } from './data-item-queue-admission.js';
+import { parsePruneStableDataItemsParams } from './prune-stable-data-items-params.js';
 import { buildArIoInfo } from './ar-io-info-builder.js';
 import {
   advertisementOf,
@@ -899,63 +900,19 @@ arIoRouter.get(
 );
 
 // Prune stable data items written before a threshold, within a height range.
-// stableAtThreshold (maxStableDataItemStableAt read before exporting the range)
-// deletes only what the export saw; indexedAtThreshold is kept for older
-// callers, but a row flushed late can carry an old indexed_at and be deleted
-// unexported. Exactly one is required.
+// See parsePruneStableDataItemsParams for which threshold to send.
 arIoRouter.post(
   '/ar-io/admin/prune-stable-data-items',
   express.json(),
   async (req, res) => {
     try {
-      const { indexedAtThreshold, stableAtThreshold, startHeight, endHeight } =
-        req.body;
-
-      if (
-        (indexedAtThreshold === undefined) ===
-        (stableAtThreshold === undefined)
-      ) {
-        res
-          .status(400)
-          .send('Give exactly one of stableAtThreshold or indexedAtThreshold');
-        return;
-      }
-      const [thresholdName, threshold] =
-        stableAtThreshold !== undefined
-          ? ['stableAtThreshold', stableAtThreshold]
-          : ['indexedAtThreshold', indexedAtThreshold];
-      if (!Number.isInteger(threshold) || threshold < 0) {
-        res
-          .status(400)
-          .send(`Invalid ${thresholdName} - must be a positive integer`);
+      const parsed = parsePruneStableDataItemsParams(req.body);
+      if (!parsed.ok) {
+        res.status(400).send(parsed.message);
         return;
       }
 
-      if (!Number.isInteger(startHeight) || startHeight < 0) {
-        res
-          .status(400)
-          .send('Invalid startHeight - must be a positive integer');
-        return;
-      }
-
-      if (
-        !Number.isInteger(endHeight) ||
-        endHeight < 0 ||
-        endHeight < startHeight
-      ) {
-        res
-          .status(400)
-          .send(
-            'Invalid endHeight - must be a positive integer greater than or equal to startHeight',
-          );
-        return;
-      }
-
-      await db.pruneStableDataItems(
-        stableAtThreshold !== undefined
-          ? { stableAtThreshold, startHeight, endHeight }
-          : { indexedAtThreshold, startHeight, endHeight },
-      );
+      await db.pruneStableDataItems(parsed.params);
       res.json({ message: 'Stable data items pruned successfully' });
     } catch (error: any) {
       res.status(500).send(error?.message);
