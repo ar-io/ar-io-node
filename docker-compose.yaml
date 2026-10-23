@@ -1,7 +1,7 @@
 ---
 services:
   envoy:
-    image: ghcr.io/ar-io/ar-io-envoy:${ENVOY_IMAGE_TAG:-9a28d6538aca7fb88d96c862062b13a0ed0fce69}
+    image: ghcr.io/ar-io/ar-io-envoy:${ENVOY_IMAGE_TAG:-latest}
     build:
       context: envoy/
     restart: unless-stopped
@@ -50,7 +50,7 @@ services:
       - observer
 
   core:
-    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-6c5cf67c55ac3264e527647f08ee0a5f2ce0fec7}
+    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-latest}
     build:
       context: .
     restart: unless-stopped
@@ -338,7 +338,7 @@ services:
       - AWS_ELASTICACHE_TURBO_HOST=${AWS_ELASTICACHE_TURBO_HOST:-}
       - AWS_ELASTICACHE_TURBO_USE_TLS=${AWS_ELASTICACHE_TURBO_USE_TLS:-}
       - AWS_ELASTICACHE_TURBO_PORT=${AWS_ELASTICACHE_TURBO_PORT:-}
-      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-86}
+      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-87-pre}
       - CHUNK_POST_MIN_SUCCESS_COUNT=${CHUNK_POST_MIN_SUCCESS_COUNT:-}
       - CHUNK_POST_MIN_PREFERRED_SUCCESS_COUNT=${CHUNK_POST_MIN_PREFERRED_SUCCESS_COUNT:-}
       - CHUNK_POST_MAX_CONSECUTIVE_FAILURES=${CHUNK_POST_MAX_CONSECUTIVE_FAILURES:-}
@@ -645,7 +645,7 @@ services:
       - ar-io-network
 
   clickhouse-auto-import:
-    image: ghcr.io/ar-io/ar-io-clickhouse-auto-import:${CLICKHOUSE_AUTO_IMPORT_IMAGE_TAG:-226ef06930babf540c1211e6d38d45b0707b73aa}
+    image: ghcr.io/ar-io/ar-io-clickhouse-auto-import:${CLICKHOUSE_AUTO_IMPORT_IMAGE_TAG:-latest}
     profiles:
       - clickhouse
     build:
@@ -756,7 +756,7 @@ services:
       - TURBO_UPLOAD_SERVICE_URL=${TURBO_UPLOAD_SERVICE_URL:-}
       - RUN_OBSERVER=${RUN_OBSERVER:-true}
       - MIN_RELEASE_NUMBER=${MIN_RELEASE_NUMBER:-0}
-      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-86}
+      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-87-pre}
       - AR_IO_SDK_LOG_LEVEL=${AR_IO_SDK_LOG_LEVEL:-none}
       # Reference Gateway Configuration
       # The bundled observer references THIS node's own gateway by default (its
@@ -816,7 +816,7 @@ services:
       - ar-io-network
 
   litestream:
-    image: ghcr.io/ar-io/ar-io-litestream:${LITESTREAM_IMAGE_TAG:-be121fc0ae24a9eb7cdb2b92d01f047039b5f5e8}
+    image: ghcr.io/ar-io/ar-io-litestream:${LITESTREAM_IMAGE_TAG:-latest}
     build:
       context: litestream/
       dockerfile: Dockerfile
@@ -848,7 +848,7 @@ services:
   # have, so a separate image would be roughly a gigabyte of duplicate layers
   # per operator for code that is already present.
   index-swarm:
-    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-6c5cf67c55ac3264e527647f08ee0a5f2ce0fec7}
+    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-latest}
     build:
       context: .
     entrypoint: ['/nodejs/bin/node', 'dist/index-swarm/main.js']
@@ -974,7 +974,7 @@ services:
     # The core image, at its own tag when set: the service can move to a
     # release before core does, and must not run an image that predates it.
     # Like core's, this build tags the core image.
-    image: ghcr.io/ar-io/ar-io-core:${INDEX_EXPORT_IMAGE_TAG:-${CORE_IMAGE_TAG:-6c5cf67c55ac3264e527647f08ee0a5f2ce0fec7}}
+    image: ghcr.io/ar-io/ar-io-core:${INDEX_EXPORT_IMAGE_TAG:-${CORE_IMAGE_TAG:-latest}}
     build:
       context: .
     entrypoint: ['/nodejs/bin/node', 'dist/index-export/main.js']
@@ -1074,7 +1074,7 @@ services:
   # have one: the engine never runs without a password. Runs by default; the
   # old `--profile index-swarm-torrent` flag is still accepted.
   index-swarm-engine-init:
-    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-6c5cf67c55ac3264e527647f08ee0a5f2ce0fec7}
+    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-latest}
     entrypoint: ['/nodejs/bin/node', 'dist/index-swarm/engine-init.js']
     restart: 'no'
     volumes:

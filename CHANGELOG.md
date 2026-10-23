@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased]
+
+### Added
+
+### Changed
+
+### Fixed
+
 ## [Release 86] - 2026-10-23
 
 This is an **urgent, recommended release** focused on **the Node.js
