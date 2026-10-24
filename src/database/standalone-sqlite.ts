@@ -3888,9 +3888,13 @@ export class StandaloneSqliteDatabase
 
       let job: any = null; // Current item from the queue
       let error: any = null; // Error that caused the worker to crash
+      // Set once the worker acknowledges `terminate`: it is about to exit and
+      // must take no other job, or it could swallow a terminate job queued
+      // for a sibling, which would then never exit.
+      let terminating = false;
 
       function takeWork() {
-        if (!job && self.workQueues[pool][role].length) {
+        if (!terminating && !job && self.workQueues[pool][role].length) {
           // If there's a job in the queue, send it to the worker
           job = self.workQueues[pool][role].shift();
 
@@ -3958,14 +3962,11 @@ export class StandaloneSqliteDatabase
           } else {
             job.resolve(result);
           }
-          const terminating = job.message.method === 'terminate';
-          job = null;
-          // A worker that has acknowledged `terminate` is about to exit. It
-          // must not take another job: that would swallow a terminate job
-          // queued for a sibling, which would then never exit.
-          if (!terminating) {
-            takeWork(); // Check if there's more work to do
+          if (job.message.method === 'terminate') {
+            terminating = true;
           }
+          job = null;
+          takeWork(); // Check if there's more work to do
         })
         .on('error', (err) => {
           self.log.error('Worker error', err);
