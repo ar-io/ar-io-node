@@ -38,6 +38,10 @@ function dbPaths({ migrated }: { migrated: boolean }) {
     for (const name of SCHEMAS) {
       const db = new Sqlite(path.join(dir, `${name}.db`));
       try {
+        // Already WAL, as a gateway's databases are after their first run.
+        // Left to the workers, all of them switch a fresh file at once, and
+        // one can lose that race with SQLITE_BUSY and die at startup.
+        db.pragma('journal_mode = WAL');
         db.exec(fs.readFileSync(`test/${name}-schema.sql`, 'utf8'));
       } finally {
         db.close();
