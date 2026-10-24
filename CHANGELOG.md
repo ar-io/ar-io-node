@@ -20,6 +20,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   The gateway serves it at `https://<gateway>/ar-io/indexes`; the examples
   now use that. The local file `data/indexes/published/publication.json`
   is unchanged.
+- `keccak` (pulled in by `@dha-team/arbundles`, and loaded by every
+  SQLite worker thread) is pinned to 3.0.4. Version 3.0.2 kept one
+  process-wide reference to its class constructor, so a worker thread
+  loading it while another started or exited could abort the whole
+  process (`Check failed: node->IsInUse()`, a segfault, or on macOS
+  `libc++abi: terminating due to uncaught exception of type Napi::Error`).
+- Shutdown now waits until every SQLite worker thread has exited, and no
+  longer respawns a worker that dies while the gateway is stopping.
 
 ## [Release 86] - 2026-10-23
 
