@@ -513,6 +513,23 @@ each, whatever `core.db` holds:
 | `transactions.data_root` on format 1 | null | A format-1 header carries none; some gateways hold one computed from the data. Format 2 signs its `data_root`, so it is kept |
 | `transactions.content_type`, `content_encoding` | The first `Content-Type` / `Content-Encoding` tag by position, names compared without case; null if none | Older releases stored the last matching tag, so the stored value depends on the release that indexed the row |
 
+Block values that gateways store in more than one spelling are written in
+the one spelling the `canonical` check accepts. Only the spelling changes,
+never the value:
+
+- `diff`, `cumulative_diff` and `reward_pool` are read as exact whole
+  numbers and written in decimal without leading zeros, with `.0` where the
+  era stored a float: `diff` below the 1.8 fork (269,510), and
+  `cumulative_diff` from 1.6 (95,000) to 1.8. A fraction that isn't zero, a
+  sign, an exponent or anything else non-numeric refuses the band
+  (`rejected`, reason `canonical`).
+- `cumulative_diff` and `hash_list_merkle` are null below the 1.6 fork,
+  where the header has neither field.
+- An unclaimed `reward_addr` (null, or the text `unclaimed`) is written as
+  empty bytes; so is the genesis block's null `previous_block`.
+- A block with no `wallet_list`, `diff` or `reward_pool`, or no
+  `cumulative_diff` from 1.6, refuses the band. Nothing is made up.
+
 No check reads a pre-fork `tx_root`, and `tx_root` recomputation derives a
 format-1 transaction's root from its data, never from the stored column.
 An import never erases a pre-fork `tx_root` or a format-1 `data_root` the

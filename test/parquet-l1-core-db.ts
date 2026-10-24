@@ -203,7 +203,8 @@ export async function buildCoreDb(
     previous_block: random(48),
     weave_size: weaveStart,
     tx_root: Buffer.alloc(0),
-    hash_list_merkle: random(48),
+    // Headers carry no hash_list_merkle below the 1.6 fork.
+    hash_list_merkle: first - 1 < FORK_1_6 ? null : random(48),
   };
   previous.indep_hash = insertBlock.run(
     previous.height,
@@ -329,7 +330,7 @@ export async function buildCoreDb(
             ? random(32)
             : Buffer.alloc(0)
           : ((await computeTxRoot(h, txs)) ?? Buffer.alloc(0)),
-      hash_list_merkle: nextHashListMerkle(previous),
+      hash_list_merkle: h < FORK_1_6 ? null : nextHashListMerkle(previous),
     };
     block.indep_hash = insertBlock.run(
       h,

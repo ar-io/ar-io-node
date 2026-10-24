@@ -54,6 +54,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   fork and `N` from it, no cumulative difficulty below 1.6, the reward pool
   as `N`, an unclaimed reward address as empty bytes, a wallet list always,
   no `hash_list_merkle` below 1.6 (the `canonical` check).
+  The exporter re-spells what `core.db` holds into those forms, never
+  changing a value, and refuses a value that isn't a whole number or a
+  block without a wallet list.
 - Under `l1-4` the importer writes the witnessed v1 roots and transition
   `tx_root`s over whatever `core.db` kept.
 - `index-l1-verify --bands-dir` and `index-l1-import` refuse an `l1-1`

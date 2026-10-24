@@ -39,7 +39,9 @@ import {
   ChainTransaction,
   checkBlockChain,
   checkTxRoot,
+  FORK_1_6,
 } from '../../../lib/parquet-l1/chain.js';
+import { FORK_1_8 } from '../../../lib/parquet-l1/tx-signature.js';
 import {
   checkParquetDir,
   ParquetStructureError,
@@ -144,6 +146,99 @@ function normalizeBytes<T extends Record<string, unknown>>(
     }
   }
   return rows;
+}
+
+/**
+ * A block row in the one spelling a band writes for each value (the judge's
+ * `canonical` check; `column-bindings.ts`, `representation`), whatever this
+ * gateway's `core.db` stored. Only the spelling changes, never the value:
+ *
+ * - `diff`, `cumulative_diff` and `reward_pool` are read as exact integers
+ *   (a fraction that isn't zero, a sign, an exponent or anything else
+ *   non-numeric is refused, as is a stored float too large to be exact)
+ *   and written as decimal text without leading zeros, with `.0` where the
+ *   era stored a float: `diff` below the 1.8 fork, `cumulative_diff` from
+ *   1.6 to 1.8.
+ * - `cumulative_diff` and `hash_list_merkle` are NULL below the 1.6 fork,
+ *   where the block header has neither field.
+ * - An unclaimed `reward_addr` (NULL, or the text `unclaimed`) is empty
+ *   bytes; so is the genesis block's NULL `previous_block`.
+ * - A missing `diff`, `reward_pool`, `wallet_list`, or `cumulative_diff`
+ *   from 1.6, is refused: nothing is made up.
+ *
+ * Runs before `normalizeBytes`, which refuses any other text in a byte
+ * column.
+ *
+ * @throws L1CheckError (reason `canonical`) naming the height and column.
+ */
+export function canonicalBlockSpelling<T extends Record<string, unknown>>(
+  row: T,
+): T {
+  const block = row as Record<string, unknown>;
+  const h = Number(block.height);
+  const refuse = (name: string, why: string): never => {
+    throw new L1CheckError(
+      `block ${h}: ${name} ${why}; a band writes only what core.db holds`,
+      'canonical',
+    );
+  };
+  const integer = (name: string): bigint => {
+    const value = block[name];
+    if (value === null || value === undefined) {
+      return refuse(name, 'is missing');
+    }
+    if (typeof value === 'bigint') {
+      if (value < 0n) refuse(name, `${value} is negative`);
+      return value;
+    }
+    if (typeof value === 'number') {
+      if (!Number.isSafeInteger(value) || value < 0) {
+        refuse(name, `${value} is not an exact non-negative integer`);
+      }
+      return BigInt(value);
+    }
+    if (typeof value === 'string') {
+      const match = /^([0-9]+)(?:\.(0+))?$/.exec(value);
+      if (match === null) {
+        refuse(
+          name,
+          `${JSON.stringify(value.slice(0, 40))} is not a whole number`,
+        );
+      }
+      return BigInt((match as RegExpExecArray)[1]);
+    }
+    return refuse(name, `holds ${typeof value}, not a number`);
+  };
+  const spell = (n: bigint, real: boolean) => `${n}${real ? '.0' : ''}`;
+
+  block.diff = spell(integer('diff'), h < FORK_1_8);
+  if (h < FORK_1_6) {
+    block.cumulative_diff = null;
+    block.hash_list_merkle = null;
+  } else {
+    block.cumulative_diff = spell(integer('cumulative_diff'), h < FORK_1_8);
+  }
+  block.reward_pool = spell(integer('reward_pool'), false);
+
+  const addr = block.reward_addr;
+  if (
+    addr === null ||
+    addr === undefined ||
+    addr === 'unclaimed' ||
+    (Buffer.isBuffer(addr) && addr.equals(Buffer.from('unclaimed')))
+  ) {
+    block.reward_addr = Buffer.alloc(0);
+  }
+  if (block.wallet_list === null || block.wallet_list === undefined) {
+    refuse('wallet_list', 'is missing');
+  }
+  if (
+    h === 0 &&
+    (block.previous_block === null || block.previous_block === undefined)
+  ) {
+    block.previous_block = Buffer.alloc(0);
+  }
+  return row;
 }
 
 /** One scratch file and the digest of what is written to it. */
@@ -343,7 +438,9 @@ export async function exportL1Band({
     for (let start = from; start <= to; start += windowHeights) {
       const end = Math.min(to, start + windowHeights - 1);
       const blocks = normalizeBytes(
-        sql.blocks.all(start, end) as Array<Record<string, any>>,
+        (sql.blocks.all(start, end) as Array<Record<string, any>>).map(
+          (block) => canonicalBlockSpelling(block),
+        ),
         table('blocks'),
       );
       // One value for a pre-fork `tx_root`, whatever this gateway's header
