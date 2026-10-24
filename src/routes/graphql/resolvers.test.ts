@@ -4,7 +4,13 @@
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+// Must stay the first import: it moves the process into a temporary
+// directory with migrated SQLite databases before system.ts (loaded by the
+// resolvers) opens `data/sqlite/*.db`. See test/system-test-env.ts.
+import { systemTestDir } from '../../../test/system-test-env.js';
+
 import { strict as assert } from 'node:assert';
+import fs from 'node:fs';
 import { after, describe, it, mock } from 'node:test';
 import { GraphQLResolveInfo, OperationDefinitionNode, parse } from 'graphql';
 
@@ -33,6 +39,7 @@ import { db, ownerFetcher } from '../../system.js';
 // ("FATAL ERROR: v8::ToLocalChecked Empty MaybeLocal").
 after(async () => {
   await db.stop();
+  fs.rmSync(systemTestDir, { recursive: true, force: true });
 });
 
 const GQL_TX = {
