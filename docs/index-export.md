@@ -540,7 +540,8 @@ gateway already holds.
 These are layout `l1-2`'s rules (`schema` in `band.json`). Layout `l1-3`
 keeps them and adds three [lookup files](index-publication.md#lookup-files)
 to every band. Lookup files add 10 to 20% to a band. A reader accepts
-`l1-1`, `l1-2` and `l1-3` (verify and import refuse `l1-1`: see below).
+`l1-1`, `l1-2`, `l1-3` and `l1-4` (verify and import refuse `l1-1`: see
+below).
 
 Every band built has lookup files (and, from `l1-4`, its witnesses when
 they can be had): the service writes the tables, derives the lookup files
