@@ -21,9 +21,11 @@ import {
   PARQUET_L1_LOOKUPS,
   PARQUET_L1_SCHEMA,
   PARQUET_L1_TABLES,
+  PARQUET_L1_WITNESSES,
   PUBLISHER_FILE,
   readPublisherFacts,
   serializeBandFile,
+  witnessesOf,
   writePublisherFacts,
 } from '../lib/parquet-l1/layout.js';
 import { verifyBandLookups } from '../lib/parquet-l1/lookups.js';
@@ -115,10 +117,17 @@ describe('ExportService parquet-l1', () => {
               { rows: 0, rowDigest: '0'.repeat(64) },
             ]),
           ),
-          // Current, lookups included, so there is nothing to derive.
+          // Current, lookups and witnesses included, so there is nothing
+          // to derive or witness.
           lookups: Object.fromEntries(
             PARQUET_L1_LOOKUPS.map((l) => [
               l.name,
+              { rows: 0, rowDigest: '0'.repeat(64) },
+            ]),
+          ),
+          witnesses: Object.fromEntries(
+            witnessesOf(PARQUET_L1_SCHEMA, [from, to]).map((w) => [
+              w.name,
               { rows: 0, rowDigest: '0'.repeat(64) },
             ]),
           ),
@@ -298,13 +307,15 @@ describe('ExportService parquet-l1', () => {
     /** Rewrites a published band as `schema` without lookups, as an older exporter left it. */
     async function downgrade(id: string, schema: 'l1-1' | 'l1-2') {
       const bandDir = path.join(config().l1PublishDir, id);
-      for (const spec of PARQUET_L1_LOOKUPS) {
-        await fs.rm(path.join(bandDir, spec.file));
+      for (const spec of [...PARQUET_L1_LOOKUPS, ...PARQUET_L1_WITNESSES]) {
+        await fs.rm(path.join(bandDir, spec.file), { force: true });
       }
       const file = path.join(bandDir, BAND_FILE);
-      const { lookups: _dropped, ...json } = JSON.parse(
-        await fs.readFile(file, 'utf8'),
-      );
+      const {
+        lookups: _dropped,
+        witnesses: _witnesses,
+        ...json
+      } = JSON.parse(await fs.readFile(file, 'utf8'));
       await fs.writeFile(file, JSON.stringify({ ...json, schema }, null, 2));
       return bandDir;
     }
@@ -333,11 +344,12 @@ describe('ExportService parquet-l1', () => {
 
       const tip = (await live()).at(-1);
       assert.equal(tip?.id, id, 'the same id');
-      assert.equal(tip?.band.schema, 'l1-3');
+      // Derived, then given its witnesses in the same run.
+      assert.equal(tip?.band.schema, 'l1-4');
       assert.deepEqual(await tableStats(bandDir), before, 'tables untouched');
       assert.deepEqual(
         (await fs.readdir(bandDir)).sort(),
-        [...bandFiles('l1-3'), PUBLISHER_FILE].sort(),
+        [...bandFiles('l1-4', tip!.band.heightRange), PUBLISHER_FILE].sort(),
         'nothing else left in the band but the publisher’s own facts',
       );
       const duck = await Database.create(':memory:');
@@ -393,7 +405,7 @@ describe('ExportService parquet-l1', () => {
       );
       assert.deepEqual(
         (await fs.readdir(bandDir)).sort(),
-        [...bandFiles('l1-2'), PUBLISHER_FILE].sort(),
+        [...bandFiles('l1-2', [0, 0]), PUBLISHER_FILE].sort(),
       );
     });
 
@@ -409,7 +421,7 @@ describe('ExportService parquet-l1', () => {
         ['d', [FIRST, FIRST + 9], 'unchanged', 'same_id'],
       ]);
       assert.deepEqual(derived(report), [[id, 'published', 'lookups']]);
-      assert.equal((await live()).at(-1)?.band.schema, 'l1-3');
+      assert.equal((await live()).at(-1)?.band.schema, 'l1-4');
     });
   });
 
@@ -524,11 +536,13 @@ describe('ExportService parquet-l1', () => {
     const first = await service().runOnce({ toHeight: FIRST + 9 });
     const tip = path.join(config().l1PublishDir, first.l1Steps[0].id as string);
     const bandPath = path.join(tip, BAND_FILE);
-    const { lookups: _dropped, ...json } = JSON.parse(
-      await fs.readFile(bandPath, 'utf8'),
-    );
-    for (const spec of PARQUET_L1_LOOKUPS) {
-      await fs.rm(path.join(tip, spec.file));
+    const {
+      lookups: _dropped,
+      witnesses: _witnesses,
+      ...json
+    } = JSON.parse(await fs.readFile(bandPath, 'utf8'));
+    for (const spec of [...PARQUET_L1_LOOKUPS, ...PARQUET_L1_WITNESSES]) {
+      await fs.rm(path.join(tip, spec.file), { force: true });
     }
     await fs.writeFile(bandPath, JSON.stringify({ ...json, schema: 'l1-2' }));
     const tag = bandPublisherTag(PUBLISHER);

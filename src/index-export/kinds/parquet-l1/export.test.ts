@@ -17,6 +17,7 @@ import {
   bandFiles,
   bandTime,
   PARQUET_L1_LOOKUPS,
+  PARQUET_L1_LOOKUPS_SCHEMA,
   PARQUET_L1_SCHEMA,
   PARQUET_L1_TABLES,
   readPublisherFacts,
@@ -29,6 +30,7 @@ import { ParquetL1Kind } from '../../../index-swarm/kinds/parquet-l1.js';
 import { buildCoreDb } from '../../../../test/parquet-l1-core-db.js';
 import { createTestLogger } from '../../../../test/test-logger.js';
 import {
+  canonicalBlockSpelling,
   exportL1Band,
   L1CheckError,
   L1IncompleteError,
@@ -135,7 +137,15 @@ describe('exportL1Band', () => {
       supersedes: [],
       windowHeights: 7,
     });
-    assert.equal(result.band.schema, 'l1-3');
+    // A band no format-1 data and no height below the 2.0 fork: its
+    // witnesses are built from nothing, so it is written as l1-4.
+    assert.equal(result.band.schema, 'l1-4');
+    assert.deepEqual(result.band.witnesses, {
+      v1_data_roots: {
+        rows: 0,
+        rowDigest: crypto.createHash('sha256').digest('hex'),
+      },
+    });
     const lookups = result.band.lookups ?? {};
     assert.deepEqual(Object.keys(lookups).sort(), ['tag', 'tx_id', 'wallet']);
     // One tx_id row per transaction; a wallet row per signer and per
@@ -519,7 +529,7 @@ describe('exportL1Band', () => {
     // Every file of the band is the same, so the torrent is: one infohash,
     // one swarm for both publishers.
     const torrentOf = async (dir: string) => {
-      const names = bandFiles(PARQUET_L1_SCHEMA);
+      const names = bandFiles(PARQUET_L1_SCHEMA, a.band.heightRange);
       const files = await Promise.all(
         names.map(async (name) => {
           const bytes = await fsp.readFile(path.join(dir, name));
@@ -643,7 +653,10 @@ describe('exportL1Band below the 2.0 fork', () => {
         `${table.name} digest`,
       );
     }
-    assert.equal(a.band.schema, PARQUET_L1_SCHEMA);
+    // A test chain below the fork reaches no pinned 2.0 seed fold, so its
+    // band is written without witnesses, as l1-3.
+    assert.equal(a.band.schema, PARQUET_L1_LOOKUPS_SCHEMA);
+    assert.match(a.witnessesRefused ?? '', /no pinned/);
   });
 });
 
@@ -780,5 +793,243 @@ describe('exportL1Band, columns the chain does not fix', () => {
         `${table.name} digest`,
       );
     }
+  });
+});
+
+describe('exportL1Band, spellings core.db may hold', () => {
+  // One range in each era of spelling: below 1.6 (no cumulative_diff or
+  // hash_list_merkle), 1.6 to 1.8 (floats, N.0), 1.8 to 2.0 and after 2.0.
+  const ERAS = [
+    { name: 'below 1.6', first: 50_000 },
+    { name: '1.6 to 1.8', first: 200_000 },
+    { name: '1.8 to 2.0', first: 300_000 },
+    { name: 'after 2.0', first: FIRST },
+  ];
+  const COUNT = 8;
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'parquet-l1-spelling-'));
+  });
+
+  afterEach(async () => {
+    await fsp.rm(dir, { recursive: true, force: true });
+  });
+
+  const exportFrom = async (
+    coreDbPath: string,
+    first: number,
+    work: string,
+  ) => {
+    const workDir = path.join(dir, work);
+    await fsp.mkdir(workDir);
+    return exportL1Band({
+      coreDbPath,
+      workDir,
+      from: first,
+      to: first + COUNT - 1,
+    });
+  };
+
+  for (const era of ERAS) {
+    it(`writes the canonical spelling of each value ${era.name}, and the same values`, async () => {
+      const plain = path.join(dir, 'plain.db');
+      await buildCoreDb(plain, era.first, COUNT, { padded: false });
+      // Some blocks unclaimed, stored as the empty bytes a band writes.
+      let db = new Sqlite(plain);
+      try {
+        db.prepare(
+          `UPDATE stable_blocks SET reward_addr = X'' WHERE height >= ? AND height % 2 = 0`,
+        ).run(era.first);
+      } finally {
+        db.close();
+      }
+      const odd = path.join(dir, 'odd.db');
+      await fsp.copyFile(plain, odd);
+      // The same values, spelt as another gateway may store them.
+      db = new Sqlite(odd);
+      try {
+        db.prepare(
+          `UPDATE stable_blocks SET
+             diff = CASE height % 3
+               WHEN 0 THEN '00' || diff
+               WHEN 1 THEN CAST(CAST(diff AS INTEGER) AS TEXT)
+               ELSE CAST(CAST(diff AS INTEGER) AS TEXT) || '.000' END,
+             cumulative_diff = CASE
+               WHEN cumulative_diff IS NULL THEN NULL
+               WHEN height % 2 = 0 THEN '0' || cumulative_diff
+               ELSE CAST(CAST(cumulative_diff AS INTEGER) AS TEXT) END,
+             reward_pool = '000' || reward_pool,
+             reward_addr = CASE
+               WHEN LENGTH(reward_addr) > 0 THEN reward_addr
+               WHEN height % 4 = 0 THEN NULL
+               ELSE 'unclaimed' END
+           WHERE height >= ?`,
+        ).run(era.first);
+        // A gateway that kept the field the header doesn't carry below 1.6.
+        db.prepare(
+          `UPDATE stable_blocks SET hash_list_merkle = randomblob(48)
+           WHERE height >= ? AND height < 95000`,
+        ).run(era.first);
+        // And one that stored unclaimed as bytes, not text.
+        db.prepare(
+          `UPDATE stable_blocks SET reward_addr = CAST('unclaimed' AS BLOB)
+           WHERE height = ?`,
+        ).run(era.first + 2);
+        const respelt = db
+          .prepare(
+            `SELECT COUNT(*) FROM stable_blocks WHERE height >= ?
+             AND (diff LIKE '0%' OR diff NOT LIKE '%.0' OR reward_addr IS NULL
+               OR CAST(reward_addr AS TEXT) = 'unclaimed')`,
+          )
+          .pluck()
+          .get(era.first) as number;
+        assert.ok(respelt > 0, 'the fixture re-spells values');
+      } finally {
+        db.close();
+      }
+
+      // Each export judges its own band, so both passing means both carry
+      // the canonical spellings; equal digests mean equal values.
+      const fromPlain = await exportFrom(plain, era.first, 'plain');
+      const fromOdd = await exportFrom(odd, era.first, 'odd');
+      assert.deepEqual(fromOdd.band.tables, fromPlain.band.tables);
+
+      const { Database } = await import('duckdb-async');
+      const duck = await Database.create(':memory:');
+      try {
+        const rows = (await duck.all(
+          `SELECT height, diff, cumulative_diff, reward_pool,
+             octet_length(reward_addr) AS addr, hash_list_merkle IS NULL AS no_merkle
+           FROM read_parquet('${path.join(fromOdd.dir, 'blocks.parquet')}')
+           WHERE height >= ${era.first} ORDER BY height`,
+        )) as Array<Record<string, unknown>>;
+        assert.equal(rows.length, COUNT);
+        for (const row of rows) {
+          const h = Number(row.height);
+          const real = h < 269_510;
+          assert.equal(row.diff, real ? '1.0' : '1', `diff at ${h}`);
+          assert.equal(
+            row.cumulative_diff,
+            h < 95_000 ? null : real ? '2.0' : '2',
+            `cumulative_diff at ${h}`,
+          );
+          assert.equal(row.reward_pool, '4', `reward_pool at ${h}`);
+          if (h % 2 === 0 || h === era.first + 2) {
+            assert.equal(Number(row.addr), 0, `reward_addr at ${h}`);
+          }
+          if (h < 95_000) assert.equal(row.no_merkle, true, `merkle at ${h}`);
+        }
+      } finally {
+        await duck.close();
+      }
+    });
+  }
+
+  it('refuses a value that is not a whole number, and leaves nothing', async () => {
+    for (const [column, value] of [
+      ['diff', 'abc'],
+      ['diff', '1.5'],
+      ['diff', '-1'],
+      ['diff', '1e3'],
+      ['diff', ' 1'],
+      ['cumulative_diff', '2.01'],
+      ['reward_pool', '4.'],
+      ['reward_pool', '0x4'],
+      ['cumulative_diff', null],
+    ] as const) {
+      const file = path.join(dir, `bad-${crypto.randomUUID()}.db`);
+      await buildCoreDb(file, FIRST, COUNT);
+      const db = new Sqlite(file);
+      try {
+        db.prepare(
+          `UPDATE stable_blocks SET ${column} = ? WHERE height = ?`,
+        ).run(value, FIRST + 3);
+      } finally {
+        db.close();
+      }
+      const workDir = path.join(dir, `work-${crypto.randomUUID()}`);
+      await fsp.mkdir(workDir);
+      await assert.rejects(
+        exportL1Band({
+          coreDbPath: file,
+          workDir,
+          from: FIRST,
+          to: FIRST + COUNT - 1,
+        }),
+        (error: unknown) =>
+          error instanceof L1CheckError &&
+          error.reason === 'canonical' &&
+          error.message.includes(`block ${FIRST + 3}: ${column}`),
+        `${column} = ${JSON.stringify(value)}`,
+      );
+      assert.deepEqual(await fsp.readdir(workDir), []);
+    }
+  });
+
+  it('refuses a block without a wallet list rather than make one up', async () => {
+    const file = path.join(dir, 'core.db');
+    await buildCoreDb(file, FIRST, COUNT);
+    const db = new Sqlite(file);
+    try {
+      db.prepare(
+        'UPDATE stable_blocks SET wallet_list = NULL WHERE height = ?',
+      ).run(FIRST + 1);
+    } finally {
+      db.close();
+    }
+    await assert.rejects(
+      exportFrom(file, FIRST, 'work'),
+      (error: unknown) =>
+        error instanceof L1CheckError &&
+        error.reason === 'canonical' &&
+        error.message.includes(`block ${FIRST + 1}: wallet_list is missing`),
+    );
+  });
+
+  it('re-spells numbers a driver returns as numbers, and refuses one that is not exact', () => {
+    const row = (values: Record<string, unknown>) => ({
+      height: 300_000,
+      diff: '1',
+      cumulative_diff: '2',
+      reward_pool: '4',
+      reward_addr: Buffer.alloc(32, 1),
+      wallet_list: Buffer.alloc(32),
+      previous_block: Buffer.alloc(48),
+      hash_list_merkle: Buffer.alloc(48),
+      ...values,
+    });
+    const spelt = canonicalBlockSpelling(
+      row({ diff: 28, cumulative_diff: 5n, reward_pool: 0 }),
+    );
+    assert.equal(spelt.diff, '28');
+    assert.equal(spelt.cumulative_diff, '5');
+    assert.equal(spelt.reward_pool, '0');
+    assert.equal(
+      canonicalBlockSpelling(row({ height: 100_000, diff: 28 })).diff,
+      '28.0',
+    );
+    for (const diff of [2.5, 2 ** 60, -1, -1n, Buffer.from('1'), true]) {
+      assert.throws(
+        () => canonicalBlockSpelling(row({ diff })),
+        (error: unknown) =>
+          error instanceof L1CheckError && error.reason === 'canonical',
+        String(diff),
+      );
+    }
+    // A real address is kept as it is; only the unclaimed spellings change.
+    const addr = Buffer.alloc(31, 7);
+    assert.equal(
+      canonicalBlockSpelling(row({ reward_addr: addr })).reward_addr,
+      addr,
+    );
+    // The genesis block's absent previous block, as the band writes it.
+    const genesis = canonicalBlockSpelling(
+      row({ height: 0, previous_block: null, cumulative_diff: null }),
+    );
+    assert.deepEqual(genesis.previous_block, Buffer.alloc(0));
+    assert.equal(genesis.cumulative_diff, null);
+    assert.equal(genesis.hash_list_merkle, null);
+    assert.equal(genesis.diff, '1.0');
   });
 });

@@ -341,11 +341,13 @@ docker run --rm -u "$(id -u):$(id -g)" -v "$HOME/arweave-l1:/bands:ro" \
   --publisher-key <the publisher's observer address>
 ```
 
-Today's `l1-3` bands report every block below the 2.0 fork, and the
-post-2.0 blocks holding a format-1 transaction with data (none from
-height 2,000,000), as `unbound`: read the result's `unbound` and
-`assurance`, and pass `--allow-unbound --allow-unverified-format1` only if
-that is enough for your use.
+`l1-4` bands carry [witnesses](#witness-files) that bind every block, so a
+whole set verifies with no `--allow-*` flag beyond the anchor. `l1-3`
+bands report every block below the 2.0 fork, and the post-2.0 blocks
+holding a format-1 transaction with data (none from height 2,000,000), as
+`unbound`: read the result's `unbound` and `assurance`, and pass
+`--allow-unbound --allow-unverified-format1` only if that is enough for
+your use.
 
 Then query it where it lies, for example with DuckDB:
 
@@ -522,13 +524,15 @@ A band is a directory of `band.json` and these files:
 | `tags.parquet` | Transaction tags, names and values in plaintext |
 | `wallets.parquet` | Owners' addresses and keys |
 | `lookup_tx_id.parquet`, `lookup_wallet.parquet`, `lookup_tag.parquet` | From layout `l1-3`: the [lookup files](#lookup-files) |
+| `witness_v1_data_roots.parquet`, `witness_fork_2_0.parquet` | From layout `l1-4`: the [witness files](#witness-files) (`witness_fork_2_0` only in a band holding heights below 422,250) |
 
-`band.json` names the band's layout (`schema`: `l1-1`, `l1-2` or `l1-3`), its
-heights, and for each table and lookup file its row count and a digest of its
-rows, independent of the Parquet bytes. A band's id is
+`band.json` names the band's layout (`schema`: `l1-1`, `l1-2`, `l1-3` or
+`l1-4`), its heights, and for each table, lookup and witness file its row
+count and a digest of its rows, independent of the Parquet bytes (under
+`tables`, `lookups` and `witnesses`). A band's id is
 `l1-h<from>-<to>-<publisher tag>-<digest>`: its heights, a tag of its
 publisher, and the first 12 hex digits of a digest of its tables' rows (the
-lookup files are not part of it). Two publishers of the same chain therefore
+lookup and witness files are not part of it). Two publishers of the same chain therefore
 write bands whose ids differ only in the publisher tag, with the same
 digest, and can compare them without exchanging files.
 
@@ -553,6 +557,97 @@ rows). A publisher runs the same check before it writes `band.json`, so it
 never publishes a band its readers would refuse. The file set it expects is
 the one the layout declares. A reader that does not know a layout refuses
 the band and names the layout.
+
+## Witness files
+
+Two things the chain committed to cannot be read from a band's tables: the
+data root of a format-1 transaction (its header carries none: the root is
+of its data), and a pre-2.0 block's place in the 2.0 seed of
+`hash_list_merkle` (a pre-2.0 block hash commits to the full wallet list,
+which no header carries). Without them a verifier cannot bind a block
+holding a format-1 transaction with data, nor any block below the 2.0 fork,
+and reports them `unbound`. From layout `l1-4` a band carries both, as
+witness files: untrusted values a verifier recomputes and checks against
+hashes the chain fixes, so it needs no trust in whoever wrote them.
+
+| File | One row per | Columns | Sorted by |
+|---|---|---|---|
+| `witness_v1_data_roots.parquet` | Format-1 transaction with `data_size > 0` (none from the 2.9.6 fork) | `height` UBIGINT, `id` BLOB (32), `data_root` BLOB (32) | `height, id` |
+| `witness_fork_2_0.parquet` | Height below 422,250 (only in a band holding one) | `height` UBIGINT, `tx_root` BLOB (empty, or 32), `fold` BLOB (48), `h2` BLOB (48) | `height` |
+
+- **`data_root`** is the v1 data root as Arweave computes it
+  (`ar_tx:chunk_binary`: 256 KiB chunks, the remainder last, no
+  rebalancing; not `arweave-js`'s `computeRootHash`). A verifier recomputes
+  the block's `tx_root` with it in the transaction's leaf: from the 2.0 fork
+  against the header's `tx_root`; below it, against the row's `tx_root`.
+- **`tx_root`** is the block's transition `tx_root`: Arweave's `tx_root`
+  rule (`generate_size_tagged_list_from_txs`: transactions sorted by format
+  then id, each leaf its data root and the running end offset, no padding
+  below 2.5) over its transactions, as Arweave's 2.0 fork computed it; empty
+  for a block without transactions.
+- **`fold`** is the 2.0 seed fold through the height:
+  `SHA-384(fold below ‖ deepHash([indep_hash, decimal weave_size, tx_root]))`,
+  from empty below height 0 (`ar_unbalanced_merkle:block_index_to_merkle_root`).
+  The fold through 422,249 is block 422,250's `hash_list_merkle`. A
+  verifier recomputes each fold from the one below and requires it equal,
+  and binds a run of pre-2.0 blocks once its fold reaches a value the chain
+  fixes: block 422,250's `hash_list_merkle`, or a fold pinned in the
+  verifier. ar-io-node pins the folds through 99,999, 199,999, 299,999,
+  399,999 and 422,249:
+
+  | Height | Fold (base64url) |
+  |---|---|
+  | 99,999 | `3uxEfY2W3pKx5lqRvvksHCVczmZy0mtU6vY-aDELGlzgP6JAdLeztd3ib6bk-ddq` |
+  | 199,999 | `MTYJHNVyj5NO5Vgwm7kPrmE1hMD4lQge_LE9WG3nUmlPRStx39oF5uibHBD4mF3d` |
+  | 299,999 | `5fyunSDM_5oMnjyt9M0ZB5XKpW5ZjmrvJu7rrC5Yn1nUzfJ1xeN8x8-Y_I_mVB-i` |
+  | 399,999 | `1s-ckibn5_evNgrs82K8d_J4byo8xc3GKV0rQK4uw_Iwp0Oia-Xstp5yAfXYH7Nk` |
+  | 422,249 | `akSjDrBKPuepJMOhO_S9C-iFp5zn9Glv57HGdN_WPqEToWC0Ukb37Gzs4PDA7oLU` (block 422,250's `hash_list_merkle`) |
+
+  The first four fold out of Arweave's own 2.0 checkpoint
+  (`apps/arweave/priv/fork_2_0_checkpoint` at the parent of Arweave commit
+  d43ba2b9, SHA-256 `714be0bc…44d4`); anyone can recompute them.
+- **`h2`** is the block's "2.0 hash": Arweave's 2.0–2.4 `indep_hash` rule
+  applied to its 1.0 header, with `tx_root` set to the transition root,
+  its transaction ids sorted, block tags empty and the default proof of
+  access (`ar_header_sync:download_block`). It covers every header field
+  the fold does not (timestamp, `last_retarget`, both difficulties, nonce,
+  `hash`, reward address, reward pool, `wallet_list`, `hash_list_merkle`)
+  and the transaction ids. Arweave ships every one in
+  `genesis_data/hash_list_1_0` (SHA-256 `d161502a…ca6f`) and checks each
+  pre-2.0 header a node syncs against it. A verifier recomputes it from the
+  band's own fields (an empty `reward_addr` read as `unclaimed`) and
+  requires it equal, and folds them, `SHA-384(fold ‖ h2)` from empty, to
+  the fold of `hash_list_1_0` pinned at the same heights:
+
+  | Height | Fold of the 2.0 hashes (base64url) |
+  |---|---|
+  | 99,999 | `tP4Ss_y8j-c6EPNQDFd-STooBLOy4B-dxTmWwdK-wzgQ04RhmVbVWw7fu_Bk2ip-` |
+  | 199,999 | `iNz57dW3y_JZUB3kvSFLCfLUunVnLM76LJixac82_83jD2kBWQTS7DbljA59ebQU` |
+  | 299,999 | `4HRV8yVq8rxRfqaS6g6ml6TZFxCBu0Y77V-pLGEqTlJ8WaJ4ZNP3p-wzJUeukUvi` |
+  | 399,999 | `GuZEzEU_BOTJa44c88OMw8lJvDoFELyzxLY4ljverSJBZVprRd06lDdd8K8UOJDM` |
+  | 422,249 | `Fznt4jqwgcOvFiFxtt05_vT7p9A3aE9FJPalyfkIfjBjOv3vC9Ay8AdbQZuJAH2r` |
+
+  Those fields are bound to Arweave's checkpoint, not to a hash the chain's
+  own blocks reach.
+
+A run of pre-2.0 blocks is bound once both folds reach their pins, so a
+history band below the fork is bound alone, its folds running from the
+pins below it to the pins at its top.
+
+A row for anything else (a transaction that is not format 1 with data at
+its height, a height outside the band or at or above the fork), a repeated
+row, a row out of order or malformed, a file that does not digest to
+`band.json`, or a format-1 transaction whose `data_root` column is not
+NULL, fails the band. So does a missing row: an `l1-4` band holds one
+`witness_fork_2_0` row for every height below the fork and a v1 root for
+every format-1 transaction with data, and any of its blocks left unbound
+fails `witnesses`, whatever `--allow-*` flag is given (those accept bands
+without witnesses only). A band whose witnesses its publisher could not
+have or confirm in full is published as `l1-3` instead.
+
+Like lookups, witnesses are not part of a band's id: a publisher adds them
+to a published band in place, and only `band.json` and the new files
+change.
 
 ## Lookup files
 

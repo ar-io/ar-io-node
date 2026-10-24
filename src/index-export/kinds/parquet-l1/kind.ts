@@ -25,7 +25,9 @@
  * A published band whose tables are current but whose lookups are not (an
  * `l1-2` band once `l1-3` is the layout) is never rebuilt: its lookups are
  * derived from its own tables and added in place ({@link planL1Derive},
- * {@link runL1Derive}), keeping its id.
+ * {@link runL1Derive}), keeping its id. A band with lookups but no
+ * witnesses (`l1-3`) gains them the same way ({@link planL1Witness},
+ * {@link runL1Witness}).
  */
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
@@ -36,6 +38,7 @@ import { bandPublisherTag } from '../../../lib/index-band/build.js';
 import { supersededBands } from '../../../lib/index-publication.js';
 import type { Database } from 'duckdb-async';
 
+import type { Fork20Pins } from '../../../lib/parquet-l1/chain.js';
 import {
   BAND_FILE,
   bandSupersedes,
@@ -47,6 +50,7 @@ import {
   l1SubRangeOf,
   lookupsCurrent,
   lookupsOf,
+  PARQUET_L1_LOOKUPS_SCHEMA,
   PARQUET_L1_SCHEMA,
   PARQUET_L1_TABLES,
   ParquetL1Band,
@@ -54,10 +58,19 @@ import {
   readPublisherFacts,
   serializeBandFile,
   tablesCurrent,
+  witnessesCurrent,
+  witnessesOf,
   writePublisherFacts,
 } from '../../../lib/parquet-l1/layout.js';
 import { checkParquetStructure } from '../../../lib/parquet/check.js';
 import { writeBandLookups } from '../../../lib/parquet-l1/lookups.js';
+import { BandsSource } from '../../../lib/parquet-l1/bands-source.js';
+import { L1Judge } from '../../../lib/parquet-l1/judge.js';
+import {
+  buildBandWitnesses,
+  checkBandWitnesses,
+  WitnessRefused,
+} from '../../../lib/parquet-l1/witnesses.js';
 import * as metrics from '../../metrics.js';
 import {
   exportL1Band,
@@ -66,6 +79,7 @@ import {
   L1IncompleteError,
   withBandWriter,
 } from './export.js';
+import { L1WitnessConfig, l1WitnessInputs } from './witness-inputs.js';
 
 export const L1_INDEX = 'parquet-l1';
 
@@ -193,8 +207,17 @@ export function planL1(
   // A range is only covered by a band of the layout this build writes, so
   // upgrading a publisher rebuilds what the new layout changes instead of
   // leaving the network split across versions.
+  // A whole range band already published covers its sub-ranges too: with
+  // --to at a range boundary the top falls in a range a band covers, and
+  // building its sub-ranges beside it would publish an overlapping set,
+  // which subscribers refuse.
   const have = (from: number, to: number) =>
-    bands.some((b) => b.from === from && b.to === to && current(b));
+    bands.some(
+      (b) =>
+        current(b) &&
+        ((b.from === from && b.to === to) ||
+          (b.from <= from && b.to >= to && b.to === l1RangeOf(b.from)[1])),
+    );
 
   // Whole history ranges, oldest first.
   const [activeFrom] = l1RangeOf(top);
@@ -221,7 +244,10 @@ export function planL1(
       });
     }
   }
-  if (!bands.some((b) => b.from === tipFrom && b.to >= top && current(b))) {
+  if (
+    !bands.some((b) => b.from === tipFrom && b.to >= top && current(b)) &&
+    !have(tipFrom, top)
+  ) {
     steps.push({
       role: 'd',
       heightRange: [tipFrom, top],
@@ -294,6 +320,7 @@ export async function runL1Step(
     dryRun,
     log,
     stillHeld,
+    witness,
   }: {
     coreDbPath: string;
     workDir: string;
@@ -301,6 +328,8 @@ export async function runL1Step(
     publisher: string;
     dryRun: boolean;
     log: Logger;
+    /** Where witnesses come from; without it only a band needing none gets them. */
+    witness?: L1WitnessConfig;
     /**
      * Whether this run still holds the lock: asked just before publishing,
      * so a run that stalled past its lock never publishes beside another.
@@ -330,6 +359,11 @@ export async function runL1Step(
           to,
           supersedes: step.supersedes,
           requireComplete: step.role === 'h',
+          ...(witness !== undefined
+            ? {
+                witnessInputs: l1WitnessInputs(witness, [from, to], log),
+              }
+            : {}),
         }),
       { log, heightRange: step.heightRange },
     );
@@ -345,6 +379,9 @@ export async function runL1Step(
       strayTransactions: result.strayTransactions,
       scratchBytes: result.scratchBytes,
       bandBytes: result.bandBytes,
+      ...(result.witnessesRefused !== undefined
+        ? { details: [`written without witnesses: ${result.witnessesRefused}`] }
+        : {}),
     };
     try {
       const target = path.join(publishDir, id);
@@ -665,7 +702,7 @@ export async function runL1Derive(
     );
     // Subscribers refuse a footer over the limit: check before publishing,
     // and in a dry run, so it reports a lookup that couldn't be published.
-    for (const spec of lookupsOf(PARQUET_L1_SCHEMA)) {
+    for (const spec of lookupsOf(PARQUET_L1_LOOKUPS_SCHEMA)) {
       await checkParquetStructure(path.join(staging, spec.file));
     }
     if (dryRun) {
@@ -686,7 +723,7 @@ export async function runL1Derive(
         seconds: 0,
       };
     } else {
-      for (const spec of lookupsOf(PARQUET_L1_SCHEMA)) {
+      for (const spec of lookupsOf(PARQUET_L1_LOOKUPS_SCHEMA)) {
         await fs.rename(
           path.join(staging, spec.file),
           path.join(band.dir, spec.file),
@@ -694,7 +731,7 @@ export async function runL1Derive(
       }
       await settleBandFile(band, {
         version: 1,
-        schema: PARQUET_L1_SCHEMA,
+        schema: PARQUET_L1_LOOKUPS_SCHEMA,
         heightRange: band.band.heightRange,
         tables: band.band.tables,
         lookups,
@@ -727,5 +764,255 @@ export async function runL1Derive(
     reason: outcome.reason,
   });
   log.info('L1 band lookups derived', { ...outcome });
+  return outcome;
+}
+
+/** What adding one published band's witnesses came to. */
+export interface L1WitnessOutcome {
+  index: typeof L1_INDEX;
+  id: string;
+  heightRange: [number, number];
+  /**
+   * `published`: the witnesses and the new `band.json` are in place.
+   * `skipped`: the inputs lack what the band needs (`unavailable`), tried
+   * again next run. `couldnt_check`: an input or the band contradicts the
+   * chain, or a read failed.
+   */
+  result: 'published' | 'skipped' | 'couldnt_check' | 'dry_run';
+  reason: string;
+  details?: string[];
+  /** Rows per witness. */
+  rows?: Record<string, number>;
+  seconds: number;
+}
+
+/**
+ * The published bands to upgrade by adding their witnesses: tables and
+ * lookups current, no witnesses (`l1-3`). Never a rebuild, and no read of
+ * `core.db`.
+ */
+export function planL1Witness(
+  bands: L1PublishedBand[],
+  confirmed: ReadonlySet<string> = new Set(),
+): L1PublishedBand[] {
+  return bands.filter(
+    (b) =>
+      tablesCurrent(b.band.schema, b.id, confirmed) &&
+      lookupsCurrent(b.band.schema) &&
+      !witnessesCurrent(b.band.schema),
+  );
+}
+
+/**
+ * Builds a published band's witnesses from `witness` and adds them, in
+ * place, under the band's id, as `l1-4`.
+ *
+ * Built in `workDir` and checked there before the band is touched: every
+ * root confirmed by its block's `tx_root`, every fold by the chain's
+ * (`buildBandWitnesses`), and then the band with them judged whole by the
+ * code its consumers run, which must pass with no block left unbound.
+ * Only then are the files moved in
+ * and `band.json` replaced, by a rename, so a reader sees the old band or
+ * the new one. A band whose witnesses cannot be had or confirmed is left
+ * as it is, and tried again next run.
+ */
+export async function runL1Witness(
+  band: L1PublishedBand,
+  {
+    workDir,
+    dryRun,
+    log,
+    stillHeld,
+    witness,
+    foldPins,
+  }: {
+    workDir: string;
+    dryRun: boolean;
+    log: Logger;
+    stillHeld?: () => Promise<boolean>;
+    witness: L1WitnessConfig;
+    /** The chain's folds; a test chain gives its own. */
+    foldPins?: Fork20Pins;
+  },
+): Promise<L1WitnessOutcome> {
+  const started = Date.now();
+  const base = {
+    index: L1_INDEX,
+    id: band.id,
+    heightRange: [band.from, band.to] as [number, number],
+  } as const;
+  let outcome: L1WitnessOutcome;
+  await fs.mkdir(workDir, { recursive: true });
+  const staging = await fs.mkdtemp(path.join(workDir, 'witness-'));
+  try {
+    // With no inputs at all, a band that needs a root cannot get one: say
+    // so without reading the band through.
+    if (witness.dir === undefined && witness.nodes.length === 0) {
+      const needed = await withBandWriter(staging, async (duck) => {
+        const file = path
+          .join(band.dir, 'transactions.parquet')
+          .replace(/'/g, "''");
+        const [row] = (await duck.all(
+          `SELECT COUNT(*) AS n FROM read_parquet('${file}') WHERE format = 1 AND data_size > 0`,
+        )) as Array<{ n: number | bigint }>;
+        return Number(row.n);
+      });
+      if (needed > 0) {
+        throw new WitnessRefused(
+          `${needed} format-1 transactions with data need a v1 data root, and no witness input is configured (INDEX_EXPORT_L1_WITNESS_DIR, INDEX_EXPORT_L1_WITNESS_NODES)`,
+          'unavailable',
+        );
+      }
+    }
+    // The band as it would be: its own files, and the new witnesses.
+    const judgedDir = path.join(staging, 'band');
+    await fs.mkdir(judgedDir);
+    const { built, createdAt, failing, unbound } = await withBandWriter(
+      staging,
+      async (duck) => {
+        const built = await buildBandWitnesses(
+          duck,
+          band.dir,
+          band.band,
+          judgedDir,
+          l1WitnessInputs(witness, [band.from, band.to], log),
+          foldPins !== undefined ? { foldPins } : {},
+        );
+        for (const table of PARQUET_L1_TABLES) {
+          await fs.symlink(
+            path.resolve(band.dir, table.file),
+            path.join(judgedDir, table.file),
+          );
+        }
+        const next: ParquetL1Band = {
+          ...band.band,
+          schema: PARQUET_L1_SCHEMA,
+          witnesses: built.witnesses,
+        };
+        const judge = new L1Judge(band.from, band.to, {
+          witnesses: true,
+          ...(foldPins !== undefined ? { foldPins } : {}),
+        });
+        for (const problem of await checkBandWitnesses(duck, judgedDir, next)) {
+          judge.fail(
+            'witnesses',
+            problem.height,
+            problem.found,
+            problem.expected,
+          );
+        }
+        await new BandsSource(duck, [
+          { id: band.id, dir: judgedDir, band: next },
+        ]).judge(judge, band.from, band.to, 10_000);
+        const judged = judge.finish();
+        return {
+          built,
+          createdAt: await bandTopTime(duck, band),
+          failing: judged.checks.filter((c) => !c.ok),
+          unbound: judged.unbound,
+        };
+      },
+    );
+    const rows = Object.fromEntries(
+      Object.entries(built.witnesses).map(([name, w]) => [name, w.rows]),
+    );
+    const left =
+      (unbound.pre20?.blocks ?? 0) + (unbound.txRootFormat1?.blocks ?? 0);
+    if (failing.length > 0 || left > 0) {
+      throw new WitnessRefused(
+        failing.length > 0
+          ? `the band with them fails the checks its consumers run: ${failing
+              .map(
+                (c) =>
+                  `${c.name} (${(c.failures ?? [])
+                    .slice(0, 3)
+                    .map((f) => `${f.height}: ${f.found}`)
+                    .join('; ')})`,
+              )
+              .join('; ')}`
+          : `the band with them still leaves ${left} blocks unbound`,
+      );
+    }
+    for (const spec of witnessesOf(PARQUET_L1_SCHEMA, band.band.heightRange)) {
+      await checkParquetStructure(path.join(judgedDir, spec.file));
+    }
+    if (dryRun) {
+      outcome = {
+        ...base,
+        result: 'dry_run',
+        reason: 'dry_run',
+        rows,
+        seconds: 0,
+      };
+    } else if (stillHeld !== undefined && !(await stillHeld())) {
+      outcome = {
+        ...base,
+        result: 'couldnt_check',
+        reason: 'lock_lost',
+        details: ['another run took the lock while this one stalled'],
+        rows,
+        seconds: 0,
+      };
+    } else {
+      for (const spec of witnessesOf(
+        PARQUET_L1_SCHEMA,
+        band.band.heightRange,
+      )) {
+        await fs.rename(
+          path.join(judgedDir, spec.file),
+          path.join(band.dir, spec.file),
+        );
+      }
+      await settleBandFile(band, {
+        version: 1,
+        schema: PARQUET_L1_SCHEMA,
+        heightRange: band.band.heightRange,
+        tables: band.band.tables,
+        ...(band.band.lookups !== undefined
+          ? { lookups: band.band.lookups }
+          : {}),
+        witnesses: built.witnesses,
+        createdAt,
+      });
+      outcome = {
+        ...base,
+        result: 'published',
+        reason: 'witnesses',
+        rows,
+        ...(built.missing > 0
+          ? {
+              details: [
+                `${built.missing} v1 data roots no input had; their blocks stay unbound`,
+              ],
+            }
+          : {}),
+        seconds: 0,
+      };
+    }
+  } catch (error) {
+    const unavailable =
+      error instanceof WitnessRefused && error.kind === 'unavailable';
+    outcome = {
+      ...base,
+      result: unavailable ? 'skipped' : 'couldnt_check',
+      reason: unavailable
+        ? 'witnesses_unavailable'
+        : error instanceof WitnessRefused
+          ? 'witnesses'
+          : 'witness_source',
+      details: [error instanceof Error ? error.message : String(error)],
+      seconds: 0,
+    };
+  } finally {
+    await fs.rm(staging, { recursive: true, force: true });
+  }
+  outcome.seconds = (Date.now() - started) / 1000;
+  metrics.runs.inc({
+    index: L1_INDEX,
+    kind: 'witness',
+    result: outcome.result,
+    reason: outcome.reason,
+  });
+  log.info('L1 band witnesses', { ...outcome });
   return outcome;
 }

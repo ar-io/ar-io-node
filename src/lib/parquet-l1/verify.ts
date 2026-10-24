@@ -26,15 +26,18 @@
  * draw of headers and signatures and checks them; the result says what
  * fraction of forged rows it would catch.
  *
- * **What it cannot bind at all, under the `l1-3` layout.** Below the 2.0
- * fork a block's hash is a deep hash over the full wallet list, which no
- * header carries, so it cannot be recomputed; those blocks are bound only
- * through Arweave's own list of their "2.0 hashes" or the 2.0 seed fold,
- * and both need each block's transition `tx_root`, a witness the layout
- * does not carry. Above the fork, a block holding a format-1 transaction
- * with data has a `tx_root` built from that data's root, which the index
- * does not store. Both are reported as `unbound`, by class, and fail the
- * run unless accepted (`--allow-unbound`, `--allow-unverified-format1`).
+ * **What it cannot bind at all from `core.db`.** Below the 2.0 fork a
+ * block's hash covers the full wallet list (from the 1.6 fork a deep hash
+ * over the header fields and the list; below it a SHA-384 over the header
+ * as JSON with the full hash list too), which no header carries, so it
+ * cannot be recomputed; those blocks are bound only through the 2.0 seed
+ * fold, which needs each block's transition `tx_root`. A block holding a
+ * format-1 transaction with data has a `tx_root` built from that data's
+ * root. `core.db` stores neither (an `l1-4` band's witnesses do, and
+ * `--bands-dir` binds both), so both are reported as `unbound`, by class,
+ * and fail the run unless accepted (`--allow-unbound`,
+ * `--allow-unverified-format1`). Block 422,250's `hash_list_merkle` is
+ * still checked against the pinned fold through 422,249.
  */
 import Sqlite from 'better-sqlite3';
 

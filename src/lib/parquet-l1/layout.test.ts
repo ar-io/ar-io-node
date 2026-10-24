@@ -21,6 +21,7 @@ import {
   firstTagValue,
   lookupsCurrent,
   lookupsOf,
+  witnessesCurrent,
   PARQUET_L1_LOOKUPS,
   PARQUET_L1_SCHEMA,
   PARQUET_L1_SCHEMAS,
@@ -47,7 +48,7 @@ const valid = (schema: string = PARQUET_L1_SCHEMA): any => ({
   tables: Object.fromEntries(
     PARQUET_L1_TABLES.map((t) => [t.name, { rows: 5, rowDigest: digest }]),
   ),
-  ...(schema === 'l1-3'
+  ...(schema === 'l1-3' || schema === 'l1-4'
     ? {
         lookups: Object.fromEntries(
           PARQUET_L1_LOOKUPS.map((l) => [
@@ -55,6 +56,14 @@ const valid = (schema: string = PARQUET_L1_SCHEMA): any => ({
             { rows: 7, rowDigest: digest },
           ]),
         ),
+      }
+    : {}),
+  ...(schema === 'l1-4'
+    ? {
+        witnesses: {
+          v1_data_roots: { rows: 3, rowDigest: digest },
+          fork_2_0: { rows: 100_000, rowDigest: digest },
+        },
       }
     : {}),
   createdAt: '2026-10-02T00:00:00.000Z',
@@ -113,16 +122,36 @@ describe('parquet-l1 layout', () => {
       'transactions.parquet',
       'wallets.parquet',
     ];
-    assert.deepEqual(bandFiles('l1-1'), tables);
-    assert.deepEqual(bandFiles('l1-2'), tables);
+    const range = [0, 99_999] as const;
+    assert.deepEqual(bandFiles('l1-1', range), tables);
+    assert.deepEqual(bandFiles('l1-2', range), tables);
+    const lookups = [
+      ...tables,
+      'lookup_tag.parquet',
+      'lookup_tx_id.parquet',
+      'lookup_wallet.parquet',
+    ].sort();
+    assert.deepEqual(bandFiles('l1-3', range), lookups);
+    // l1-4: witnesses, fork_2_0 only for a band below the 2.0 fork.
     assert.deepEqual(
-      bandFiles('l1-3'),
+      bandFiles('l1-4', range),
       [
-        ...tables,
-        'lookup_tag.parquet',
-        'lookup_tx_id.parquet',
-        'lookup_wallet.parquet',
+        ...lookups,
+        'witness_fork_2_0.parquet',
+        'witness_v1_data_roots.parquet',
       ].sort(),
+    );
+    assert.deepEqual(
+      bandFiles('l1-4', [400_000, 499_999]),
+      [
+        ...lookups,
+        'witness_fork_2_0.parquet',
+        'witness_v1_data_roots.parquet',
+      ].sort(),
+    );
+    assert.deepEqual(
+      bandFiles('l1-4', [FORK_2_0, FORK_2_0 + 10]),
+      [...lookups, 'witness_v1_data_roots.parquet'].sort(),
     );
   });
 
@@ -209,7 +238,7 @@ describe('parseBandFile', () => {
     refuse((b) => (b.supersedes = 'one'), /supersedes must be a list/);
     refuse((b) => (b.supersedes = ['']), /supersedes must be a list/);
     // Lookups: exactly the layout's, and none before l1-3.
-    refuse((b) => delete b.lookups, /layout l1-3 needs lookups/);
+    refuse((b) => delete b.lookups, /layout l1-4 needs lookups/);
     refuse((b) => delete b.lookups.tag, /lookup tag needs/);
     refuse(
       (b) => (b.lookups.extra = { rows: 1, rowDigest: digest }),
@@ -261,6 +290,7 @@ describe('serializeBandFile', () => {
       'heightRange',
       'tables',
       'lookups',
+      'witnesses',
       'createdAt',
     ]);
     assert.deepEqual(
@@ -271,6 +301,42 @@ describe('serializeBandFile', () => {
       Object.keys(json.lookups),
       PARQUET_L1_LOOKUPS.map((l) => l.name),
     );
+    assert.deepEqual(Object.keys(json.witnesses), [
+      'v1_data_roots',
+      'fork_2_0',
+    ]);
+  });
+
+  it("refuses witnesses a layout or a band's heights do not declare", () => {
+    const refuse = (band: any, message: RegExp) =>
+      assert.throws(() => parseBandFile(JSON.stringify(band)), message);
+    refuse(
+      { ...valid('l1-3'), witnesses: valid().witnesses },
+      /layout l1-3 has no witnesses/,
+    );
+    const noWitnesses: any = valid();
+    delete noWitnesses.witnesses;
+    refuse(noWitnesses, /layout l1-4 needs witnesses/);
+    const noFork: any = valid();
+    delete noFork.witnesses.fork_2_0;
+    refuse(noFork, /witness fork_2_0 needs rows/);
+    // Above the 2.0 fork a band has no fork_2_0 witness.
+    refuse(
+      { ...valid(), heightRange: [FORK_2_0, FORK_2_0 + 9] },
+      /unknown witness "fork_2_0"/,
+    );
+    const above: any = {
+      ...valid(),
+      heightRange: [FORK_2_0, FORK_2_0 + 9],
+      witnesses: { v1_data_roots: valid().witnesses.v1_data_roots },
+    };
+    assert.deepEqual(
+      Object.keys(parseBandFile(JSON.stringify(above)).witnesses ?? {}),
+      ['v1_data_roots'],
+    );
+    const badDigest: any = valid();
+    badDigest.witnesses.v1_data_roots.rowDigest = 'xyz';
+    refuse(badDigest, /witness v1_data_roots needs/);
   });
 
   it('writes an older layout without lookups', () => {
@@ -454,10 +520,17 @@ describe('tablesCurrent and lookupsCurrent', () => {
     assert.equal(tablesCurrent('l1-1', 'x', new Set(['y'])), false);
   });
 
-  it('counts lookups as current only at the current layout', () => {
+  it('counts lookups as current from l1-3', () => {
     assert.equal(lookupsCurrent(PARQUET_L1_SCHEMA), true);
+    assert.equal(lookupsCurrent('l1-3'), true);
     assert.equal(lookupsCurrent('l1-2'), false);
     assert.equal(lookupsCurrent('l1-1'), false);
+  });
+
+  it('counts witnesses as current only at l1-4, and its tables as current', () => {
+    assert.equal(witnessesCurrent('l1-4'), true);
+    assert.equal(witnessesCurrent('l1-3'), false);
+    assert.equal(tablesCurrent('l1-4', 'x', new Set()), true);
   });
 });
 

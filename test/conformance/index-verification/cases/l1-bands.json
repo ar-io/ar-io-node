@@ -184,18 +184,29 @@
   {
     "id": "l1-bands-format1-flip",
     "description": "A8: a format-2 transaction with data relabelled format 1, republished so every digest matches",
-    "tampered": "transactions.format, republished",
+    "tampered": "band made l1-3 (no witnesses), transactions.format, republished; that block's offsets dropped (NULL), as a forger would, so they do not give it away",
     "kind": "l1-bands",
     "options": {
-      "allowUnanchored": true
+      "allowUnanchored": true,
+      "allowUnsampled": true
     },
     "ops": [
+      {
+        "op": "dropWitnesses",
+        "band": 0
+      },
       {
         "op": "setFormat",
         "band": 0,
         "height": 1900003,
         "bti": 0,
         "format": 1
+      },
+      {
+        "op": "rewrite",
+        "band": 0,
+        "table": "transactions",
+        "select": "SELECT * REPLACE (CASE WHEN height = 1900003 THEN NULL ELSE \"offset\" END AS \"offset\") FROM SRC"
       },
       {
         "op": "republish",
@@ -216,19 +227,30 @@
   {
     "id": "l1-bands-format1-flip-accepted",
     "description": "A8: the same relabelled band, format-1 blocks accepted (--allow-unverified-format1): the gap is accepted, not hidden",
-    "tampered": "transactions.format, republished",
+    "tampered": "band made l1-3 (no witnesses), transactions.format, republished; that block's offsets dropped (NULL), as a forger would, so they do not give it away",
     "kind": "l1-bands",
     "options": {
       "allowUnanchored": true,
-      "allowUnverifiedFormat1": true
+      "allowUnverifiedFormat1": true,
+      "allowUnsampled": true
     },
     "ops": [
+      {
+        "op": "dropWitnesses",
+        "band": 0
+      },
       {
         "op": "setFormat",
         "band": 0,
         "height": 1900003,
         "bti": 0,
         "format": 1
+      },
+      {
+        "op": "rewrite",
+        "band": 0,
+        "table": "transactions",
+        "select": "SELECT * REPLACE (CASE WHEN height = 1900003 THEN NULL ELSE \"offset\" END AS \"offset\") FROM SRC"
       },
       {
         "op": "republish",
@@ -499,7 +521,7 @@
   {
     "id": "l1-bands-invented-tx",
     "description": "An invented, linked, zero-size transaction, republished",
-    "tampered": "transactions, block_transactions, blocks.tx_count, republished",
+    "tampered": "transactions, block_transactions, blocks.tx_count, republished; that block's offsets dropped (NULL), as a forger would, so they do not give it away (copied from a transaction with tags, it keeps their content_type with none of its own: canonical)",
     "kind": "l1-bands",
     "options": {
       "allowUnanchored": true,
@@ -512,6 +534,12 @@
         "height": 1900003
       },
       {
+        "op": "rewrite",
+        "band": 0,
+        "table": "transactions",
+        "select": "SELECT * REPLACE (CASE WHEN height = 1900003 THEN NULL ELSE \"offset\" END AS \"offset\") FROM SRC"
+      },
+      {
         "op": "republish",
         "band": 0
       }
@@ -520,6 +548,7 @@
       "verdict": "refuted",
       "check": "tx_root",
       "failing": [
+        "canonical",
         "tx_root"
       ]
     }
@@ -576,8 +605,9 @@
       "verdict": "refuted",
       "check": "block_size",
       "failing": [
-        "hash_list_merkle",
         "block_size",
+        "canonical",
+        "hash_list_merkle",
         "weave_accounting"
       ]
     }

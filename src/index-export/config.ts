@@ -20,6 +20,7 @@ import {
   parseL2Indexes,
   resolveL2Source,
 } from './kinds/parquet-l2/config.js';
+import type { L1WitnessConfig } from './kinds/parquet-l1/witness-inputs.js';
 import {
   DEFAULT_SQLITE_BUNDLES_PATH,
   resolveSourceConfigs,
@@ -102,6 +103,13 @@ export interface ExportConfig {
    * off-peak. Raise it for an operator's one-time rebuild or bootstrap.
    */
   l1RunBudgetMs?: number;
+  /**
+   * Where `parquet-l1` witnesses (`l1-4`) come from: a directory of v1 data
+   * roots and Arweave's 2.0 checkpoint (`INDEX_EXPORT_L1_WITNESS_DIR`), and
+   * Arweave nodes (`INDEX_EXPORT_L1_WITNESS_NODES`). Nothing from either is
+   * published unless the chain confirms it.
+   */
+  l1Witness?: L1WitnessConfig;
   /** Gateway the header check reads roots from. Required. */
   headerCheckUrl: string;
   headerCheckTimeoutMs: number;
@@ -303,6 +311,7 @@ export function parseExportConfig(env: Env, dataDir = DATA_DIR): ExportConfig {
     ...(l1RunBudgetMinutes !== undefined
       ? { l1RunBudgetMs: l1RunBudgetMinutes * 60_000 }
       : {}),
+    l1Witness: l1WitnessConfig(env),
     headerCheckUrl,
     headerCheckTimeoutMs: integer(env, 'INDEX_EXPORT_HEADER_CHECK_TIMEOUT_MS', {
       min: 1000,
@@ -365,5 +374,34 @@ export function parseExportConfig(env: Env, dataDir = DATA_DIR): ExportConfig {
           }) as number,
         }
       : {}),
+  };
+}
+
+/** `INDEX_EXPORT_L1_WITNESS_*`: where `parquet-l1` witnesses come from. */
+function l1WitnessConfig(env: Env): L1WitnessConfig {
+  const dir = value(env, 'INDEX_EXPORT_L1_WITNESS_DIR');
+  const nodes = (value(env, 'INDEX_EXPORT_L1_WITNESS_NODES') ?? '')
+    .split(',')
+    .map((url) => url.trim())
+    .filter((url) => url.length > 0);
+  for (const url of nodes) {
+    let parsed: URL;
+    try {
+      parsed = new URL(url);
+    } catch {
+      throw new Error(`INDEX_EXPORT_L1_WITNESS_NODES: ${url} is not a URL`);
+    }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      throw new Error(`INDEX_EXPORT_L1_WITNESS_NODES: ${url} is not http(s)`);
+    }
+    if (parsed.username !== '' || parsed.password !== '') {
+      throw new Error(
+        `INDEX_EXPORT_L1_WITNESS_NODES: ${url} may not carry a user or password`,
+      );
+    }
+  }
+  return {
+    ...(dir !== undefined ? { dir } : {}),
+    nodes,
   };
 }

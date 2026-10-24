@@ -705,6 +705,15 @@ export const HISTORICAL_PINS: HistoricalPin[] = [
       'transition_block: the pre-2.0 tx_root the 2.0 seed and hash_list_1_0 use (generate_size_tagged_list_from_txs over v1 data)',
   },
   {
+    // The parent of "Remove the 2.0 transition artifacts" (d43ba2b9),
+    // 1730adf0acbba1208583d172dedcb38ca75df33e.
+    commit: 'd43ba2b9^',
+    path: 'apps/arweave/priv/fork_2_0_checkpoint',
+    blob: 'b1de1ed686b6a9c52c163de33f35e9246e2ac292',
+    mirrors:
+      'FORK_2_0_FOLD_PINS and FORK_2_0_CHECKPOINT_SHA256: the per-height transition entries the 2.0 seed folds, heights 0 to 399,999 (fork-2-0-pins.test.ts recomputes the pins from it)',
+  },
+  {
     // The parent of 28df6bd5, f107262d50bef5cdbd88f4dbfe049c069eeacb5c.
     commit: '28df6bd5^',
     path: 'apps/arweave/src/ar_weave.erl',

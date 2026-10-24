@@ -1016,6 +1016,10 @@ services:
       - INDEX_EXPORT_ROOT_TX_RESETTLE_MAX_CHANGED=${INDEX_EXPORT_ROOT_TX_RESETTLE_MAX_CHANGED:-20000}
       - INDEX_EXPORT_START_HEIGHT=${INDEX_EXPORT_START_HEIGHT:-}
       - INDEX_EXPORT_L1_RUN_BUDGET_MINUTES=${INDEX_EXPORT_L1_RUN_BUDGET_MINUTES:-}
+      # parquet-l1 witnesses (l1-4): a directory inside the container (under
+      # data/indexes, say) and Arweave nodes; nothing unconfirmed is published.
+      - INDEX_EXPORT_L1_WITNESS_DIR=${INDEX_EXPORT_L1_WITNESS_DIR:-}
+      - INDEX_EXPORT_L1_WITNESS_NODES=${INDEX_EXPORT_L1_WITNESS_NODES:-}
       # parquet-l2: the selections to build, and where from (see envs.md).
       - INDEX_EXPORT_L2_INDEXES=${INDEX_EXPORT_L2_INDEXES:-}
       - INDEX_EXPORT_L2_SOURCE=${INDEX_EXPORT_L2_SOURCE:-}

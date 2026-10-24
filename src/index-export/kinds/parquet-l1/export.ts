@@ -39,7 +39,9 @@ import {
   ChainTransaction,
   checkBlockChain,
   checkTxRoot,
+  FORK_1_6,
 } from '../../../lib/parquet-l1/chain.js';
+import { FORK_1_8 } from '../../../lib/parquet-l1/tx-signature.js';
 import {
   checkParquetDir,
   ParquetStructureError,
@@ -49,6 +51,12 @@ import { LookupDescription } from '../../../lib/parquet/lookups.js';
 import { writeBandLookups } from '../../../lib/parquet-l1/lookups.js';
 import { BandsSource } from '../../../lib/parquet-l1/bands-source.js';
 import { L1Judge } from '../../../lib/parquet-l1/judge.js';
+import {
+  buildBandWitnesses,
+  checkBandWitnesses,
+  WitnessInputs,
+  WitnessRefused,
+} from '../../../lib/parquet-l1/witnesses.js';
 
 /** Heights the exporter judges its own band in per read. */
 const JUDGE_WINDOW = 10_000;
@@ -59,11 +67,13 @@ import {
   canonicalDataRoot,
   canonicalTxRoot,
   firstTagValue,
+  PARQUET_L1_LOOKUPS_SCHEMA,
   PARQUET_L1_SCHEMA,
   PARQUET_L1_TABLES,
   ParquetL1Band,
   serializeBandFile,
   TableSpec,
+  witnessesOf,
   writePublisherFacts,
 } from '../../../lib/parquet-l1/layout.js';
 
@@ -94,8 +104,19 @@ export interface L1ExportResult {
   /** Bytes of scratch at its peak, and of the finished band. */
   scratchBytes: number;
   bandBytes: number;
+  /**
+   * Why the band was written without witnesses (`l1-3`), when it was: its
+   * witness inputs lacked what it needs, or contradicted the chain. The
+   * witness step adds them later, in place.
+   */
+  witnessesRefused?: string;
   seconds: number;
 }
+
+/** Witness inputs that have nothing: a band needing none still gets its (empty) witnesses. */
+export const NO_WITNESS_INPUTS: WitnessInputs = {
+  v1Roots: async () => new Map(),
+};
 
 const table = (name: string): TableSpec =>
   PARQUET_L1_TABLES.find((t) => t.name === name) as TableSpec;
@@ -125,6 +146,99 @@ function normalizeBytes<T extends Record<string, unknown>>(
     }
   }
   return rows;
+}
+
+/**
+ * A block row in the one spelling a band writes for each value (the judge's
+ * `canonical` check; `column-bindings.ts`, `representation`), whatever this
+ * gateway's `core.db` stored. Only the spelling changes, never the value:
+ *
+ * - `diff`, `cumulative_diff` and `reward_pool` are read as exact integers
+ *   (a fraction that isn't zero, a sign, an exponent or anything else
+ *   non-numeric is refused, as is a stored float too large to be exact)
+ *   and written as decimal text without leading zeros, with `.0` where the
+ *   era stored a float: `diff` below the 1.8 fork, `cumulative_diff` from
+ *   1.6 to 1.8.
+ * - `cumulative_diff` and `hash_list_merkle` are NULL below the 1.6 fork,
+ *   where the block header has neither field.
+ * - An unclaimed `reward_addr` (NULL, or the text `unclaimed`) is empty
+ *   bytes; so is the genesis block's NULL `previous_block`.
+ * - A missing `diff`, `reward_pool`, `wallet_list`, or `cumulative_diff`
+ *   from 1.6, is refused: nothing is made up.
+ *
+ * Runs before `normalizeBytes`, which refuses any other text in a byte
+ * column.
+ *
+ * @throws L1CheckError (reason `canonical`) naming the height and column.
+ */
+export function canonicalBlockSpelling<T extends Record<string, unknown>>(
+  row: T,
+): T {
+  const block = row as Record<string, unknown>;
+  const h = Number(block.height);
+  const refuse = (name: string, why: string): never => {
+    throw new L1CheckError(
+      `block ${h}: ${name} ${why}; a band writes only what core.db holds`,
+      'canonical',
+    );
+  };
+  const integer = (name: string): bigint => {
+    const value = block[name];
+    if (value === null || value === undefined) {
+      return refuse(name, 'is missing');
+    }
+    if (typeof value === 'bigint') {
+      if (value < 0n) refuse(name, `${value} is negative`);
+      return value;
+    }
+    if (typeof value === 'number') {
+      if (!Number.isSafeInteger(value) || value < 0) {
+        refuse(name, `${value} is not an exact non-negative integer`);
+      }
+      return BigInt(value);
+    }
+    if (typeof value === 'string') {
+      const match = /^([0-9]+)(?:\.(0+))?$/.exec(value);
+      if (match === null) {
+        refuse(
+          name,
+          `${JSON.stringify(value.slice(0, 40))} is not a whole number`,
+        );
+      }
+      return BigInt((match as RegExpExecArray)[1]);
+    }
+    return refuse(name, `holds ${typeof value}, not a number`);
+  };
+  const spell = (n: bigint, real: boolean) => `${n}${real ? '.0' : ''}`;
+
+  block.diff = spell(integer('diff'), h < FORK_1_8);
+  if (h < FORK_1_6) {
+    block.cumulative_diff = null;
+    block.hash_list_merkle = null;
+  } else {
+    block.cumulative_diff = spell(integer('cumulative_diff'), h < FORK_1_8);
+  }
+  block.reward_pool = spell(integer('reward_pool'), false);
+
+  const addr = block.reward_addr;
+  if (
+    addr === null ||
+    addr === undefined ||
+    addr === 'unclaimed' ||
+    (Buffer.isBuffer(addr) && addr.equals(Buffer.from('unclaimed')))
+  ) {
+    block.reward_addr = Buffer.alloc(0);
+  }
+  if (block.wallet_list === null || block.wallet_list === undefined) {
+    refuse('wallet_list', 'is missing');
+  }
+  if (
+    h === 0 &&
+    (block.previous_block === null || block.previous_block === undefined)
+  ) {
+    block.previous_block = Buffer.alloc(0);
+  }
+  return row;
 }
 
 /** One scratch file and the digest of what is written to it. */
@@ -259,6 +373,7 @@ export async function exportL1Band({
   supersedes = [],
   windowHeights = EXPORT_WINDOW_HEIGHTS,
   requireComplete = false,
+  witnessInputs = NO_WITNESS_INPUTS,
 }: {
   coreDbPath: string;
   workDir: string;
@@ -273,6 +388,8 @@ export async function exportL1Band({
    * a whole band is never rebuilt, so it waits rather than keep a gap.
    */
   requireComplete?: boolean;
+  /** Where the band's witnesses come from (`witness-inputs.ts`). */
+  witnessInputs?: WitnessInputs;
 }): Promise<L1ExportResult> {
   const started = Date.now();
   const staging = await fs.mkdtemp(path.join(workDir, '.band-build-l1-'));
@@ -321,7 +438,9 @@ export async function exportL1Band({
     for (let start = from; start <= to; start += windowHeights) {
       const end = Math.min(to, start + windowHeights - 1);
       const blocks = normalizeBytes(
-        sql.blocks.all(start, end) as Array<Record<string, any>>,
+        (sql.blocks.all(start, end) as Array<Record<string, any>>).map(
+          (block) => canonicalBlockSpelling(block),
+        ),
         table('blocks'),
       );
       // One value for a pre-fork `tx_root`, whatever this gateway's header
@@ -571,11 +690,43 @@ export async function exportL1Band({
     if (topTimestamp === undefined) {
       throw new L1CheckError(`no block ${to} to date the band by`);
     }
+    // Witnesses, built in a directory of their own and moved in only when
+    // the chain confirmed every one: a band without them is written as
+    // `l1-3`, and the witness step adds them later.
+    const witnessDir = path.join(staging, 'witnesses');
+    await fs.mkdir(witnessDir);
+    let witnesses: ParquetL1Band['witnesses'];
+    let witnessesRefused: string | undefined;
+    try {
+      witnesses = (
+        await withBandWriter(staging, (duck) =>
+          buildBandWitnesses(
+            duck,
+            bandDir,
+            { heightRange: [from, to] },
+            witnessDir,
+            witnessInputs,
+            {},
+          ),
+        )
+      ).witnesses;
+      for (const spec of witnessesOf(PARQUET_L1_SCHEMA, [from, to])) {
+        await fs.rename(
+          path.join(witnessDir, spec.file),
+          path.join(bandDir, spec.file),
+        );
+      }
+    } catch (error) {
+      if (!(error instanceof WitnessRefused)) throw error;
+      witnessesRefused = error.message;
+    }
+    await fs.rm(witnessDir, { recursive: true, force: true });
     // Only what the rows determine, so any publisher of them writes these
     // bytes; what is this publisher's own goes beside the band.
     const band: ParquetL1Band = {
       version: 1,
-      schema: PARQUET_L1_SCHEMA,
+      schema:
+        witnesses !== undefined ? PARQUET_L1_SCHEMA : PARQUET_L1_LOOKUPS_SCHEMA,
       heightRange: [from, to],
       tables: Object.fromEntries(
         [...scratch.values()].map((file) => [
@@ -584,6 +735,7 @@ export async function exportL1Band({
         ]),
       ),
       lookups,
+      ...(witnesses !== undefined ? { witnesses } : {}),
       createdAt: bandTime(topTimestamp),
     };
     // Refuse to publish a band whose files every subscriber would refuse.
@@ -598,7 +750,15 @@ export async function exportL1Band({
     // (`index-l1-verify --bands-dir`, the importer): publisher and
     // consumer cannot drift on what a right band is.
     const judged = await withBandWriter(staging, async (duck) => {
-      const judge = new L1Judge(from, to);
+      const judge = new L1Judge(from, to, { witnesses: true });
+      for (const problem of await checkBandWitnesses(duck, bandDir, band)) {
+        judge.fail(
+          'witnesses',
+          problem.height,
+          problem.found,
+          problem.expected,
+        );
+      }
       await new BandsSource(duck, [{ id: 'staged', dir: bandDir, band }]).judge(
         judge,
         from,
@@ -636,6 +796,7 @@ export async function exportL1Band({
       strayTransactions,
       scratchBytes,
       bandBytes: await directoryBytes(bandDir),
+      ...(witnessesRefused !== undefined ? { witnessesRefused } : {}),
       seconds: (Date.now() - started) / 1000,
     };
   } catch (error) {

@@ -54,8 +54,10 @@ import {
   idHeightRange,
   lookupsOf,
   PARQUET_L1_TABLES,
+  witnessesOf,
 } from './layout.js';
 import { verifyBandLookups } from './lookups.js';
+import { checkBandWitnesses } from './witnesses.js';
 import { digestBandTable } from './read.js';
 import {
   runL1Verify,
@@ -204,6 +206,17 @@ export async function verifyBands(
   const ordered = coverage.ordered.map(
     ({ id }) => byId.get(id) as L1BandOnDisk,
   );
+  // An l1-1 band copied columns the chain does not fix (a pre-fork
+  // tx_root, a format-1 data_root, a content type from the last matching
+  // tag) as its publisher's gateway held them. Read as they are, they are
+  // bound by nothing; judged by the rule every later layout writes, an
+  // honest one fails. Neither is a verdict, so the set is refused.
+  const legacy = ordered.filter((b) => b.band.schema === 'l1-1');
+  if (legacy.length > 0) {
+    throw new BandsRefused(
+      `${legacy.map((b) => b.id).join(', ')}: layout l1-1: these columns were written by the publisher and are not canonical; rebuild the band (index-export rebuilds l1-1 bands once)`,
+    );
+  }
   const low = options.from ?? span[0];
   const high = options.to ?? span[1];
   if (high <= low) {
@@ -363,13 +376,17 @@ export async function verifyBands(
           }
         }
       }
-      const wanted = bandFiles(band.schema);
+      const wanted = bandFiles(band.schema, band.heightRange);
       if (present.join(',') !== wanted.join(',')) {
         at(files, `holds ${present.join(', ')}`, wanted.join(', '));
         continue;
       }
       let shapeOk = true;
-      for (const spec of [...PARQUET_L1_TABLES, ...lookupsOf(band.schema)]) {
+      for (const spec of [
+        ...PARQUET_L1_TABLES,
+        ...lookupsOf(band.schema),
+        ...witnessesOf(band.schema, band.heightRange),
+      ]) {
         try {
           await checkParquetFile(duck, `${dir}/${spec.file}`, {
             columns: spec.columns,
@@ -448,6 +465,43 @@ export async function verifyBands(
           expected: 'every tag belongs to a transaction at its height',
         });
       }
+      // Columns with one value a band writes (column-bindings.ts): an
+      // is_data_item that is not false, or a signature whose SHA-256 is not
+      // the id, is bound by nothing.
+      const [stray] = (await duck.all(
+        `SELECT
+           (SELECT COUNT(*) FROM read_parquet('${txFile}') WHERE is_data_item IS DISTINCT FROM false) AS tx_items,
+           (SELECT COUNT(*) FROM read_parquet('${tagsFile}') WHERE is_data_item IS DISTINCT FROM false) AS tag_items,
+           (SELECT COUNT(*) FROM read_parquet('${txFile}')
+              WHERE signature IS NOT NULL AND (id IS NULL OR sha256(signature) <> lower(hex(id)))) AS signatures`,
+      )) as Array<Record<string, number | bigint>>;
+      for (const [what, n] of [
+        ['transactions with is_data_item not false', stray.tx_items],
+        ['tags with is_data_item not false', stray.tag_items],
+        [
+          'transactions whose signature does not hash to their id',
+          stray.signatures,
+        ],
+      ] as const) {
+        if (Number(n) > 0) {
+          judgeFailures.push({
+            check: 'canonical',
+            height: from,
+            found: `${id}: ${Number(n)} ${what}`,
+            expected:
+              'is_data_item false; a signature only where its SHA-256 is the id',
+          });
+        }
+      }
+      // Witnesses, as files: what they say about the chain is the judge's.
+      for (const problem of await checkBandWitnesses(duck, dir, band)) {
+        judgeFailures.push({
+          check: 'witnesses',
+          height: problem.height,
+          found: `${id}: ${problem.found}`,
+          expected: problem.expected,
+        });
+      }
       if (options.lookups !== false) {
         if (lookupsOf(band.schema).length === 0) {
           lookupsSkipped += 1;
@@ -507,6 +561,7 @@ export async function verifyBands(
     accepted,
     assurance,
     judgeFailures,
+    witnesses: true,
   });
   return {
     ...report,

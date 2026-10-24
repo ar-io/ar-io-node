@@ -55,7 +55,7 @@ const answered = <T>(p: Promise<unknown>) =>
 
 const sample = (extra: Partial<SampleOptions> = {}): SampleOptions => ({
   seed: 5,
-  blocks: 0,
+  blocks: 3,
   txsPerStratum: 1000,
   format1PerStratum: 0,
   v1BytesPerStratum: 1e9,
@@ -436,6 +436,12 @@ describe('round 4: the import (L1, M1, M2, M3)', () => {
         db.prepare(`UPDATE ${t} SET ${c} = ? WHERE ${c} = ?`).run(fresh, old);
       }
     }
+    // New ids move their transactions in tx_root order, and with them the
+    // offsets the band would recompute; the forger drops those (NULL), so
+    // only the block the sample fetches tells, whatever ids were drawn.
+    db.prepare(
+      'UPDATE stable_transactions SET offset = NULL WHERE height BETWEEN ? AND ?',
+    ).run(V1, V1 + 9);
     db.close();
     holdFrom(source, V1 + 10);
     await exportBands(forged, bandsDir, [[V1, V1 + 9]]);

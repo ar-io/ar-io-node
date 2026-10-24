@@ -87,6 +87,16 @@ describe('planL1', () => {
     ]);
   });
 
+  it('builds no sub-range beside a whole range band that covers it (--to at a range boundary)', () => {
+    const bands = [
+      band('l1-h0-99999-p-a', 0, 99_999),
+      band('l1-h100000-199999-p-b', 100_000, 199_999),
+    ];
+    // The top falls in a range a band covers whole: nothing to build.
+    assert.deepEqual(planL1(bands, 199_999), []);
+    assert.deepEqual(planL1(bands, 150_000), []);
+  });
+
   it('builds nothing while the tip is current', () => {
     const bands = [
       band('l1-h0-99999-p-a', 0, 99_999),

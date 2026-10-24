@@ -8,8 +8,84 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **`parquet-l1` layout `l1-4`: witness files that bind every block of
+  the chain**, so a full mainnet band set verifies and imports with no
+  `--allow-*` flag. A band adds `witness_v1_data_roots.parquet` (the v1
+  data root of each format-1 transaction with data) and, below the 2.0
+  fork, `witness_fork_2_0.parquet` (each block's transition `tx_root` and
+  the 2.0 seed fold after it), described in `band.json` and added in place
+  without changing the band's id. `index-l1-verify --bands-dir` and
+  `index-l1-import` recompute `tx_root` with the witnessed roots (a wrong
+  one fails `tx_root`, never falls back to unbound), recompute each pre-2.0
+  block's transition `tx_root` from its transactions, and carry the 2.0
+  seed fold block to block until it reaches block 422,250's
+  `hash_list_merkle` or a fold pinned in this build (heights 99,999,
+  199,999, 299,999, 399,999, 422,249; the first four recomputed by a test
+  from Arweave's own 2.0 checkpoint, the last equal to block 422,250's
+  `hash_list_merkle`). Every other pre-2.0 header field, and the
+  transaction ids, are bound through each block's "2.0 hash"
+  (`witness_fork_2_0.h2`), recomputed from the band's fields and folded to
+  pins of Arweave's `genesis_data/hash_list_1_0`: Arweave-checkpointed
+  rather than chain-bound, and said so. A pre-2.0 block is bound only when
+  both folds reach their pins. Under `l1-4` a format-1 transaction's
+  `data_root` column must be NULL. A block whose witness is missing stays
+  in its `unbound` class. New `witnesses` and `hash_list_1_0` checks; the
+  result gains `foldBound` and `format1Txs`.
+- Every column a band carries has a declared binding
+  (`column-bindings.ts`, shown in docs/cli.md), checked by a test. Bands'
+  `content_type` and `content_encoding` are recomputed from their tags,
+  and `offset` (NULL, or where the data ends in the weave) from the weave,
+  failing the new `canonical` check otherwise. The block sample now draws
+  pre-2.0 heights too, attested by `--anchor-min` machines
+  (`blocksAttested`): what binds a pre-2.0 block's transaction order.
+- An `l1-4` band must hold every witness (a `witness_fork_2_0` row per
+  pre-2.0 height, a v1 root per format-1 transaction with data); any of its
+  blocks left unbound fails `witnesses`, whatever `--allow-*` flag is given
+  (`--allow-unbound`, `--allow-unverified-format1` and
+  `L1_BAND_IMPORT_ALLOW_UNVERIFIED` accept bands without witnesses only).
+  The `INDEX_EXPORT_L1_WITNESS_MAX_MISSING` knob is gone.
+- A pre-2.0 range ending at a pinned height is anchored there by its
+  witnessed folds (`anchor.pinned`), so pre-2.0 bands verify and import
+  with no `--allow-unanchored`.
+- `--sample-blocks 0`, and an undrawn format-1 sample (no sources, or every
+  count 0), need `--allow-unsampled` in `index-l1-verify` as in
+  `index-l1-import`.
+- Bands store one spelling per value: difficulties as `N.0` below the 1.8
+  fork and `N` from it, no cumulative difficulty below 1.6, the reward pool
+  as `N`, an unclaimed reward address as empty bytes, a wallet list always,
+  no `hash_list_merkle` below 1.6 (the `canonical` check).
+  The exporter re-spells what `core.db` holds into those forms, never
+  changing a value, and refuses a value that isn't a whole number or a
+  block without a wallet list.
+- Under `l1-4` the importer writes the witnessed v1 roots and transition
+  `tx_root`s over whatever `core.db` kept.
+- `index-l1-verify --bands-dir` and `index-l1-import` refuse an `l1-1`
+  band: its columns were its publisher's gateway's, not canonical. Both
+  known publishers are on `l1-3`.
+- `--sample-format1 0` over format-1 transactions with data from the 2.0
+  fork now needs `--allow-unsampled`, in `index-l1-import` (whatever their
+  witnesses) and `index-l1-verify` (new flag there): only the format-1 draw
+  checks a transaction is format 1. Block 422,250's `hash_list_merkle` is now checked
+  against the fold through 422,249 whenever a range holds both. Readers
+  accept `l1-1` to `l1-4`; `--core-db` holds no witnesses and is unchanged.
+  See [docs/index-publication.md](docs/index-publication.md#witness-files)
+  and [docs/cli.md](docs/cli.md#what-binds-what).
+- **`index-export` builds `l1-4` witnesses** for new bands and adds them
+  to published `l1-3` bands in place, from v1 roots in a witness directory
+  and Arweave nodes (`INDEX_EXPORT_L1_WITNESS_DIR`,
+  `INDEX_EXPORT_L1_WITNESS_NODES`),
+  keeping only what the chain confirms and judging the band with them, as
+  its consumers do, before anything is published. Reported as
+  `l1Witnessed` and `index_export_runs_total{kind="witness"}`. See
+  [docs/index-export.md](docs/index-export.md#layout-l1-4-and-witness-files).
+
 ### Changed
 
+- `L1_BAND_IMPORT_ALLOW_UNVERIFIED` is needed only for bands without
+  witnesses (`l1-3` and older); `l1-4` bands fill under the strict default.
+- Wording: a pre-2.0 block hash is described per era (from the 1.6 fork a
+  deep hash over the header fields and the full wallet list; below it a
+  SHA-384 over the header as JSON with the full hash list and wallet list).
 - better-sqlite3 is now 12.11.1, up from 9.6.0, which moves the
   gateway's bundled SQLite from 3.45.3 to 3.53.2. 9.x does not compile
   on Node.js 24, so this unblocks the move off Node.js 22 before its end
