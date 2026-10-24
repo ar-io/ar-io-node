@@ -234,7 +234,7 @@ export const optionMap = {
   l2Publication: {
     alias: '--publication <path|url>',
     description:
-      "The publisher's signed index publication (a file, such as data/indexes/published/publication.json, or a URL, such as https://<gateway>/ar-io/indexes/publication.json): every band must be listed in it and every file must have the size and SHA-256 it signs. Needs --publisher-key or --registry-url. Without it the bands are checked only for internal consistency (publisherBound: false)",
+      "The publisher's signed index publication (a file, such as data/indexes/published/publication.json, or a URL, such as https://<gateway>/ar-io/indexes): every band must be listed in it and every file must have the size and SHA-256 it signs. Needs --publisher-key or --registry-url. Without it the bands are checked only for internal consistency (publisherBound: false)",
   },
   l2PublisherKey: {
     alias: '--publisher-key <address>',
@@ -343,6 +343,35 @@ export const optionMap = {
     alias: '--output <path>',
     description:
       'Where to write the records, as CSV with a header line (read it with index-band-build --skip-header). Required',
+  },
+  bundlesDb: {
+    alias: '--bundles-db <path>',
+    description:
+      "The bundle indexer's bundles.db, opened read-only (default data/sqlite/bundles.db)",
+  },
+  censusFrom: {
+    alias: '--from <height>',
+    description:
+      'Lowest root transaction height to check. Short roots with no L1 row in ClickHouse are reported only without --from and --to',
+  },
+  censusTo: {
+    alias: '--to <height>',
+    description:
+      'Highest root transaction height to check (default: the top ClickHouse holds)',
+  },
+  censusRoots: {
+    alias: '--roots <path>',
+    description:
+      'Check only these root transactions, one id per line or the first column of a TSV ("-" reads stdin). Every one is checked item by item, so this also verifies re-queued bundles',
+  },
+  censusOutput: {
+    alias: '--output <path>',
+    description:
+      'Write each short root as a TSV line (root, height, expected, held_under_root, listed, here, elsewhere, expired, missing, class); the roots of class missing are the ones to re-queue',
+  },
+  bucket: {
+    alias: '--bucket <blocks>',
+    description: 'Height bucket for missingByHeight (default 100000)',
   },
 } satisfies Record<string, CommanderOption>;
 
@@ -468,4 +497,14 @@ export const indexBandExportOptions: CommanderOption[] = [
   optionMap.to,
   optionMap.output,
   optionMap.force,
+];
+
+export const indexCensusOptions: CommanderOption[] = [
+  optionMap.bundlesDb,
+  optionMap.censusFrom,
+  optionMap.censusTo,
+  optionMap.censusRoots,
+  optionMap.censusOutput,
+  optionMap.force,
+  optionMap.bucket,
 ];

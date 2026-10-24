@@ -25,6 +25,7 @@ import {
 } from './ar-io-offsets-builder.js';
 import { validateOptimisticTxBatch } from './optimistic-tx-validation.js';
 import { evaluateDataItemQueueAdmission } from './data-item-queue-admission.js';
+import { parsePruneStableDataItemsParams } from './prune-stable-data-items-params.js';
 import { buildArIoInfo } from './ar-io-info-builder.js';
 import {
   advertisementOf,
@@ -898,46 +899,20 @@ arIoRouter.get(
   },
 );
 
-// Prune stable data items before a given timestamp and within a height range
+// Prune stable data items written before a threshold, within a height range.
+// See parsePruneStableDataItemsParams for which threshold to send.
 arIoRouter.post(
   '/ar-io/admin/prune-stable-data-items',
   express.json(),
   async (req, res) => {
     try {
-      const { indexedAtThreshold, startHeight, endHeight } = req.body;
-
-      if (!Number.isInteger(indexedAtThreshold) || indexedAtThreshold < 0) {
-        res
-          .status(400)
-          .send('Invalid indexedAtThreshold - must be a positive integer');
+      const parsed = parsePruneStableDataItemsParams(req.body);
+      if (!parsed.ok) {
+        res.status(400).send(parsed.message);
         return;
       }
 
-      if (!Number.isInteger(startHeight) || startHeight < 0) {
-        res
-          .status(400)
-          .send('Invalid startHeight - must be a positive integer');
-        return;
-      }
-
-      if (
-        !Number.isInteger(endHeight) ||
-        endHeight < 0 ||
-        endHeight < startHeight
-      ) {
-        res
-          .status(400)
-          .send(
-            'Invalid endHeight - must be a positive integer greater than or equal to startHeight',
-          );
-        return;
-      }
-
-      await db.pruneStableDataItems({
-        indexedAtThreshold,
-        startHeight,
-        endHeight,
-      });
+      await db.pruneStableDataItems(parsed.params);
       res.json({ message: 'Stable data items pruned successfully' });
     } catch (error: any) {
       res.status(500).send(error?.message);

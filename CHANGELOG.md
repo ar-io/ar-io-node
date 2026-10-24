@@ -86,8 +86,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Wording: a pre-2.0 block hash is described per era (from the 1.6 fork a
   deep hash over the header fields and the full wallet list; below it a
   SHA-384 over the header as JSON with the full hash list and wallet list).
+- better-sqlite3 is now 12.11.1, up from 9.6.0, which moves the
+  gateway's bundled SQLite from 3.45.3 to 3.53.2. 9.x does not compile
+  on Node.js 24, so this unblocks the move off Node.js 22 before its end
+  of life (2027-04-30). The database file format is unchanged: a gateway
+  can roll back to an earlier release without touching `data/sqlite`.
 
 ### Fixed
+
+- **`parquet-l2` layout `l2-2`: the stats derive no longer runs a large
+  band out of memory.** Each item's first value of a stat tag was taken
+  with `arg_min(tag_value, tag_index)`, an aggregate whose BLOB state
+  DuckDB 1.4.2 cannot spill, so the 69-million-item h1.8M band of
+  `ardrive-l2` failed at the build's 2 GB limit, both in the in-place
+  upgrade and in a rebuild. It is now the lowest `tag_index` per item and
+  tag, joined back for the value: the same rows, and the same band derives
+  in about 6 minutes at 2 GB.
+- The `--publication` examples in `docs/cli.md`,
+  `docs/index-publication.md`, `docs/index-verification.md`, the
+  `index-l2-verify` help, and the `--publication` option description gave
+  the signed index publication's URL as
+  `https://<gateway>/ar-io/indexes/publication.json`, which returns 404.
+  The gateway serves it at `https://<gateway>/ar-io/indexes`; the examples
+  now use that. The local file `data/indexes/published/publication.json`
+  is unchanged.
 
 ## [Release 86] - 2026-10-23
 

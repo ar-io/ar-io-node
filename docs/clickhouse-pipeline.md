@@ -189,7 +189,7 @@ sequenceDiagram
     Auto->>CH: migrate_staging_to_final<br/>per partition (joins TTL dicts)
     Auto->>Shared: mv staging → datasets/default
 
-    Auto->>Core: POST /ar-io/admin/prune-stable-data-items<br/>(indexedAtThreshold)
+    Auto->>Core: POST /ar-io/admin/prune-stable-data-items<br/>(stableAtThreshold)
     Auto->>Core: GET /ar-io/admin/debug<br/>(verify minStableDataItem advanced)
   end
 
@@ -547,13 +547,24 @@ Spark), not the live ClickHouse instance.
   can run `OPTIMIZE TABLE transactions PARTITION ... FINAL` manually
   if duplicate counts grow, but this is heavy — prefer waiting for
   background merges under normal load.
-- **Prune no-op (`minStableDataItem` stuck).** The auto-import scopes
-  its prune to `indexed_at < batch_max_indexed_at` (snapshot taken
-  before the batch's export). A workload that continuously inserts
-  stable data items at *old* heights — most often a retroactive
-  bundle backfill (ArDrive, Solana registration re-enqueue, etc.) —
-  keeps refreshing `indexed_at` at low heights, so prune never matches
-  those rows and `minStableDataItem` never advances. Each cycle then
+- **Pruning only what was exported.** The auto-import reads
+  `maxStableDataItemStableAt` before each batch's export and prunes the
+  batch's range below it. `stable_at` is stamped when a row is flushed
+  into `stable_data_items`, under the write lock, so a row below the
+  threshold was committed before it was read and the export saw it. It
+  used `indexed_at` until 2026-10, which the flush copies from
+  `new_data_items`: a bundle unbundled earlier (or re-queued) and
+  flushed while a batch exported landed below the threshold and was
+  pruned unexported, and its bundle stayed fully indexed, so nothing
+  retried it. `ar-io-node index-census` finds items lost that way;
+  re-queuing their bundles restores them. Against an older gateway the
+  script falls back to `indexed_at`.
+- **Prune no-op (`minStableDataItem` stuck).** A workload that
+  continuously inserts stable data items at *old* heights — most often
+  a retroactive bundle backfill (ArDrive, Solana registration
+  re-enqueue, etc.) — keeps adding rows newer than each batch's
+  threshold at low heights, so prune leaves them for the next cycle and
+  `minStableDataItem` never advances. Each cycle then
   re-walks the same range from the same low floor, SQLite never
   shrinks, and read/write performance degrades linearly with the
   retained history. Diagnose via the

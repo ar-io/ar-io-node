@@ -3999,8 +3999,13 @@ paths:
       tags: [Admin]
       summary: Prune stable data items
       description: |
-        Removes stable data items from the database that were indexed before the specified timestamp.
-        This helps manage database size by removing older, stable data items.
+        Removes the stable data items in a height range that were written
+        before a threshold, after the ClickHouse import has exported them.
+        Give exactly one threshold. `stableAtThreshold` (the debug endpoint's
+        `maxStableDataItemStableAt`, read before exporting the range) removes
+        only rows that were in the range when it was read. `indexedAtThreshold`
+        is kept for older callers, but a row flushed late can carry an old
+        indexed_at and be removed although no export read it.
       operationId: adminPruneStableDataItems
       security:
         - bearerAuth: []
@@ -4011,14 +4016,27 @@ paths:
             schema:
               type: object
               properties:
+                stableAtThreshold:
+                  type: integer
+                  minimum: 0
+                  description: Unix timestamp - data items written to stable_data_items before this time will be pruned
                 indexedAtThreshold:
                   type: integer
                   minimum: 0
-                  description: Unix timestamp - data items indexed before this time will be pruned
+                  description: Unix timestamp - data items first indexed before this time will be pruned. Prefer stableAtThreshold
+                startHeight:
+                  type: integer
+                  minimum: 0
+                endHeight:
+                  type: integer
+                  minimum: 0
               required:
-                - indexedAtThreshold
+                - startHeight
+                - endHeight
             example:
-              indexedAtThreshold: 1677721600
+              stableAtThreshold: 1677721600
+              startHeight: 1500000
+              endHeight: 1509999
       responses:
         '200':
           description: Data items successfully pruned
@@ -4031,12 +4049,12 @@ paths:
                     type: string
                     example: 'Stable data items pruned successfully'
         '400':
-          description: Invalid indexedAtThreshold parameter
+          description: Missing or invalid threshold or height range
           content:
             text/plain:
               schema:
                 type: string
-                example: 'Invalid indexedAtThreshold - must be a positive integer'
+                example: 'Give exactly one of stableAtThreshold or indexedAtThreshold'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '500':

@@ -221,7 +221,7 @@ root, `root_parent_offset` is 0.
 
 ```bash
 ./tools/ar-io-node index-l2-verify --bands-dir data/indexes/installed/ardrive-l2 \
-  --publication https://turbo-gateway.com/ar-io/indexes/publication.json \
+  --publication https://turbo-gateway.com/ar-io/indexes \
   --registry-url http://core:4000
 ```
 

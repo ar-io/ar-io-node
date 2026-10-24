@@ -111,7 +111,7 @@ CREATE TABLE IF NOT EXISTS "stable_data_items" (
   owner_size INTEGER,
   signature_offset INTEGER,
   signature_size INTEGER,
-  content_encoding TEXT, root_parent_offset INTEGER,
+  content_encoding TEXT, root_parent_offset INTEGER, stable_at INTEGER,
   PRIMARY KEY (id)
 );
 CREATE INDEX stable_data_items_height_block_transaction_index_id_idx ON stable_data_items (height, block_transaction_index, id);
