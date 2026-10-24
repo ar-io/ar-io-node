@@ -3736,6 +3736,23 @@ export class StandaloneSqliteDatabase
 
   private saveDataContentAttributesCache: LRUCache<string, boolean>;
 
+  /**
+   * Set by {@link stop}. A worker that exits after this is not respawned.
+   */
+  private stopping = false;
+
+  /**
+   * Every worker thread that has been spawned and has not yet exited, keyed
+   * by pool and role, each with a promise that settles on its `exit` event.
+   * Includes workers that are still starting up and so are not yet in
+   * {@link workers}, which only holds workers that have come online.
+   */
+  private liveWorkers = new Set<{
+    pool: WorkerPoolName;
+    role: WorkerRoleName;
+    exited: Promise<void>;
+  }>();
+
   private newDataItemsCount: number = 0;
   private lastFlushDataItemsTime: number = Date.now();
 
@@ -3859,6 +3876,16 @@ export class StandaloneSqliteDatabase
         },
       });
 
+      let markExited!: () => void;
+      const live = {
+        pool,
+        role,
+        exited: new Promise<void>((resolve) => {
+          markExited = resolve;
+        }),
+      };
+      self.liveWorkers.add(live);
+
       let job: any = null; // Current item from the queue
       let error: any = null; // Error that caused the worker to crash
 
@@ -3931,8 +3958,14 @@ export class StandaloneSqliteDatabase
           } else {
             job.resolve(result);
           }
+          const terminating = job.message.method === 'terminate';
           job = null;
-          takeWork(); // Check if there's more work to do
+          // A worker that has acknowledged `terminate` is about to exit. It
+          // must not take another job: that would swallow a terminate job
+          // queued for a sibling, which would then never exit.
+          if (!terminating) {
+            takeWork(); // Check if there's more work to do
+          }
         })
         .on('error', (err) => {
           self.log.error('Worker error', err);
@@ -3942,6 +3975,8 @@ export class StandaloneSqliteDatabase
           self.workers[pool][role] = self.workers[pool][role].filter(
             (w) => w.takeWork !== takeWork,
           );
+          self.liveWorkers.delete(live);
+          markExited();
           if (job) {
             job.reject(error || new Error('worker died'));
           }
@@ -3949,7 +3984,14 @@ export class StandaloneSqliteDatabase
             self.log.error('Worker stopped with exit code ' + code, {
               exitCode: code,
             });
-            spawn(pool, role); // Worker died, so spawn a new one
+            // Worker died, so spawn a new one -- unless we are stopping. A
+            // worker that cannot start (for example against an unmigrated
+            // database, where its constructor's prepare() throws) would
+            // otherwise be respawned forever, and there would always be one
+            // inside better-sqlite3 when the process exits.
+            if (!self.stopping) {
+              spawn(pool, role);
+            }
           }
         });
     }
@@ -3967,39 +4009,52 @@ export class StandaloneSqliteDatabase
     });
   }
 
+  /**
+   * Stops every SQLite worker thread and resolves once all of them have
+   * exited.
+   *
+   * Queues one `terminate` job per live worker -- including workers still
+   * starting up, which take theirs when they come online -- and stops
+   * respawning workers that die. It waits for each worker's `exit` event
+   * rather than for the jobs, because a worker that crashes during startup
+   * never takes its job.
+   *
+   * Resolving only after every thread has exited matters to callers that
+   * exit the process next (`shutdown()`, and test files run with
+   * `--test-force-exit`): tearing down a worker that is still inside a native
+   * addon aborts the whole process under Node 22 ("FATAL ERROR:
+   * v8::ToLocalChecked Empty MaybeLocal" from better-sqlite3 on Linux,
+   * "libc++abi: terminating due to uncaught exception of type Napi::Error"
+   * on macOS).
+   */
   async stop() {
     const log = this.log.child({ method: 'stop' });
-    const promises: Promise<void>[] = [];
+    this.stopping = true;
 
+    const live = [...this.liveWorkers];
+    for (const { pool, role } of live) {
+      log.debug('Creating stop job for worker', { pool, role });
+      this.workQueues[pool][role].push({
+        // stop() waits on the worker's exit, not on this job.
+        resolve: () => {},
+        reject: () => {},
+        message: {
+          method: 'terminate',
+        },
+      });
+    }
+    this.drainQueue();
+
+    await Promise.all(live.map(({ exited }) => exited));
+
+    // Workers that crashed during startup never took their terminate jobs.
     for (const pool of WORKER_POOL_NAMES) {
       for (const role of WORKER_ROLE_NAMES) {
-        if (this.workers[pool][role] !== undefined) {
-          for (const _ of this.workers[pool][role]) {
-            if (
-              this.workQueues[pool][role] &&
-              typeof this.workQueues[pool][role].push === 'function'
-            ) {
-              log.debug('Creating stop job for worker', { pool, role });
-              promises.push(
-                new Promise((resolve) => {
-                  this.workQueues[pool][role].push({
-                    resolve,
-                    // by always resolving, we prevent shutdown procedure from
-                    // perpetually waiting for a response from the worker
-                    reject: resolve,
-                    message: {
-                      method: 'terminate',
-                    },
-                  });
-                }),
-              );
-              this.drainQueue();
-            }
-          }
-        }
+        this.workQueues[pool][role] = this.workQueues[pool][role].filter(
+          (job) => job.message?.method !== 'terminate',
+        );
       }
     }
-    await Promise.all(promises);
 
     log.debug('Stopped successfully.');
   }
