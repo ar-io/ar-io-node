@@ -15,12 +15,14 @@ import {
   bundleAndSignData,
   createData,
   EthereumSigner,
+  keccak256,
 } from '@dha-team/arbundles';
 import { strict as assert } from 'node:assert';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, before, beforeEach } from 'node:test';
+import secp256k1 from 'secp256k1';
 
 import { scanBundle, ScannedDataItem } from '../src/lib/ans104-bundle-scan.js';
 import { ByteRangeSource } from '../src/lib/byte-range-source.js';
@@ -46,6 +48,37 @@ const log = createTestLogger({ suite: 'index-export service' });
 export const PUBLISHER = 'ErEgD7dq1yR9W1CnVG3pEywi3qST7jqWA9nfWtxSGeBc';
 export const ROOT = Buffer.alloc(32, 9);
 export const DAY = 24 * 3600_000;
+
+/**
+ * arbundles' EthereumSigner, signing through the native secp256k1 addon.
+ *
+ * EthereumSigner builds an ethers `Wallet` for every signature and signs in
+ * pure JavaScript: about 1.5 ms an item, so 5 s of every suite's `before` on
+ * a fast runner and several times that on CI's macOS runners, where it
+ * pushed whole files toward the per-file timeout. This signs the same EIP-191
+ * digest with libsecp256k1, whose RFC 6979 nonces are ethers' too, so its
+ * signatures -- and the bundle -- are byte-for-byte the same, about five
+ * times faster. `useExportService` checks that before it signs the bundle.
+ */
+class NativeEthereumSigner extends EthereumSigner {
+  private readonly privateKey: Buffer;
+
+  constructor(key: string) {
+    super(key);
+    this.privateKey = Buffer.from(key.replace(/^0x/, ''), 'hex');
+  }
+
+  async sign(message: Uint8Array): Promise<Uint8Array> {
+    const digest = keccak256(
+      Buffer.concat([
+        Buffer.from(`\x19Ethereum Signed Message:\n${message.length}`),
+        message,
+      ]),
+    );
+    const { signature, recid } = secp256k1.ecdsaSign(digest, this.privateKey);
+    return Buffer.concat([signature, Buffer.from([27 + recid])]);
+  }
+}
 
 export class MemorySource implements RecordSource {
   readonly rank = 0;
@@ -165,7 +198,14 @@ export function useExportService(): ExportServiceHarness {
   const ctx = new ExportServiceHarness();
 
   before(async () => {
-    const signer = new EthereumSigner(`0x${'11'.repeat(32)}`);
+    const key = `0x${'11'.repeat(32)}`;
+    const signer = new NativeEthereumSigner(key);
+    const probe = Buffer.from('index-export service fixture');
+    assert.deepEqual(
+      Buffer.from(await signer.sign(probe)),
+      Buffer.from(await new EthereumSigner(key).sign(probe)),
+      'signs exactly as EthereumSigner does',
+    );
     const signed = await bundleAndSignData(
       Array.from({ length: 3300 }, (_, i) => createData(`item ${i}`, signer)),
       signer,

@@ -265,7 +265,7 @@ describe('StandaloneSqliteDatabase', () => {
   });
 
   after(async () => {
-    db.stop();
+    await db.stop();
   });
 
   // Through the worker-backed database, not the decoder alone: an error thrown

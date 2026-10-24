@@ -127,9 +127,11 @@ jobs:
   # Linux containers, so this only guards against breaking local development
   # on macOS: it runs after merges to develop and main, nothing depends on it
   # (in particular not `images`), and a failure reports to Slack instead of
-  # blocking anything.
+  # blocking anything. Dispatching the workflow by hand runs it on any branch
+  # (`gh workflow run build-core.yml --ref <branch>`), to check a macOS fix
+  # before it merges.
   test-macos:
-    if: github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
     runs-on: macos-latest
     timeout-minutes: 40
     permissions:

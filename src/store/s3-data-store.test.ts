@@ -150,7 +150,9 @@ describe('S3DataStore', () => {
       const tempPath = `${testBaseDir}/tmp/test-file`;
       await fs.promises.writeFile(tempPath, 'test content');
 
-      const writeStream = fs.createWriteStream(tempPath);
+      // 'a', not the default 'w': opening with 'w' truncates the content
+      // just written, racing finalize()'s size check.
+      const writeStream = fs.createWriteStream(tempPath, { flags: 'a' });
       mockS3Client.PutObject = mock.fn(() =>
         Promise.resolve({
           $metadata: { httpStatusCode: 200 },
@@ -305,7 +307,9 @@ describe('S3DataStore', () => {
     it('should handle PutObject errors', async () => {
       const tempPath = `${testBaseDir}/tmp/test-file`;
       await fs.promises.writeFile(tempPath, 'test content');
-      const writeStream = fs.createWriteStream(tempPath);
+      // 'a', not the default 'w': opening with 'w' truncates the content
+      // just written, racing finalize()'s size check.
+      const writeStream = fs.createWriteStream(tempPath, { flags: 'a' });
 
       mockS3Client.PutObject = mock.fn(() =>
         Promise.reject(new Error('Failed to upload')),
