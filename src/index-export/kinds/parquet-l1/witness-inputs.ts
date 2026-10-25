@@ -137,7 +137,13 @@ export function l1WitnessInputs(
   heightRange: [number, number],
   log: Logger,
   pool: ArweaveNodePool | undefined = config.nodes.length > 0
-    ? new ArweaveNodePool({ urls: config.nodes, timeoutMs: FETCH_TIMEOUT_MS })
+    ? new ArweaveNodePool({
+        urls: config.nodes,
+        timeoutMs: FETCH_TIMEOUT_MS,
+        // A redirect is an answer from the node asked, not one to follow
+        // elsewhere: the pool moves on to the next node.
+        fetch: (url, init) => fetch(url, { ...init, redirect: 'manual' }),
+      })
     : undefined,
 ): WitnessInputs {
   const [from, to] = heightRange;
