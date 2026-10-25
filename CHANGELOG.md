@@ -8,6 +8,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **`parquet-l2` band size cap (`INDEX_EXPORT_L2_MAX_BAND_ITEMS`, default
+  10,000,000).** A 100,000-height range is one band only while it holds at
+  most that many items; above it the range stays as its twenty
+  5,000-height bands. A settled range is counted at the source before it
+  is frozen whole; twenty sub-range bands are rolled into one only while
+  their items sum to the cap or less; and a band already over the cap is
+  split into its sub-range bands, each built, compared with the old band's
+  rows at its own heights and header-checked as a re-settle is, then all
+  published together, each superseding the old band (subscribers keep it
+  until every part is installed). On turbo-gateway.com, `ardrive-l2`'s
+  1,800,000–1,899,999 band holds 69 million items, and its build peaked at
+  13 GB of native memory, killed twice in a 16 GB container; its densest
+  sub-range holds 12 million. Sub-range bands are already valid, so
+  subscribers, verifiers and readers need no change. See
+  [docs/index-export.md](docs/index-export.md#band-size-cap).
 - **`parquet-l1` layout `l1-4`: witness files that bind every block of
   the chain**, so a full mainnet band set verifies and imports with no
   `--allow-*` flag. A band adds `witness_v1_data_roots.parquet` (the v1

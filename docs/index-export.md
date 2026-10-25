@@ -931,17 +931,49 @@ bands are frozen is the publisher's own fact, `settledAt` in each band's
 
 | Role | Range | Built | Rebuilt |
 |---|---|---|---|
-| `h` | A whole 100,000-height range | From the source, when the whole range has settled at once (a bootstrap, a catch-up), or as a roll once its twenty `d` bands are frozen | Only by a re-settle |
+| `h` | A whole 100,000-height range holding at most `INDEX_EXPORT_L2_MAX_BAND_ITEMS` items | From the source, when the whole range has settled at once (a bootstrap, a catch-up), or as a roll once its twenty `d` bands are frozen | Only by a re-settle |
 | `d` | A whole 5,000-height range | Once its top is `INDEX_EXPORT_L2_SETTLE_BLOCKS` (the root-TX settle lag, 5,040, unless set) below the source's stable top | Only by a re-settle |
 | tip | Each sub-range above the frozen bands, the top one cut short at the stable top | Each daily run, superseding the band of the same start | Daily |
 
 A run, per index: **freeze** the settled ranges, lowest first, each
 replacing the tip bands of its heights (a tip band whose rows haven't
 changed is kept under its id and only marked frozen); **roll** each range
-of twenty frozen `d` bands into its `h`; rebuild the **tip** bands; then
-**re-settle** the frozen bands due by
-`INDEX_EXPORT_ROOT_TX_RESETTLE_INTERVAL_HOURS` (or all, with `--once
+of twenty frozen `d` bands into its `h`; **split** each `h` over the band
+size cap; rebuild the **tip** bands; then **re-settle** the frozen bands
+due by `INDEX_EXPORT_ROOT_TX_RESETTLE_INTERVAL_HOURS` (or all, with `--once
 --resettle`).
+
+#### Band size cap
+
+A range is one `h` band only while it holds at most
+`INDEX_EXPORT_L2_MAX_BAND_ITEMS` items (10,000,000 unless set); above it the
+range stays as its twenty `d` bands. The cap bounds what one build, one
+re-settle, one verification and one download handle, whatever the data's
+skew: on turbo-gateway.com, `ardrive-l2`'s range 1,800,000–1,899,999 holds
+69 million items, eight of its sub-ranges 6–12 million each, and as one
+band its build peaked at 13 GB, against about 4 GB for the next-largest
+bands.
+
+- **Freeze:** a whole settled range is counted at the source first (one
+  ClickHouse `count()`); over the cap it is frozen `d` by `d`.
+- **Roll:** twenty frozen `d` bands are rolled into their `h` only while
+  the items their `band.json` files count sum to the cap or less.
+- **Split:** an `h` already over the cap (built before the cap, or under a
+  larger one) is replaced by its twenty `d` bands. Each part is built from
+  the source, compared with the `h`'s rows at its own heights (nothing
+  dropped, nothing unlocated, every owner key kept, relocations
+  header-checked: a re-settle's checks), and staged. Only when every part
+  has passed are they moved into the index's directory together, each
+  naming the `h` under `supersedes`, so neither the planner nor a
+  subscriber sees the range half covered: a subscriber keeps the `h` until
+  every part that supersedes it is installed (`awaitingSuccessor`). A part
+  that fails leaves the `h` in place and is logged (`Band split not
+  published`). An `h` over the cap is not re-settled; it is split instead.
+- A `d` band is never split (the grid has nothing smaller), so one over the
+  cap is built anyway.
+
+Two publishers with the same rows and the same cap cut the same bands; with
+different caps they publish different band sets, whose ids differ anyway.
 
 A re-settle is gated on a fingerprint, the root-TX grid's design: per
 5,000-height sub-range, one ClickHouse aggregate over every row the band's

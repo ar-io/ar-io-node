@@ -494,6 +494,100 @@ describe('ExportService, parquet-l2', () => {
     });
   });
 
+  describe('band size cap', () => {
+    // The roots' range, 100,000-199,999, whole and settled: the L1 bands
+    // reach past it and the source's top is above the settle lag.
+    const settleWholeRange = async () => {
+      await writeL1Band(
+        path.join(dir, 'published', 'parquet-l1'),
+        200_000,
+        299_999,
+        [],
+      );
+      source.top = 200_100;
+    };
+    const inRange = (bands: L2LiveBand[]) =>
+      bands.filter((b) => b.from >= 100_000 && b.to <= 199_999);
+    const items = (bands: L2LiveBand[]) =>
+      bands.reduce((sum, b) => sum + b.band.tables.data_items.rows, 0);
+
+    it('freezes a whole range over the cap d by d, and never rolls it into an h', async () => {
+      await settleWholeRange();
+      await run({}, { l2MaxBandItems: 2 });
+      let bands = inRange(await live());
+      assert.equal(bands.length, 20, bands.map((b) => b.id).join(' '));
+      assert.ok(
+        bands.every(
+          (b) => b.to - b.from === 4_999 && b.facts.settledAt !== undefined,
+        ),
+      );
+      assert.equal(items(bands), 5); // a1, b1, b2, c1, e1 (a2 joins later)
+      // A second run: the twenty frozen d bands hold more than the cap, so
+      // no roll.
+      const second = await run({}, { l2MaxBandItems: 2 });
+      assert.ok(!second.steps.some((s) => s.step === 'roll'));
+      bands = inRange(await live());
+      assert.equal(bands.length, 20);
+    });
+
+    it('freezes a whole range at or under the cap as one h, as before', async () => {
+      await settleWholeRange();
+      await run({}, { l2MaxBandItems: 5 });
+      const bands = inRange(await live());
+      assert.deepEqual(
+        bands.map((b) => [b.from, b.to]),
+        [[100_000, 199_999]],
+      );
+    });
+
+    it('splits an h over the cap into its twenty d bands, published together, each superseding it', async () => {
+      await settleWholeRange();
+      await run({});
+      const [h] = inRange(await live());
+      assert.deepEqual([h.from, h.to], [100_000, 199_999]);
+      assert.equal(h.band.tables.data_items.rows, 5);
+
+      // A dry run builds the parts and publishes nothing.
+      const dry = await run({ dryRun: true }, { l2MaxBandItems: 2 });
+      const dryParts = dry.steps.filter((s) => s.step === 'split');
+      assert.equal(dryParts.length, 20);
+      assert.ok(dryParts.every((s) => s.result === 'dry_run'));
+      assert.deepEqual(
+        inRange(await live()).map((b) => b.id),
+        [h.id],
+      );
+
+      const split = await run({}, { l2MaxBandItems: 2 });
+      const parts = split.steps.filter((s) => s.step === 'split');
+      assert.equal(parts.length, 20);
+      assert.ok(
+        parts.every(
+          (s) => s.result === 'published' && s.stagedAt === undefined,
+        ),
+        JSON.stringify(parts.map((s) => [s.heightRange, s.result, s.reason])),
+      );
+      const bands = inRange(await live());
+      assert.equal(bands.length, 20);
+      assert.ok(!bands.some((b) => b.id === h.id), 'the h is superseded');
+      assert.equal(items(bands), 5, 'every item kept');
+      for (const band of bands) {
+        assert.ok(band.facts.supersedes?.includes(h.id), band.id);
+        assert.ok(band.facts.settledAt !== undefined);
+      }
+      // Nothing left staged.
+      const work = await fs.readdir(path.join(dir, 'export'));
+      assert.deepEqual(
+        work.filter((n) => n.startsWith('.split-')),
+        [],
+      );
+      // Settled: a later run neither splits again nor rolls them back.
+      const after = await run({}, { l2MaxBandItems: 2 });
+      assert.ok(
+        !after.steps.some((s) => s.step === 'split' || s.step === 'roll'),
+      );
+    });
+  });
+
   it('builds a pinned range in a dry run, publishing nothing', async () => {
     const pinned = await run({ dryRun: true, range: [105_000, 109_999] });
     assert.deepEqual(steps(pinned.steps), [

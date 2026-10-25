@@ -11,6 +11,7 @@ import { parseSelection } from '../../../lib/parquet-l2/layout.js';
 import { GridLayoutError } from '../root-tx/planner-grid.js';
 import type { L2LiveBand } from './bands.js';
 import {
+  capL2Freezes,
   classifyL2Bands,
   l2ResettleDue,
   l2Role,
@@ -18,6 +19,7 @@ import {
   planL2Pin,
   planL2Resettle,
   planL2Rolls,
+  planL2Splits,
   planL2Tip,
 } from './planner.js';
 
@@ -166,6 +168,93 @@ describe('planL2Rolls', () => {
     assert.equal(steps[0].role, 'h');
     assert.equal(steps[0].replaces.length, 20);
     assert.deepEqual(planL2Rolls(deltas.slice(1)), []);
+  });
+});
+
+describe('band size cap', () => {
+  const twentyDeltas = (rows: number) =>
+    Array.from({ length: 20 }, (_, i) =>
+      settled(100_000 + i * 5_000, 104_999 + i * 5_000, { rows }),
+    );
+
+  it('rolls twenty d bands only while together they hold at most the cap', () => {
+    const deltas = twentyDeltas(10); // 200 items
+    assert.deepEqual(ranges(planL2Rolls(deltas, 200)), [[100_000, 199_999]]);
+    assert.deepEqual(planL2Rolls(deltas, 199), []);
+    // No cap: as before.
+    assert.deepEqual(ranges(planL2Rolls(deltas)), [[100_000, 199_999]]);
+  });
+
+  it('freezes a whole range over the cap as its twenty d bands, each replacing the tips of its heights', () => {
+    const tip = band(100_000, 104_999);
+    const steps = planL2Freezes({
+      bands: [tip],
+      stableTop: 200_100,
+      settleBlocks: 100,
+      startHeight: 100_000,
+    });
+    assert.deepEqual(ranges(steps), [[100_000, 199_999]]);
+    assert.equal(steps[0].role, 'h');
+
+    const capped = capL2Freezes(steps, new Map([[100_000, 11]]), 10);
+    assert.equal(capped.length, 20);
+    assert.ok(
+      capped.every((s) => s.role === 'd' && s.step === 'freeze' && s.settles),
+    );
+    assert.deepEqual(capped[0].heightRange, [100_000, 104_999]);
+    assert.deepEqual(capped[19].heightRange, [195_000, 199_999]);
+    assert.deepEqual(
+      capped[0].replaces.map((b) => b.id),
+      [tip.id],
+    );
+    assert.deepEqual(capped[1].replaces, []);
+    // At or under the cap, or not counted: as planned.
+    assert.deepEqual(capL2Freezes(steps, new Map([[100_000, 10]]), 10), steps);
+    assert.deepEqual(capL2Freezes(steps, new Map(), 10), steps);
+  });
+
+  it('splits an h over the cap into its twenty d steps, each comparing at its own heights', () => {
+    const big = settled(100_000, 199_999, { rows: 50 });
+    const small = settled(200_000, 299_999, { rows: 5 });
+    const splits = planL2Splits([big, small], 10);
+    assert.equal(splits.length, 1);
+    assert.equal(splits[0].band.id, big.id);
+    assert.equal(splits[0].parts.length, 20);
+    for (const [i, part] of splits[0].parts.entries()) {
+      const from = 100_000 + i * 5_000;
+      assert.equal(part.step, 'split');
+      assert.equal(part.role, 'd');
+      assert.ok(part.settles);
+      assert.deepEqual(part.heightRange, [from, from + 4_999]);
+      assert.deepEqual(part.compareRange, [from, from + 4_999]);
+      assert.deepEqual(
+        part.replaces.map((b) => b.id),
+        [big.id],
+      );
+    }
+    // A d band is never split, however large.
+    assert.deepEqual(
+      planL2Splits([settled(100_000, 104_999, { rows: 99 })], 10),
+      [],
+    );
+  });
+
+  it('leaves an h over the cap out of re-settles: it is split instead', () => {
+    const big = settled(100_000, 199_999, { rows: 50 });
+    const small = settled(200_000, 299_999, { rows: 5 });
+    const plan = (maxItems?: number) =>
+      planL2Resettle([big, small], {
+        now: NOW,
+        intervalMs: DAY,
+        force: true,
+        resettledAt: {},
+        ...(maxItems !== undefined ? { maxItems } : {}),
+      });
+    assert.deepEqual(ranges(plan(10)), [[200_000, 299_999]]);
+    assert.deepEqual(ranges(plan()), [
+      [100_000, 199_999],
+      [200_000, 299_999],
+    ]);
   });
 });
 

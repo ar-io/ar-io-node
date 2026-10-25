@@ -27,6 +27,7 @@ import {
   ResolvedSource,
   SourceEnv,
 } from './kinds/root-tx/sources/config.js';
+import { DEFAULT_L2_MAX_BAND_ITEMS } from './kinds/parquet-l2/planner.js';
 
 /** Where the service works: the shared index volume, fixed in compose. */
 export const DATA_DIR = 'data/indexes';
@@ -143,6 +144,11 @@ export interface ExportConfig {
    * rebuilt on every this many re-settles its fingerprint would skip.
    */
   l2RecheckUnreadableEvery?: number;
+  /**
+   * `parquet-l2`: the most items one `h` band holds. A range above it stays
+   * as its twenty `d` bands (`INDEX_EXPORT_L2_MAX_BAND_ITEMS`).
+   */
+  l2MaxBandItems?: number;
 }
 
 type Env = Record<string, string | undefined>;
@@ -371,6 +377,10 @@ export function parseExportConfig(env: Env, dataDir = DATA_DIR): ExportConfig {
           l2WindowItems: integer(env, 'INDEX_EXPORT_L2_WINDOW_ITEMS', {
             min: 1000,
             fallback: DEFAULT_L2_WINDOW_ITEMS,
+          }) as number,
+          l2MaxBandItems: integer(env, 'INDEX_EXPORT_L2_MAX_BAND_ITEMS', {
+            min: 1,
+            fallback: DEFAULT_L2_MAX_BAND_ITEMS,
           }) as number,
         }
       : {}),

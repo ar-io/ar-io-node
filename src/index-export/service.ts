@@ -113,6 +113,10 @@ import {
   planL2Resettle,
   planL2Rolls,
   planL2Tip,
+  bandItems,
+  capL2Freezes,
+  DEFAULT_L2_MAX_BAND_ITEMS,
+  planL2Splits,
 } from './kinds/parquet-l2/planner.js';
 import type { L2ItemSource } from './kinds/parquet-l2/source.js';
 import { fingerprintL2Band } from './kinds/parquet-l2/fingerprint.js';
@@ -1888,7 +1892,11 @@ export class ExportService {
               : {}),
             ...(walletsDb !== undefined ? { walletsDb } : {}),
           });
-        const run = async (step: L2Step, bands: L2LiveBand[]) => {
+        const run = async (
+          step: L2Step,
+          bands: L2LiveBand[],
+          stageDir?: string,
+        ) => {
           entry.plan.push(describeL2Step(step));
           await this.checkL2Disk(
             dryRun
@@ -1912,6 +1920,7 @@ export class ExportService {
           const outcome = await runL2Step(step, {
             ...context,
             history: named,
+            ...(stageDir !== undefined ? { stageDir } : {}),
           });
           entry.steps.push(outcome);
           report.peakBytes += outcome.bandBytes ?? 0;
@@ -1929,6 +1938,7 @@ export class ExportService {
         const fingerprinted = async (
           step: L2Step,
           bands: L2LiveBand[],
+          stageDir?: string,
         ): Promise<L2Outcome> => {
           const taken = await fingerprintOf(step);
           let gate: L2Outcome['gate'] | undefined;
@@ -2005,7 +2015,7 @@ export class ExportService {
               return skipped;
             }
           }
-          const outcome = await run(step, bands);
+          const outcome = await run(step, bands, stageDir);
           if (gate !== undefined) outcome.gate = gate;
           const kept =
             outcome.result === 'published' || outcome.result === 'unchanged'
@@ -2046,8 +2056,10 @@ export class ExportService {
         // 1. Freeze, in height order. A dry run publishes nothing, so what
         // it built counts as frozen for the tip.
         let bands = await live();
-        // With a range, only its re-settles.
-        const freezes =
+        const maxItems = config.l2MaxBandItems ?? DEFAULT_L2_MAX_BAND_ITEMS;
+        // With a range, only its re-settles. A whole range over the band
+        // size cap (by the source's count) is frozen d by d instead.
+        const planned =
           range !== undefined
             ? []
             : planL2Freezes({
@@ -2056,6 +2068,20 @@ export class ExportService {
                 settleBlocks,
                 ...(startHeight !== undefined ? { startHeight } : {}),
               });
+        const counts = new Map<number, number>();
+        if (source.count !== undefined) {
+          for (const step of planned.filter((s) => s.role === 'h')) {
+            counts.set(
+              step.heightRange[0],
+              await source.count(
+                step.heightRange[0],
+                step.heightRange[1],
+                index.selection,
+              ),
+            );
+          }
+        }
+        const freezes = capL2Freezes(planned, counts, maxItems);
         let builtTop: number | undefined;
         for (const [i, step] of freezes.entries()) {
           if (i > 0 && overBudget()) {
@@ -2076,10 +2102,84 @@ export class ExportService {
           builtTop = step.heightRange[1];
         }
 
-        // 2. Roll every range of twenty frozen d bands into its h.
+        // 2. Roll every range of twenty frozen d bands into its h, unless
+        // together they are over the band size cap.
         bands = await live();
-        for (const step of range !== undefined ? [] : planL2Rolls(bands)) {
+        for (const step of range !== undefined
+          ? []
+          : planL2Rolls(bands, maxItems)) {
           await fingerprinted(step, bands);
+        }
+
+        // 2b. Split every h over the cap into its twenty d bands. Each part
+        // is built, compared with the h's rows at its own heights and
+        // header-checked as a re-settle is, then staged; only when every
+        // part has passed are they moved into place together, each naming
+        // the h as superseded, so neither this planner nor a subscriber
+        // ever sees the range half covered. With --range, only splits
+        // inside it; a dry run builds the parts and publishes nothing.
+        bands = await live();
+        for (const split of planL2Splits(bands, maxItems).filter(
+          (s) =>
+            range === undefined ||
+            (s.band.from >= range[0] && s.band.to <= range[1]),
+        )) {
+          if (overBudget()) {
+            for (const part of split.parts) {
+              entry.plan.push(describeL2Step(part, "the run's time budget"));
+            }
+            continue;
+          }
+          const stage = path.join(
+            workDir,
+            `.split-${index.name}-${split.band.from}-${process.pid}`,
+          );
+          await fs.rm(stage, { recursive: true, force: true });
+          const outcomes: L2Outcome[] = [];
+          for (const part of split.parts) {
+            const outcome = await fingerprinted(part, bands, stage);
+            outcomes.push(outcome);
+            if (
+              outcome.result !== 'published' &&
+              outcome.result !== 'dry_run'
+            ) {
+              break;
+            }
+          }
+          const passed =
+            outcomes.length === split.parts.length &&
+            outcomes.every((o) => o.result === 'published');
+          if (passed && !dryRun) {
+            if (this.lock !== undefined && !(await this.lock.held())) {
+              log.warn('Split not published: the lock was lost', {
+                index: index.name,
+                band: split.band.id,
+              });
+            } else {
+              for (const o of outcomes) {
+                await fs.rename(
+                  o.stagedAt as string,
+                  path.join(index.publishDir, o.id as string),
+                );
+                delete o.stagedAt;
+              }
+              log.info('Band split published', {
+                index: index.name,
+                band: split.band.id,
+                items: bandItems(split.band),
+                parts: outcomes.map((o) => o.id),
+              });
+            }
+          } else if (!passed) {
+            log.warn('Band split not published: a part did not pass', {
+              index: index.name,
+              band: split.band.id,
+              failed: outcomes.at(-1)?.heightRange,
+              result: outcomes.at(-1)?.result,
+              reason: outcomes.at(-1)?.reason,
+            });
+          }
+          await fs.rm(stage, { recursive: true, force: true });
         }
 
         // 3. The tip. After a failed freeze it still covers the heights the
@@ -2117,6 +2217,7 @@ export class ExportService {
         if (options.resettle !== undefined || intervalMs > 0) {
           bands = await live();
           const steps = planL2Resettle(bands, {
+            maxItems,
             now: this.now(),
             intervalMs,
             force: options.resettle !== undefined,

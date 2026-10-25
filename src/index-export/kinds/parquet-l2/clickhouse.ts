@@ -95,6 +95,23 @@ export function itemsQuery(selection: ParquetL2Selection): {
   };
 }
 
+/** How many selected items the heights hold: what the band size cap reads. */
+export function countQuery(selection: ParquetL2Selection): {
+  query: string;
+  params: Record<string, string>;
+} {
+  const { condition, params } = selectionClickHouse(selection);
+  return {
+    query: `
+  SELECT count() AS items
+  FROM transactions FINAL
+  WHERE height >= {from:UInt32} AND height <= {to:UInt32}
+    AND is_data_item
+    AND ${condition}`,
+    params,
+  };
+}
+
 /**
  * A digest of every row a window's queries read, over the heights: the
  * selected items (every column the item query reads, `inserted_at`
@@ -315,6 +332,20 @@ export class ClickHouseL2Source implements L2ItemSource {
       );
     }
     return `rows ${Number(row.rows)} xor ${row.xor} sum ${row.sum}`;
+  }
+
+  async count(
+    from: number,
+    to: number,
+    selection: ParquetL2Selection,
+  ): Promise<number> {
+    const { query, params } = countQuery(selection);
+    const rows = await this.rows<{ items: number | string }>(
+      query,
+      { ...params, from, to },
+      `item count of heights ${from}-${to}`,
+    );
+    return Number(rows[0]?.items ?? 0);
   }
 
   async *owners(
