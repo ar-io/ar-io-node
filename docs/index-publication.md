@@ -771,7 +771,7 @@ most 16, or an empty list), each table's row count and row digest (computed
 as an L1 band's), the same for each lookup file (`lookups`), and
 `createdAt`; optionally `checks`, a small free-form object of what the
 builder checked. A reader refuses any field it does not declare, and
-accepts both layouts. The selection is:
+accepts both layouts. The selection (here, the published `ardrive-l2`'s) is:
 
 ```json
 {
@@ -779,7 +779,7 @@ accepts both layouts. The selection is:
   "tag": {
     "name": "App-Name",
     "valuePrefix": "ArDrive",
-    "excludeValuePrefix": "ArDrive-Test"
+    "excludeValuePrefix": "ArDriver"
   }
 }
 ```
