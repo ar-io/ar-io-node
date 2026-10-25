@@ -173,6 +173,39 @@ const DRY_RUN_STALE_MS = 12 * 3600_000;
 const HISTORY_KEPT = 8;
 
 const STAGING_PREFIX = '.band-build-';
+/** A band split's staged parts, in the work directory. */
+const SPLIT_PREFIX = '.split-';
+/**
+ * Written into a split's stage once every part has passed, before any is
+ * moved: a stage holding it is published, by this run or, if this run is
+ * interrupted while moving, by the next.
+ */
+const SPLIT_READY = 'split-ready.json';
+
+/**
+ * Moves every part of a ready split still in its stage into the index's
+ * directory, then removes the stage. Safe to repeat: a part already moved
+ * is skipped.
+ */
+async function publishStagedSplit(stage: string): Promise<{
+  band: string;
+  parts: string[];
+}> {
+  const ready = JSON.parse(
+    await fs.readFile(path.join(stage, SPLIT_READY), 'utf8'),
+  ) as { publishDir: string; band: string; parts: string[] };
+  await fs.mkdir(ready.publishDir, { recursive: true });
+  for (const id of ready.parts) {
+    const from = path.join(stage, id);
+    const exists = await fs.stat(from).then(
+      () => true,
+      () => false,
+    );
+    if (exists) await fs.rename(from, path.join(ready.publishDir, id));
+  }
+  await fs.rm(stage, { recursive: true, force: true });
+  return { band: ready.band, parts: ready.parts };
+}
 const GIB = 1024 ** 3;
 
 export interface RunOptions {
@@ -2116,8 +2149,11 @@ export class ExportService {
         // header-checked as a re-settle is, then staged; only when every
         // part has passed are they moved into place together, each naming
         // the h as superseded, so neither this planner nor a subscriber
-        // ever sees the range half covered. With --range, only splits
-        // inside it; a dry run builds the parts and publishes nothing.
+        // ever sees the range half covered. The moves start only after a
+        // ready marker is written into the stage: a run interrupted while
+        // moving leaves it, and the next run finishes the moves before
+        // anything else (clearStaging). With --range, only splits inside
+        // it; a dry run builds the parts and publishes nothing.
         bands = await live();
         for (const split of planL2Splits(bands, maxItems).filter(
           (s) =>
@@ -2130,56 +2166,74 @@ export class ExportService {
             }
             continue;
           }
+          // Named for the split alone: the lock makes it this run's. A dry
+          // run stages nothing (its parts stop before publishing), so it
+          // never touches a real run's stage.
           const stage = path.join(
             workDir,
-            `.split-${index.name}-${split.band.from}-${process.pid}`,
+            `${SPLIT_PREFIX}${index.name}-${split.band.from}`,
           );
-          await fs.rm(stage, { recursive: true, force: true });
-          const outcomes: L2Outcome[] = [];
-          for (const part of split.parts) {
-            const outcome = await fingerprinted(part, bands, stage);
-            outcomes.push(outcome);
-            if (
-              outcome.result !== 'published' &&
-              outcome.result !== 'dry_run'
-            ) {
-              break;
-            }
-          }
-          const passed =
-            outcomes.length === split.parts.length &&
-            outcomes.every((o) => o.result === 'published');
-          if (passed && !dryRun) {
-            if (this.lock !== undefined && !(await this.lock.held())) {
-              log.warn('Split not published: the lock was lost', {
-                index: index.name,
-                band: split.band.id,
-              });
-            } else {
-              for (const o of outcomes) {
-                await fs.rename(
-                  o.stagedAt as string,
-                  path.join(index.publishDir, o.id as string),
-                );
-                delete o.stagedAt;
+          if (!dryRun) await fs.rm(stage, { recursive: true, force: true });
+          // Set once the ready marker is written: from then on the stage is
+          // the record of an unfinished publish, kept if the moves fail.
+          let ready = false;
+          try {
+            const outcomes: L2Outcome[] = [];
+            for (const part of split.parts) {
+              const outcome = await fingerprinted(part, bands, stage);
+              outcomes.push(outcome);
+              if (
+                outcome.result !== 'published' &&
+                outcome.result !== 'dry_run'
+              ) {
+                break;
               }
-              log.info('Band split published', {
+            }
+            const failed =
+              outcomes.length !== split.parts.length ||
+              outcomes.some(
+                (o) => o.result !== 'published' && o.result !== 'dry_run',
+              );
+            if (failed) {
+              log.warn('Band split not published: a part did not pass', {
                 index: index.name,
                 band: split.band.id,
-                items: bandItems(split.band),
-                parts: outcomes.map((o) => o.id),
+                failed: outcomes.at(-1)?.heightRange,
+                result: outcomes.at(-1)?.result,
+                reason: outcomes.at(-1)?.reason,
               });
+            } else if (!dryRun) {
+              if (this.lock !== undefined && !(await this.lock.held())) {
+                log.warn('Band split not published: the lock was lost', {
+                  index: index.name,
+                  band: split.band.id,
+                });
+              } else {
+                await fs.writeFile(
+                  path.join(stage, SPLIT_READY),
+                  JSON.stringify({
+                    publishDir: index.publishDir,
+                    band: split.band.id,
+                    parts: outcomes.map((o) => o.id),
+                  }),
+                );
+                ready = true;
+                await publishStagedSplit(stage);
+                ready = false;
+                for (const o of outcomes) delete o.stagedAt;
+                log.info('Band split published', {
+                  index: index.name,
+                  band: split.band.id,
+                  items: bandItems(split.band),
+                  parts: outcomes.map((o) => o.id),
+                });
+              }
             }
-          } else if (!passed) {
-            log.warn('Band split not published: a part did not pass', {
-              index: index.name,
-              band: split.band.id,
-              failed: outcomes.at(-1)?.heightRange,
-              result: outcomes.at(-1)?.result,
-              reason: outcomes.at(-1)?.reason,
-            });
+          } finally {
+            if (!dryRun && !ready) {
+              await fs.rm(stage, { recursive: true, force: true });
+            }
           }
-          await fs.rm(stage, { recursive: true, force: true });
         }
 
         // 3. The tip. After a failed freeze it still covers the heights the
@@ -2542,10 +2596,35 @@ export class ExportService {
     }
   }
 
-  /** Removes staging that runs killed before their cleanup left. */
+  /**
+   * Removes staging that runs killed before their cleanup left, and
+   * finishes a band split a run was interrupted while publishing: its parts
+   * had all passed, and some may already be live, superseding the band they
+   * replace, so the rest must follow.
+   */
   private async clearStaging(): Promise<void> {
     const { workDir } = this.deps.config;
     for (const name of await fs.readdir(workDir)) {
+      if (name.startsWith(SPLIT_PREFIX)) {
+        const stage = path.join(workDir, name);
+        const ready = await fs.stat(path.join(stage, SPLIT_READY)).then(
+          () => true,
+          () => false,
+        );
+        if (ready) {
+          const done = await publishStagedSplit(stage);
+          this.deps.log.warn(
+            'Finished publishing a band split an interrupted run left',
+            { name, ...done },
+          );
+        } else {
+          this.deps.log.warn('Removing a band split an interrupted run left', {
+            name,
+          });
+          await fs.rm(stage, { recursive: true, force: true });
+        }
+        continue;
+      }
       if (!name.startsWith(STAGING_PREFIX)) continue;
       this.deps.log.warn('Removing staging an interrupted run left', { name });
       await fs.rm(path.join(workDir, name), { recursive: true, force: true });

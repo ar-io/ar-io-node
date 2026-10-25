@@ -586,6 +586,48 @@ describe('ExportService, parquet-l2', () => {
         !after.steps.some((s) => s.step === 'split' || s.step === 'roll'),
       );
     });
+
+    it('finishes a split a run was interrupted while publishing, and drops one that was not ready', async () => {
+      await settleWholeRange();
+      await run({});
+      const [h] = inRange(await live());
+      await run({}, { l2MaxBandItems: 2 });
+      const parts = inRange(await live());
+      assert.equal(parts.length, 20);
+
+      // Interrupted after five moves: fifteen parts still staged, ready.
+      const stage = path.join(dir, 'export', `.split-ardrive-l2-100000`);
+      await fs.mkdir(stage, { recursive: true });
+      for (const band of parts.slice(5)) {
+        await fs.rename(band.dir, path.join(stage, band.id));
+      }
+      await fs.writeFile(
+        path.join(stage, 'split-ready.json'),
+        JSON.stringify({
+          publishDir: indexDir(),
+          band: h.id,
+          parts: parts.map((b) => b.id),
+        }),
+      );
+      // Half covered: the h is superseded by the parts already live.
+      assert.equal(inRange(await live()).length, 5);
+      // A stage without the marker never published anything: dropped.
+      const notReady = path.join(dir, 'export', `.split-ardrive-l2-900000`);
+      await fs.mkdir(path.join(notReady, 'some-part'), { recursive: true });
+
+      await run({}, { l2MaxBandItems: 2 });
+      const bands = inRange(await live());
+      assert.deepEqual(
+        bands.map((b) => b.id).sort(),
+        parts.map((b) => b.id).sort(),
+      );
+      assert.equal(items(bands), 5);
+      const work = await fs.readdir(path.join(dir, 'export'));
+      assert.deepEqual(
+        work.filter((n) => n.startsWith('.split-')),
+        [],
+      );
+    });
   });
 
   it('builds a pinned range in a dry run, publishing nothing', async () => {
