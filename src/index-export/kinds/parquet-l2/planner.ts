@@ -33,6 +33,14 @@
  *
  * Frozen bands are re-settled on an interval: rebuilt from the source, and
  * replaced only when that adds rows, under the checks in `kind.ts`.
+ *
+ * Band size cap (`maxItems`): a whole range is one `h` band only while it
+ * holds at most `maxItems` items. Above it, the range stays as its twenty
+ * `d` bands: a roll is skipped, a freeze builds `d` by `d`, and an `h`
+ * already over the cap is split into its `d` bands, published together.
+ * A `d` band is never split (the grid has nothing smaller), so one over
+ * the cap is built anyway. The cap bounds what one build, one re-settle,
+ * one verification and one download handle, whatever the data's skew.
  */
 import {
   isL1BandRange,
@@ -45,7 +53,20 @@ import { GridLayoutError } from '../root-tx/planner-grid.js';
 import type { L2LiveBand } from './bands.js';
 
 export type L2Role = 'h' | 'd' | 'tip';
-export type L2StepKind = 'freeze' | 'roll' | 'tip' | 'resettle' | 'pin';
+export type L2StepKind =
+  | 'freeze'
+  | 'roll'
+  | 'tip'
+  | 'resettle'
+  | 'pin'
+  | 'split';
+
+/** The band size cap's default: items in one `h` band (`INDEX_EXPORT_L2_MAX_BAND_ITEMS`). */
+export const DEFAULT_L2_MAX_BAND_ITEMS = 10_000_000;
+
+/** A band's items as its description counts them: rows of `data_items`. */
+export const bandItems = (band: L2LiveBand) =>
+  band.band.tables.data_items?.rows ?? 0;
 
 export interface L2Step {
   step: L2StepKind;
@@ -55,6 +76,17 @@ export interface L2Step {
   replaces: L2LiveBand[];
   /** Whether the band built is frozen (its heights settled). */
   settles: boolean;
+  /**
+   * Compare with the replaced bands' rows at these heights only: a part of
+   * a split answers for its own heights, not the whole band it replaces.
+   */
+  compareRange?: [number, number];
+}
+
+/** An `h` over the cap and the twenty `d` bands that replace it. */
+export interface L2Split {
+  band: L2LiveBand;
+  parts: L2Step[];
 }
 
 const isWholeRange = (from: number, to: number) => {
@@ -193,9 +225,13 @@ export function planL2Freezes({
 
 /**
  * An `h` for each 100,000-height range whose twenty `d` bands are all
- * frozen, rebuilt from the source and replacing them.
+ * frozen, rebuilt from the source and replacing them, unless together they
+ * hold more than `maxItems` items: then the range stays as its `d` bands.
  */
-export function planL2Rolls(bands: L2LiveBand[]): L2Step[] {
+export function planL2Rolls(
+  bands: L2LiveBand[],
+  maxItems: number = Number.POSITIVE_INFINITY,
+): L2Step[] {
   const { frozen } = classifyL2Bands(bands);
   const deltas = frozen.filter((band) => l2Role(band) === 'd');
   const ranges = [
@@ -206,6 +242,9 @@ export function planL2Rolls(bands: L2LiveBand[]): L2Step[] {
     const to = rangeFrom + L1_SPAN - 1;
     const folds = deltas.filter((band) => within(band, rangeFrom, to));
     if (folds.length < L1_SPAN / L1_SUB_SPAN) continue;
+    if (folds.reduce((sum, band) => sum + bandItems(band), 0) > maxItems) {
+      continue;
+    }
     steps.push({
       step: 'roll',
       role: 'h',
@@ -215,6 +254,65 @@ export function planL2Rolls(bands: L2LiveBand[]): L2Step[] {
     });
   }
   return steps;
+}
+
+/**
+ * Freezes under the cap: each whole-range `h` freeze whose range holds more
+ * than `maxItems` items (`items`, by the range's first height, from the
+ * source's count) becomes its twenty `d` freezes, which replace the same
+ * tips. A range whose count is unknown is left as planned.
+ */
+export function capL2Freezes(
+  steps: L2Step[],
+  items: ReadonlyMap<number, number>,
+  maxItems: number,
+): L2Step[] {
+  const out: L2Step[] = [];
+  for (const step of steps) {
+    const [from, to] = step.heightRange;
+    const n = items.get(from);
+    if (step.role !== 'h' || n === undefined || n <= maxItems) {
+      out.push(step);
+      continue;
+    }
+    for (let at = from; at <= to; at += L1_SUB_SPAN) {
+      const end = at + L1_SUB_SPAN - 1;
+      out.push({
+        step: 'freeze',
+        role: 'd',
+        heightRange: [at, end],
+        replaces: step.replaces.filter((tip) => within(tip, at, end)),
+        settles: true,
+      });
+    }
+  }
+  return out;
+}
+
+/**
+ * Each frozen `h` over the cap, with the twenty `d` steps that replace it.
+ * Every part names the `h` it replaces and compares with its rows at the
+ * part's own heights, so each passes the same checks as a re-settle.
+ */
+export function planL2Splits(bands: L2LiveBand[], maxItems: number): L2Split[] {
+  const { frozen } = classifyL2Bands(bands);
+  return frozen
+    .filter((band) => l2Role(band) === 'h' && bandItems(band) > maxItems)
+    .map((band) => {
+      const parts: L2Step[] = [];
+      for (let at = band.from; at <= band.to; at += L1_SUB_SPAN) {
+        const end = at + L1_SUB_SPAN - 1;
+        parts.push({
+          step: 'split',
+          role: 'd',
+          heightRange: [at, end],
+          replaces: [band],
+          settles: true,
+          compareRange: [at, end],
+        });
+      }
+      return { band, parts };
+    });
 }
 
 /**
@@ -275,7 +373,10 @@ export function l2ResettleDue(
   return times.length === 0 || now - Math.max(...times) >= intervalMs;
 }
 
-/** The frozen bands to re-settle: due, or all when forced; the largest first. */
+/**
+ * The frozen bands to re-settle: due, or all when forced; the largest first.
+ * An `h` over the cap is left out: it is split instead ({@link planL2Splits}).
+ */
 export function planL2Resettle(
   bands: L2LiveBand[],
   {
@@ -283,15 +384,18 @@ export function planL2Resettle(
     intervalMs,
     force,
     resettledAt,
+    maxItems = Number.POSITIVE_INFINITY,
   }: {
     now: number;
     intervalMs: number;
     force: boolean;
     resettledAt: Record<string, string>;
+    maxItems?: number;
   },
 ): L2Step[] {
   const { frozen } = classifyL2Bands(bands);
   return frozen
+    .filter((band) => !(l2Role(band) === 'h' && bandItems(band) > maxItems))
     .filter(
       (band) =>
         force || l2ResettleDue(band, resettledAt[band.id], now, intervalMs),

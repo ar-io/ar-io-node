@@ -106,6 +106,16 @@ export interface L2ItemSource {
     to: number,
     selection: ParquetL2Selection,
   ): Promise<string>;
+  /**
+   * How many selected items `[from, to]` holds, for the band size cap: one
+   * cheap query, read before a whole range is frozen as one band. Absent:
+   * the cap is applied only where band sizes are already known.
+   */
+  count?(
+    from: number,
+    to: number,
+    selection: ParquetL2Selection,
+  ): Promise<number>;
   /** The distinct owner addresses of the selected items of `[from, to]`. */
   owners?(
     from: number,

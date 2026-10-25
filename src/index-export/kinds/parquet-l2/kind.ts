@@ -91,6 +91,11 @@ export interface L2StepContext {
   headerCheck?: { retries?: number; retryDelayMs?: number };
   /** Ids this band names as superseded besides the bands it replaces. */
   history?: string[];
+  /**
+   * Publish into this directory instead of the index's: a part of a split,
+   * moved into place with the rest once every part has passed.
+   */
+  stageDir?: string;
   /** The build's DuckDB limits ({@link DEFAULT_L2_DUCK_LIMITS} when unset). */
   limits?: L2DuckLimits;
   /** Random source for the header-check sample (tests). */
@@ -99,6 +104,8 @@ export interface L2StepContext {
 }
 
 export interface L2Outcome {
+  /** Where a staged part of a split waits to be published with the rest. */
+  stagedAt?: string;
   index: string;
   step: L2StepKind;
   role: L2Role;
@@ -300,8 +307,10 @@ export async function runL2Step(
       ...(step.settles ? { settledAt: at } : {}),
       ...ownFacts(built, outcome.header),
     });
-    await fs.mkdir(ctx.index.publishDir, { recursive: true });
-    await fs.rename(built.dir, path.join(ctx.index.publishDir, id));
+    const into = ctx.stageDir ?? ctx.index.publishDir;
+    await fs.mkdir(into, { recursive: true });
+    await fs.rename(built.dir, path.join(into, id));
+    if (ctx.stageDir !== undefined) outcome.stagedAt = path.join(into, id);
     return finish(outcome, step, ctx, started);
   } catch (error) {
     outcome = {
@@ -362,6 +371,7 @@ async function decide(
           step.replaces.map((band) => band.dir),
           built.dir,
           ctx.resettleMaxChanged,
+          step.compareRange,
         ),
       { inMemory: true },
     );

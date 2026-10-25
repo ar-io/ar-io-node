@@ -128,8 +128,18 @@ export async function compareL2Bands(
   oldDirs: string[],
   newDir: string,
   maxRelocated: number,
+  /**
+   * Compare against only the old bands' rows at these heights: a band that
+   * replaces part of a larger one (a split) answers for its own heights.
+   * Owners' keys are then those of the old rows at these heights.
+   */
+  heightRange?: [number, number],
 ): Promise<L2Compare> {
-  const old = `read_parquet([${oldDirs.map((dir) => file(dir)).join(', ')}])`;
+  const within =
+    heightRange !== undefined
+      ? ` WHERE height BETWEEN ${Math.trunc(heightRange[0])} AND ${Math.trunc(heightRange[1])}`
+      : '';
+  const old = `(SELECT * FROM read_parquet([${oldDirs.map((dir) => file(dir)).join(', ')}])${within})`;
   const oldParents = `read_parquet([${oldDirs.map((dir) => file(dir, 'parents')).join(', ')}])`;
   const next = `read_parquet(${file(newDir)})`;
   const pair = (p: string) =>
@@ -149,7 +159,7 @@ export async function compareL2Bands(
   // side in a semi join's ON clause had DuckDB 1.4.2 deduplicate the wide
   // left side instead, spilling for over ten minutes on a 6.7M-item band.
   for (const statement of [
-    `CREATE OR REPLACE TEMP VIEW o AS SELECT * FROM ${old}`,
+    `CREATE OR REPLACE TEMP VIEW o AS SELECT * FROM ${old} o`,
     `CREATE OR REPLACE TEMP VIEW n AS SELECT * FROM ${next}`,
     `-- Per (id, root) of each side: whether it is located, and (old side)
     -- whether at a place a reader could check: directly in the root, or
@@ -222,9 +232,14 @@ export async function compareL2Bands(
     WHERE old_located AND NOT checkable AND NOT new_located`;
   const relocatedSql = 'SELECT * FROM reloc n';
   const newlyLocatedSql = 'SELECT * FROM newloc n';
+  const oldWallets =
+    heightRange === undefined
+      ? `read_parquet([${oldDirs.map((dir) => file(dir, 'wallets')).join(', ')}])`
+      : `(SELECT w.* FROM read_parquet([${oldDirs.map((dir) => file(dir, 'wallets')).join(', ')}]) w
+          SEMI JOIN (SELECT DISTINCT owner_address FROM o) s ON s.owner_address = w.address)`;
   const walletsMissingSql = `
     SELECT DISTINCT o.address AS id
-    FROM read_parquet([${oldDirs.map((dir) => file(dir, 'wallets')).join(', ')}]) o
+    FROM ${oldWallets} o
     ANTI JOIN read_parquet(${file(newDir, 'wallets')}) n ON n.address = o.address`;
   const ids = async (sql: string) =>
     (
