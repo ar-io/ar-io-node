@@ -2209,14 +2209,18 @@ export class ExportService {
                   band: split.band.id,
                 });
               } else {
+                // Written whole or not at all: a reader sees no marker
+                // (nothing moved yet, the stage is dropped) or a complete one.
+                const marker = path.join(stage, SPLIT_READY);
                 await fs.writeFile(
-                  path.join(stage, SPLIT_READY),
+                  `${marker}.tmp`,
                   JSON.stringify({
                     publishDir: index.publishDir,
                     band: split.band.id,
                     parts: outcomes.map((o) => o.id),
                   }),
                 );
+                await fs.rename(`${marker}.tmp`, marker);
                 ready = true;
                 await publishStagedSplit(stage);
                 ready = false;
@@ -2456,6 +2460,9 @@ export class ExportService {
     at: string,
   ): void {
     for (const step of index.steps) {
+      // A part of a split left staged (another part failed, or the lock was
+      // lost) was never published: nothing to record.
+      if (step.stagedAt !== undefined) continue;
       if (step.result === 'published' || step.result === 'unchanged') {
         state.lastSuccess[step.role] = at;
         metrics.lastSuccess.set(
