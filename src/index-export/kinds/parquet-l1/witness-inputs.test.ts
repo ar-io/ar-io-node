@@ -14,9 +14,14 @@ import { generateTransactionChunks } from 'arweave/node/lib/merkle.js';
 
 import { createTestLogger } from '../../../../test/test-logger.js';
 import { v1DataRoot } from '../../../lib/parquet-l1/chain.js';
+import {
+  ArweaveNodePool,
+  type FetchLike,
+} from '../../../lib/onchain/arweave-nodes.js';
 import { WitnessRefused } from '../../../lib/parquet-l1/witnesses.js';
 import {
   CHECKPOINT_FILE,
+  CHUNK_CONCURRENCY,
   HASH_LIST_1_0_FILE,
   dataPathRoot,
   l1WitnessInputs,
@@ -26,6 +31,9 @@ import {
 
 const log = createTestLogger({ suite: 'l1-witness-inputs' });
 const b64 = (b: Buffer) => b.toString('base64url');
+/** One test node, `http://n.test`, answering with `fetch`. */
+const poolOf = (fetch: FetchLike, urls = ['http://n.test']) =>
+  new ArweaveNodePool({ urls, fetch, dedupeByAddress: false });
 
 describe('rootFromDataPath', () => {
   it("gives the root a transaction's last-chunk data_path proves, as v1DataRoot computes it", async () => {
@@ -129,7 +137,7 @@ describe('l1WitnessInputs', () => {
       { dir, nodes: ['http://n.test'] },
       [100, 199],
       log,
-      async (url: string) => {
+      poolOf(async (url: string) => {
         asked.push(url);
         if (url.endsWith('/chunk/77')) {
           return new Response(
@@ -139,7 +147,7 @@ describe('l1WitnessInputs', () => {
           );
         }
         return new Response('', { status: 404 });
-      },
+      }),
     );
     const out = await inputs.v1Roots([
       need(150, a, 5n),
@@ -158,6 +166,41 @@ describe('l1WitnessInputs', () => {
     ]);
   });
 
+  it('rests a node that cannot be reached instead of asking it for every chunk', async () => {
+    const data = crypto.randomBytes(10);
+    const chunks = await generateTransactionChunks(data);
+    const ids = Array.from({ length: 40 }, () => crypto.randomBytes(32));
+    const asked = new Map<string, number>();
+    const inputs = l1WitnessInputs(
+      { nodes: ['http://dead.test', 'http://n.test'] },
+      [100, 199],
+      log,
+      poolOf(
+        async (url: string) => {
+          const host = new URL(url).host;
+          asked.set(host, (asked.get(host) ?? 0) + 1);
+          if (host === 'dead.test') throw new TypeError('fetch failed');
+          return new Response(
+            JSON.stringify({
+              data_path: b64(Buffer.from(chunks.proofs[0].proof)),
+            }),
+          );
+        },
+        ['http://dead.test', 'http://n.test'],
+      ),
+    );
+    const out = await inputs.v1Roots(
+      ids.map((id, i) => need(150, id, BigInt(1000 + i))),
+    );
+    assert.equal(out.size, 40, 'every root from the node that answers');
+    // Only the requests already under way when it first failed reach it.
+    assert.ok(
+      (asked.get('dead.test') ?? 0) <= CHUNK_CONCURRENCY,
+      `asked ${asked.get('dead.test')} times`,
+    );
+    assert.equal(asked.get('n.test'), 40);
+  });
+
   it('computes a root from data a node serves whole, of the size the band says', async () => {
     const data = crypto.randomBytes(10);
     const id = crypto.randomBytes(32);
@@ -166,12 +209,14 @@ describe('l1WitnessInputs', () => {
       { nodes: ['http://n.test'] },
       [0, 99],
       log,
-      async (url: string) =>
-        new Response(
-          JSON.stringify({
-            data: b64(url.endsWith(b64(id)) ? data : data.subarray(0, 5)),
-          }),
-        ),
+      poolOf(
+        async (url: string) =>
+          new Response(
+            JSON.stringify({
+              data: b64(url.endsWith(b64(id)) ? data : data.subarray(0, 5)),
+            }),
+          ),
+      ),
     );
     const out = await inputs.v1RootsFromData!([need(0, id), need(0, short)]);
     assert.deepEqual(out.get(b64(id)), await v1DataRoot(data));
@@ -200,7 +245,7 @@ describe('l1WitnessInputs', () => {
       { nodes: ['http://n.test'] },
       [400_000, 499_999],
       log,
-      async (url: string, init?: RequestInit) => {
+      poolOf(async (url: string, init?: RequestInit) => {
         seen.push([url, new Headers(init?.headers).get('X-Block-Format')]);
         const m = /\/block_index\/(\d+)\/(\d+)$/.exec(url);
         const n = Number(m?.[2]) - Number(m?.[1]) + 1;
@@ -213,7 +258,7 @@ describe('l1WitnessInputs', () => {
             })),
           ),
         );
-      },
+      }),
     );
     const out = await inputs.blockIndex!(400_000, 422_249);
     assert.equal(out.size, 22_250);

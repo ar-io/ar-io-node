@@ -7,6 +7,7 @@
 import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
 
+import { DEFAULT_ARWEAVE_NODE_URLS } from '../lib/onchain/arweave-nodes.js';
 import { parseExportConfig, parseRunAt } from './config.js';
 
 const BASE = {
@@ -130,6 +131,43 @@ describe('parseExportConfig', () => {
         pattern,
       );
     }
+  });
+
+  it('takes witness nodes from INDEX_EXPORT_L1_WITNESS_NODES, else the core’s preferred chunk nodes, else its defaults', () => {
+    assert.deepEqual(
+      parseExportConfig(BASE).l1Witness?.nodes,
+      DEFAULT_ARWEAVE_NODE_URLS,
+    );
+    const preferred = {
+      ...BASE,
+      PREFERRED_CHUNK_GET_NODE_URLS:
+        ' http://a.test:1984 , http://b.test:1984 ',
+    };
+    assert.deepEqual(parseExportConfig(preferred).l1Witness?.nodes, [
+      'http://a.test:1984',
+      'http://b.test:1984',
+    ]);
+    assert.deepEqual(
+      parseExportConfig({
+        ...preferred,
+        INDEX_EXPORT_L1_WITNESS_NODES: 'http://w.test:1984',
+      }).l1Witness?.nodes,
+      ['http://w.test:1984'],
+    );
+    // Empty, as compose passes an unset variable, counts as unset.
+    assert.deepEqual(
+      parseExportConfig({ ...preferred, INDEX_EXPORT_L1_WITNESS_NODES: '' })
+        .l1Witness?.nodes,
+      ['http://a.test:1984', 'http://b.test:1984'],
+    );
+    assert.throws(
+      () =>
+        parseExportConfig({
+          ...BASE,
+          PREFERRED_CHUNK_GET_NODE_URLS: 'ftp://x',
+        }),
+      /PREFERRED_CHUNK_GET_NODE_URLS: ftp:\/\/x is not http\(s\)/,
+    );
   });
 
   it('builds L1 bands alone without a header-check gateway or sources, and refuses an unknown index', () => {
