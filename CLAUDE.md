@@ -22,8 +22,9 @@ caching, ANS-104 bundle unbundling, and multi-source data retrieval.
 | Circular deps / dupes | `yarn deps:ci` / `yarn duplicate:check` |
 
 `build-core.yml` runs on every push (any branch) and runs `build`,
-`lint:check`, `typecheck` and `test:ci`. Its docker build and `test:e2e`
-steps run only on `develop`. `test-core.yml` (manual dispatch only) runs
+`lint:check`, `typecheck` and `test:ci`. Its `test:e2e` step runs only on
+`develop` and `main`; its `images` job publishes `ar-io-core:<sha>` on
+`develop` and `r*` tags. `test-core.yml` (manual dispatch only) runs
 `typecheck` too. Nothing runs on `pull_request`. `yarn build` uses
 `tsconfig.prod.json`, which excludes `*.test.ts`, so `yarn typecheck` is the
 only thing that type-checks test code. It passes with zero errors and CI
