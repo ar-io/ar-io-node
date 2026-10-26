@@ -109,6 +109,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **index-export's memory no longer grows to several times its work.**
+  The service (and the CLI's verifiers) now run with glibc's allocator held
+  to two arenas and returning large frees to the system
+  (`MALLOC_ARENA_MAX=2`, `MALLOC_MMAP_THRESHOLD_=131072`,
+  `MALLOC_TRIM_THRESHOLD_=131072`). A build runs DuckDB query after query
+  in one process, and with glibc's defaults the memory each frees stayed in
+  per-thread arenas: building a 12.0M-item `parquet-l2` band peaked at
+  16.8 GB of anonymous memory though no single query used more than
+  2.6 GB, and denser bands were OOM-killed in 16 GB. The same band now
+  builds at 3.3 GB, about 15% slower, byte-identical. Override with
+  `INDEX_EXPORT_MALLOC_ARENA_MAX`, `INDEX_EXPORT_MALLOC_MMAP_THRESHOLD` and
+  `INDEX_EXPORT_MALLOC_TRIM_THRESHOLD`.
 - **`parquet-l2` layout `l2-2`: the stats derive no longer runs a large
   band out of memory.** Each item's first value of a stat tag was taken
   with `arg_min(tag_value, tag_index)`, an aggregate whose BLOB state
