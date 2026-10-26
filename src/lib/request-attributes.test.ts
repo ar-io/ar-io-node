@@ -27,6 +27,7 @@ describe('Request attributes functions', () => {
     it('should handles hops, origin, and nodeRelease correctly', () => {
       const input: RequestAttributes = {
         hops: 2,
+        clientIps: [],
         origin: 'test-origin',
         originNodeRelease: 'v1.0.0',
       };
@@ -72,6 +73,7 @@ describe('Request attributes functions', () => {
     it('should handles missing origin and nodeVersion correctly', () => {
       const input: RequestAttributes = {
         hops: 2,
+        clientIps: [],
       };
       const expected = {
         headers: {
@@ -89,6 +91,7 @@ describe('Request attributes functions', () => {
     it('should handles ArNS headers correctly', () => {
       const input: RequestAttributes = {
         hops: 1,
+        clientIps: [],
         origin: 'test-origin',
         arnsName: 'test-basename_test-record',
         arnsBasename: 'test-basename',
@@ -281,6 +284,7 @@ describe('Request attributes functions', () => {
     it('should propagate via in headers', () => {
       const input: RequestAttributes = {
         hops: 1,
+        clientIps: [],
         via: ['gateway-a.example.com', 'gateway-b.example.com'],
       };
       const result = generateRequestAttributes(input);
@@ -297,6 +301,7 @@ describe('Request attributes functions', () => {
     it('should omit via header when via is undefined', () => {
       const input: RequestAttributes = {
         hops: 1,
+        clientIps: [],
       };
       const result = generateRequestAttributes(input);
       assert.strictEqual(result?.headers[headerNames.via], undefined);
@@ -306,6 +311,7 @@ describe('Request attributes functions', () => {
     it('should omit via header when via is empty array', () => {
       const input: RequestAttributes = {
         hops: 1,
+        clientIps: [],
         via: [],
       };
       const result = generateRequestAttributes(input);
@@ -338,6 +344,7 @@ describe('Request attributes functions', () => {
     it('should round-trip via through generate and parse', () => {
       const input: RequestAttributes = {
         hops: 1,
+        clientIps: [],
         via: ['gateway-a.example.com', 'gateway-b.example.com'],
       };
       const generated = generateRequestAttributes(input);
@@ -422,7 +429,7 @@ describe('Request attributes functions', () => {
 
     describe('generateRequestAttributes — outbound emission', () => {
       it('emits no hint headers when no hints are populated', () => {
-        const result = generateRequestAttributes({ hops: 1 });
+        const result = generateRequestAttributes({ hops: 1, clientIps: [] });
         assert.ok(result !== undefined);
         assert.strictEqual(
           result.headers[headerNames.rootTransactionId],
@@ -439,6 +446,7 @@ describe('Request attributes functions', () => {
       it('emits Root-Transaction-Id when rootTransactionIdHint is set', () => {
         const result = generateRequestAttributes({
           hops: 1,
+          clientIps: [],
           rootTransactionIdHint: txId,
         });
         assert.ok(result !== undefined);
@@ -449,6 +457,7 @@ describe('Request attributes functions', () => {
       it('emits Root-Path comma-joined when rootPathHint is set', () => {
         const result = generateRequestAttributes({
           hops: 1,
+          clientIps: [],
           rootPathHint: [txId, parentId],
         });
         assert.ok(result !== undefined);
@@ -465,6 +474,7 @@ describe('Request attributes functions', () => {
       it('omits Root-Path when rootPathHint is an empty array', () => {
         const result = generateRequestAttributes({
           hops: 1,
+          clientIps: [],
           rootPathHint: [],
         });
         assert.ok(result !== undefined);
@@ -474,6 +484,7 @@ describe('Request attributes functions', () => {
       it('does not forward Root-Item-Offset or Root-Item-Size', () => {
         const result = generateRequestAttributes({
           hops: 1,
+          clientIps: [],
           rootByteHint: { offset: 12345, size: 6789 },
         });
         assert.ok(result !== undefined);
@@ -488,6 +499,7 @@ describe('Request attributes functions', () => {
       it('forwards root and path hints while dropping the byte hint', () => {
         const result = generateRequestAttributes({
           hops: 1,
+          clientIps: [],
           rootTransactionIdHint: txId,
           rootPathHint: [txId, parentId],
           rootByteHint: { offset: 100, size: 200 },
@@ -546,6 +558,7 @@ describe('Request attributes functions', () => {
       it('preserves root and path hints, but not the byte hint, across one emit/parse cycle', () => {
         const emitted = generateRequestAttributes({
           hops: 1,
+          clientIps: [],
           rootTransactionIdHint: txId,
           rootPathHint: [txId, parentId],
           rootByteHint: { offset: 100, size: 200 },

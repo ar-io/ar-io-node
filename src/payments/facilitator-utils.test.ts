@@ -154,8 +154,17 @@ describe('x402 config exports', () => {
   it('keeps the paywall client key as its own export', () => {
     // Collapsing the two back into one value is the bug; they must stay
     // separately addressable so neither can silently stand in for the other.
-    assert.ok(Object.hasOwn(config, 'X_402_CDP_CLIENT_KEY'));
-    assert.ok(Object.hasOwn(config, 'X_402_CDP_API_KEY_ID'));
-    assert.ok(Object.hasOwn(config, 'X_402_CDP_FACILITATOR_KEY_ID'));
+    assert.ok(
+      Object.prototype.hasOwnProperty.call(config, 'X_402_CDP_CLIENT_KEY'),
+    );
+    assert.ok(
+      Object.prototype.hasOwnProperty.call(config, 'X_402_CDP_API_KEY_ID'),
+    );
+    assert.ok(
+      Object.prototype.hasOwnProperty.call(
+        config,
+        'X_402_CDP_FACILITATOR_KEY_ID',
+      ),
+    );
   });
 });
