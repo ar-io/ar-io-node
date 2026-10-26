@@ -384,6 +384,70 @@ describe('CompositeClickHouseDatabase', () => {
     });
   });
 
+  describe('cursor on a pending row', () => {
+    // In HEIGHT_ASC pending rows (no height) sort after every mined row, so
+    // a pending row's cursor is past all that ClickHouse holds. The stub's
+    // ClickHouse legs answer with mined rows whatever the cursor, as a
+    // height-less cursor narrowed them before: those rows must not come
+    // back, or the walk starts over at the first mined row (#947).
+    const pendingItem = (label: string) =>
+      sqliteEdge({
+        ...sqliteTx({ id: id(label), height: 0, isDataItem: true }),
+        height: null as unknown as number,
+        blockTransactionIndex: null as unknown as number,
+      });
+
+    it('reads only SQLite past a pending cursor (HEIGHT_ASC)', async () => {
+      const composite = buildComposite({
+        sqlite: makeSqliteStub({
+          transactions: {
+            pageInfo: { hasNextPage: false },
+            edges: [pendingItem('q'), pendingItem('r')],
+          },
+        }),
+        queryUnstableHead: true,
+        chRowsByLeg: {
+          stable: [chRow({ id: id('old'), height: 10 })],
+          unstable: [chRow({ id: id('new'), height: 50 })],
+        },
+      });
+
+      const result = await composite.getGqlTransactions({
+        pageSize: 10,
+        sortOrder: 'HEIGHT_ASC',
+        cursor: pendingItem('p').cursor,
+      });
+      assert.deepEqual(
+        result.edges.map((e) => e.node.id),
+        [id('q'), id('r')],
+      );
+      assert.equal(result.pageInfo.hasNextPage, false);
+    });
+
+    it('still reads ClickHouse past a pending cursor (HEIGHT_DESC)', async () => {
+      // In HEIGHT_DESC pending rows come first: every mined row follows.
+      const composite = buildComposite({
+        sqlite: makeSqliteStub({
+          transactions: {
+            pageInfo: { hasNextPage: false },
+            edges: [pendingItem('q')],
+          },
+        }),
+        chRowsByLeg: { stable: [chRow({ id: id('old'), height: 10 })] },
+      });
+
+      const result = await composite.getGqlTransactions({
+        pageSize: 10,
+        sortOrder: 'HEIGHT_DESC',
+        cursor: pendingItem('p').cursor,
+      });
+      assert.deepEqual(
+        result.edges.map((e) => e.node.id),
+        [id('q'), id('old')],
+      );
+    });
+  });
+
   describe('pending L1 transactions', () => {
     // SQLite orders and pages pending (height-less) L1 transactions by
     // indexed_at, then id. The merge must keep that order, or the page's

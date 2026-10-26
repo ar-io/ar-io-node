@@ -1483,12 +1483,23 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
     let stableSaturated = false;
     let unstableSaturated = false;
 
+    // A pending row's cursor (no height) is past every mined row in
+    // ascending order, where pending rows sort last. Both ClickHouse legs
+    // hold only mined rows, and a height-less cursor would not narrow them:
+    // they would start over from the first row (#947).
+    const pastMinedRows =
+      sortOrder === 'HEIGHT_ASC' &&
+      cursor !== undefined &&
+      cursor !== '' &&
+      decodeTransactionGqlCursor(cursor).height == null;
+
     // STABLE LEG — `transactions`. Always queried; this is CH's primary
     // role and any failure here surfaces to the caller (fail-fast). When the
     // id lookup is enabled, `ids` / `bundledIn` are first resolved to primary
     // keys through `transaction_ids` (inside this leg, so the other legs don't
     // wait on it).
     const chStablePromise = (async () => {
+      if (pastMinedRows) return [];
       const { pkPrefix, noMatches } = await this.resolveStablePkPrefix({
         ids,
         bundledIn,
@@ -1607,6 +1618,7 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
       GqlTransactionsResult['edges'][0]['node'][]
     > = this.queryUnstableHead
       ? (async () => {
+          if (pastMinedRows) return [];
           const buildUnstableSql = (roundCursor: string | undefined) => {
             const unstableQuery = this.getGqlUnstableTransactionsBaseSql();
             this.addGqlTransactionFilters({
