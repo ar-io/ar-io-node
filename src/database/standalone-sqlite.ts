@@ -3075,6 +3075,14 @@ export class StandaloneSqliteDatabaseWorker {
     l1Only?: boolean;
   }) {
     let txs: GqlTransaction[] = [];
+    // Each leg returns up to pageSize + 1 rows, the extra one telling
+    // hasNextPage; the next leg is read until that row is had.
+    const needMore = () => txs.length <= pageSize;
+    // A pending row's cursor (no height) is past every mined row in
+    // ascending order (NULLS LAST): the stable tables hold nothing after it,
+    // and a height-less cursor would not narrow them at all.
+    const pastMinedRows =
+      !!cursor && decodeTransactionGqlCursor(cursor).height == null;
 
     if (sortOrder === 'HEIGHT_DESC') {
       txs = this.getGqlNewTransactions({
@@ -3091,7 +3099,7 @@ export class StandaloneSqliteDatabaseWorker {
         l1Only,
       });
 
-      if (txs.length < pageSize) {
+      if (needMore()) {
         const lastTxHeight = txs[txs.length - 1]?.height;
         txs = txs.concat(
           this.getGqlStableTransactions({
@@ -3111,21 +3119,23 @@ export class StandaloneSqliteDatabaseWorker {
         );
       }
     } else {
-      txs = this.getGqlStableTransactions({
-        pageSize,
-        cursor,
-        sortOrder,
-        ids,
-        recipients,
-        owners,
-        minHeight,
-        maxHeight,
-        bundledIn,
-        tags,
-        l1Only,
-      });
+      txs = pastMinedRows
+        ? []
+        : this.getGqlStableTransactions({
+            pageSize,
+            cursor,
+            sortOrder,
+            ids,
+            recipients,
+            owners,
+            minHeight,
+            maxHeight,
+            bundledIn,
+            tags,
+            l1Only,
+          });
 
-      if (txs.length < pageSize) {
+      if (needMore()) {
         const lastTxHeight = txs[txs.length - 1]?.height;
         txs = txs.concat(
           this.getGqlNewTransactions({

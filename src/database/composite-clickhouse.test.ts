@@ -384,6 +384,47 @@ describe('CompositeClickHouseDatabase', () => {
     });
   });
 
+  describe('pending L1 transactions', () => {
+    // SQLite orders and pages pending (height-less) L1 transactions by
+    // indexed_at, then id. The merge must keep that order, or the page's
+    // last cursor is not the last row SQLite gave and the next page skips
+    // or repeats rows (#947). id('a') < id('b') < id('c'); their indexed_at
+    // order is the reverse.
+    const pending = (label: string, indexedAt: number) =>
+      sqliteEdge({
+        ...sqliteTx({ id: id(label), height: 0, indexedAt }),
+        height: null as unknown as number,
+        blockTransactionIndex: null as unknown as number,
+      });
+
+    for (const [sortOrder, order] of [
+      ['HEIGHT_DESC', ['a', 'b', 'c']],
+      ['HEIGHT_ASC', ['c', 'b', 'a']],
+    ] as const) {
+      it(`keeps SQLite's indexed_at order (${sortOrder})`, async () => {
+        const indexedAt: Record<string, number> = { a: 300, b: 200, c: 100 };
+        const composite = buildComposite({
+          sqlite: makeSqliteStub({
+            transactions: {
+              pageInfo: { hasNextPage: false },
+              edges: order.map((label) => pending(label, indexedAt[label])),
+            },
+          }),
+          chRowsByLeg: {},
+        });
+
+        const result = await composite.getGqlTransactions({
+          pageSize: 10,
+          sortOrder,
+        });
+        assert.deepEqual(
+          result.edges.map((e) => e.node.id),
+          order.map((label) => id(label)),
+        );
+      });
+    }
+  });
+
   describe('hasNextPage', () => {
     it('is true when combined results exceed pageSize', async () => {
       const composite = buildComposite({
