@@ -4,10 +4,46 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased]
+## [Release 87] - 2026-10-26
+
+This is a **recommended release** focused on **index builds that fit
+ordinary gateways, chain-bound L1 witnesses, and data correctness**. Key
+highlights include index-export's memory held near its work by holding
+glibc's allocator to two arenas (a 12M-item `parquet-l2` band now builds
+at 3.3 GB instead of 16.8 GB) and DuckDB running one thread by default,
+avoiding a DuckDB 1.4 crash in large spilled aggregates; a `parquet-l2`
+band size cap that keeps dense ranges as sub-range bands; `parquet-l1`
+layout `l1-4`, whose witness files bind format-1 and pre-2.0 blocks to the
+chain, built by index-export; `ar-io-node index-census` to find items the
+indexer indexed but ClickHouse never received, and a ClickHouse import fix
+so the prune no longer drops unexported items; GraphQL pages that no
+longer lose or repeat transactions where pending and mined rows meet; and
+security updates to `multer`, `undici`, `express`/`body-parser`,
+`form-data` and `ajv`. Gateways that subscribe to `parquet-l1` need this
+release to take bands published as `l1-4`.
+
+### Security
+
+- Dependency updates for advisories in the HTTP and fetch stack, none
+  imported by gateway code directly: `multer` 2.5.0 (DoS via a pending
+  async file, orphaned disk writes), `undici` 7.30.1 (DoS on excessive
+  errors, unbounded `EventSource` memory, SRI bypass), `express` 4.22.3
+  with `body-parser` 1.20.9 (DoS via trailing bytes) and `body-parser`
+  2.4.0 under `@apollo/server`, `form-data` 3.0.5 (CRLF injection in
+  multipart field names), `ajv` 8.20.0 (ReDoS with `$data`), `fast-uri`
+  3.1.9 and `stream-json` 3.7.0. `yarn audit` of production dependencies
+  shows no high or critical advisory new since Release 86; those left
+  are in build tooling (`node-gyp`) and SDK response validation (`zod`).
 
 ### Added
 
+- **`ar-io-node index-census`: check ClickHouse holds every item the
+  indexer indexed.** Read-only on `bundles.db` and ClickHouse: it compares
+  each root's matched item count with the distinct ids ClickHouse holds
+  under it, then lists the missing ids, so lost rows can be re-queued.
+  On turbo-gateway.com it found 1.41 million items unbundled April–June
+  2026 missing from ClickHouse on both nodes. See
+  [docs/cli.md](docs/cli.md#index-census).
 - **`parquet-l2` band size cap (`INDEX_EXPORT_L2_MAX_BAND_ITEMS`, default
   10,000,000).** A 100,000-height range is one band only while it holds at
   most that many items; above it the range stays as its twenty
@@ -88,7 +124,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **`index-export` builds `l1-4` witnesses** for new bands and adds them
   to published `l1-3` bands in place, from v1 roots in a witness directory
   and Arweave nodes (`INDEX_EXPORT_L1_WITNESS_DIR`,
-  `INDEX_EXPORT_L1_WITNESS_NODES`),
+  `INDEX_EXPORT_L1_WITNESS_NODES`; unset, the core's
+  `PREFERRED_CHUNK_GET_NODE_URLS`, else its default tip and data nodes,
+  each asked through the node pool so a dead node rests instead of
+  costing every chunk a timeout),
   keeping only what the chain confirms and judging the band with them, as
   its consumers do, before anything is published. Reported as
   `l1Witnessed` and `index_export_runs_total{kind="witness"}`. See
@@ -121,6 +160,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **The ClickHouse import no longer prunes items it has not exported.**
+  The prune threshold was the newest `indexed_at` of a stable data item,
+  but the flush copies `indexed_at` from when an item was first indexed,
+  so an item unbundled earlier (or re-queued) and flushed while a batch
+  exported landed below the threshold after the export had read its
+  range: it was pruned from SQLite, never reached ClickHouse, and its
+  bundle stayed fully indexed, so nothing retried it. Stable items now
+  carry `stable_at`, stamped by the flush itself, and the prune follows
+  it. Adds a nullable column to `stable_data_items` in `bundles.db`
+  (instant; migration `2026.10.21T00.00.00`).
+- **On-demand data items' signature and owner offsets are stored on the
+  same base as their data.** An item found through the root-tx index and
+  read from its bundle had `offset` and `data_offset` stored relative to
+  the root but `signature_offset` and `owner_offset` relative to the item,
+  so GraphQL's `signature` and `owner` for it returned the bundle's own
+  header bytes.
+- **GraphQL pages no longer lose or repeat transactions where pending and
+  mined rows meet** ([#947](https://github.com/ar-io/ar-io-node/issues/947)).
+  Pending rows are walked by the full sort tuple, NULL heights sort the
+  same in the merged query as in each leg, an ascending walk reaches the
+  pending rows after the mined ones, a new data item's cursor carries its
+  own id, and the second leg is read until the page's look-ahead row is
+  had. Thanks to @saravanan619 (#1096).
+- The abort-signal middleware no longer assigns `req.signal`, which Node
+  24 defines as a getter: on Node 24 every request would have failed with
+  a 500. The gateway's own signal (aborted only when the client leaves
+  before the response) is kept.
 - **index-export's memory no longer grows to several times its work.**
   The service (and the CLI's verifiers) now run with glibc's allocator held
   to two arenas and returning large frees to the system
