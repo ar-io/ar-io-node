@@ -281,7 +281,7 @@ describe('parseExportConfig, parquet-l2', () => {
     assert.equal(config.l2RunBudgetMs, undefined);
     assert.deepEqual(config.l2Duck, {
       memoryLimit: '2GB',
-      threads: 2,
+      threads: 1,
       spillMaxGb: 256,
     });
     assert.equal(config.l2WindowItems, 50_000);

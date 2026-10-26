@@ -103,6 +103,7 @@ import {
   OwnerNotes,
   resolveOwnerKeys,
 } from './wallets.js';
+import { DEFAULT_DUCKDB_THREADS } from '../../../lib/duckdb-threads.js';
 
 /**
  * Header-check samples: how many entries to read, general and per placement
@@ -132,7 +133,7 @@ export interface L2DuckLimits {
 
 export const DEFAULT_L2_DUCK_LIMITS: L2DuckLimits = {
   memoryLimit: '2GB',
-  threads: 2,
+  threads: DEFAULT_DUCKDB_THREADS,
   spillMaxGb: 256,
 };
 

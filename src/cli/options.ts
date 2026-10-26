@@ -226,6 +226,11 @@ export const optionMap = {
     description:
       "Seeds --onchain's sample, to repeat a run (the result reports the seed it drew when none is given)",
   },
+  duckdbThreads: {
+    alias: '--duckdb-threads <n>',
+    description:
+      "DuckDB's threads per database, 1 to 64 (default 1). More can be faster, but DuckDB 1.4, the newest the Node binding has, can crash (SIGSEGV) merging a large aggregate that spilled while running on more than one (duckdb/duckdb#23757). The result is the same at any value",
+  },
   spillMax: {
     alias: '--spill-max <size>',
     description:
@@ -289,7 +294,7 @@ export const optionMap = {
   l2Concurrency: {
     alias: '--concurrency <n>',
     description:
-      'How many DuckDB databases check side by side, two threads and 2GB of memory each: bands, and the tables and lookups of a band, are read on them at once, sharing the spill cap (default: a quarter of the CPUs, at most 4, at least 1). At most 16, and at most UV_THREADPOOL_SIZE less 2: each database holds a libuv thread while it reads, and DNS and file reads need the rest (tools/ar-io-node sets UV_THREADPOOL_SIZE=16). The result is the same at any value',
+      'How many DuckDB databases check side by side, --duckdb-threads threads (one unless asked) and 2GB of memory each: bands, and the tables and lookups of a band, are read on them at once, sharing the spill cap (default: a quarter of the CPUs, at most 4, at least 1). At most 16, and at most UV_THREADPOOL_SIZE less 2: each database holds a libuv thread while it reads, and DNS and file reads need the rest (tools/ar-io-node sets UV_THREADPOOL_SIZE=16). The result is the same at any value',
   },
   l2SkipLookups: {
     alias: '--skip-lookups',
@@ -425,6 +430,7 @@ export const indexL1ImportOptions: CommanderOption[] = [
   optionMap.sampleConcurrency,
   optionMap.readTimeout,
   optionMap.spillMax,
+  optionMap.duckdbThreads,
   optionMap.spillReserveGb,
 ];
 
@@ -434,6 +440,7 @@ export const indexL1VerifyOptions: CommanderOption[] = [
   optionMap.skipTxRoot,
   optionMap.skipLookups,
   optionMap.spillMax,
+  optionMap.duckdbThreads,
   optionMap.spillReserveGb,
   optionMap.fromHeight,
   optionMap.toHeight,
@@ -469,6 +476,7 @@ export const indexL2VerifyOptions: CommanderOption[] = [
   optionMap.toHeight,
   optionMap.l2SkipLookups,
   optionMap.spillMax,
+  optionMap.duckdbThreads,
   optionMap.l2Publication,
   optionMap.l2PublisherKey,
   optionMap.l2RegistryUrl,
