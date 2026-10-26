@@ -13,7 +13,6 @@ import { default as Arweave } from 'arweave';
 import { ArweaveCompositeClient } from './composite-client.js';
 import { toB64Url } from '../lib/encoding.js';
 import { UniformFailureSimulator } from '../lib/chaos.js';
-import { ArweavePeerManager } from '../peers/arweave-peer-manager.js';
 import * as config from '../config.js';
 import * as metrics from '../metrics.js';
 import log from '../log.js';
@@ -354,8 +353,9 @@ describe('ArweaveCompositeClient', () => {
 
       const client = createTestClient({ preferredChunkGetUrls });
 
-      // Test that peer manager's getPeerUrls is called correctly
-      const getChunkPeers = mockPeerManager.getPeerUrls('getChunk');
+      // The client delegates peer selection to its injected peer manager
+      assert.strictEqual(client.peerManager, mockPeerManager);
+      const getChunkPeers = client.peerManager.getPeerUrls('getChunk');
       assert.equal(getChunkPeers.length, 2);
       assert.equal(getChunkPeers[0], 'http://peer1.example.com');
       assert.equal(getChunkPeers[1], 'http://peer2.example.com');
@@ -370,9 +370,10 @@ describe('ArweaveCompositeClient', () => {
       const client = createTestClient({ preferredChunkGetUrls });
 
       // Test that different peer categories return different results
-      const getChunkPeers = mockPeerManager.getPeerUrls('getChunk');
-      const chainPeers = mockPeerManager.getPeerUrls('chain');
-      const postChunkPeers = mockPeerManager.getPeerUrls('postChunk');
+      assert.strictEqual(client.peerManager, mockPeerManager);
+      const getChunkPeers = client.peerManager.getPeerUrls('getChunk');
+      const chainPeers = client.peerManager.getPeerUrls('chain');
+      const postChunkPeers = client.peerManager.getPeerUrls('postChunk');
 
       // Only chunk GET peers should be initialized with preferred URLs
       assert.equal(getChunkPeers.length, 2);
@@ -383,14 +384,15 @@ describe('ArweaveCompositeClient', () => {
 
     it('should work without preferred chunk GET URLs', () => {
       // Update mock to return empty array when no preferred URLs
-      mockPeerManager.getPeerUrls = mock.fn((category?: string) => {
+      mockPeerManager.getPeerUrls = mock.fn(() => {
         return [];
       });
 
       const client = createTestClient();
 
       // Test that no peers are returned when none are configured
-      const getChunkPeers = mockPeerManager.getPeerUrls('getChunk');
+      assert.strictEqual(client.peerManager, mockPeerManager);
+      const getChunkPeers = client.peerManager.getPeerUrls('getChunk');
       assert.equal(getChunkPeers.length, 0);
     });
 

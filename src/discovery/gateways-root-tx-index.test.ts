@@ -124,7 +124,7 @@ describe('GatewaysRootTxIndex', () => {
       });
 
       // Prefill rate limiters for all gateways
-      for (const [url, limiter] of (gatewaysIndex as any)['limiters']) {
+      for (const [, limiter] of (gatewaysIndex as any)['limiters']) {
         limiter.content = limiter.bucketSize;
       }
 
@@ -174,7 +174,7 @@ describe('GatewaysRootTxIndex', () => {
       });
 
       // Prefill rate limiters for all gateways
-      for (const [url, limiter] of (gatewaysIndex as any)['limiters']) {
+      for (const [, limiter] of (gatewaysIndex as any)['limiters']) {
         limiter.content = limiter.bucketSize;
       }
 
@@ -223,7 +223,7 @@ describe('GatewaysRootTxIndex', () => {
       });
 
       // Prefill rate limiters for all gateways
-      for (const [url, limiter] of (gatewaysIndex as any)['limiters']) {
+      for (const [, limiter] of (gatewaysIndex as any)['limiters']) {
         limiter.content = limiter.bucketSize;
       }
 
@@ -271,7 +271,7 @@ describe('GatewaysRootTxIndex', () => {
       });
 
       // Prefill rate limiters for all gateways
-      for (const [url, limiter] of (gatewaysIndex as any)['limiters']) {
+      for (const [, limiter] of (gatewaysIndex as any)['limiters']) {
         limiter.content = limiter.bucketSize;
       }
 
@@ -309,7 +309,7 @@ describe('GatewaysRootTxIndex', () => {
       });
 
       // Prefill rate limiters for all gateways
-      for (const [url, limiter] of (gatewaysIndex as any)['limiters']) {
+      for (const [, limiter] of (gatewaysIndex as any)['limiters']) {
         limiter.content = limiter.bucketSize;
       }
 
@@ -335,7 +335,7 @@ describe('GatewaysRootTxIndex', () => {
           ),
           // What a server really sends for `Range: bytes=0-0`: the length of
           // the one returned byte, with the payload size only in the total.
-          get: mock.fn(() =>
+          get: mock.fn((_url: string, _config?: { headers?: unknown }) =>
             Promise.resolve({
               status: 206,
               headers: {
@@ -377,7 +377,7 @@ describe('GatewaysRootTxIndex', () => {
         // GET must request the smallest legal range so we get headers
         // back without pulling the body.
         const getCall = mockAxiosInstance.get.mock.calls[0];
-        assert.deepEqual((getCall.arguments[1] as any).headers, {
+        assert.deepEqual(getCall.arguments[1]?.headers, {
           Range: 'bytes=0-0',
         });
         // Sizes come from the Content-Range total, not the 1-byte
@@ -607,7 +607,7 @@ describe('GatewaysRootTxIndex', () => {
       });
 
       // Prefill rate limiters for all gateways
-      for (const [url, limiter] of (gatewaysIndex as any)['limiters']) {
+      for (const [, limiter] of (gatewaysIndex as any)['limiters']) {
         limiter.content = limiter.bucketSize;
       }
 
@@ -676,7 +676,7 @@ describe('GatewaysRootTxIndex', () => {
       });
 
       // Prefill rate limiters for all gateways
-      for (const [url, limiter] of (gatewaysIndex as any)['limiters']) {
+      for (const [, limiter] of (gatewaysIndex as any)['limiters']) {
         limiter.content = limiter.bucketSize;
       }
 
@@ -733,7 +733,7 @@ describe('GatewaysRootTxIndex', () => {
       });
 
       // Prefill rate limiters for all gateways
-      for (const [url, limiter] of (gatewaysIndex as any)['limiters']) {
+      for (const [, limiter] of (gatewaysIndex as any)['limiters']) {
         limiter.content = limiter.bucketSize;
       }
 
@@ -798,7 +798,7 @@ describe('GatewaysRootTxIndex', () => {
       });
 
       // Prefill rate limiters for all gateways
-      for (const [url, limiter] of (gatewaysIndex as any)['limiters']) {
+      for (const [, limiter] of (gatewaysIndex as any)['limiters']) {
         limiter.content = limiter.bucketSize;
       }
 
