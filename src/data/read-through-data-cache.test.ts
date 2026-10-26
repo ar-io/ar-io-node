@@ -11,10 +11,10 @@ import { Readable, Writable } from 'node:stream';
 import {
   ContiguousData,
   ContiguousDataAttributes,
+  ContiguousDataAttributesStore,
   ContiguousDataIndex,
   ContiguousDataSource,
   ContiguousDataStore,
-  DataAttributesSource,
   RequestAttributes,
 } from '../types.js';
 import {
@@ -36,7 +36,7 @@ describe('ReadThroughDataCache', function () {
   let mockContiguousDataSource: ContiguousDataSource;
   let mockContiguousDataStore: ContiguousDataStore;
   let mockContiguousDataIndex: ContiguousDataIndex;
-  let mockDataAttributesStore: DataAttributesSource;
+  let mockDataAttributesStore: ContiguousDataAttributesStore;
   let mockDataContentAttributeImporter: DataContentAttributeImporter;
   let readThroughDataCache: ReadThroughDataCache;
   let requestAttributes: RequestAttributes;
@@ -132,6 +132,7 @@ describe('ReadThroughDataCache', function () {
         if (id === 'knownId') {
           return {
             size: 100,
+            offset: 0,
             contentType: undefined,
             isManifest: false,
             stable: false,
@@ -140,6 +141,9 @@ describe('ReadThroughDataCache', function () {
           };
         }
         return undefined;
+      },
+      setDataAttributes: async () => {
+        return;
       },
     };
 
@@ -166,6 +170,7 @@ describe('ReadThroughDataCache', function () {
     requestAttributes = {
       origin: 'node-url',
       hops: 0,
+      clientIps: [],
     };
   });
 
@@ -713,6 +718,7 @@ describe('ReadThroughDataCache', function () {
         dataStore: mockContiguousDataStore,
         metadataStore: makeContiguousMetadataStore({ log, type: 'node' }),
         contiguousDataIndex: mockContiguousDataIndex,
+        dataAttributesStore: mockDataAttributesStore,
         dataContentAttributeImporter: mockDataContentAttributeImporter,
         skipCacheWrites: true,
       });
@@ -796,6 +802,7 @@ describe('ReadThroughDataCache', function () {
         dataStore: mockContiguousDataStore,
         metadataStore: makeContiguousMetadataStore({ log, type: 'node' }),
         contiguousDataIndex: mockContiguousDataIndex,
+        dataAttributesStore: mockDataAttributesStore,
         dataContentAttributeImporter: mockDataContentAttributeImporter,
         skipCache: true,
       });
@@ -822,6 +829,7 @@ describe('ReadThroughDataCache', function () {
         dataStore: mockContiguousDataStore,
         metadataStore: makeContiguousMetadataStore({ log, type: 'node' }),
         contiguousDataIndex: mockContiguousDataIndex,
+        dataAttributesStore: mockDataAttributesStore,
         dataContentAttributeImporter: mockDataContentAttributeImporter,
         skipCache: true,
       });
@@ -1011,7 +1019,7 @@ describe('ReadThroughDataCache', function () {
         },
       );
 
-      mock.method(mockContiguousDataSource, 'getData', (args: any) => {
+      mock.method(mockContiguousDataSource, 'getData', () => {
         return Promise.resolve({
           stream: new Readable({
             read() {
@@ -1086,7 +1094,7 @@ describe('ReadThroughDataCache', function () {
         },
       );
 
-      mock.method(mockContiguousDataSource, 'getData', (args: any) => {
+      mock.method(mockContiguousDataSource, 'getData', () => {
         return Promise.resolve({
           stream: new Readable({
             read() {
@@ -1205,7 +1213,7 @@ describe('ReadThroughDataCache', function () {
         dataStore: mockContiguousDataStore,
         metadataStore: makeContiguousMetadataStore({ log, type: 'node' }),
         contiguousDataIndex: mockContiguousDataIndex,
-        dataAttributesStore: mockDataAttributesStore as any,
+        dataAttributesStore: mockDataAttributesStore,
         dataContentAttributeImporter: mockDataContentAttributeImporter,
         eventEmitter,
       });
@@ -1334,7 +1342,7 @@ describe('ReadThroughDataCache', function () {
       });
 
       // Consume the stream
-      for await (const chunk of result.stream) {
+      for await (const _chunk of result.stream) {
         // drain
       }
 
@@ -1417,7 +1425,7 @@ describe('ReadThroughDataCache', function () {
       });
 
       // Consume the stream
-      for await (const chunk of result.stream) {
+      for await (const _chunk of result.stream) {
         // drain
       }
 
@@ -1475,7 +1483,7 @@ describe('ReadThroughDataCache', function () {
         region,
       });
 
-      for await (const chunk of result.stream) {
+      for await (const _chunk of result.stream) {
         // drain
       }
 
@@ -1538,7 +1546,7 @@ describe('ReadThroughDataCache', function () {
         region,
       });
 
-      for await (const chunk of result.stream) {
+      for await (const _chunk of result.stream) {
         // drain
       }
 
@@ -1625,7 +1633,7 @@ describe('ReadThroughDataCache', function () {
         requestAttributes,
         region,
       });
-      for await (const chunk of result1.stream) {
+      for await (const _chunk of result1.stream) {
         // drain
       }
 
@@ -1635,7 +1643,7 @@ describe('ReadThroughDataCache', function () {
         requestAttributes,
         region,
       });
-      for await (const chunk of result2.stream) {
+      for await (const _chunk of result2.stream) {
         // drain
       }
 
@@ -1731,7 +1739,7 @@ describe('ReadThroughDataCache', function () {
         requestAttributes,
         region,
       });
-      for await (const chunk of result1.stream) {
+      for await (const _chunk of result1.stream) {
         // drain
       }
 
@@ -1744,7 +1752,7 @@ describe('ReadThroughDataCache', function () {
         requestAttributes,
         region,
       });
-      for await (const chunk of result2.stream) {
+      for await (const _chunk of result2.stream) {
         // drain
       }
 
@@ -1883,7 +1891,7 @@ describe('ReadThroughDataCache', function () {
         region,
       });
 
-      for await (const chunk of result.stream) {
+      for await (const _chunk of result.stream) {
         // drain
       }
 
@@ -1947,7 +1955,7 @@ describe('ReadThroughDataCache', function () {
         requestAttributes,
       });
 
-      for await (const chunk of result.stream) {
+      for await (const _chunk of result.stream) {
         // drain
       }
 
@@ -1975,7 +1983,7 @@ describe('ReadThroughDataCache', function () {
       );
 
       let getDataCallCount = 0;
-      mock.method(mockContiguousDataSource, 'getData', (params: any) => {
+      mock.method(mockContiguousDataSource, 'getData', () => {
         getDataCallCount++;
         return Promise.resolve({
           stream: new Readable({
@@ -2013,7 +2021,7 @@ describe('ReadThroughDataCache', function () {
         region,
       });
 
-      for await (const chunk of result.stream) {
+      for await (const _chunk of result.stream) {
         // drain
       }
 
@@ -2090,7 +2098,7 @@ describe('ReadThroughDataCache', function () {
         region,
       });
 
-      for await (const chunk of result.stream) {
+      for await (const _chunk of result.stream) {
         // drain
       }
 

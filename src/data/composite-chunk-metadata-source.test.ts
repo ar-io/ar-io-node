@@ -24,9 +24,9 @@ const TEST_PARAMS: ChunkDataByAnySourceParams = {
 
 const TEST_CHUNK_METADATA: ChunkMetadata = {
   offset: 51530681327863,
-  dataRoot: Buffer.from('test-data-root'),
-  dataSize: 256000,
-  dataPath: Buffer.from('test-data-path'),
+  data_root: Buffer.from('test-data-root'),
+  data_size: 256000,
+  data_path: Buffer.from('test-data-path'),
   hash: Buffer.from('test-hash'),
 };
 
@@ -42,9 +42,7 @@ class MockChunkMetadataSource implements ChunkMetadataByAnySource {
     this.delay = delay;
   }
 
-  async getChunkMetadataByAny(
-    params: ChunkDataByAnySourceParams,
-  ): Promise<ChunkMetadata> {
+  async getChunkMetadataByAny(): Promise<ChunkMetadata> {
     this.callCount++;
     if (this.delay > 0) {
       await new Promise((resolve) => setTimeout(resolve, this.delay));
@@ -196,9 +194,7 @@ describe('CompositeChunkMetadataSource', () => {
           parallelism: 3,
         });
 
-        const start = Date.now();
         const result = await composite.getChunkMetadataByAny(TEST_PARAMS);
-        const duration = Date.now() - start;
 
         // Last source (source9) succeeds
         assert.equal(result.hash.toString(), 'source9-hash');
@@ -280,9 +276,7 @@ describe('CompositeChunkMetadataSource', () => {
         const source1 = new MockChunkMetadataSource('source1', false, 10);
 
         class CheckingSource implements ChunkMetadataByAnySource {
-          async getChunkMetadataByAny(
-            params: ChunkDataByAnySourceParams,
-          ): Promise<ChunkMetadata> {
+          async getChunkMetadataByAny(): Promise<ChunkMetadata> {
             lateSourceStarted = true;
             await new Promise((resolve) => setTimeout(resolve, 100));
             return TEST_CHUNK_METADATA;

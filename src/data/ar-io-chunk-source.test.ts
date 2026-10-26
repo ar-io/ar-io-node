@@ -61,7 +61,11 @@ describe('ArIOChunkSource', () => {
       await assert.rejects(
         arIOChunkSource.getChunkByAny({
           ...testChunkParams,
-          requestAttributes: { hops: 0, skipRemoteForwarding: true },
+          requestAttributes: {
+            hops: 0,
+            clientIps: [],
+            skipRemoteForwarding: true,
+          },
         }),
         /Remote forwarding skipped for compute-origin request/,
       );
@@ -74,6 +78,7 @@ describe('ArIOChunkSource', () => {
       await assert.rejects(
         arIOChunkSource.getUnvalidatedChunk(12345, {
           hops: 0,
+          clientIps: [],
           skipRemoteForwarding: true,
         }),
         /Remote forwarding skipped for compute-origin request/,

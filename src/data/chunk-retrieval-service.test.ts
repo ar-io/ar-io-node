@@ -8,7 +8,7 @@ import { strict as assert } from 'node:assert';
 import { afterEach, before, describe, it, mock } from 'node:test';
 
 import { createTestLogger } from '../../test/test-logger.js';
-import { fromB64Url, toB64Url } from '../lib/encoding.js';
+import { fromB64Url } from '../lib/encoding.js';
 import {
   Chunk,
   ChunkByAnySource,
@@ -84,6 +84,7 @@ const createMockChunkDataStore = (): ChunkDataStore => ({
   get: mock.fn(async () => undefined),
   set: mock.fn(async () => {}),
   has: mock.fn(async () => false),
+  del: mock.fn(async () => {}),
   getByAbsoluteOffset: mock.fn(async () => undefined),
 });
 
@@ -91,6 +92,7 @@ const createMockChunkMetadataStore = (): ChunkMetadataStore => ({
   get: mock.fn(async () => undefined),
   set: mock.fn(async () => {}),
   has: mock.fn(async () => false),
+  del: mock.fn(async () => {}),
   getByAbsoluteOffset: mock.fn(async () => undefined),
 });
 

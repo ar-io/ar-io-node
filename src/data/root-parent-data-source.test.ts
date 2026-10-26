@@ -19,6 +19,7 @@ import {
   ContiguousDataSource,
   ContiguousDataAttributesStore,
   DataItemRootIndex,
+  RequestAttributes,
 } from '../types.js';
 import { DataItemVerificationError } from '../lib/data-item-signature.js';
 import { createTestLogger } from '../../test/test-logger.js';
@@ -643,7 +644,9 @@ describe('RootParentDataSource', () => {
       const rootTxId = 'root-tx-id';
       const dataStream = Readable.from([Buffer.from('test data')]);
 
-      const requestAttributes = {
+      const requestAttributes: RequestAttributes = {
+        hops: 0,
+        clientIps: [],
         arnsName: 'test-name',
         arnsBasename: 'test-basename',
       };
@@ -1741,7 +1744,6 @@ describe('RootParentDataSource', () => {
       const dataItemId = 'cached-item';
       const parentId = 'parent';
       const rootId = 'root-tx';
-      const dataStream = Readable.from([Buffer.from('cached data')]);
 
       // Track whether offsets have been computed yet
       let offsetsComputed = false;
@@ -1906,6 +1908,7 @@ describe('RootParentDataSource', () => {
       const result = await rootParentDataSource.getData({
         id: dataItemId,
         requestAttributes: {
+          hops: 0,
           rootTransactionIdHint: hintRootTxId,
           clientIps: [],
         },
@@ -1981,6 +1984,7 @@ describe('RootParentDataSource', () => {
       const result = await rootParentDataSource.getData({
         id: dataItemId,
         requestAttributes: {
+          hops: 0,
           rootTransactionIdHint: hintRootTxId,
           clientIps: [],
         },
@@ -2037,6 +2041,7 @@ describe('RootParentDataSource', () => {
       const result = await rootParentDataSource.getData({
         id: dataItemId,
         requestAttributes: {
+          hops: 0,
           rootTransactionIdHint: hintRootTxId,
           clientIps: [],
         },
@@ -2086,6 +2091,7 @@ describe('RootParentDataSource', () => {
       const result = await rootParentDataSource.getData({
         id: dataItemId,
         requestAttributes: {
+          hops: 0,
           rootTransactionIdHint: hintRootTxId,
           rootPathHint: hintPath,
           clientIps: [],
@@ -2146,6 +2152,7 @@ describe('RootParentDataSource', () => {
       const result = await rootParentDataSource.getData({
         id: dataItemId,
         requestAttributes: {
+          hops: 0,
           rootTransactionIdHint: hintRootTxId,
           clientIps: [],
         },
@@ -2501,6 +2508,7 @@ describe('RootParentDataSource', () => {
       const result = await rootParentDataSource.getData({
         id: dataItemId,
         requestAttributes: {
+          hops: 0,
           rootTransactionIdHint: hintRootTxId,
           rootByteHint: { offset: 9999, size: 100 },
           clientIps: [],
@@ -2563,6 +2571,7 @@ describe('RootParentDataSource', () => {
       const result = await rootParentDataSource.getData({
         id: dataItemId,
         requestAttributes: {
+          hops: 0,
           rootTransactionIdHint: hintRootTxId,
           rootByteHint: { offset: 5000, size: 200 },
           clientIps: [],
@@ -2624,6 +2633,7 @@ describe('RootParentDataSource', () => {
       await rootParentDataSource.getData({
         id: dataItemId,
         requestAttributes: {
+          hops: 0,
           rootTransactionIdHint: hintRootTxId,
           // rootByteHint intentionally omitted (offset without size)
           clientIps: [],
