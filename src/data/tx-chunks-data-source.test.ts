@@ -47,7 +47,7 @@ describe('TxChunksDataSource', () => {
       chainSource,
       chunkSource,
     });
-    requestAttributes = { origin: 'node-url', hops: 0 };
+    requestAttributes = { origin: 'node-url', hops: 0, clientIps: [] };
   });
 
   beforeEach(() => {
@@ -532,7 +532,8 @@ describe('TxChunksDataSource', () => {
         'getChunkByAny',
         async (params: any, signal?: AbortSignal) => {
           receivedSignals.push(signal);
-          return rangeMock(params, signal);
+          // The range mock wraps the stub, which takes no signal.
+          return rangeMock(params);
         },
       );
 

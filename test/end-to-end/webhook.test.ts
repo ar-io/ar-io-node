@@ -19,8 +19,6 @@ import axios from 'axios';
 import { cleanDb, getCoreContainer } from './utils.js';
 import { isTestFiltered } from '../utils.js';
 
-const projectRootPath = process.cwd();
-
 describe('WebhookEmitter', { skip: isTestFiltered(['flaky']) }, () => {
   let webServer: Server;
   let eventsReceived: string[];

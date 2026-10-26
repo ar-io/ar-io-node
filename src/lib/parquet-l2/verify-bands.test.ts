@@ -43,7 +43,8 @@ import {
   verifyL2Bands,
 } from './verify-bands.js';
 
-const LOC = (name: string) => 13 + DATA_ITEM_LOCATION_COLUMNS.indexOf(name);
+const LOC = (name: (typeof DATA_ITEM_LOCATION_COLUMNS)[number]) =>
+  13 + DATA_ITEM_LOCATION_COLUMNS.indexOf(name);
 
 /** A source whose every read is an Arweave-signed header of no item here. */
 const strangerHeaders =
@@ -335,7 +336,7 @@ describe('verifyL2Bands', () => {
     const result = await verifyL2Bands(db, dir);
     assert.deepEqual(failing(result), ['lookups']);
     assert.match(
-      result.checks.find((c) => c.name === 'lookups')!.failures[0].found,
+      result.checks.find((c) => c.name === 'lookups')!.failures![0].found,
       /lookup_key\.parquet: holds 0 rows/,
     );
   });

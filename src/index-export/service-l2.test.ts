@@ -802,6 +802,8 @@ describe('ExportService, parquet-l2', () => {
               kind: 'ans104-data-items',
               tag: { name: 'App-Name', valuePrefix: 'ArDrive' },
             },
+            keyTags: [],
+            statTags: [],
             publishDir: indexDir(),
           },
         ],

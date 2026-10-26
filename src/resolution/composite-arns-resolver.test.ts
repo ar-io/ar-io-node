@@ -5,6 +5,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import { strict as assert } from 'node:assert';
+import { ARIORead } from '@ar.io/sdk';
 import { describe, it, beforeEach, mock } from 'node:test';
 import { CompositeArNSResolver } from './composite-arns-resolver.js';
 import { NameResolution, NameResolver } from '../types.js';
@@ -35,6 +36,10 @@ describe('CompositeArNSResolver', () => {
     set: mock.fn(),
   } as unknown as KvArNSRegistryStore;
 
+  // Only used to build a default ArNSNamesCache; every test passes its own
+  // arnsNamesCache, so the network process is never called.
+  const unusedNetworkProcess = {} as ARIORead;
+
   beforeEach(() => {
     mock.reset();
   });
@@ -55,6 +60,7 @@ describe('CompositeArNSResolver', () => {
       resolvers: [resolver1, resolver2],
       resolutionCache: mockResolutionCache,
       registryCache: mockRegistryCache,
+      networkProcess: unusedNetworkProcess,
       arnsNamesCache: {} as ArNSNamesCache, // unused, avoids unawaited promises
       maxConcurrentResolutions: 2,
     });
@@ -82,6 +88,7 @@ describe('CompositeArNSResolver', () => {
       resolvers: [resolver1, resolver2],
       resolutionCache: mockResolutionCache,
       registryCache: mockRegistryCache,
+      networkProcess: unusedNetworkProcess,
       arnsNamesCache: {} as ArNSNamesCache, // unused, avoids unawaited promises
       maxConcurrentResolutions: 2,
       resolverTimeoutMs: 50,
@@ -119,6 +126,7 @@ describe('CompositeArNSResolver', () => {
       resolvers: [resolver1],
       resolutionCache: mockResolutionCache,
       registryCache: mockRegistryCache,
+      networkProcess: unusedNetworkProcess,
       arnsNamesCache: {} as ArNSNamesCache, // unused, avoids unawaited promises
       maxConcurrentResolutions: 2,
       resolverTimeoutMs: 50,
@@ -146,6 +154,7 @@ describe('CompositeArNSResolver', () => {
       resolvers: [resolver1, resolver2],
       resolutionCache: mockResolutionCache,
       registryCache: mockRegistryCache,
+      networkProcess: unusedNetworkProcess,
       arnsNamesCache: {} as ArNSNamesCache, // unused, avoids unawaited promises
       maxConcurrentResolutions: 2,
       resolverTimeoutMs: 50,
@@ -176,6 +185,7 @@ describe('CompositeArNSResolver', () => {
       resolvers: [resolver1, resolver2],
       resolutionCache: mockResolutionCache,
       registryCache: mockRegistryCache,
+      networkProcess: unusedNetworkProcess,
       arnsNamesCache: {} as ArNSNamesCache, // unused, avoids unawaited promises
       maxConcurrentResolutions: 2,
       resolverTimeoutMs: 50,
@@ -223,6 +233,7 @@ describe('CompositeArNSResolver', () => {
         resolvers: [{ resolve: miss }, { resolve: miss }],
         resolutionCache: mockResolutionCache,
         registryCache: mockRegistryCache,
+        networkProcess: unusedNetworkProcess,
         arnsNamesCache: {} as ArNSNamesCache, // unused, avoids unawaited promises
         maxConcurrentResolutions: 2,
         resolverTimeoutMs: 50,
@@ -252,6 +263,7 @@ describe('CompositeArNSResolver', () => {
         ],
         resolutionCache: mockResolutionCache,
         registryCache: mockRegistryCache,
+        networkProcess: unusedNetworkProcess,
         arnsNamesCache: {} as ArNSNamesCache, // unused, avoids unawaited promises
         maxConcurrentResolutions: 2,
         resolverTimeoutMs: 50,
@@ -299,6 +311,7 @@ describe('CompositeArNSResolver', () => {
       resolvers: [resolver1],
       resolutionCache: mockResolutionCache,
       registryCache: mockRegistryCache,
+      networkProcess: unusedNetworkProcess,
       arnsNamesCache: {} as ArNSNamesCache, // unused, avoids unawaited promises
       maxConcurrentResolutions: 1,
       resolverTimeoutMs: 1000,
@@ -353,6 +366,7 @@ describe('CompositeArNSResolver', () => {
       resolvers: [resolver1],
       resolutionCache: mockResolutionCache,
       registryCache: mockRegistryCache,
+      networkProcess: unusedNetworkProcess,
       arnsNamesCache: {} as ArNSNamesCache, // unused, avoids unawaited promises
       maxConcurrentResolutions: 1,
       resolverTimeoutMs: 1000,
@@ -379,6 +393,7 @@ describe('CompositeArNSResolver', () => {
       resolvers: [resolver1],
       resolutionCache: mockResolutionCache,
       registryCache: mockRegistryCache,
+      networkProcess: unusedNetworkProcess,
       arnsNamesCache: {} as ArNSNamesCache, // unused, avoids unawaited promises
       maxConcurrentResolutions: 1,
       resolverTimeoutMs: 1000,
@@ -437,6 +452,7 @@ describe('CompositeArNSResolver', () => {
       resolvers,
       resolutionCache: mockResolutionCache,
       registryCache: mockRegistryCache,
+      networkProcess: unusedNetworkProcess,
       arnsNamesCache: {} as ArNSNamesCache, // unused, avoids unawaited promises
       maxConcurrentResolutions: 2,
       resolverTimeoutMs: 50,

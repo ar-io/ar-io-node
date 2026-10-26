@@ -52,6 +52,7 @@ describe('DataImporter', () => {
           stream: Readable.from(Buffer.from('testing...')),
           size: 10,
           verified: false,
+          trusted: false,
           cached: false,
         }),
     };
@@ -235,6 +236,7 @@ describe('DataImporter', () => {
             stream: neverEndingStream,
             size: 0,
             verified: false,
+            trusted: false,
             cached: false,
           }),
       };

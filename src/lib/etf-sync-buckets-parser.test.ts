@@ -5,7 +5,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import { describe, it, beforeEach, afterEach } from 'node:test';
+import { describe, it } from 'node:test';
 import * as assert from 'node:assert';
 import {
   parseETFSyncBuckets,

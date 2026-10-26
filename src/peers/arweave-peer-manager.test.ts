@@ -570,7 +570,7 @@ describe('ArweavePeerManager', () => {
 
     it('should handle DNS resolution errors', async () => {
       const mockResolver: DnsResolver = {
-        resolveUrls: async (): Promise<ResolvedUrl[]> => {
+        resolveUrls: async (_urls: string[]): Promise<ResolvedUrl[]> => {
           throw new Error('DNS resolution failed');
         },
       } as DnsResolver;
@@ -800,7 +800,7 @@ describe('ArweavePeerManager', () => {
 
     it('should update peer buckets from /sync_buckets endpoint', async () => {
       // Mock axios request for sync_buckets
-      const mockAxiosGet = mock.fn(() =>
+      const mockAxiosGet = mock.fn((_url: string) =>
         Promise.resolve({
           status: 200,
           data: new ArrayBuffer(32),

@@ -39,9 +39,7 @@ class MockChunkDataSource implements ChunkDataByAnySource {
     this.delay = delay;
   }
 
-  async getChunkDataByAny(
-    params: ChunkDataByAnySourceParams,
-  ): Promise<ChunkData> {
+  async getChunkDataByAny(): Promise<ChunkData> {
     this.callCount++;
     if (this.delay > 0) {
       await new Promise((resolve) => setTimeout(resolve, this.delay));
@@ -193,9 +191,7 @@ describe('CompositeChunkDataSource', () => {
           parallelism: 3,
         });
 
-        const start = Date.now();
         const result = await composite.getChunkDataByAny(TEST_PARAMS);
-        const duration = Date.now() - start;
 
         // Last source (source9) succeeds
         assert.equal(result.chunk.toString(), 'source9-data');
@@ -277,9 +273,7 @@ describe('CompositeChunkDataSource', () => {
         const source1 = new MockChunkDataSource('source1', false, 10);
 
         class CheckingSource implements ChunkDataByAnySource {
-          async getChunkDataByAny(
-            params: ChunkDataByAnySourceParams,
-          ): Promise<ChunkData> {
+          async getChunkDataByAny(): Promise<ChunkData> {
             lateSourceStarted = true;
             await new Promise((resolve) => setTimeout(resolve, 100));
             return TEST_CHUNK_DATA;

@@ -15,16 +15,13 @@ import { gzipSync } from 'node:zlib';
 import { headerNames } from '../../constants.js';
 import * as config from '../../config.js';
 import { createTestLogger } from '../../../test/test-logger.js';
-import { release } from '../../version.js';
 
 const log = createTestLogger({ suite: 'Data routes' });
 import {
-  ContiguousDataIndex,
   ContiguousDataSource,
   DataAttributesSource,
   DataBlockListValidator,
   ManifestPathResolver,
-  RequestAttributes,
 } from '../../types.js';
 import {
   createDataHandler,
@@ -38,17 +35,15 @@ import { setRequestSignal } from '../../middleware/abort-signal.js';
 import type {
   PaymentProcessor,
   PaymentRequirementsContext,
-  PaymentPayload,
-  PaymentRequirements,
   PaymentVerificationResult,
   PaymentSettlementResult,
 } from '../../payments/types.js';
-import type { Request } from 'express';
+import type { PaymentPayload, PaymentRequirements } from 'x402/types';
+import type { Request, Response } from 'express';
 
 describe('Data routes', () => {
   describe('createDataHandler', () => {
     let app: express.Express;
-    let dataIndex: ContiguousDataIndex;
     let dataAttributesSource: DataAttributesSource;
     let dataSource: ContiguousDataSource;
     let dataBlockListValidator: DataBlockListValidator;
@@ -56,16 +51,6 @@ describe('Data routes', () => {
 
     beforeEach(() => {
       app = express();
-      dataIndex = {
-        getDataAttributes: () => Promise.resolve(undefined),
-        getDataItemAttributes: () => Promise.resolve(undefined),
-        getTransactionAttributes: () => Promise.resolve(undefined),
-        getDataParent: () => Promise.resolve(undefined),
-        saveDataContentAttributes: () => Promise.resolve(undefined),
-        getVerifiableDataIds: () => Promise.resolve([]),
-        getRootTxId: () => Promise.resolve(undefined),
-        saveVerificationStatus: () => Promise.resolve(undefined),
-      };
       dataAttributesSource = {
         getDataAttributes: () => Promise.resolve(undefined),
       };
@@ -84,6 +69,7 @@ describe('Data routes', () => {
             stream: Readable.from(data),
             size: 10,
             verified: false,
+            trusted: false,
             cached: false,
             requestAttributes: {
               origin: 'node-url',
@@ -1902,6 +1888,7 @@ st
           dataAttributesSource.getDataAttributes = () =>
             Promise.resolve({
               size: 10,
+              offset: 0,
               contentType: 'application/octet-stream',
               isManifest: false,
               stable: true,
@@ -1933,6 +1920,7 @@ st
           dataAttributesSource.getDataAttributes = () =>
             Promise.resolve({
               size: 10,
+              offset: 0,
               contentType: 'application/octet-stream',
               isManifest: false,
               stable: true,
@@ -1954,6 +1942,7 @@ st
               stream: Readable.from(data),
               size: 10,
               verified: false,
+              trusted: false,
               cached: true,
               requestAttributes: {
                 origin: 'node-url',
@@ -1987,6 +1976,7 @@ st
           dataAttributesSource.getDataAttributes = () =>
             Promise.resolve({
               size: 10,
+              offset: 0,
               contentType: 'application/octet-stream',
               isManifest: false,
               stable: true,
@@ -2018,6 +2008,7 @@ st
           dataAttributesSource.getDataAttributes = () =>
             Promise.resolve({
               size: 10,
+              offset: 0,
               contentType: 'application/octet-stream',
               isManifest: false,
               stable: true,
@@ -2039,6 +2030,7 @@ st
               stream: Readable.from(data),
               size: 10,
               verified: false,
+              trusted: false,
               cached: true,
               requestAttributes: {
                 origin: 'node-url',
@@ -2125,6 +2117,7 @@ st
             Promise.resolve({
               hash: 'hash',
               size: 10,
+              offset: 0,
               contentType: 'application/octet-stream',
               isManifest: false,
               stable: true,
@@ -2177,6 +2170,7 @@ st
             Promise.resolve({
               hash: HASH,
               size: LARGE_SIZE,
+              offset: 0,
               contentType: 'application/octet-stream',
               isManifest: false,
               stable: true,
@@ -2221,6 +2215,7 @@ st
             Promise.resolve({
               hash: 'hash',
               size: 10,
+              offset: 0,
               contentType: 'application/octet-stream',
               isManifest: false,
               stable: true,
@@ -2242,6 +2237,7 @@ st
               stream: Readable.from(data),
               size: 10,
               verified: false,
+              trusted: false,
               cached: true,
               requestAttributes: {
                 origin: 'node-url',
@@ -2290,9 +2286,11 @@ st
             hash: '4ROTs2lTPAKbr8Y41WrjHu-2q-7S-m-yTuO7fAUzZI4',
             size: testData.length,
             contentType: 'text/plain',
+            isManifest: false,
             stable: true,
             verified: true,
             offset: 0,
+            signature: null,
           });
 
           dataSource.getData = async () => ({
@@ -2534,6 +2532,7 @@ st
           dataAttributesSource.getDataAttributes = () =>
             Promise.resolve({
               size: 10,
+              offset: 0,
               contentType: 'application/octet-stream',
               rootTransactionId: 'root-tx',
               isManifest: false,
@@ -2570,6 +2569,7 @@ st
           dataAttributesSource.getDataAttributes = () =>
             Promise.resolve({
               size: 10,
+              offset: 0,
               contentType: 'application/octet-stream',
               rootTransactionId: 'root-tx',
               parentId: 'root-tx', // single-level: parent IS the root
@@ -2605,6 +2605,7 @@ st
           dataAttributesSource.getDataAttributes = () =>
             Promise.resolve({
               size: 10,
+              offset: 0,
               contentType: 'application/octet-stream',
               rootTransactionId: 'root-tx',
               parentId: 'intermediate-bundle', // multi-level
@@ -2637,6 +2638,7 @@ st
           dataAttributesSource.getDataAttributes = () =>
             Promise.resolve({
               size: 10,
+              offset: 0,
               contentType: 'application/octet-stream',
               isManifest: false,
               stable: true,
@@ -2670,6 +2672,7 @@ st
             Promise.resolve({
               hash: 'test-hash',
               size: 10,
+              offset: 0,
               contentType: 'application/octet-stream',
               isManifest: false,
               stable: true,
@@ -2691,6 +2694,7 @@ st
               stream: Readable.from(data),
               size: 10,
               verified: false,
+              trusted: false,
               cached: true,
               requestAttributes: {
                 origin: 'node-url',
@@ -2731,6 +2735,7 @@ st
             Promise.resolve({
               hash: 'test-hash',
               size: 10,
+              offset: 0,
               contentType: 'application/octet-stream',
               isManifest: false,
               stable: true,
@@ -2752,6 +2757,7 @@ st
               stream: Readable.from(data),
               size: 10,
               verified: false,
+              trusted: false,
               cached: true,
               requestAttributes: {
                 origin: 'node-url',
@@ -2787,6 +2793,7 @@ st
             Promise.resolve({
               hash: 'test-hash',
               size: 10,
+              offset: 0,
               contentType: 'application/octet-stream',
               isManifest: false,
               stable: true,
@@ -2808,6 +2815,7 @@ st
               stream: Readable.from(data),
               size: 10,
               verified: false,
+              trusted: false,
               cached: true,
               requestAttributes: {
                 origin: 'node-url',
@@ -2849,6 +2857,7 @@ st
             Promise.resolve({
               hash: 'test-hash',
               size: 10,
+              offset: 0,
               contentType: 'application/octet-stream',
               isManifest: false,
               stable: true,
@@ -2870,6 +2879,7 @@ st
               stream: Readable.from(data),
               size: 10,
               verified: false,
+              trusted: false,
               cached: true,
               requestAttributes: {
                 origin: 'node-url',
@@ -2911,6 +2921,7 @@ st
           dataAttributesSource.getDataAttributes = () =>
             Promise.resolve({
               size: 10,
+              offset: 0,
               contentType: 'application/octet-stream',
               isManifest: false,
               stable: true,
@@ -2955,6 +2966,7 @@ st
             Promise.resolve({
               hash: 'rH97YzYj4XAQhOYHRljfHw1lLl1XTQP5--TfXcNws7Q',
               size: 10,
+              offset: 0,
               contentType: 'application/octet-stream',
               isManifest: false,
               stable: true,
@@ -2970,7 +2982,7 @@ st
               verified: true,
               trusted: true,
               cached: true,
-              requestAttributes: { hops: 0 },
+              requestAttributes: { hops: 0, clientIps: [] },
             });
 
           app.get(
@@ -2984,7 +2996,7 @@ st
             }),
           );
 
-          return request(app)
+          await request(app)
             .get('/not-a-real-id')
             .set(
               'If-None-Match',
@@ -2998,6 +3010,7 @@ st
             Promise.resolve({
               hash: 'test-hash',
               size: 10,
+              offset: 0,
               contentType: 'application/octet-stream',
               isManifest: false,
               stable: true,
@@ -3019,6 +3032,7 @@ st
               stream: Readable.from(data),
               size: 10,
               verified: false,
+              trusted: false,
               cached: true,
               requestAttributes: {
                 origin: 'node-url',
@@ -3062,6 +3076,7 @@ st
             Promise.resolve({
               hash: 'test-hash',
               size: 10,
+              offset: 0,
               contentType: 'application/octet-stream',
               isManifest: false,
               stable: true,
@@ -3118,6 +3133,7 @@ st
             Promise.resolve({
               hash: 'test-hash',
               size: 10,
+              offset: 0,
               contentType: 'application/octet-stream',
               isManifest: false,
               stable: true,
@@ -3174,6 +3190,7 @@ st
             Promise.resolve({
               hash: 'test-hash',
               size: 10,
+              offset: 0,
               contentType: 'application/octet-stream',
               isManifest: false,
               stable: true,
@@ -3230,6 +3247,7 @@ st
             Promise.resolve({
               hash: 'test-hash',
               size: 10,
+              offset: 0,
               contentType: 'application/octet-stream',
               isManifest: false,
               stable: true,
@@ -3287,6 +3305,7 @@ st
             Promise.resolve({
               hash: 'test-hash',
               size: 10,
+              offset: 0,
               contentType: 'application/octet-stream',
               isManifest: false,
               stable: true,
@@ -4006,7 +4025,7 @@ st
           // Mock req.dataId to simulate ArNS resolution
           app.get(
             '/:id',
-            (req, res, next) => {
+            (req, _res, next) => {
               // Simulate ArNS resolution by setting the dataId on request
               req.dataId = arnsResolvedId;
               next();
@@ -4434,6 +4453,9 @@ st
     class TestPaymentProcessor implements PaymentProcessor {
       public shouldVerify = true;
       public shouldSettle = true;
+      public calculatedContexts: PaymentRequirementsContext[] = [];
+      public verifyCalls = 0;
+      public settleCalls = 0;
 
       isBrowserRequest(_req: Request): boolean {
         return false;
@@ -4442,12 +4464,17 @@ st
       calculateRequirements(
         context: PaymentRequirementsContext,
       ): PaymentRequirements {
+        this.calculatedContexts.push(context);
         return {
-          amount: context.contentSize.toString(),
-          currency: 'AR',
-          address: 'test-address',
-          dataId: context.dataId,
-          timestamp: Date.now(),
+          scheme: 'exact',
+          description: `Test payment for ${context.contentSize} bytes`,
+          network: 'base-sepolia',
+          maxAmountRequired: context.contentSize.toString(),
+          payTo: '0x0000000000000000000000000000000000000001',
+          asset: '0x0000000000000000000000000000000000000002',
+          resource: `${context.protocol}://${context.host}${context.originalUrl}`,
+          mimeType: context.contentType,
+          maxTimeoutSeconds: 300,
         };
       }
 
@@ -4455,19 +4482,54 @@ st
         _payload: PaymentPayload,
         _requirements: PaymentRequirements,
       ): Promise<PaymentVerificationResult> {
-        return {
-          verified: this.shouldVerify,
-          message: this.shouldVerify ? 'Payment verified' : 'Payment failed',
-        };
+        this.verifyCalls++;
+        return this.shouldVerify
+          ? { isValid: true }
+          : { isValid: false, invalidReason: 'Payment failed' };
       }
 
       async settlePayment(
         _payload: PaymentPayload,
         _requirements: PaymentRequirements,
       ): Promise<PaymentSettlementResult> {
+        this.settleCalls++;
+        return this.shouldSettle
+          ? { success: true }
+          : { success: false, errorReason: 'Settlement failed' };
+      }
+
+      sendPaymentRequiredResponse(
+        _req: Request,
+        res: Response,
+        requirements: PaymentRequirements,
+        options?: { error?: string; message?: string },
+      ): void {
+        res.status(402).json({
+          error: options?.error,
+          message: options?.message,
+          accepts: [requirements],
+        });
+      }
+
+      extractPayment(req: Request): PaymentPayload | undefined {
+        if (req.headers['x-payment'] === undefined) {
+          return undefined;
+        }
         return {
-          settled: this.shouldSettle,
-          message: this.shouldSettle ? 'Payment settled' : 'Settlement failed',
+          x402Version: 1,
+          scheme: 'exact',
+          network: 'base-sepolia',
+          payload: {
+            signature: '0xsignature',
+            authorization: {
+              from: '0x0000000000000000000000000000000000000003',
+              to: '0x0000000000000000000000000000000000000001',
+              value: '10',
+              validAfter: '0',
+              validBefore: '9999999999',
+              nonce: '0x01',
+            },
+          },
         };
       }
     }
@@ -4498,6 +4560,7 @@ st
           getDataAttributes: () =>
             Promise.resolve({
               size: 10,
+              offset: 0,
               contentType: 'application/octet-stream',
               isManifest: false,
               stable: true,
@@ -4588,6 +4651,54 @@ st
 
         await request(testApp).get('/test-id').expect(200);
       });
+
+      it('should calculate requirements and allow the request when no payment is attached', async () => {
+        testApp.get(
+          '/:id',
+          createDataHandler({
+            log,
+            dataAttributesSource: testDataAttributesSource,
+            dataSource: testDataSource,
+            dataBlockListValidator: testDataBlockListValidator,
+            manifestPathResolver: testManifestPathResolver,
+            rateLimiter,
+            paymentProcessor,
+          }),
+        );
+
+        await request(testApp).get('/test-id').expect(200);
+
+        assert.equal(paymentProcessor.calculatedContexts.length, 1);
+        assert.equal(paymentProcessor.calculatedContexts[0].contentSize, 10);
+        assert.equal(paymentProcessor.verifyCalls, 0);
+        assert.equal(paymentProcessor.settleCalls, 0);
+      });
+
+      it('should respond 402 when an attached payment fails verification', async () => {
+        paymentProcessor.shouldVerify = false;
+        testApp.get(
+          '/:id',
+          createDataHandler({
+            log,
+            dataAttributesSource: testDataAttributesSource,
+            dataSource: testDataSource,
+            dataBlockListValidator: testDataBlockListValidator,
+            manifestPathResolver: testManifestPathResolver,
+            rateLimiter,
+            paymentProcessor,
+          }),
+        );
+
+        const res = await request(testApp)
+          .get('/test-id')
+          .set('X-Payment', 'test-payment')
+          .expect(402);
+
+        assert.equal(res.body.error, 'payment_verification_failed');
+        assert.equal(res.body.message, 'Payment failed');
+        assert.equal(paymentProcessor.verifyCalls, 1);
+        assert.equal(paymentProcessor.settleCalls, 0);
+      });
     });
 
     describe('Cache-Control max-age tiers', () => {
@@ -4596,6 +4707,7 @@ st
           Promise.resolve({
             hash: 'test-hash',
             size: 10,
+            offset: 0,
             contentType: 'application/octet-stream',
             isManifest: false,
             stable: true,
@@ -4644,6 +4756,7 @@ st
           Promise.resolve({
             hash: 'test-hash',
             size: 10,
+            offset: 0,
             contentType: 'application/octet-stream',
             isManifest: false,
             stable: false,
@@ -4689,6 +4802,7 @@ st
           Promise.resolve({
             hash: 'test-hash',
             size: 10,
+            offset: 0,
             contentType: 'application/octet-stream',
             isManifest: false,
             stable: false,
@@ -4736,7 +4850,7 @@ st
       // must override this for fallback resolutions, but preserve it for
       // path/index resolutions.
       const withSimulatedArnsTtl =
-        (ttl: number) => (req: any, res: any, next: any) => {
+        (ttl: number) => (_req: any, res: any, next: any) => {
           res.setHeader('Cache-Control', `public, max-age=${ttl}`);
           next();
         };
@@ -4755,6 +4869,7 @@ st
             return Promise.resolve({
               hash: 'inner-hash',
               size: 10,
+              offset: 0,
               contentType: 'text/html',
               isManifest: false,
               stable: true,
@@ -4765,6 +4880,7 @@ st
           return Promise.resolve({
             hash: 'manifest-hash',
             size: 100,
+            offset: 0,
             contentType: 'application/x.arweave-manifest+json',
             isManifest: true,
             stable: true,

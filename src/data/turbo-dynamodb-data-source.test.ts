@@ -709,7 +709,7 @@ describe('TurboDynamoDbDataSource', () => {
 
       const result = await turboDynamoDbDataSource.getData({
         id: testDataId,
-        requestAttributes: { hops: 1, origin: 'test-origin' },
+        requestAttributes: { hops: 1, origin: 'test-origin', clientIps: [] },
       });
 
       // eslint-disable-next-line @typescript-eslint/strict-boolean-expressions

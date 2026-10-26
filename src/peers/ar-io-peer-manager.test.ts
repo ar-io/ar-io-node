@@ -196,18 +196,16 @@ describe('ArIOPeerManager', () => {
       // First call
       const peers1 = peerManager.selectPeers('test', 2);
 
-      // Mock the internal method to verify caching
-      const selectPeersUncached = peerManager['_selectPeersUncached'];
-      const mockUncached = mock.fn(peerManager, '_selectPeersUncached');
-
       // Second call with same parameters should use cache
       const peers2 = peerManager.selectPeers('test', 2);
 
-      // The uncached method should not have been called again
-      assert.equal(mockUncached.mock.callCount(), 0);
+      // An uncached selection builds a new array, so getting the very same
+      // array back shows the second call was served from the cache.
+      assert.strictEqual(peers2, peers1);
 
-      // Results should be identical (cached)
-      assert.deepEqual(peers1, peers2);
+      // A different count is a different cache entry
+      const peers3 = peerManager.selectPeers('test', 1);
+      assert.notStrictEqual(peers3, peers1);
     });
   });
 

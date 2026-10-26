@@ -186,12 +186,9 @@ describe('merkle-path-parser property tests', () => {
   it('should enforce strict data split rules correctly', async () => {
     await fc.assert(
       fc.asyncProperty(
-        fc.integer({ min: 1, max: 10 }), // Number of full chunks
         fc.integer({ min: 1, max: DATA_CHUNK_SIZE - 1 }), // Remainder size
-        async (numFullChunks, remainder) => {
-          const totalSize = numFullChunks * DATA_CHUNK_SIZE + remainder;
-
-          // Create a properly aligned chunk
+        async (remainder) => {
+          // A single full, aligned chunk
           const { root, path } = await createSingleChunkTree(DATA_CHUNK_SIZE);
           const offset = DATA_CHUNK_SIZE / 2;
 
@@ -206,6 +203,33 @@ describe('merkle-path-parser property tests', () => {
           assert(result.validated);
           assert.equal(result.boundaries.startOffset, 0);
           assert.equal(result.boundaries.endOffset, DATA_CHUNK_SIZE);
+
+          // A full chunk followed by a smaller last chunk of `remainder`
+          // bytes: both are a valid strict split.
+          const totalSize = DATA_CHUNK_SIZE + remainder;
+          const split = await createTwoChunkTree(DATA_CHUNK_SIZE, remainder);
+
+          const full = await parseDataPath({
+            dataRoot: split.root,
+            dataSize: totalSize,
+            dataPath: split.path1,
+            offset: DATA_CHUNK_SIZE / 2,
+            ruleset: ValidationRuleset.STRICT_DATA_SPLIT,
+          });
+          assert(full.validated);
+          assert.equal(full.boundaries.startOffset, 0);
+          assert.equal(full.boundaries.endOffset, DATA_CHUNK_SIZE);
+
+          const last = await parseDataPath({
+            dataRoot: split.root,
+            dataSize: totalSize,
+            dataPath: split.path2,
+            offset: DATA_CHUNK_SIZE + Math.floor(remainder / 2),
+            ruleset: ValidationRuleset.STRICT_DATA_SPLIT,
+          });
+          assert(last.validated);
+          assert.equal(last.boundaries.startOffset, DATA_CHUNK_SIZE);
+          assert.equal(last.boundaries.endOffset, totalSize);
         },
       ),
       { numRuns: 50 },
@@ -275,6 +299,7 @@ describe('merkle-path-parser property tests', () => {
           assert.equal(result.boundaries.rebaseDepth, 1);
           assert.equal(result.boundaries.startOffset, 0);
           assert.equal(result.boundaries.endOffset, chunkSize);
+          assert.deepEqual(result.chunkData, dataHash);
         },
       ),
       { numRuns: 50 },

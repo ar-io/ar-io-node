@@ -208,7 +208,6 @@ describe('Ans104OffsetSource', () => {
 
       const nestedBundleIdBuffer = Buffer.alloc(32);
       nestedBundleIdBuffer.write('nested-bundle-id');
-      const nestedBundleId = nestedBundleIdBuffer.toString('base64url');
 
       const rootBundleId = 'root-bundle-id';
 

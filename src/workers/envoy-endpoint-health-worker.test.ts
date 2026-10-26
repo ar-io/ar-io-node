@@ -9,15 +9,7 @@ import dns from 'node:dns';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import {
-  after,
-  afterEach,
-  before,
-  beforeEach,
-  describe,
-  it,
-  mock,
-} from 'node:test';
+import { afterEach, before, beforeEach, describe, it, mock } from 'node:test';
 
 import { EnvoyEndpointHealthWorker } from './envoy-endpoint-health-worker.js';
 import { createTestLogger } from '../../test/test-logger.js';

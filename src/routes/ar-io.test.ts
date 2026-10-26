@@ -69,7 +69,7 @@ describe('buildArIoInfo', () => {
       },
     });
 
-    assert.notStrictEqual(result.rateLimiter, undefined);
+    assert.ok(result.rateLimiter !== undefined);
     assert.strictEqual(result.rateLimiter.enabled, true);
     assert.notStrictEqual(result.rateLimiter.dataEgress, undefined);
     assert.notStrictEqual(result.rateLimiter.dataEgress.buckets, undefined);
@@ -114,7 +114,7 @@ describe('buildArIoInfo', () => {
       },
     });
 
-    assert.notStrictEqual(result.x402, undefined);
+    assert.ok(result.x402 !== undefined);
     assert.strictEqual(result.x402.enabled, true);
     assert.strictEqual(result.x402.network, 'base-sepolia');
     assert.strictEqual(
@@ -187,7 +187,7 @@ describe('buildArIoInfo', () => {
       },
     });
 
-    assert.notStrictEqual(result.x402, undefined);
+    assert.ok(result.x402 !== undefined);
     assert.strictEqual(result.x402.network, 'base');
     assert.strictEqual(result.rateLimiter, undefined);
   });
@@ -224,8 +224,8 @@ describe('buildArIoInfo', () => {
       },
     });
 
-    assert.notStrictEqual(result.rateLimiter, undefined);
-    assert.notStrictEqual(result.x402, undefined);
+    assert.ok(result.rateLimiter !== undefined);
+    assert.ok(result.x402 !== undefined);
     assert.strictEqual(result.rateLimiter.enabled, true);
     assert.strictEqual(result.x402.enabled, true);
   });
@@ -252,6 +252,7 @@ describe('buildArIoInfo', () => {
       },
     });
 
+    assert.ok(result.rateLimiter !== undefined);
     const resourceBucket = result.rateLimiter.dataEgress.buckets.resource;
     assert.strictEqual(resourceBucket.capacityBytes, 500 * 1024);
     assert.strictEqual(resourceBucket.refillRateBytesPerSec, 10 * 1024);
@@ -286,6 +287,7 @@ describe('buildArIoInfo', () => {
       },
     });
 
+    assert.ok(result.x402 !== undefined);
     const costs = result.x402.dataEgress.pricing.exampleCosts;
     const perBytePrice = 0.0000001;
     const minPrice = 0.0001;
@@ -341,6 +343,7 @@ describe('buildArIoInfo', () => {
       },
     });
 
+    assert.ok(result.x402 !== undefined);
     const costs = result.x402.dataEgress.pricing.exampleCosts;
 
     // All costs should be at least minPrice
@@ -374,6 +377,7 @@ describe('buildArIoInfo', () => {
       },
     });
 
+    assert.ok(result.x402 !== undefined);
     const costs = result.x402.dataEgress.pricing.exampleCosts;
 
     // 1GB cost should be capped at maxPrice
@@ -422,12 +426,14 @@ describe('buildArIoInfo', () => {
     assert.strictEqual(resultStr.includes('API_KEY'), false);
 
     // Verify structure doesn't include internal implementation details
-    assert.strictEqual(result.rateLimiter.type, undefined);
+    assert.ok(result.rateLimiter !== undefined);
+    assert.ok(result.x402 !== undefined);
+    assert.strictEqual('type' in result.rateLimiter, false);
     assert.strictEqual(
-      result.rateLimiter.dataEgress.rateLimitedEndpoints,
-      undefined,
+      'rateLimitedEndpoints' in result.rateLimiter.dataEgress,
+      false,
     );
-    assert.strictEqual(result.x402.ui, undefined);
+    assert.strictEqual('ui' in result.x402, false);
   });
 
   it('should include default bundler URL', () => {

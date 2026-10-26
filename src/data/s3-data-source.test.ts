@@ -471,7 +471,7 @@ describe('S3DataSource', () => {
 
       const result = await s3DataSource.getData({
         id: testId,
-        requestAttributes: { hops: 2, origin: 'test-origin' },
+        requestAttributes: { hops: 2, origin: 'test-origin', clientIps: [] },
       });
 
       assert.deepEqual(result.requestAttributes, {

@@ -5,14 +5,11 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import { describe, it, beforeEach, afterEach, mock } from 'node:test';
+import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert';
 import { Request, Response } from 'express';
 import { MemoryRateLimiter } from './memory-rate-limiter.js';
 import { extractAllClientIPs } from '../lib/ip-utils.js';
-import { createTestLogger } from '../../test/test-logger.js';
-
-const log = createTestLogger({ suite: 'MemoryRateLimiter' });
 
 // Helper to create mock Express Request
 const createMockRequest = (overrides: Partial<Request> = {}): Request => {
@@ -300,7 +297,6 @@ describe('MemoryRateLimiter', () => {
     });
 
     it('should bypass resource limit when paid tokens available', async () => {
-      const req = createMockRequest();
       const res = createMockResponse();
 
       // Exhaust resource bucket using different IPs
