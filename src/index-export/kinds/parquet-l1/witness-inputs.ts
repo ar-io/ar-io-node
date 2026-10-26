@@ -24,6 +24,13 @@
  *   and nodes' `GET /block_index/{from}/{to}` with `X-Block-Format: 3` for
  *   400,000 on (nodes serve hashes only below it).
  *
+ * Nodes are asked through an {@link ArweaveNodePool}: each request starts at
+ * the next node in turn and moves on until one answers, and a node that
+ * times out or refuses a connection rests for a while instead of costing a
+ * timeout on every chunk. The `data` nodes each hold part of the weave, so
+ * most of them answer 404 for most offsets; the pool needs the list to cover
+ * every range, not every node to.
+ *
  * None of it is trusted: `buildBandWitnesses` keeps a root only where its
  * block's `tx_root` recomputes with it, and a transition root only where
  * the fold reaches the chain's. A source that lies or fails costs the band
@@ -46,6 +53,7 @@ import {
   v1DataRoot,
 } from '../../../lib/parquet-l1/chain.js';
 import { idHeightRange } from '../../../lib/parquet-l1/layout.js';
+import { ArweaveNodePool } from '../../../lib/onchain/arweave-nodes.js';
 import {
   type BlockIndexEntryIn,
   type V1Need,
@@ -72,7 +80,12 @@ export const FETCH_TIMEOUT_MS = 30_000;
 export interface L1WitnessConfig {
   /** `INDEX_EXPORT_L1_WITNESS_DIR`: `roots-*.jsonl` and `fork_2_0_checkpoint`. */
   dir?: string;
-  /** `INDEX_EXPORT_L1_WITNESS_NODES`: Arweave nodes for `/chunk` and `/block_index`. */
+  /**
+   * Arweave nodes for `/chunk`, `/tx` and `/block_index`:
+   * `INDEX_EXPORT_L1_WITNESS_NODES`, else the gateway's
+   * `PREFERRED_CHUNK_GET_NODE_URLS`, else its default `tip` and `data` nodes
+   * (`l1WitnessConfig`).
+   */
   nodes: string[];
 }
 
@@ -118,30 +131,26 @@ export async function rootFromDataPath(
   return proved === false ? undefined : root;
 }
 
-type Fetch = (url: string, init?: RequestInit) => Promise<Response>;
-
 /** The witness inputs for one band (see the module comment). */
 export function l1WitnessInputs(
   config: L1WitnessConfig,
   heightRange: [number, number],
   log: Logger,
-  fetchImpl: Fetch = fetch,
+  pool: ArweaveNodePool | undefined = config.nodes.length > 0
+    ? new ArweaveNodePool({
+        urls: config.nodes,
+        timeoutMs: FETCH_TIMEOUT_MS,
+        // Coverage, not agreement among machines: nodes on one address (on
+        // other ports, say) hold other data, so every one is kept.
+        dedupeByAddress: false,
+        // A redirect is an answer from the node asked, not one to follow
+        // elsewhere: the pool moves on to the next node.
+        fetch: (url, init) => fetch(url, { ...init, redirect: 'manual' }),
+      })
+    : undefined,
 ): WitnessInputs {
   const [from, to] = heightRange;
   let fromDir: Promise<Map<string, { h: number; root: Buffer }>> | undefined;
-  const get = async (url: string, headers: Record<string, string> = {}) => {
-    const response = await fetchImpl(url, {
-      headers,
-      redirect: 'manual',
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-    });
-    if (response.status !== 200) {
-      throw new Error(`${url}: HTTP ${response.status}`);
-    }
-    return response.json() as Promise<unknown>;
-  };
-  const node = (attempt: number, key: number) =>
-    config.nodes[(key + attempt) % config.nodes.length].replace(/\/+$/, '');
 
   return {
     async v1Roots(needs: V1Need[]): Promise<Map<string, Buffer>> {
@@ -155,29 +164,37 @@ export function l1WitnessInputs(
         if (row !== undefined && row.h === need.height) out.set(id, row.root);
         else if (need.endOffset !== undefined) left.push(need);
       }
-      if (left.length === 0 || config.nodes.length === 0) return out;
+      if (left.length === 0 || pool === undefined) return out;
       const limit = pLimit(CHUNK_CONCURRENCY);
       let failed = 0;
       await Promise.all(
-        left.map((need, i) =>
+        left.map((need) =>
           limit(async () => {
-            for (let attempt = 0; attempt < config.nodes.length; attempt++) {
-              const at = `${node(attempt, i)}/chunk/${need.endOffset as bigint}`;
-              try {
-                const body = (await get(at)) as { data_path?: unknown };
-                if (typeof body.data_path !== 'string') continue;
-                const root = await rootFromDataPath(
-                  Buffer.from(body.data_path, 'base64url'),
-                  need.size,
-                );
-                if (root === undefined) continue;
-                out.set(need.id.toString('base64url'), root);
-                return;
-              } catch {
-                // The next node.
-              }
+            try {
+              // Only the proof is read, so a packed chunk serves as well.
+              const root = await pool.ask(
+                `/chunk/${need.endOffset as bigint}`,
+                async (body) => {
+                  const { data_path: dataPath } = (body ?? {}) as {
+                    data_path?: unknown;
+                  };
+                  if (typeof dataPath !== 'string') {
+                    throw new Error('no data_path in the answer');
+                  }
+                  const proved = await rootFromDataPath(
+                    Buffer.from(dataPath, 'base64url'),
+                    need.size,
+                  );
+                  if (proved === undefined) {
+                    throw new Error('a data_path that does not prove its size');
+                  }
+                  return proved;
+                },
+              );
+              out.set(need.id.toString('base64url'), root);
+            } catch {
+              failed += 1;
             }
-            failed += 1;
           }),
         ),
       );
@@ -193,27 +210,29 @@ export function l1WitnessInputs(
 
     async v1RootsFromData(needs: V1Need[]): Promise<Map<string, Buffer>> {
       const out = new Map<string, Buffer>();
-      if (config.nodes.length === 0) return out;
+      if (pool === undefined) return out;
       const limit = pLimit(CHUNK_CONCURRENCY);
       await Promise.all(
         needs
           .filter((need) => need.size <= BigInt(MAX_DATA_BYTES))
-          .map((need, i) =>
+          .map((need) =>
             limit(async () => {
               const id = need.id.toString('base64url');
-              for (let attempt = 0; attempt < config.nodes.length; attempt++) {
-                try {
-                  const body = (await get(`${node(attempt, i)}/tx/${id}`)) as {
-                    data?: unknown;
-                  };
-                  if (typeof body.data !== 'string') continue;
-                  const data = Buffer.from(body.data, 'base64url');
-                  if (BigInt(data.length) !== need.size) continue;
-                  out.set(id, await v1DataRoot(data));
-                  return;
-                } catch {
-                  // The next node.
-                }
+              try {
+                const data = await pool.ask(`/tx/${id}`, (body) => {
+                  const { data: encoded } = (body ?? {}) as { data?: unknown };
+                  if (typeof encoded !== 'string') {
+                    throw new Error('no data in the answer');
+                  }
+                  const bytes = Buffer.from(encoded, 'base64url');
+                  if (BigInt(bytes.length) !== need.size) {
+                    throw new Error('data of another size');
+                  }
+                  return bytes;
+                });
+                out.set(id, await v1DataRoot(data));
+              } catch {
+                // No node had it: the root stays missing.
               }
             }),
           ),
@@ -242,22 +261,20 @@ export function l1WitnessInputs(
         start += BLOCK_INDEX_PAGE
       ) {
         const end = Math.min(top, start + BLOCK_INDEX_PAGE - 1);
-        for (let attempt = 0; attempt < config.nodes.length; attempt++) {
-          try {
-            const body = await get(
-              `${node(attempt, start)}/block_index/${start}/${end}`,
-              { 'X-Block-Format': '3' },
-            );
-            const entries = parseBlockIndex(body, start, end);
-            for (const [h, entry] of entries) out.set(h, entry);
-            break;
-          } catch (error) {
-            log.debug('A block index page could not be read', {
-              start,
-              end,
-              error: (error as Error).message,
-            });
-          }
+        if (pool === undefined) continue;
+        try {
+          const entries = await pool.ask(
+            `/block_index/${start}/${end}`,
+            (body) => parseBlockIndex(body, start, end),
+            { 'X-Block-Format': '3' },
+          );
+          for (const [h, entry] of entries) out.set(h, entry);
+        } catch (error) {
+          log.debug('A block index page could not be read', {
+            start,
+            end,
+            error: (error as Error).message,
+          });
         }
       }
       return out;

@@ -601,7 +601,10 @@ nothing the chain does not confirm:
   "root": "<base64url>"}`; other keys ignored; a file named
   `roots-<band id>.jsonl` is read only for bands overlapping its heights),
   then, for a transaction none has, its last chunk from the nodes in
-  `INDEX_EXPORT_L1_WITNESS_NODES` (`GET /chunk/{offset}`, the offset its
+  `INDEX_EXPORT_L1_WITNESS_NODES` (by default the core's
+  `PREFERRED_CHUNK_GET_NODE_URLS`; each request starts at the next node and
+  moves on until one serves it, and a node that times out rests for a while)
+  (`GET /chunk/{offset}`, the offset its
   data ends at in the weave; the root its `data_path` proves, the path
   checked to end at the transaction's size). Where a block's roots do not
   reproduce its `tx_root`, its transactions are fetched whole

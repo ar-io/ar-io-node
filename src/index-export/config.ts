@@ -28,6 +28,7 @@ import {
   SourceEnv,
 } from './kinds/root-tx/sources/config.js';
 import { DEFAULT_L2_MAX_BAND_ITEMS } from './kinds/parquet-l2/planner.js';
+import { DEFAULT_ARWEAVE_NODE_URLS } from '../lib/onchain/arweave-nodes.js';
 
 /** Where the service works: the shared index volume, fixed in compose. */
 export const DATA_DIR = 'data/indexes';
@@ -390,24 +391,33 @@ export function parseExportConfig(env: Env, dataDir = DATA_DIR): ExportConfig {
 /** `INDEX_EXPORT_L1_WITNESS_*`: where `parquet-l1` witnesses come from. */
 function l1WitnessConfig(env: Env): L1WitnessConfig {
   const dir = value(env, 'INDEX_EXPORT_L1_WITNESS_DIR');
-  const nodes = (value(env, 'INDEX_EXPORT_L1_WITNESS_NODES') ?? '')
-    .split(',')
-    .map((url) => url.trim())
-    .filter((url) => url.length > 0);
+  // Unless told otherwise, the nodes the gateway already reads chunks from:
+  // its PREFERRED_CHUNK_GET_NODE_URLS, else the default tip and data nodes.
+  let name = 'INDEX_EXPORT_L1_WITNESS_NODES';
+  let listed = value(env, name);
+  if (listed === undefined) {
+    name = 'PREFERRED_CHUNK_GET_NODE_URLS';
+    listed = value(env, name);
+  }
+  const nodes =
+    listed === undefined
+      ? DEFAULT_ARWEAVE_NODE_URLS
+      : listed
+          .split(',')
+          .map((url) => url.trim())
+          .filter((url) => url.length > 0);
   for (const url of nodes) {
     let parsed: URL;
     try {
       parsed = new URL(url);
     } catch {
-      throw new Error(`INDEX_EXPORT_L1_WITNESS_NODES: ${url} is not a URL`);
+      throw new Error(`${name}: ${url} is not a URL`);
     }
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-      throw new Error(`INDEX_EXPORT_L1_WITNESS_NODES: ${url} is not http(s)`);
+      throw new Error(`${name}: ${url} is not http(s)`);
     }
     if (parsed.username !== '' || parsed.password !== '') {
-      throw new Error(
-        `INDEX_EXPORT_L1_WITNESS_NODES: ${url} may not carry a user or password`,
-      );
+      throw new Error(`${name}: ${url} may not carry a user or password`);
     }
   }
   return {
