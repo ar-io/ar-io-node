@@ -135,8 +135,9 @@ class FakeQueryable implements GqlQueryable {
     if (this.data.throws) throw this.data.throws;
     const all = this.data.transactions ?? [];
     const sign = args.sortOrder === 'HEIGHT_ASC' ? 1 : -1;
-    // Sort exactly like SQL/ClickHouse: (height, bti, data_item_id,
-    // indexed_at, id), all in the same direction. id and data_item_id are
+    // Sort exactly like SQL/ClickHouse: (height, bti, data_item_id, id),
+    // all in the same direction; indexed_at is each gateway's own and takes
+    // no part (#947). id and data_item_id are
     // sorted as raw bytes (BLOB), so decode before comparing.
     const compareBySortKey = (
       a: {
@@ -163,8 +164,6 @@ class FakeQueryable implements GqlQueryable {
         fromB64Url(b.dataItemId ?? ''),
       );
       if (diCmp) return sign * diCmp;
-      const iaDiff = a.indexedAt - b.indexedAt;
-      if (iaDiff) return sign * Math.sign(iaDiff);
       return sign * Buffer.compare(fromB64Url(a.id), fromB64Url(b.id));
     };
     const sorted = [...all].sort(compareBySortKey);
@@ -507,6 +506,40 @@ describe('GatewaysGqlQueryable', () => {
         ['b', 'x', 'a'],
       );
     });
+
+    for (const sortOrder of ['HEIGHT_DESC', 'HEIGHT_ASC'] as const) {
+      it(`walks pending items stamped differently by each source exactly once (${sortOrder})`, async () => {
+        // Each gateway stamps its own indexed_at, here a second apart: a
+        // cursor taken from one source's edge must not re-admit the same
+        // item from the other (#947).
+        const pending = (id: string, indexedAt: number) => ({
+          ...txAt({ id, height: 0, isDataItem: true, indexedAt }),
+          height: null as unknown as number,
+          blockTransactionIndex: null as unknown as number,
+        });
+        // Four characters each, so their bytes (sorted as BLOBs) differ.
+        const ids = ['aaaa', 'bbbb', 'cccc', 'dddd'];
+        const merger = makeMerger([
+          new FakeQueryable({ transactions: ids.map((i) => pending(i, 100)) }),
+          new FakeQueryable({ transactions: ids.map((i) => pending(i, 101)) }),
+        ]);
+
+        const seen: string[] = [];
+        let cursor: string | undefined;
+        for (let pages = 0; pages < 10; pages++) {
+          const result = await merger.getGqlTransactions({
+            pageSize: 1,
+            cursor,
+            sortOrder,
+            tags: [],
+          });
+          seen.push(...result.edges.map((e) => e.node.id));
+          if (!result.pageInfo.hasNextPage) break;
+          cursor = result.edges[result.edges.length - 1].cursor;
+        }
+        assert.deepEqual([...seen].sort(), [...ids].sort());
+      });
+    }
 
     it('prefers the height-resolved edge over the null-height edge for the same id (PE-9092)', async () => {
       // Two sources both have id 'x'. Source A has it as a pending

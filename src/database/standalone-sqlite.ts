@@ -2597,11 +2597,12 @@ export class StandaloneSqliteDatabaseWorker {
         cursorHeight == null &&
         cursorIndexedAt != null
       ) {
-        // Pending rows sort by (data_item_id, indexed_at, id) — see the
-        // ORDER BY below and the merged ORDER BY in getGqlNewTransactions —
-        // so the cursor must walk that same tuple, not (indexed_at, id).
-        // For plain transactions data_item_id is the constant x'00'; for
-        // data items it is the item id itself (#947).
+        // Pending rows sort by (data_item_id, id) — see the ORDER BY below
+        // and the merged ORDER BY in getGqlNewTransactions — and the cursor
+        // walks that same tuple. For plain transactions data_item_id is the
+        // constant x'00'; for data items it is the item id itself. Not
+        // indexed_at: each gateway stamps its own, so a cursor from another
+        // indexer (federation) would re-admit the same row (#947).
         const dataItemIdField = source === 'new_items' ? 'id' : "x'00'";
         const cursorDataItemIdBytes = cursorDataItemId
           ? fromB64Url(cursorDataItemId)
@@ -2617,11 +2618,6 @@ export class StandaloneSqliteDatabaseWorker {
                 sql.lt(dataItemIdField, cursorDataItemIdBytes),
                 sql.and(
                   sql.eq(dataItemIdField, cursorDataItemIdBytes),
-                  sql.lt(`${txTableAlias}.indexed_at`, cursorIndexedAt),
-                ),
-                sql.and(
-                  sql.eq(dataItemIdField, cursorDataItemIdBytes),
-                  sql.eq(`${txTableAlias}.indexed_at`, cursorIndexedAt),
                   sql.lt('id', cursorIdBytes),
                 ),
               ),
@@ -2674,7 +2670,6 @@ export class StandaloneSqliteDatabaseWorker {
       } else {
         orderBy += `, 3 DESC`;
       }
-      orderBy += `, indexed_at DESC`;
       orderBy += `, 5 DESC`;
       query.orderBy(orderBy);
     } else {
@@ -2683,11 +2678,12 @@ export class StandaloneSqliteDatabaseWorker {
         cursorHeight == null &&
         cursorIndexedAt != null
       ) {
-        // Pending rows sort by (data_item_id, indexed_at, id) — see the
-        // ORDER BY below and the merged ORDER BY in getGqlNewTransactions —
-        // so the cursor must walk that same tuple, not (indexed_at, id).
-        // For plain transactions data_item_id is the constant x'00'; for
-        // data items it is the item id itself (#947).
+        // Pending rows sort by (data_item_id, id) — see the ORDER BY below
+        // and the merged ORDER BY in getGqlNewTransactions — and the cursor
+        // walks that same tuple. For plain transactions data_item_id is the
+        // constant x'00'; for data items it is the item id itself. Not
+        // indexed_at: each gateway stamps its own, so a cursor from another
+        // indexer (federation) would re-admit the same row (#947).
         const dataItemIdField = source === 'new_items' ? 'id' : "x'00'";
         const cursorDataItemIdBytes = cursorDataItemId
           ? fromB64Url(cursorDataItemId)
@@ -2702,11 +2698,6 @@ export class StandaloneSqliteDatabaseWorker {
             sql.gt(dataItemIdField, cursorDataItemIdBytes),
             sql.and(
               sql.eq(dataItemIdField, cursorDataItemIdBytes),
-              sql.gt(`${txTableAlias}.indexed_at`, cursorIndexedAt),
-            ),
-            sql.and(
-              sql.eq(dataItemIdField, cursorDataItemIdBytes),
-              sql.eq(`${txTableAlias}.indexed_at`, cursorIndexedAt),
               sql.gt('id', cursorIdBytes),
             ),
           ),
@@ -2764,7 +2755,6 @@ export class StandaloneSqliteDatabaseWorker {
       } else {
         orderBy += `, 3 ASC`;
       }
-      orderBy += `, indexed_at ASC`;
       orderBy += `, 5 ASC`;
       query.orderBy(orderBy);
     }
@@ -2862,7 +2852,7 @@ export class StandaloneSqliteDatabaseWorker {
     }
 
     sqlParts.push(
-      `ORDER BY 1 ${sqlSortOrder} ${nulls}, 2 ${sqlSortOrder} ${nulls}, 3 ${sqlSortOrder}, 4 ${sqlSortOrder}, 5 ${sqlSortOrder}`,
+      `ORDER BY 1 ${sqlSortOrder} ${nulls}, 2 ${sqlSortOrder} ${nulls}, 3 ${sqlSortOrder}, 5 ${sqlSortOrder}`,
     );
     sqlParts.push(`LIMIT ${pageSize + 1}`);
     const sql = sqlParts.join(' ');
