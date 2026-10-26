@@ -396,7 +396,10 @@ describe('StandaloneSqliteDatabase', () => {
             cursor,
             sortOrder,
           });
-          const ids = edges.map((edge) => edge.node.id);
+          const ids: string[] = [];
+          for (const edge of edges) {
+            ids.push(edge.node.id);
+          }
           assert.equal(ids.includes(item.id), false);
           // Every other pending item is on its proper side of the cursor.
           const others = PENDING_ITEMS.map((i) => i.id)
