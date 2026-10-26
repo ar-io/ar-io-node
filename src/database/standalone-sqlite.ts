@@ -2632,7 +2632,14 @@ export class StandaloneSqliteDatabaseWorker {
           ),
         );
       } else if (cursorHeight != null && cursorBlockTransactionIndex != null) {
-        let dataItemIdField = source === 'stable_items' ? 'sdi.id' : "x'00'";
+        // The third sort key: a data item's own id (sdi.id, or id in
+        // new_data_items), x'00' for a plain transaction.
+        const dataItemIdField =
+          source === 'stable_items'
+            ? 'sdi.id'
+            : source === 'new_items'
+              ? 'id'
+              : "x'00'";
         query.where(
           sql.lte(`${heightSortTableAlias}.height`, cursorHeight),
           sql.or(
@@ -2708,8 +2715,15 @@ export class StandaloneSqliteDatabaseWorker {
         cursorHeight != undefined &&
         cursorBlockTransactionIndex != undefined
       ) {
-        let dataItemIdField = source === 'stable_items' ? 'sdi.id' : "x'00'";
-        query.where(
+        // The third sort key: a data item's own id (sdi.id, or id in
+        // new_data_items), x'00' for a plain transaction.
+        const dataItemIdField =
+          source === 'stable_items'
+            ? 'sdi.id'
+            : source === 'new_items'
+              ? 'id'
+              : "x'00'";
+        const afterCursor = sql.and(
           sql.gte(`${heightSortTableAlias}.height`, cursorHeight),
           sql.or(
             sql.gt(`${heightSortTableAlias}.height`, cursorHeight),
@@ -2734,6 +2748,13 @@ export class StandaloneSqliteDatabaseWorker {
               ),
             ),
           ),
+        );
+        query.where(
+          ['new_txs', 'new_items'].includes(source)
+            ? // Pending rows (NULL height) sort after every mined row in
+              // ascending order (NULLS LAST)
+              sql.or(afterCursor, sql.isNull(`${heightSortTableAlias}.height`))
+            : afterCursor,
         );
       }
       let orderBy = `${heightSortTableAlias}.height ASC NULLS LAST`;
@@ -2821,6 +2842,9 @@ export class StandaloneSqliteDatabaseWorker {
     const itemsFinalSql = `${itemsSql} LIMIT ${pageSize + 1}`;
 
     const sqlSortOrder = sortOrder === 'HEIGHT_DESC' ? 'DESC' : 'ASC';
+    // Pending rows (NULL height) placed as the per-leg queries place them;
+    // SQLite's default (NULL smallest) is the opposite in both orders.
+    const nulls = sortOrder === 'HEIGHT_DESC' ? 'NULLS FIRST' : 'NULLS LAST';
     // `l1Only` forces the base-layer (transactions) leg only, dropping the
     // bundled data-item leg regardless of `bundledIn`.
     const includeTxs = l1Only || bundledIn === undefined || bundledIn === null;
@@ -2838,7 +2862,7 @@ export class StandaloneSqliteDatabaseWorker {
     }
 
     sqlParts.push(
-      `ORDER BY 1 ${sqlSortOrder}, 2 ${sqlSortOrder}, 3 ${sqlSortOrder}, 4 ${sqlSortOrder}, 5 ${sqlSortOrder}`,
+      `ORDER BY 1 ${sqlSortOrder} ${nulls}, 2 ${sqlSortOrder} ${nulls}, 3 ${sqlSortOrder}, 4 ${sqlSortOrder}, 5 ${sqlSortOrder}`,
     );
     sqlParts.push(`LIMIT ${pageSize + 1}`);
     const sql = sqlParts.join(' ');
