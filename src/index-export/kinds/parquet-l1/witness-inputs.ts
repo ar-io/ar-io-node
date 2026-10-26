@@ -140,6 +140,9 @@ export function l1WitnessInputs(
     ? new ArweaveNodePool({
         urls: config.nodes,
         timeoutMs: FETCH_TIMEOUT_MS,
+        // Coverage, not agreement among machines: nodes on one address (on
+        // other ports, say) hold other data, so every one is kept.
+        dedupeByAddress: false,
         // A redirect is an answer from the node asked, not one to follow
         // elsewhere: the pool moves on to the next node.
         fetch: (url, init) => fetch(url, { ...init, redirect: 'manual' }),
