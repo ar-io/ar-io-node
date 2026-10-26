@@ -828,7 +828,29 @@ largest, `h1800000`, holds 69M items and 518M tag rows):
   sorted by its key, in the same database;
 - DuckDB runs within `INDEX_EXPORT_L2_DUCKDB_MEMORY` (2 GB) and
   `INDEX_EXPORT_L2_DUCKDB_THREADS` (2), spilling into the staging
-  directory, at most `INDEX_EXPORT_L2_DUCKDB_SPILL_MAX_GB` (256 GB).
+  directory, at most `INDEX_EXPORT_L2_DUCKDB_SPILL_MAX_GB` (256 GB);
+- glibc's allocator is held to two arenas and returns large frees to the
+  system (`MALLOC_ARENA_MAX=2`, `MALLOC_MMAP_THRESHOLD_` and
+  `MALLOC_TRIM_THRESHOLD_` at 131072, set in `docker-compose.yaml`). The
+  build runs one DuckDB query after another in one process, and by default
+  glibc keeps what each frees in per-thread arenas, so the process grows
+  to several times what any one query uses and never shrinks.
+
+What that measured on turbo-gateway.com's densest `ardrive-l2` band,
+1,865,000–1,869,999 (12.0M items), built alone with one DuckDB thread
+(`--keep --range`), each run producing the same band:
+
+| Allocator | Peak (anonymous memory) | Build |
+| --- | --- | --- |
+| glibc defaults | 16.8 GB | 21 min |
+| `MALLOC_ARENA_MAX=2` | 5.6 GB | 21½ min |
+| `MALLOC_ARENA_MAX=2` and both thresholds at 131072 (shipped) | 3.3 GB | 24 min |
+
+No single query used more than 2.6 GB (each lookup's derivation, run
+alone). A deployment that sets its own `environment` for this service
+should keep these three; `INDEX_EXPORT_MALLOC_ARENA_MAX`,
+`INDEX_EXPORT_MALLOC_MMAP_THRESHOLD` and `INDEX_EXPORT_MALLOC_TRIM_THRESHOLD`
+override them.
 
 A synthetic band of 3,000,000 items and 21,000,000 tag rows (seven
 ArDrive-like tags each) builds in 8 minutes with DuckDB held to 512 MB, the

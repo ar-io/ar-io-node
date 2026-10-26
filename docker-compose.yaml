@@ -1041,6 +1041,15 @@ services:
       # of the disk.
       - NODE_OPTIONS=--max-old-space-size=4096
       - UV_THREADPOOL_SIZE=16
+      # glibc's allocator, held to two arenas and returning large frees to
+      # the system: a build's DuckDB work, query after query, otherwise
+      # leaves freed memory in per-thread arenas and the process grows to
+      # several times what any one query uses (a 12M-item L2 band: 16.8 GB
+      # by default, 3.3 GB with these, the same band). See "Memory and
+      # disk" in docs/index-export.md.
+      - MALLOC_ARENA_MAX=${INDEX_EXPORT_MALLOC_ARENA_MAX:-2}
+      - MALLOC_MMAP_THRESHOLD_=${INDEX_EXPORT_MALLOC_MMAP_THRESHOLD:-131072}
+      - MALLOC_TRIM_THRESHOLD_=${INDEX_EXPORT_MALLOC_TRIM_THRESHOLD:-131072}
     mem_limit: 6g
     blkio_config:
       weight: 100
