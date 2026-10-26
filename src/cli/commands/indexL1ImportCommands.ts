@@ -40,6 +40,7 @@ import {
   sampleOptions,
   spillReserveBytes,
 } from './indexL1VerifyCommands.js';
+import { parseDuckdbThreads } from '../../lib/duckdb-threads.js';
 
 export interface IndexL1ImportDeps {
   log: Logger;
@@ -205,6 +206,7 @@ export async function indexL1ImportCLICommand(
       tmpRoot: path.dirname(coreDb),
       prefix: SPILL_PREFIX,
       ...(options.spillMax !== undefined ? { spillMax: options.spillMax } : {}),
+      threads: parseDuckdbThreads(options.duckdbThreads),
       reserveBytes: spillReserveBytes(options.spillReserveGb),
     });
   } catch (error) {

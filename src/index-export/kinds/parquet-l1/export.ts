@@ -76,6 +76,7 @@ import {
   witnessesOf,
   writePublisherFacts,
 } from '../../../lib/parquet-l1/layout.js';
+import { DEFAULT_DUCKDB_THREADS } from '../../../lib/duckdb-threads.js';
 
 /**
  * Heights read per window: each window's transactions are held in memory,
@@ -848,7 +849,8 @@ export function isTransientSqliteError(error: unknown): boolean {
 export class L1IncompleteError extends Error {}
 
 /**
- * A DuckDB for writing a band's Parquet: 1 GB and two threads, spilling a
+ * A DuckDB for writing a band's Parquet: 1 GB and one thread
+ * ({@link DEFAULT_DUCKDB_THREADS}: DuckDB 1.4 can crash on more), spilling a
  * large sort into `staging` (the bands' volume, cleared with it), never the
  * container's own layer, and bounded. Used for a new band's tables and
  * lookups, and for deriving a published band's lookups.
@@ -863,7 +865,7 @@ export async function withBandWriter<T>(
   try {
     await fs.mkdir(spill, { recursive: true });
     await duck.exec(
-      `SET memory_limit = '1GB'; SET threads = 2; SET preserve_insertion_order = false; SET temp_directory = '${spill.replace(/'/g, "''")}'; SET max_temp_directory_size = '${DUCKDB_SPILL_MAX_GB}GB'; SET autoinstall_known_extensions = false; SET autoload_known_extensions = false;`,
+      `SET memory_limit = '1GB'; SET threads = ${DEFAULT_DUCKDB_THREADS}; SET preserve_insertion_order = false; SET temp_directory = '${spill.replace(/'/g, "''")}'; SET max_temp_directory_size = '${DUCKDB_SPILL_MAX_GB}GB'; SET autoinstall_known_extensions = false; SET autoload_known_extensions = false;`,
     );
     return await run(duck);
   } finally {

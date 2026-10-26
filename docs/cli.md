@@ -511,6 +511,7 @@ underneath.
 | `--read-timeout` | Milliseconds each read from a source may take (default 30000) |
 | `--spill-max` | The most the check's DuckDB may spill, as a DuckDB size (default 128GB) |
 | `--spill-reserve-gb` | Space always left free beside `core.db` under the spill, in GB (default 100) |
+| `--duckdb-threads <n>` | DuckDB's threads, 1 to 64 (default 1; DuckDB 1.4 can crash merging a spilled aggregate on more, [duckdb#23757](https://github.com/duckdb/duckdb/pull/23757)) |
 
 The check's DuckDB spills to a folder of its own beside `core.db`
 (`.duckdb-import-*`), capped at `--spill-max`, at 80% of the space free
@@ -1047,6 +1048,7 @@ its heartbeat is a day old.
 | `--skip-tx-root` | Leave out the `tx_root` recomputation, the one check that reads every transaction |
 | `--skip-lookups` | With `--bands-dir`, leave out the lookup check |
 | `--spill-max`, `--spill-reserve-gb` | Bound the lookup check's spill (above) |
+| `--duckdb-threads <n>` | DuckDB's threads per database, 1 to 64 (default 1; DuckDB 1.4 can crash merging a spilled aggregate on more, [duckdb#23757](https://github.com/duckdb/duckdb/pull/23757)) |
 
 `--skip-tx-root`, `--skip-lookups` and `--sample-blocks 0 --sample-txs 0`
 are listed in `skipped` and, being asked for, in `accepted`.
@@ -1279,7 +1281,8 @@ proves, and how to reproduce or repair a band that fails, is in
 | `--from <height>`, `--to <height>` | Check only the bands inside these heights; a band only partly inside is listed under `partial` |
 | `--skip-lookups` | Leave out the lookup check, the slowest on large bands |
 | `--spill-max <size>` | The most the lookup and consistency checks may spill (default `128GB`; never more than 80% of the space free under the temp directory, nor into its last 100 GB) |
-| `--concurrency <n>` | How many DuckDB databases (two threads and 2 GB of memory each) check side by side: bands, and a band's tables and lookups, are read on them at once (default: a quarter of the CPUs, at most 4, at least 1; at most 16, and never more than `UV_THREADPOOL_SIZE` less 2, since each database holds a libuv thread while it reads and the on-chain reads' DNS lookups need threads too: an explicit value above that is refused. `tools/ar-io-node` sets `UV_THREADPOOL_SIZE=16` unless the shell sets it). Bands are started largest first. The databases share the spill cap: a read that derives a lookup reserves 20 bytes per byte of the tables it reads, the SQL checks 3 per byte of `data_items` and `tags`, before they start, and wait while that much isn't free; a read that runs out of its share runs again with all of it. The result is the same at any value, 1 included; at 1 the checks still run through the same pool and DuckDB digests, one database at a time, not the reader before `--concurrency` existed |
+| `--duckdb-threads <n>` | DuckDB's threads per database, 1 to 64 (default 1). More can be faster, but DuckDB 1.4, the newest the Node binding has, can crash (SIGSEGV) merging a large aggregate that spilled on more than one ([duckdb#23757](https://github.com/duckdb/duckdb/pull/23757)). The result is the same at any value |
+| `--concurrency <n>` | How many DuckDB databases (`--duckdb-threads` threads, one unless asked, and 2 GB of memory each) check side by side: bands, and a band's tables and lookups, are read on them at once (default: a quarter of the CPUs, at most 4, at least 1; at most 16, and never more than `UV_THREADPOOL_SIZE` less 2, since each database holds a libuv thread while it reads and the on-chain reads' DNS lookups need threads too: an explicit value above that is refused. `tools/ar-io-node` sets `UV_THREADPOOL_SIZE=16` unless the shell sets it). Bands are started largest first. The databases share the spill cap: a read that derives a lookup reserves 20 bytes per byte of the tables it reads, the SQL checks 3 per byte of `data_items` and `tags`, before they start, and wait while that much isn't free; a read that runs out of its share runs again with all of it. The result is the same at any value, 1 included; at 1 the checks still run through the same pool and DuckDB digests, one database at a time, not the reader before `--concurrency` existed |
 
 It reads every row of every table in file order, so memory stays flat (DuckDB
 encodes and joins each range of rows as the row digest takes them, and the

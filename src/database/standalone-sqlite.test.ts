@@ -312,6 +312,89 @@ describe('StandaloneSqliteDatabase', () => {
     });
   });
 
+  describe('GraphQL pagination over pending data items', () => {
+    // Regression test for #947: cursor pagination over bundled data items
+    // with no block height returned duplicates and skipped items, because
+    // the per-leg sort orders pending rows by (data_item_id, indexed_at,
+    // id) while the null-height cursor predicate walked them by
+    // (indexed_at, id). Seeding items whose indexed_at order disagrees
+    // with their id order exposes the mismatch on any page walk.
+    const OWNER = Buffer.alloc(32, 0x07);
+    const ANCHOR = Buffer.alloc(32);
+
+    // Id byte order is deliberately NOT the indexed_at order: the
+    // smallest id is indexed last and the largest id first.
+    const PENDING_ITEMS = [
+      { id: toB64Url(Buffer.alloc(32, 0x10)), indexedAt: 500 },
+      { id: toB64Url(Buffer.alloc(32, 0x20)), indexedAt: 400 },
+      { id: toB64Url(Buffer.alloc(32, 0x30)), indexedAt: 300 },
+      { id: toB64Url(Buffer.alloc(32, 0x40)), indexedAt: 200 },
+      { id: toB64Url(Buffer.alloc(32, 0x50)), indexedAt: 100 },
+    ];
+
+    const seedPendingItems = () => {
+      bundlesDb
+        .prepare(
+          'INSERT INTO wallets (address, public_modulus) VALUES (@address, @modulus)',
+        )
+        .run({ address: OWNER, modulus: Buffer.alloc(32, 0x09) });
+      const insert = bundlesDb.prepare(
+        `INSERT INTO new_data_items (
+           id, anchor, owner_address, data_size, tag_count, indexed_at
+         ) VALUES (@id, @anchor, @owner, 1, 0, @indexedAt)`,
+      );
+      for (const item of PENDING_ITEMS) {
+        insert.run({
+          id: fromB64Url(item.id),
+          anchor: ANCHOR,
+          owner: OWNER,
+          indexedAt: item.indexedAt,
+        });
+      }
+    };
+
+    const walkAll = async (sortOrder: 'HEIGHT_ASC' | 'HEIGHT_DESC') => {
+      const seen: string[] = [];
+      let cursor: string | undefined;
+      for (let pages = 0; pages < 10; pages++) {
+        const { pageInfo, edges } = await db.getGqlTransactions({
+          pageSize: 2,
+          cursor,
+          sortOrder,
+        });
+        for (const edge of edges) {
+          seen.push(edge.node.id);
+        }
+        if (!pageInfo.hasNextPage) {
+          return seen;
+        }
+        cursor = edges[edges.length - 1]?.cursor;
+        assert.notEqual(cursor, undefined);
+      }
+      assert.fail('pagination did not terminate');
+    };
+
+    it('walks every pending data item exactly once (HEIGHT_ASC)', async () => {
+      seedPendingItems();
+      const seen = await walkAll('HEIGHT_ASC');
+      assert.deepEqual(
+        [...seen].sort(),
+        PENDING_ITEMS.map((item) => item.id).sort(),
+      );
+      assert.equal(new Set(seen).size, seen.length);
+    });
+
+    it('walks every pending data item exactly once (HEIGHT_DESC)', async () => {
+      seedPendingItems();
+      const seen = await walkAll('HEIGHT_DESC');
+      assert.deepEqual(
+        [...seen].sort(),
+        PENDING_ITEMS.map((item) => item.id).sort(),
+      );
+      assert.equal(new Set(seen).size, seen.length);
+    });
+  });
+
   describe('offsets', () => {
     it('should return stable transaction geometry via getTxGeometry only when offset and data_root are set', async () => {
       const completeId = 'Gm0rYd8Eq2wqBqk3JdxYl7c3v8m9mZ0p2Qn1l2o3p4E';
