@@ -377,6 +377,40 @@ describe('StandaloneSqliteDatabase', () => {
       assert.fail('pagination did not terminate');
     };
 
+    for (const sortOrder of ['HEIGHT_ASC', 'HEIGHT_DESC'] as const) {
+      for (const skew of [-1, 1]) {
+        it(`does not re-admit a pending item for a cursor stamped ${skew > 0 ? 'later' : 'earlier'} elsewhere (${sortOrder})`, async () => {
+          // A federating gateway hands one indexer's cursor to another, which
+          // stamped the same item's indexed_at a little differently (#947).
+          seedPendingItems();
+          const [item] = PENDING_ITEMS;
+          const cursor = encodeTransactionGqlCursor({
+            height: null,
+            blockTransactionIndex: null,
+            dataItemId: item.id,
+            indexedAt: item.indexedAt + skew,
+            id: item.id,
+          });
+          const { edges } = await db.getGqlTransactions({
+            pageSize: 10,
+            cursor,
+            sortOrder,
+          });
+          const ids = edges.map((edge) => edge.node.id);
+          assert.equal(ids.includes(item.id), false);
+          // Every other pending item is on its proper side of the cursor.
+          const others = PENDING_ITEMS.map((i) => i.id)
+            .filter((id) => id !== item.id)
+            .filter((id) =>
+              sortOrder === 'HEIGHT_ASC'
+                ? Buffer.compare(fromB64Url(id), fromB64Url(item.id)) > 0
+                : Buffer.compare(fromB64Url(id), fromB64Url(item.id)) < 0,
+            );
+          assert.deepEqual([...ids].sort(), [...others].sort());
+        });
+      }
+    }
+
     it('walks every pending data item exactly once (HEIGHT_ASC)', async () => {
       seedPendingItems();
       const seen = await walkAll('HEIGHT_ASC');

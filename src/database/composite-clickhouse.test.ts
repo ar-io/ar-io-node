@@ -449,11 +449,10 @@ describe('CompositeClickHouseDatabase', () => {
   });
 
   describe('pending L1 transactions', () => {
-    // SQLite orders and pages pending (height-less) L1 transactions by
-    // indexed_at, then id. The merge must keep that order, or the page's
-    // last cursor is not the last row SQLite gave and the next page skips
-    // or repeats rows (#947). id('a') < id('b') < id('c'); their indexed_at
-    // order is the reverse.
+    // Pending (height-less) L1 transactions come only from SQLite, which
+    // orders and pages them by id; indexed_at differs from one gateway to
+    // the next, so it takes no part in the order (#947). The merge must keep
+    // that order whatever their indexed_at.
     const pending = (label: string, indexedAt: number) =>
       sqliteEdge({
         ...sqliteTx({ id: id(label), height: 0, indexedAt }),
@@ -462,11 +461,11 @@ describe('CompositeClickHouseDatabase', () => {
       });
 
     for (const [sortOrder, order] of [
-      ['HEIGHT_DESC', ['a', 'b', 'c']],
-      ['HEIGHT_ASC', ['c', 'b', 'a']],
+      ['HEIGHT_DESC', ['c', 'b', 'a']],
+      ['HEIGHT_ASC', ['a', 'b', 'c']],
     ] as const) {
-      it(`keeps SQLite's indexed_at order (${sortOrder})`, async () => {
-        const indexedAt: Record<string, number> = { a: 300, b: 200, c: 100 };
+      it(`keeps SQLite's id order, not indexed_at (${sortOrder})`, async () => {
+        const indexedAt: Record<string, number> = { a: 300, b: 100, c: 200 };
         const composite = buildComposite({
           sqlite: makeSqliteStub({
             transactions: {
