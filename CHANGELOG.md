@@ -182,7 +182,13 @@ release to take bands published as `l1-4`.
   same in the merged query as in each leg, an ascending walk reaches the
   pending rows after the mined ones, a new data item's cursor carries its
   own id, and the second leg is read until the page's look-ahead row is
-  had. Thanks to @saravanan619 (#1096).
+  had. In an ascending walk the ClickHouse legs no longer start over once
+  a page ends on a pending row (they hold only mined rows), and pending
+  rows sort and page by data item and id rather than by `indexed_at`,
+  which each indexer stamps for itself, so a gateway federating several
+  indexers no longer repeats pending items. A pending-row cursor issued
+  before the upgrade may skip one pending row once, as the order changes
+  under it. Thanks to @saravanan619 (#1096).
 - The abort-signal middleware no longer assigns `req.signal`, which Node
   24 defines as a getter: on Node 24 every request would have failed with
   a 500. The gateway's own signal (aborted only when the client leaves
