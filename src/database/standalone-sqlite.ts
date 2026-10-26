@@ -2597,23 +2597,32 @@ export class StandaloneSqliteDatabaseWorker {
         cursorHeight == null &&
         cursorIndexedAt != null
       ) {
+        // Pending rows sort by (data_item_id, indexed_at, id) — see the
+        // ORDER BY below and the merged ORDER BY in getGqlNewTransactions —
+        // so the cursor must walk that same tuple, not (indexed_at, id).
+        // For plain transactions data_item_id is the constant x'00'; for
+        // data items it is the item id itself (#947).
+        const dataItemIdField = source === 'new_items' ? 'id' : "x'00'";
+        const cursorDataItemIdBytes = cursorDataItemId
+          ? fromB64Url(cursorDataItemId)
+          : Buffer.from([0]);
+        const cursorIdBytes = cursorId
+          ? fromB64Url(cursorId)
+          : Buffer.from([0]);
         query.where(
           sql.or(
             sql.and(
-              // indexed_at is only considered when the height is null
               sql.isNull(`${heightSortTableAlias}.height`),
               sql.or(
-                // If the indexed_at is less than the cursor, the ID is not
-                // considered
-                sql.lt(`${txTableAlias}.indexed_at`, cursorIndexedAt),
+                sql.lt(dataItemIdField, cursorDataItemIdBytes),
                 sql.and(
-                  // If the indexedAt is the same as the cursor, the ID is
-                  // compared
-                  sql.lte(`${txTableAlias}.indexed_at`, cursorIndexedAt),
-                  sql.lt(
-                    'id',
-                    cursorId ? fromB64Url(cursorId) : Buffer.from([0]),
-                  ),
+                  sql.eq(dataItemIdField, cursorDataItemIdBytes),
+                  sql.lt(`${txTableAlias}.indexed_at`, cursorIndexedAt),
+                ),
+                sql.and(
+                  sql.eq(dataItemIdField, cursorDataItemIdBytes),
+                  sql.eq(`${txTableAlias}.indexed_at`, cursorIndexedAt),
+                  sql.lt('id', cursorIdBytes),
                 ),
               ),
             ),
@@ -2667,18 +2676,31 @@ export class StandaloneSqliteDatabaseWorker {
         cursorHeight == null &&
         cursorIndexedAt != null
       ) {
+        // Pending rows sort by (data_item_id, indexed_at, id) — see the
+        // ORDER BY below and the merged ORDER BY in getGqlNewTransactions —
+        // so the cursor must walk that same tuple, not (indexed_at, id).
+        // For plain transactions data_item_id is the constant x'00'; for
+        // data items it is the item id itself (#947).
+        const dataItemIdField = source === 'new_items' ? 'id' : "x'00'";
+        const cursorDataItemIdBytes = cursorDataItemId
+          ? fromB64Url(cursorDataItemId)
+          : Buffer.from([0]);
+        const cursorIdBytes = cursorId
+          ? fromB64Url(cursorId)
+          : Buffer.from([0]);
         query.where(
           // indexed_at is only considered when the height is null
           sql.isNull(`${heightSortTableAlias}.height`),
           sql.or(
-            // If the indexed_at is greater than the cursor, the ID is not
-            // considered
-            sql.gt(`${txTableAlias}.indexed_at`, cursorIndexedAt),
+            sql.gt(dataItemIdField, cursorDataItemIdBytes),
             sql.and(
-              // If the indexed_at is the same as the cursor, the ID is
-              // compared
-              sql.gte(`${txTableAlias}.indexed_at`, cursorIndexedAt),
-              sql.gt('id', cursorId ? fromB64Url(cursorId) : Buffer.from([0])),
+              sql.eq(dataItemIdField, cursorDataItemIdBytes),
+              sql.gt(`${txTableAlias}.indexed_at`, cursorIndexedAt),
+            ),
+            sql.and(
+              sql.eq(dataItemIdField, cursorDataItemIdBytes),
+              sql.eq(`${txTableAlias}.indexed_at`, cursorIndexedAt),
+              sql.gt('id', cursorIdBytes),
             ),
           ),
         );
