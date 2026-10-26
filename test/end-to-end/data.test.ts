@@ -30,8 +30,6 @@ import { StartedGenericContainer } from 'testcontainers/build/generic-container/
 import { isTestFiltered } from '../utils.js';
 import { DataItem } from '@dha-team/arbundles';
 
-const projectRootPath = process.cwd();
-
 // contains various data items
 const bundle1 = '73QwVewKc0hXmuiaahtGJqHEY5pb85SoqCC33VE0Teg';
 

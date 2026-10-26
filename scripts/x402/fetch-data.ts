@@ -4,7 +4,7 @@
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
-import { wrapFetchWithPayment } from 'x402-fetch';
+import { type Signer, wrapFetchWithPayment } from 'x402-fetch';
 import { privateKeyToAccount } from 'viem/accounts';
 
 // Get transaction ID from command line arguments
@@ -23,7 +23,13 @@ if (privateKey === undefined) {
 }
 const account = privateKeyToAccount(privateKey);
 
-const fetchWithPayment = wrapFetchWithPayment(fetch, account);
+// x402-fetch resolves its own nested copy of viem, so the account type from
+// the top-level viem is structurally the same but nominally distinct. The
+// cast only bridges the duplicate package types; the value is unchanged.
+const fetchWithPayment = wrapFetchWithPayment(
+  fetch,
+  account as unknown as Signer,
+);
 
 fetchWithPayment(`http://localhost:4000/${txId}`, { method: 'GET' })
   .then(async (response) => {

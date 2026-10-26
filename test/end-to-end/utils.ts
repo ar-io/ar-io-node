@@ -11,7 +11,7 @@ import {
   StartedDockerComposeEnvironment,
   Wait,
 } from 'testcontainers';
-import { StartedGenericContainer } from 'testcontainers/build/generic-container/started-generic-container';
+import { StartedGenericContainer } from 'testcontainers/build/generic-container/started-generic-container.js';
 import { Environment } from 'testcontainers/build/types.js';
 import axios from 'axios';
 import * as fs from 'node:fs';
