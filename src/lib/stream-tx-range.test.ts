@@ -6,7 +6,7 @@
  */
 
 import { strict as assert } from 'node:assert';
-import { describe, it, beforeEach, mock } from 'node:test';
+import { describe, it, beforeEach, mock, type Mock } from 'node:test';
 import winston from 'winston';
 import crypto from 'node:crypto';
 import { streamRangeData } from './stream-tx-range.js';
@@ -119,16 +119,23 @@ async function createMockChunk(
 }
 
 describe('streamRangeData', () => {
+  type LogMethodMock = Mock<(...args: unknown[]) => void>;
+  let logMocks: {
+    debug: LogMethodMock;
+    warn: LogMethodMock;
+    error: LogMethodMock;
+  };
   let mockLogger: winston.Logger;
   let mockGetChunkByAny: any;
 
   beforeEach(() => {
-    // Create a mock logger
-    mockLogger = {
+    // Create a mock logger; the code under test only logs at these levels
+    logMocks = {
       debug: mock.fn(),
       warn: mock.fn(),
       error: mock.fn(),
-    } as any;
+    };
+    mockLogger = logMocks as unknown as winston.Logger;
 
     // Reset mock
     mockGetChunkByAny = mock.fn();
@@ -353,7 +360,7 @@ describe('streamRangeData', () => {
 
     assert.equal(chunks.length, 0);
     assert.equal(mockGetChunkByAny.mock.calls.length, 0);
-    assert.equal(mockLogger.warn.mock.calls.length, 1);
+    assert.equal(logMocks.warn.mock.calls.length, 1);
     assert.equal(result.getChunksFetched(), 0);
   });
 
@@ -377,7 +384,7 @@ describe('streamRangeData', () => {
 
     assert.equal(chunks.length, 0);
     assert.equal(mockGetChunkByAny.mock.calls.length, 0);
-    assert.equal(mockLogger.warn.mock.calls.length, 1);
+    assert.equal(logMocks.warn.mock.calls.length, 1);
     assert.equal(result.getChunksFetched(), 0);
   });
 
@@ -401,7 +408,7 @@ describe('streamRangeData', () => {
 
     assert.equal(chunks.length, 0);
     assert.equal(mockGetChunkByAny.mock.calls.length, 0);
-    assert.equal(mockLogger.warn.mock.calls.length, 1);
+    assert.equal(logMocks.warn.mock.calls.length, 1);
     assert.equal(result.getChunksFetched(), 0);
   });
 
@@ -429,7 +436,7 @@ describe('streamRangeData', () => {
       }
     }, /Network error/);
 
-    assert.equal(mockLogger.error.mock.calls.length, 1);
+    assert.equal(logMocks.error.mock.calls.length, 1);
   });
 
   it('should handle last chunk being smaller', async () => {

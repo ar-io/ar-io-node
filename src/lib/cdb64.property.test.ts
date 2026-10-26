@@ -243,7 +243,7 @@ describe('CDB64 property tests', () => {
               pairs.map(([k]) => Buffer.from(k).toString('hex')),
             );
             if (existingKeys.has(missingKey.toString('hex'))) {
-              return true; // Skip this case
+              return; // Skip this case
             }
 
             const writer = new Cdb64Writer(cdbPath);

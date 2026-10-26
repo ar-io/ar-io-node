@@ -7,15 +7,7 @@
 
 import { strict as assert } from 'node:assert';
 import { Readable } from 'node:stream';
-import {
-  after,
-  afterEach,
-  before,
-  beforeEach,
-  describe,
-  it,
-  mock,
-} from 'node:test';
+import { after, afterEach, before, describe, it, mock } from 'node:test';
 import { ContiguousDataIndex, ContiguousDataSource } from '../types.js';
 
 import { DataVerificationWorker } from './data-verification.js';

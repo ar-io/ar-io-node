@@ -94,7 +94,7 @@ describe('IP Utilities', () => {
 
   describe('extractAllClientIPs', () => {
     function createMockRequest(
-      ip: string,
+      ip: string | undefined,
       headers: Record<string, string | string[]> = {},
       remoteAddress?: string,
     ): Request {
@@ -282,10 +282,9 @@ describe('IP Utilities', () => {
 
     it('has no client address without a connection address', () => {
       // Headers alone prove nothing about who sent them.
-      const req = createMockRequest('', {
+      const req = createMockRequest(undefined, {
         'x-forwarded-for': '203.0.113.1',
       });
-      req.ip = undefined;
 
       const result = extractAllClientIPs(req);
 
