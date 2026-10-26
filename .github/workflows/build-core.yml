@@ -47,6 +47,10 @@ jobs:
       - run: yarn --immutable --immutable-cache
       - run: yarn build
       - run: yarn lint:check
+      # `yarn build` uses tsconfig.prod.json, which excludes *.test.ts, so
+      # this is the only per-push check that type-checks test code. It must
+      # stay at zero errors.
+      - run: yarn typecheck
       - run: yarn test:ci
       # Run E2E tests on the integration and release branches only.
       #

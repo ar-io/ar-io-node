@@ -22,13 +22,14 @@ caching, ANS-104 bundle unbundling, and multi-source data retrieval.
 | Circular deps / dupes | `yarn deps:ci` / `yarn duplicate:check` |
 
 `build-core.yml` runs on every push (any branch) and runs `build`,
-`lint:check` and `test:ci` — not `typecheck`. Its docker build and `test:e2e`
-steps run only on `develop`. `test-core.yml` (manual dispatch only) is the one
-workflow that also runs `typecheck`. Nothing runs on `pull_request`. `yarn build`
-uses `tsconfig.prod.json`, which excludes `*.test.ts`, so `yarn typecheck` is
-the only thing that type-checks test code — run it locally. It currently fails
-with hundreds of pre-existing errors, so the useful check is "no new errors
-compared with `develop`", not a clean exit.
+`lint:check`, `typecheck` and `test:ci`. Its docker build and `test:e2e`
+steps run only on `develop`. `test-core.yml` (manual dispatch only) runs
+`typecheck` too. Nothing runs on `pull_request`. `yarn build` uses
+`tsconfig.prod.json`, which excludes `*.test.ts`, so `yarn typecheck` is the
+only thing that type-checks test code. It passes with zero errors and CI
+fails on any new one, so run it locally before pushing. Use
+`yarn typecheck --pretty false` when grepping: coloured output makes
+`grep 'error TS'` match nothing.
 
 E2E tests (`test/end-to-end/`) come in two kinds. `getCoreContainer` suites
 run the image tagged `core`. `composeUp` suites run whatever image

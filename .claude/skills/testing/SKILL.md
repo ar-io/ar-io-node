@@ -33,7 +33,7 @@ Pick the narrowest layer that can fail on the change.
 | `yarn test:e2e` | All e2e tests. Builds the core image unless `USE_PREBUILT_IMAGE=true`. |
 | `yarn test:auto-verify:indexing` | Auto-verify run. Driven by `.env` + `AUTO_VERIFY_*` vars. |
 | `yarn lint:check` / `yarn lint:fix` | ESLint. Read its full output: piping through `tail` can leave only npm's update notice. |
-| `yarn typecheck` | Type-checks source **and tests** (`yarn build` skips tests, and the per-push CI, `build-core.yml`, runs neither on test code; only the hand-dispatched `test-core.yml` does). It fails with hundreds of pre-existing errors, so compare against `develop` by file and message, with `--pretty false` (coloured output defeats `grep 'error TS'`). |
+| `yarn typecheck` | Type-checks source **and tests** (`yarn build` skips tests). It passes with zero errors, and the per-push CI (`build-core.yml`) runs it, so any new error fails the build. Use `--pretty false` when grepping (coloured output defeats `grep 'error TS'`). |
 | `yarn duplicate:ci` / `yarn deps:ci` | jscpd and madge circular-dependency gates. `yarn duplicate:check` only reports; it never fails. |
 
 **DuckDB and SQLite suites on an old-glibc host.** The native DuckDB and SQLite modules need a newer glibc than some hosts have. Run those suites (index-swarm, index-export, parquet-l1, anything that opens a database) inside the core image, with your `node_modules` mounted read-only:
