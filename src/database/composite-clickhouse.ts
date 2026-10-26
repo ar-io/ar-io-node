@@ -1791,6 +1791,20 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
         return (txA.isDataItem ? 1 : -1) * sortOrderModifier;
       }
 
+      // Pending L1 transactions (no height) come only from SQLite, which
+      // orders and pages them by indexed_at, then id; a data item's own id
+      // is its key there, so only these differ from the id order below.
+      if (
+        txA.height == null &&
+        txB.height == null &&
+        !txA.isDataItem &&
+        txA.indexedAt !== txB.indexedAt
+      ) {
+        return (
+          ((txA.indexedAt ?? 0) - (txB.indexedAt ?? 0)) * sortOrderModifier
+        );
+      }
+
       // Compare transaction IDs as binary data to match ClickHouse sorting
       const bufA = fromB64Url(txA.id);
       const bufB = fromB64Url(txB.id);

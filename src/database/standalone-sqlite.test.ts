@@ -353,12 +353,15 @@ describe('StandaloneSqliteDatabase', () => {
       }
     };
 
-    const walkAll = async (sortOrder: 'HEIGHT_ASC' | 'HEIGHT_DESC') => {
+    const walkAll = async (
+      sortOrder: 'HEIGHT_ASC' | 'HEIGHT_DESC',
+      pageSize = 2,
+    ) => {
       const seen: string[] = [];
       let cursor: string | undefined;
-      for (let pages = 0; pages < 10; pages++) {
+      for (let pages = 0; pages < 20; pages++) {
         const { pageInfo, edges } = await db.getGqlTransactions({
-          pageSize: 2,
+          pageSize,
           cursor,
           sortOrder,
         });
@@ -393,6 +396,106 @@ describe('StandaloneSqliteDatabase', () => {
       );
       assert.equal(new Set(seen).size, seen.length);
     });
+
+    // Mined items in the new tables: their height and block transaction
+    // index come from their root transaction's new_block_transactions row.
+    // Two share a bundle (same height and index), so only their ids order
+    // them.
+    const seedMinedItems = () => {
+      const block = coreDb.prepare(
+        `INSERT INTO new_block_transactions (
+           block_indep_hash, transaction_id, block_transaction_index, height
+         ) VALUES (@block, @root, @index, @height)`,
+      );
+      const item = bundlesDb.prepare(
+        `INSERT INTO new_data_items (
+           id, parent_id, root_transaction_id, height, anchor, owner_address,
+           data_size, tag_count, indexed_at
+         ) VALUES (@id, @root, @root, @height, @anchor, @owner, 1, 0, 600)`,
+      );
+      const roots = [
+        { root: Buffer.alloc(32, 0xa1), height: 10, index: 3 },
+        { root: Buffer.alloc(32, 0xa2), height: 20, index: 0 },
+      ];
+      for (const { root, height, index } of roots) {
+        block.run({ block: Buffer.alloc(48, root[0]), root, index, height });
+      }
+      const mined = [
+        { id: Buffer.alloc(32, 0x60), ...roots[0] },
+        { id: Buffer.alloc(32, 0x05), ...roots[1] },
+        { id: Buffer.alloc(32, 0x45), ...roots[1] },
+      ];
+      for (const { id, root, height } of mined) {
+        item.run({ id, root, height, anchor: ANCHOR, owner: OWNER });
+      }
+      return mined.map(({ id }) => toB64Url(id));
+    };
+
+    // Mined items in the stable tables, read before (HEIGHT_ASC) or after
+    // (HEIGHT_DESC) the new tables. Two share height 6 and its index.
+    const seedStableItems = () => {
+      const block = coreDb.prepare(
+        `INSERT OR IGNORE INTO stable_blocks (
+           height, indep_hash, previous_block, nonce, hash, block_timestamp,
+           diff, last_retarget, reward_pool, block_size, weave_size, tx_count,
+           missing_tx_count
+         ) VALUES (@height, @hash, @hash, x'00', x'00', 1, '1', 1, '0', 0, 0, 0, 0)`,
+      );
+      const item = bundlesDb.prepare(
+        `INSERT INTO stable_data_items (
+           id, parent_id, root_transaction_id, height, block_transaction_index,
+           anchor, owner_address, data_offset, data_size, tag_count, indexed_at
+         ) VALUES (@id, @root, @root, @height, @index, @anchor, @owner, 0, 1, 0, 10)`,
+      );
+      const stable = [
+        { id: Buffer.alloc(32, 0x71), height: 5, index: 1 },
+        { id: Buffer.alloc(32, 0x02), height: 6, index: 0 },
+        { id: Buffer.alloc(32, 0x33), height: 6, index: 0 },
+      ];
+      for (const { id, height, index } of stable) {
+        block.run({ height, hash: Buffer.alloc(48, height) });
+        item.run({
+          id,
+          root: Buffer.alloc(32, 0xb0 + height),
+          height,
+          index,
+          anchor: ANCHOR,
+          owner: OWNER,
+        });
+      }
+      return stable.map(({ id }) => toB64Url(id));
+    };
+
+    for (const sortOrder of ['HEIGHT_ASC', 'HEIGHT_DESC'] as const) {
+      for (const pageSize of [1, 2, 3]) {
+        it(`walks pending, new mined and stable items exactly once (${sortOrder}, ${pageSize} a page)`, async () => {
+          seedPendingItems();
+          const expected = [
+            ...PENDING_ITEMS.map((item) => item.id),
+            ...seedMinedItems(),
+            ...seedStableItems(),
+          ];
+          const seen = await walkAll(sortOrder, pageSize);
+          assert.deepEqual([...seen].sort(), [...expected].sort());
+          assert.equal(new Set(seen).size, seen.length);
+        });
+      }
+    }
+
+    for (const sortOrder of ['HEIGHT_ASC', 'HEIGHT_DESC'] as const) {
+      for (const pageSize of [1, 2]) {
+        it(`walks pending and mined items exactly once across the boundary (${sortOrder}, ${pageSize} a page)`, async () => {
+          seedPendingItems();
+          const mined = seedMinedItems();
+          const seen = await walkAll(sortOrder, pageSize);
+          assert.deepEqual(
+            [...seen].sort(),
+            [...PENDING_ITEMS.map((item) => item.id), ...mined].sort(),
+          );
+          assert.equal(new Set(seen).size, seen.length);
+        });
+      }
+    }
   });
 
   describe('offsets', () => {
