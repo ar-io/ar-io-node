@@ -29,6 +29,7 @@ import {
 } from './kinds/root-tx/sources/config.js';
 import { DEFAULT_L2_MAX_BAND_ITEMS } from './kinds/parquet-l2/planner.js';
 import { DEFAULT_ARWEAVE_NODE_URLS } from '../lib/onchain/arweave-nodes.js';
+import { DEFAULT_DUCKDB_THREADS } from '../lib/duckdb-threads.js';
 
 /** Where the service works: the shared index volume, fixed in compose. */
 export const DATA_DIR = 'data/indexes';
@@ -57,7 +58,8 @@ export const DEFAULT_RESETTLE_MAX_CHANGED = 20_000;
 export const DEFAULT_L2_MAX_READS = 200_000;
 /** `parquet-l2`: the build's DuckDB, and the items a source window holds. */
 export const DEFAULT_L2_DUCKDB_MEMORY = '2GB';
-export const DEFAULT_L2_DUCKDB_THREADS = 2;
+/** One: see {@link DEFAULT_DUCKDB_THREADS} (DuckDB 1.4 crashes on more). */
+export const DEFAULT_L2_DUCKDB_THREADS = DEFAULT_DUCKDB_THREADS;
 export const DEFAULT_L2_DUCKDB_SPILL_MAX_GB = 256;
 export const DEFAULT_L2_WINDOW_ITEMS = 50_000;
 /** `parquet-l2`: every how many gated re-settles a band with 404s is rebuilt. */

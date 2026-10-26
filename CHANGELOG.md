@@ -96,6 +96,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **DuckDB runs one thread by default in index-export and the index CLI.**
+  The `duckdb` Node binding stops at DuckDB 1.4, whose hash aggregate can
+  crash the process (SIGSEGV, exit 139) merging a large aggregate that
+  spilled while running on more than one thread
+  ([duckdb#23757](https://github.com/duckdb/duckdb/pull/23757), fixed in
+  1.5 only). On turbo-gateway.com it killed a band split at its compare (4
+  of 33 repeats of that compare crashed at two threads, none of 35 at one)
+  and a full `index-l2-verify` of ardrive-l2 (which passed at one). L2
+  band builds (`INDEX_EXPORT_L2_DUCKDB_THREADS`, now 1), L1 band writes,
+  and the databases of `index-l1-verify`, `index-l2-verify` and
+  `index-l1-import` (new `--duckdb-threads`, default 1) now run one thread.
+  Results are unchanged; large steps take longer.
 - `L1_BAND_IMPORT_ALLOW_UNVERIFIED` is needed only for bands without
   witnesses (`l1-3` and older); `l1-4` bands fill under the strict default.
 - Wording: a pre-2.0 block hash is described per era (from the 1.6 fork a

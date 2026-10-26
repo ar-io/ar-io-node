@@ -50,6 +50,10 @@ import type { SampleOptions } from '../../lib/parquet-l1/sample.js';
 import type { IndexL1VerifyCLIOptions, JsonSerializable } from '../types.js';
 import { requiredStringFromOptions } from '../utils.js';
 import { resolvePublication } from './index-publication-options.js';
+import {
+  DEFAULT_DUCKDB_THREADS,
+  parseDuckdbThreads,
+} from '../../lib/duckdb-threads.js';
 
 /**
  * The most a check may spill unless `--spill-max` says otherwise. The lookup
@@ -84,7 +88,8 @@ export const SPILL_HEARTBEAT_FILE = '.heartbeat';
 const HEARTBEAT_MS = 60_000;
 
 /**
- * A DuckDB session for checking bands: bounded memory, two threads, no
+ * A DuckDB session for checking bands: bounded memory, `threads` threads
+ * (default {@link DEFAULT_DUCKDB_THREADS}: DuckDB 1.4 can crash on more), no
  * extensions, and somewhere it can always spill.
  *
  * Without a `temp_directory`, an in-memory DuckDB spills to `.tmp` under the
@@ -105,6 +110,8 @@ export async function openBandsDuck(
     tmpRoot?: string;
     prefix?: string;
     spillMax?: string;
+    /** DuckDB's threads per database (default {@link DEFAULT_DUCKDB_THREADS}). */
+    threads?: number;
     /** Injected in tests: the bytes free under the temp root. */
     freeBytes?: (dir: string) => Promise<number>;
     /** Space always left free under the spill (default {@link SPILL_RESERVE_BYTES}). */
@@ -128,6 +135,7 @@ export async function openBandsDuck(
   close(): Promise<void>;
 }> {
   const spillMax = options.spillMax ?? BANDS_SPILL_MAX;
+  const threads = options.threads ?? DEFAULT_DUCKDB_THREADS;
   if (!SPILL_MAX_PATTERN.test(spillMax)) {
     throw new Error(
       `--spill-max must be a size such as 16GB or 512MB, not ${spillMax}`,
@@ -209,7 +217,7 @@ export async function openBandsDuck(
     const opened = await Database.create(':memory:');
     try {
       await opened.exec(
-        `SET memory_limit = '2GB'; SET threads = 2; SET temp_directory = '${dir.replace(/'/g, "''")}'; SET max_temp_directory_size = '${capOf(capBytes)}'; SET autoinstall_known_extensions = false; SET autoload_known_extensions = false;`,
+        `SET memory_limit = '2GB'; SET threads = ${threads}; SET temp_directory = '${dir.replace(/'/g, "''")}'; SET max_temp_directory_size = '${capOf(capBytes)}'; SET autoinstall_known_extensions = false; SET autoload_known_extensions = false;`,
       );
     } catch (error) {
       await opened.close().catch(() => undefined);
@@ -487,6 +495,7 @@ export async function indexL1VerifyCLICommand(
     );
     const session = await openBandsDuck({
       ...(options.spillMax !== undefined ? { spillMax: options.spillMax } : {}),
+      threads: parseDuckdbThreads(options.duckdbThreads),
       ...(deps.freeBytes !== undefined ? { freeBytes: deps.freeBytes } : {}),
       reserveBytes: spillReserveBytes(options.spillReserveGb),
     });

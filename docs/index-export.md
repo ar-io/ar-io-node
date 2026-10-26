@@ -830,7 +830,8 @@ largest, `h1800000`, holds 69M items and 518M tag rows):
   derived by DuckDB from the tables' Parquet once it is written, each
   sorted by its key, in the same database;
 - DuckDB runs within `INDEX_EXPORT_L2_DUCKDB_MEMORY` (2 GB) and
-  `INDEX_EXPORT_L2_DUCKDB_THREADS` (2), spilling into the staging
+  `INDEX_EXPORT_L2_DUCKDB_THREADS` (1: DuckDB 1.4 can crash merging a
+  spilled aggregate on more; see `docs/envs.md`), spilling into the staging
   directory, at most `INDEX_EXPORT_L2_DUCKDB_SPILL_MAX_GB` (256 GB);
 - glibc's allocator is held to two arenas and returns large frees to the
   system (`MALLOC_ARENA_MAX=2`, `MALLOC_MMAP_THRESHOLD_` and

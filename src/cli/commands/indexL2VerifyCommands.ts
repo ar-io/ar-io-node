@@ -37,6 +37,7 @@ import type { IndexL2VerifyCLIOptions, JsonSerializable } from '../types.js';
 import { requiredStringFromOptions } from '../utils.js';
 import { openBandsDuck, SPILL_RESERVE_BYTES } from './indexL1VerifyCommands.js';
 import { resolvePublication } from './index-publication-options.js';
+import { parseDuckdbThreads } from '../../lib/duckdb-threads.js';
 
 /** Items per band read on chain when `--onchain` is not given. */
 export const DEFAULT_ONCHAIN_PER_BAND = 20;
@@ -88,7 +89,8 @@ export function threadpoolSize(
 
 /**
  * How many databases check side by side: `asked` (`--concurrency`), or by
- * default a quarter of the CPUs (each database runs two threads, and the
+ * default a quarter of the CPUs (each database runs `--duckdb-threads`, one
+ * unless asked, and the
  * host may be serving a gateway), at most {@link DEFAULT_MAX_CONCURRENCY};
  * never more than libuv's threadpool leaves {@link THREADPOOL_SPARE}
  * threads beside, nor {@link MAX_CONCURRENCY}.
@@ -254,6 +256,12 @@ export async function indexL2VerifyCLICommand(
   const concurrency = concurrencyFor({
     asked: whole(options.concurrency, '--concurrency'),
   });
+  let threads: number;
+  try {
+    threads = parseDuckdbThreads(options.duckdbThreads);
+  } catch (error) {
+    throw new L2VerifyRefused((error as Error).message);
+  }
   const deadlineSeconds =
     whole(options.bandDeadline, '--band-deadline') ??
     DEFAULT_BAND_DEADLINE_SECONDS;
@@ -343,6 +351,7 @@ export async function indexL2VerifyCLICommand(
       prefix: 'ar-io-node-l2-verify-',
       ...(injectedFree !== undefined ? { freeBytes: injectedFree } : {}),
       ...(options.spillMax !== undefined ? { spillMax: options.spillMax } : {}),
+      threads,
     });
   } catch (error) {
     if (/--spill-max/.test((error as Error).message)) {

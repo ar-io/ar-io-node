@@ -297,7 +297,8 @@ are sorted. Rows are digested in DuckDB: each range of rows is encoded as the
 row digest takes it and handed over as one buffer, hashed in order, with each
 row checked against the one before (a type it can't encode exactly, or any
 error, and the rows are read one at a time instead, with the same result).
-`--concurrency` databases (two threads and 2 GB each; by default a quarter
+`--concurrency` databases (`--duckdb-threads` threads, one unless asked,
+and 2 GB each; by default a quarter
 of the CPUs, at most 4, and never more than `UV_THREADPOOL_SIZE` less 2:
 each holds a libuv thread while it reads, and the on-chain reads need
 threads for DNS) read side by side: bands, and a band's tables and
