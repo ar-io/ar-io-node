@@ -170,12 +170,13 @@ mount_spill() {
     exit 1
   fi
   DOCKER_ARGS+=(-v "${spill}:/tmp" -e TMPDIR=/tmp)
-  # The allocator settings index-export runs with (docker-compose.yaml):
-  # without them a verifier's DuckDB work leaves freed memory in glibc's
-  # arenas and the process grows far past what any one query uses.
-  DOCKER_ARGS+=(-e "MALLOC_ARENA_MAX=${MALLOC_ARENA_MAX:-2}"
-    -e "MALLOC_MMAP_THRESHOLD_=${MALLOC_MMAP_THRESHOLD_:-131072}"
-    -e "MALLOC_TRIM_THRESHOLD_=${MALLOC_TRIM_THRESHOLD_:-131072}")
+  # The allocator settings index-export runs with (docker-compose.yaml),
+  # with the same overrides: without them a verifier's DuckDB work leaves
+  # freed memory in glibc's arenas and the process grows far past what any
+  # one query uses.
+  DOCKER_ARGS+=(-e "MALLOC_ARENA_MAX=${INDEX_EXPORT_MALLOC_ARENA_MAX:-2}"
+    -e "MALLOC_MMAP_THRESHOLD_=${INDEX_EXPORT_MALLOC_MMAP_THRESHOLD:-131072}"
+    -e "MALLOC_TRIM_THRESHOLD_=${INDEX_EXPORT_MALLOC_TRIM_THRESHOLD:-131072}")
 }
 # Join the gateway's network, so URLs such as http://core:4000 work.
 join_gateway_network() {
