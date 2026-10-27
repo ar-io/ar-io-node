@@ -42,6 +42,10 @@ const SCHEMA = await fs.readFile(
   new URL('../../../test/bundles-schema.sql', import.meta.url),
   'utf8',
 );
+const CORE_SCHEMA = await fs.readFile(
+  new URL('../../../test/core-schema.sql', import.meta.url),
+  'utf8',
+);
 const PUBLISHER = getSolanaAddress(
   crypto.generateKeyPairSync('ed25519').publicKey,
 );
@@ -97,6 +101,7 @@ describe('index-l2-import', () => {
   let root: string;
   let bandsDir: string;
   let bundlesDb: string;
+  let coreDb: string;
   let jobsDir: string;
   let tmpDir: string;
   const env = { CLICKHOUSE_URL: 'http://clickhouse:8123' };
@@ -113,6 +118,11 @@ describe('index-l2-import', () => {
     db.exec('CREATE TABLE migrations (name TEXT PRIMARY KEY)');
     db.prepare('INSERT INTO migrations VALUES (?)').run(L2_LEDGER_MIGRATION);
     db.close();
+    // The test's own core.db, never the checkout's data/sqlite.
+    coreDb = path.join(root, 'core.db');
+    const core = new Sqlite(coreDb);
+    core.exec(CORE_SCHEMA);
+    core.close();
   });
   afterEach(async () => {
     await fs.rm(root, { recursive: true, force: true });
@@ -149,6 +159,7 @@ describe('index-l2-import', () => {
         target: 'clickhouse',
         bandsDir,
         bundlesDb,
+        coreDb,
         jobsDir,
         tmpDir,
         ...options,
