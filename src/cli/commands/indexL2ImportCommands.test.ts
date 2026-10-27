@@ -328,7 +328,11 @@ describe('index-l2-import', () => {
         onchain: '1',
       }),
       (refusal: { refused?: string; refusal?: string }) => {
-        assert.match(String(refusal.refused), new RegExp(`^${id}: `));
+        assert.match(
+          String(refusal.refused),
+          new RegExp(`^${id}: `),
+          refusal instanceof Error ? refusal.message : undefined,
+        );
         assert.equal(refusal.refusal, 'refused');
         return true;
       },
