@@ -475,6 +475,15 @@ only the heights `core.db` lacks beneath what the gateway indexes itself;
 with the gateway stopped it loads a whole chain fastest. Idempotent, and
 recorded range by range in `parquet_l1_imports` so it resumes.
 
+<a id="l2-import"></a> **L2 Import** — Loading installed [L2
+bands](#parquet-l2) into a gateway's ClickHouse with `index-l2-import
+--target clickhouse` (`L2_BAND_IMPORT_ENABLED`): each band verified first,
+one placement kept per item, items ClickHouse already holds left alone
+(first writer wins, a different location counted as a conflict), and the
+rest queued as a job for `clickhouse-auto-import` to load. Recorded in the
+`parquet_l2_imports` ledger in `bundles.db`; `--forget` undoes one band.
+See [cli.md](cli.md#index-l2-import).
+
 <a id="query-in-place"></a> **Query in Place** — Reading
 [L1 bands](#parquet-l1) directly with DuckDB or Polars, from disk or over
 [range reads](#range-read), instead of importing them into a gateway's

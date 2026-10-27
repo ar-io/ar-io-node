@@ -483,7 +483,18 @@ migrate_staging_to_final() {
     --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD")
   local target_table=transactions
   local final_staging=""
-  if [ "${CLICKHOUSE_IMPORT_SKIP_UNCHANGED:-true}" = true ]; then
+  # CLICKHOUSE_IMPORT_KEEP_EXISTING (default false) inserts only keys
+  # `transactions` does not hold yet, so a row already there is never
+  # replaced, whatever this import says of it: "first writer wins". The L2
+  # import's jobs set it (scripts/lib/l2-import-queue.sh). It is checked here,
+  # by the one writer of `transactions`, so nothing written between a job's
+  # making and its loading can be overwritten. It needs the per-run table.
+  local keep_existing="${CLICKHOUSE_IMPORT_KEEP_EXISTING:-false}"
+  if [ "$keep_existing" != true ] && [ "$keep_existing" != false ]; then
+    echo "    Error: CLICKHOUSE_IMPORT_KEEP_EXISTING must be true or false, got '$keep_existing'" >&2
+    return 1
+  fi
+  if [ "${CLICKHOUSE_IMPORT_SKIP_UNCHANGED:-true}" = true ] || [ "$keep_existing" = true ]; then
     # One table per run, so this step adds no shared state between
     # concurrent imports. (The staging_blocks/_transactions/_tags tables are
     # shared and truncated by every import, so concurrent imports were never
@@ -733,16 +744,27 @@ FROM
     # version. Measured on a 19.9M-row 10k-height bucket: ~10 s, ~2.2 GiB;
     # a tip bucket (2.8M rows): ~0.5 s, ~470 MiB.
     local content_hash="cityHash64(* EXCEPT (inserted_at, expires_at))"
-    echo "    Inserting new or changed rows into transactions table..."
-    "${ch[@]}" --query "INSERT INTO transactions
-SELECT * FROM ${final_staging}
-WHERE sipHash128(height, block_transaction_index, is_data_item, id, ${content_hash}) NOT IN (
+    local insert_filter
+    if [ "$keep_existing" = true ]; then
+      echo "    Inserting rows whose keys transactions lacks (keeping existing rows)..."
+      insert_filter="sipHash128(height, block_transaction_index, is_data_item, id) NOT IN (
+  SELECT sipHash128(height, block_transaction_index, is_data_item, id)
+  FROM transactions
+  WHERE height >= ${min_height} AND height <= ${max_height}
+)"
+    else
+      echo "    Inserting new or changed rows into transactions table..."
+      insert_filter="sipHash128(height, block_transaction_index, is_data_item, id, ${content_hash}) NOT IN (
   SELECT sipHash128(height, block_transaction_index, is_data_item, id,
     argMax(${content_hash}, inserted_at))
   FROM transactions
   WHERE height >= ${min_height} AND height <= ${max_height}
   GROUP BY height, block_transaction_index, is_data_item, id
-)
+)"
+    fi
+    "${ch[@]}" --query "INSERT INTO transactions
+SELECT * FROM ${final_staging}
+WHERE ${insert_filter}
 SETTINGS optimize_aggregation_in_order = 1" || {
       echo "    Warning: Failed to migrate data to transactions table" >&2
       "${ch[@]}" --query "DROP TABLE IF EXISTS ${final_staging}" || true

@@ -613,6 +613,7 @@ function makeL2BandImportWorker(): L2BandImportWorker | undefined {
     registryUrl: `http://localhost:${config.PORT}`,
     arweaveNodes: config.L2_BAND_IMPORT_ARWEAVE_NODES,
     maxQueued: config.L2_BAND_IMPORT_MAX_QUEUED,
+    maxUnchecked: config.L2_BAND_IMPORT_MAX_UNCHECKED,
     intervalMs: config.L2_BAND_IMPORT_INTERVAL_SECONDS * 1000,
   });
 }

@@ -69,7 +69,7 @@ Gateways publish signed index bands and subscribe to each other's.
 | Document | Description |
 |----------|-------------|
 | [Deployment Topologies](deployment-topologies.md) | Proxy edge, shared ClickHouse, partitioning, and app-split topologies |
-| [The `ar-io-node` CLI](cli.md) | The gateway's command-line tool: building, checking and exporting index bands (`index-band-build`, `index-band-verify`, `index-band-export`), filling an L1 index from published bands, while the gateway runs (`--fill`) or into a new database, and checking it against the chain (`index-l1-import`, `index-l1-verify`, `index-l1-audit`), checking an L2 index (`index-l2-verify`), and every `ar.io` CLI command, run in the core image through `tools/ar-io-node` |
+| [The `ar-io-node` CLI](cli.md) | The gateway's command-line tool: building, checking and exporting index bands (`index-band-build`, `index-band-verify`, `index-band-export`), filling an L1 index from published bands, while the gateway runs (`--fill`) or into a new database, and checking it against the chain (`index-l1-import`, `index-l1-verify`, `index-l1-audit`), checking an L2 index (`index-l2-verify`) and importing it into ClickHouse (`index-l2-import`), and every `ar.io` CLI command, run in the core image through `tools/ar-io-node` |
 | [Verifying index bands](index-verification.md) | Which command checks which index (root-TX, L1, L2), what each check proves and doesn't, reading roots from Arweave nodes with every byte proven, and how to reproduce or repair a band |
 
 ## Reference

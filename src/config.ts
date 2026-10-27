@@ -1828,6 +1828,18 @@ export const L2_BAND_IMPORT_ARWEAVE_NODES = env
   .map((s) => s.trim())
   .filter((s) => s.length > 0);
 
+/**
+ * On-chain sample items per band (of 20) that may go unread, nodes lacking
+ * their chunks, and the band still be imported (`--max-unchecked`). 0 by
+ * default: a band with any item unread waits and is tried again. An unread
+ * item is counted as possibly fabricated, and the bound the sample gives is
+ * stated with it; the ledger records the value a band was accepted with.
+ */
+export const L2_BAND_IMPORT_MAX_UNCHECKED = +env.varOrDefault(
+  'L2_BAND_IMPORT_MAX_UNCHECKED',
+  '0',
+);
+
 /** Jobs waiting for clickhouse-auto-import before a run writes no more. */
 export const L2_BAND_IMPORT_MAX_QUEUED = +env.varOrDefault(
   'L2_BAND_IMPORT_MAX_QUEUED',

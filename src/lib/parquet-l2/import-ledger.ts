@@ -252,8 +252,14 @@ export async function reconcileJobs(
   );
   for (const row of queued) {
     const job = row.job as string;
-    const loaded = path.join(jobsDir, DONE_DIR, job, LOADED_FILE);
-    if (await exists(loaded)) {
+    // The queue first: auto-import only ever moves a job out of it, to
+    // done/ or failed/, each move whole (a rename). Looked at in this order,
+    // a job moved between two looks is found in the second, never missed.
+    if (await exists(path.join(jobsDir, QUEUE_DIR, job))) {
+      result.waiting.push(job);
+      continue;
+    }
+    if (await exists(path.join(jobsDir, DONE_DIR, job, LOADED_FILE))) {
       db.prepare(
         'UPDATE parquet_l2_imports SET completed_at = ? WHERE band_id = ? AND target = ? AND job = ?',
       ).run(now(), row.bandId, 'clickhouse', job);
@@ -261,27 +267,20 @@ export async function reconcileJobs(
       continue;
     }
     const failedDir = path.join(jobsDir, FAILED_DIR, job);
-    if (await exists(failedDir)) {
-      const reason = await fsp
-        .readFile(path.join(failedDir, 'failed.txt'), 'utf8')
-        .then((t) => t.trim().split('\n').pop() ?? '')
-        .catch(() => '');
-      db.prepare(
-        'DELETE FROM parquet_l2_imports WHERE band_id = ? AND target = ? AND job = ?',
-      ).run(row.bandId, 'clickhouse', job);
-      result.failed.push({ job, reason });
-      continue;
-    }
-    if (await exists(path.join(jobsDir, QUEUE_DIR, job))) {
-      result.waiting.push(job);
-      continue;
-    }
-    // In none of the three: removed by hand. Forget it, so the band is
-    // written again rather than waited on forever.
+    const reason = (await exists(failedDir))
+      ? await fsp
+          .readFile(path.join(failedDir, 'failed.txt'), 'utf8')
+          .then((t) => t.trim().split('\n').pop() ?? '')
+          .catch(() => '')
+      : // In none of the three: removed by hand.
+        'job directory missing';
+    // The band is written again later. Rows of the job that did load are
+    // held by ClickHouse by then, so the new job leaves them out; --forget
+    // finds them through this job's written.parquet, kept in failed/.
     db.prepare(
       'DELETE FROM parquet_l2_imports WHERE band_id = ? AND target = ? AND job = ?',
     ).run(row.bandId, 'clickhouse', job);
-    result.failed.push({ job, reason: 'job directory missing' });
+    result.failed.push({ job, reason });
   }
   return result;
 }

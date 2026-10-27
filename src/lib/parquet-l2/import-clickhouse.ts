@@ -314,10 +314,11 @@ export async function writeClickHouseJob({
       `SELECT count(*) FROM l2i_chosen c WHERE EXISTS (SELECT 1 FROM l2i_held h WHERE ${sameKey})`,
     );
     // Conflicting: no stored version of the key equals the band's row. The
-    // band's NULL location is ClickHouse's 0.
+    // band's NULL location is ClickHouse's 0, and its NULL id ClickHouse's
+    // empty string (its BLOB columns are not nullable).
     const equal = COMPARED_COLUMNS.map((col) =>
       HELD_COLUMNS.find((c) => c.name === col)?.type === 'BLOB'
-        ? `h."${col}" IS NOT DISTINCT FROM c."${col}"`
+        ? `coalesce(h."${col}", ''::BLOB) = coalesce(c."${col}", ''::BLOB)`
         : `h."${col}" = coalesce(c."${col}", 0)`,
     ).join(' AND ');
     const conflicting = await one(

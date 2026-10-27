@@ -86,6 +86,7 @@ export class L2BandImportWorker {
     registryUrl,
     arweaveNodes,
     maxQueued,
+    maxUnchecked = 0,
     intervalMs,
     firstRunDelayMs = 120_000,
     runImport = spawnFill as L2ImportRunner,
@@ -105,6 +106,8 @@ export class L2BandImportWorker {
     /** Arweave nodes the on-chain sample reads (`--arweave-nodes`). */
     arweaveNodes?: string[];
     maxQueued?: number;
+    /** Sample items per band that may go unread (`--max-unchecked`). */
+    maxUnchecked?: number;
     intervalMs: number;
     firstRunDelayMs?: number;
     runImport?: L2ImportRunner;
@@ -141,6 +144,9 @@ export class L2BandImportWorker {
             : []),
           ...(maxQueued !== undefined
             ? ['--max-queued', String(maxQueued)]
+            : []),
+          ...(maxUnchecked > 0
+            ? ['--max-unchecked', String(maxUnchecked)]
             : []),
         ],
       };
@@ -238,6 +244,25 @@ export class L2BandImportWorker {
       );
       this.child = undefined;
       const summary = result.summary;
+      // Jobs a run queued count whether or not it refused another band.
+      for (const job of summary?.jobs ?? []) {
+        metrics.l2BandImportRowsTotal.inc(job.counts?.written ?? 0);
+        metrics.l2BandImportConflictsTotal.inc(job.counts?.conflicting ?? 0);
+      }
+      const imported = (summary?.imported ?? 0) > 0;
+      if (result.code !== 0 && imported) {
+        // Some bands queued, another refused: no wait, so the bands that
+        // pass keep moving; the refused one is tried again next run.
+        this.refused.delete(index);
+        metrics.l2BandImportRunsTotal.inc({ result: 'queued' });
+        this.log.warn('Import queued bands and refused others', {
+          index,
+          imported: summary?.imported,
+          refused: summary?.refused,
+          seconds: Math.round((Date.now() - started) / 1000),
+        });
+        return summary;
+      }
       if (result.code !== 0) {
         const unreadable = summary?.refusal === 'unreadable';
         metrics.l2BandImportRunsTotal.inc({
@@ -277,12 +302,6 @@ export class L2BandImportWorker {
         return summary;
       }
       this.refused.delete(index);
-      const jobs = summary?.jobs ?? [];
-      for (const job of jobs) {
-        metrics.l2BandImportRowsTotal.inc(job.counts?.written ?? 0);
-        metrics.l2BandImportConflictsTotal.inc(job.counts?.conflicting ?? 0);
-      }
-      const imported = (summary?.imported ?? 0) > 0;
       metrics.l2BandImportRunsTotal.inc({
         result: imported ? 'queued' : 'idle',
       });

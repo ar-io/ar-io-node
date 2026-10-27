@@ -44,13 +44,16 @@ import {
   type L2ImportBlock,
   type L2ImportBlockSource,
   type L2ImportJob,
+  JOB_FILE,
   L2ImportRefused,
+  PARTIAL_DIR,
   WRITTEN_FILE,
   writeClickHouseJob,
 } from '../../lib/parquet-l2/import-clickhouse.js';
 import {
   assertL2LedgerMigrated,
   DONE_DIR,
+  FAILED_DIR,
   FORGOTTEN_DIR,
   QUEUE_DIR,
   readLedger,
@@ -208,9 +211,18 @@ export async function indexL2ImportCLICommand(
   };
 
   const db = new Sqlite(bundlesDbPath, { fileMustExist: true });
+  let lock: Sqlite.Database | undefined;
   try {
     db.pragma('busy_timeout = 60000');
     assertL2LedgerMigrated(db);
+    lock = await takeL2ImportLock(jobsDir);
+    // No other import runs now, so whatever a killed one left is garbage.
+    for (const left of await sweepLeftovers(
+      jobsDir,
+      options.tmpDir ?? DEFAULT_TMP_DIR,
+    )) {
+      log.warn('Removed what an interrupted import left', { path: left });
+    }
     if (options.forget !== undefined) {
       return await forgetBand({
         db,
@@ -233,8 +245,61 @@ export async function indexL2ImportCLICommand(
       now,
     });
   } finally {
+    lock?.close();
     db.close();
   }
+}
+
+/**
+ * Refuses an import or forget while another runs on the same jobs
+ * directory: two would queue the same band, and one could remove the
+ * other's half-written job. As `takeImportLock` does for the L1 import, the
+ * lock is an exclusive transaction on a small SQLite file: the kernel's
+ * lock, held across containers sharing the directory and released however
+ * the process exits.
+ */
+export async function takeL2ImportLock(
+  jobsDir: string,
+): Promise<Sqlite.Database> {
+  await fsp.mkdir(jobsDir, { recursive: true });
+  const lock = new Sqlite(path.join(jobsDir, '.l2-import.lock'), {
+    timeout: 0,
+  });
+  try {
+    lock.pragma('locking_mode = EXCLUSIVE');
+    lock.exec('BEGIN EXCLUSIVE');
+  } catch (error) {
+    lock.close();
+    throw new L2ImportRefused(
+      `another index-l2-import is running on ${jobsDir} (${(error as Error).message})`,
+    );
+  }
+  return lock;
+}
+
+/**
+ * Removes the half-written jobs (`<jobs>/.partial/*`) and scratch folders
+ * (`<tmp>/*.scratch`) a killed run left. Only called holding the lock.
+ */
+export async function sweepLeftovers(
+  jobsDir: string,
+  tmpDir: string,
+): Promise<string[]> {
+  const removed: string[] = [];
+  const sweep = async (dir: string, match: (name: string) => boolean) => {
+    for (const name of await fsp.readdir(dir).catch(() => [] as string[])) {
+      if (!match(name)) continue;
+      const target = path.join(dir, name);
+      await fsp.rm(target, { recursive: true, force: true });
+      removed.push(target);
+    }
+  };
+  await sweep(path.join(jobsDir, PARTIAL_DIR), () => true);
+  await sweep(
+    tmpDir,
+    (name) => name.startsWith('l2-') && name.endsWith('.scratch'),
+  );
+  return removed;
 }
 
 async function importBands({
@@ -303,7 +368,28 @@ async function importBands({
     log.info('Job loaded into ClickHouse', { job });
   }
   for (const { job, reason } of reconciled.failed) {
-    log.warn('Job not loaded; its band is written again', { job, reason });
+    log.warn('Job not loaded; its band is written again later', {
+      job,
+      reason,
+    });
+  }
+  if (reconciled.failed.length > 0) {
+    // A job that would not load may fail the same way again: write nothing
+    // this run, so the worker waits (twice as long each time) before the
+    // bands are written again, rather than queueing a failing job every run.
+    throw {
+      bandsDir,
+      index,
+      target: 'clickhouse',
+      imported: 0,
+      jobs: [],
+      loaded: reconciled.loaded,
+      failed: reconciled.failed,
+      refused: `${reconciled.failed.length} job(s) failed to load: ${reconciled.failed
+        .map((f) => `${f.job}: ${f.reason}`)
+        .join('; ')}`,
+      refusal: 'refused',
+    };
   }
   const room = Math.max(0, maxQueued - reconciled.waiting.length);
 
@@ -431,6 +517,13 @@ async function importBands({
   const ownWallet = nonEmpty(env.AR_IO_WALLET);
   const accepted = acceptedFlags(options);
   const jobs: Array<Record<string, unknown>> = [];
+  const refusals: Array<{
+    band: string;
+    reason: string;
+    kind: 'refused' | 'unreadable';
+    checks: Array<{ name: string; detail: string }>;
+    onchain?: unknown;
+  }> = [];
   try {
     const blocks = coreDbBlocks(core);
     for (const b of take) {
@@ -470,8 +563,10 @@ async function importBands({
           ? 'not bound to the publication'
           : unchecked.length > 0
             ? `not checked: ${unchecked.join(', ')}`
-            : out.bands !== 1
-              ? `${out.bands} bands checked where 1 was asked for`
+            : out.bands !== 1 ||
+                out.located.length !== 1 ||
+                out.located[0].id !== b.id
+              ? `the bands checked (${out.located.map((l) => l.id).join(', ')}) are not this band alone; its directory may have changed`
               : ownWallet !== undefined &&
                   out.publication?.publisher === ownWallet
                 ? "signed by this gateway's own wallet: a publisher does not import its own export"
@@ -485,12 +580,12 @@ async function importBands({
           reason: refusal,
           failed,
         });
-        throw {
-          ...summary,
-          imported: jobs.length,
-          jobs,
-          refused: `${b.id}: ${refusal}`,
-          refusal:
+        // Nothing of this band is written. The others are still tried: one
+        // band whose sample cannot be read must not hold back the rest.
+        refusals.push({
+          band: b.id,
+          reason: refusal,
+          kind:
             out.onchain !== undefined &&
             out.onchain.inconclusiveBands.length > 0 &&
             out.onchain.failedBands.length === 0 &&
@@ -499,8 +594,8 @@ async function importBands({
               : 'refused',
           checks: failed,
           onchain: out.onchain?.bands,
-          roots: describeSource(),
-        };
+        });
+        continue;
       }
       log.info('Verified a band before importing it', {
         band: b.id,
@@ -573,17 +668,38 @@ async function importBands({
     core.close();
     await session.close();
   }
-  return {
+  const result = {
     ...summary,
     imported: jobs.length,
     jobs,
     seconds: Math.round((Date.now() - started) / 100) / 10,
-  } as unknown as JsonSerializable;
+  };
+  if (refusals.length > 0) {
+    // Exit 1, with what was queued and what was refused. `unreadable` only
+    // when every refusal is a sample that could not be read (an outage).
+    throw {
+      ...result,
+      refused: refusals.map((r) => `${r.band}: ${r.reason}`).join('; '),
+      refusal: refusals.every((r) => r.kind === 'unreadable')
+        ? 'unreadable'
+        : 'refused',
+      refusals,
+      roots: describeSource(),
+    };
+  }
+  return result as unknown as JsonSerializable;
 }
 
 /**
- * Deletes from ClickHouse the rows an import of `bandId` wrote, listed in
- * its loaded job's `written.parquet`, then forgets the band in the ledger.
+ * Deletes from ClickHouse the rows imports of `bandId` wrote, then forgets
+ * the band in the ledger.
+ *
+ * Every job written for the band counts, not only the ledger's last: a band
+ * imported up to one ceiling and later past it has two, and a job that
+ * failed after some partitions loaded left rows its replacement does not
+ * list. Each kept its `written.parquet` in `done/` or `failed/`; the ids of
+ * all of them are deleted, within their heights and with the band's
+ * `indexed_at`. Refused while a job of the band waits in the queue.
  */
 async function forgetBand({
   db,
@@ -600,74 +716,103 @@ async function forgetBand({
   forget: ClickHouseForget;
   log: Logger;
 }): Promise<JsonSerializable> {
-  const row = readLedger(db, 'clickhouse').get(bandId);
-  if (row === undefined) {
-    throw new L2ImportRefused(`${bandId} is not in the ledger`);
-  }
-  if (row.job === null) {
-    db.prepare(
-      "DELETE FROM parquet_l2_imports WHERE band_id = ? AND target = 'clickhouse'",
-    ).run(bandId);
-    return { forgotten: bandId, job: null, deleted: 0 };
-  }
-  if (row.completedAt === null) {
+  const ofBand = (name: string) => name.startsWith(`${bandId}.`);
+  const list = async (dir: string) =>
+    (await fsp.readdir(path.join(jobsDir, dir)).catch(() => [] as string[]))
+      .filter(ofBand)
+      .map((name) => path.join(jobsDir, dir, name));
+  const queued = await list(QUEUE_DIR);
+  if (queued.length > 0) {
     throw new L2ImportRefused(
-      `${bandId}'s job ${row.job} is not loaded yet: wait for clickhouse-auto-import, or remove ${path.join(jobsDir, QUEUE_DIR, row.job)} while it is stopped`,
+      `${bandId} has a job waiting to load (${queued.map((q) => path.basename(q)).join(', ')}): wait for clickhouse-auto-import, or remove it from the queue while auto-import is stopped`,
     );
   }
-  const jobDir = path.join(jobsDir, DONE_DIR, row.job);
-  const manifest = JSON.parse(
-    await fsp.readFile(path.join(jobDir, 'job.json'), 'utf8'),
-  ) as L2ImportJob;
-  const indexedAt = manifest.indexedAt;
-  const written = path.join(jobDir, WRITTEN_FILE);
-  // One database for the read; nothing spills.
-  const session = await openBandsDuck({
-    prefix: 'ar-io-node-l2-forget-',
-    tmpRoot: tmpDir,
-  });
-  let ids: string[];
-  try {
-    ids = (
-      (await session.duck.all(
-        `SELECT hex(id) AS id FROM read_parquet('${written.replace(/'/g, "''")}') ORDER BY id`,
-      )) as Array<{ id: string }>
-    ).map((r) => r.id);
-  } finally {
-    await session.close();
+  const jobDirs = [...(await list(DONE_DIR)), ...(await list(FAILED_DIR))];
+  const inLedger = readLedger(db, 'clickhouse').has(bandId);
+  if (jobDirs.length === 0 && !inLedger) {
+    throw new L2ImportRefused(
+      `${bandId} is not in the ledger and has no loaded or failed job`,
+    );
   }
-  log.info('Forgetting imported rows: one ClickHouse mutation, waited for', {
-    band: bandId,
-    ids: ids.length,
-    heightRange: manifest.heightRange,
-  });
-  const { matched } = await forget.forget({
-    from: manifest.heightRange[0],
-    to: manifest.heightRange[1],
-    indexedAt,
-    ids,
-  });
+  const manifests: L2ImportJob[] = [];
+  for (const dir of jobDirs) {
+    manifests.push(
+      JSON.parse(
+        await fsp.readFile(path.join(dir, JOB_FILE), 'utf8'),
+      ) as L2ImportJob,
+    );
+  }
+  // Every job of one band carries its createdAt; refuse rather than guess.
+  const indexedAts = [...new Set(manifests.map((m) => m.indexedAt))];
+  if (indexedAts.length > 1) {
+    throw new L2ImportRefused(
+      `${bandId}'s jobs disagree on indexed_at (${indexedAts.join(', ')})`,
+    );
+  }
+  let ids: string[] = [];
+  let matched = 0;
+  const heightRange: [number, number] | undefined =
+    manifests.length > 0
+      ? [
+          Math.min(...manifests.map((m) => m.heightRange[0])),
+          Math.max(...manifests.map((m) => m.heightRange[1])),
+        ]
+      : undefined;
+  if (heightRange !== undefined) {
+    const files = jobDirs
+      .map((dir) => `'${path.join(dir, WRITTEN_FILE).replace(/'/g, "''")}'`)
+      .join(', ');
+    // One database for the read; nothing spills.
+    await fsp.mkdir(tmpDir, { recursive: true });
+    const session = await openBandsDuck({
+      prefix: 'ar-io-node-l2-forget-',
+      tmpRoot: tmpDir,
+    });
+    try {
+      ids = (
+        (await session.duck.all(
+          `SELECT DISTINCT hex(id) AS id FROM read_parquet([${files}]) ORDER BY id`,
+        )) as Array<{ id: string }>
+      ).map((r) => r.id);
+    } finally {
+      await session.close();
+    }
+    log.info('Forgetting imported rows: one ClickHouse mutation, waited for', {
+      band: bandId,
+      jobs: jobDirs.length,
+      ids: ids.length,
+      heightRange,
+    });
+    ({ matched } = await forget.forget({
+      from: heightRange[0],
+      to: heightRange[1],
+      indexedAt: indexedAts[0],
+      ids,
+    }));
+  }
   db.prepare(
     "DELETE FROM parquet_l2_imports WHERE band_id = ? AND target = 'clickhouse'",
   ).run(bandId);
-  // The rows are gone and the ledger says so; moving the job aside is
+  // The rows are gone and the ledger says so; moving the jobs aside is
   // tidying, so a failure here is reported, not fatal.
   const forgottenDir = path.join(jobsDir, FORGOTTEN_DIR);
-  await fsp
-    .mkdir(forgottenDir, { recursive: true })
-    .then(() => fsp.rename(jobDir, path.join(forgottenDir, row.job!)))
-    .catch((error: Error) =>
-      log.warn('Could not move the forgotten job aside', {
-        job: jobDir,
-        error: error.message,
-      }),
-    );
+  for (const dir of jobDirs) {
+    await fsp
+      .mkdir(forgottenDir, { recursive: true })
+      .then(() => fsp.rename(dir, path.join(forgottenDir, path.basename(dir))))
+      .catch((error: Error) =>
+        log.warn('Could not move a forgotten job aside', {
+          job: dir,
+          error: error.message,
+        }),
+      );
+  }
   return {
     forgotten: bandId,
-    job: row.job,
-    indexedAt,
+    jobs: jobDirs.map((d) => path.basename(d)),
+    indexedAt: indexedAts[0] ?? null,
     ids: ids.length,
     matched,
-    heightRange: manifest.heightRange,
+    heightRange: heightRange ?? null,
   } as unknown as JsonSerializable;
 }

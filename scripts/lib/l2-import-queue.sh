@@ -13,8 +13,8 @@
 # them, so two imports must never overlap), so it loads the jobs too, one at
 # a time, between its own batches. A loaded job moves to done/ with
 # loaded.json, keeping job.json and written.parquet for `--forget`; one that
-# fails $l2_import_max_attempts times moves to failed/ with failed.txt. The
-# core reads both back into its ledger.
+# fails $l2_import_max_attempts times moves to failed/ with failed.txt, its
+# Parquet data removed. The core reads both back into its ledger.
 l2_import_dir="${ETL_STAGING_PATH:-./data/etl/staging}/l2-import"
 l2_import_max_attempts=${CLICKHOUSE_AUTO_IMPORT_L2_MAX_ATTEMPTS:-3}
 l2_import_poll_s=${CLICKHOUSE_AUTO_IMPORT_L2_POLL_INTERVAL:-60}
@@ -49,7 +49,10 @@ process_l2_import_queue() {
             [ -n "${CLICKHOUSE_PORT:-}" ]     && import_args+=(--clickhouse-port "$CLICKHOUSE_PORT")
             [ -n "${CLICKHOUSE_USER:-}" ]     && import_args+=(--clickhouse-user "$CLICKHOUSE_USER")
             [ -n "${CLICKHOUSE_PASSWORD:-}" ] && import_args+=(--clickhouse-password "$CLICKHOUSE_PASSWORD")
-            if ! "${L2_IMPORT_CLICKHOUSE_IMPORT:-./scripts/clickhouse-import}" "${import_args[@]}"; then
+            # Keep every row transactions already holds: the gateway may have
+            # exported an item of this band since the job was written.
+            if ! CLICKHOUSE_IMPORT_KEEP_EXISTING=true \
+                "${L2_IMPORT_CLICKHOUSE_IMPORT:-./scripts/clickhouse-import}" "${import_args[@]}"; then
                 ok=false
                 failed_partition=$partition
                 break
@@ -69,6 +72,10 @@ process_l2_import_queue() {
             if [ "$attempts" -ge "$l2_import_max_attempts" ]; then
                 mkdir -p "$l2_import_dir/failed"
                 echo "clickhouse-import failed on $failed_partition, attempt $attempts of $l2_import_max_attempts" >> "$job_dir/failed.txt"
+                # Kept: job.json and written.parquet, so --forget finds rows
+                # of partitions that did load. The band's data goes; the
+                # gateway writes the band again later.
+                rm -rf "$job_dir/blocks" "$job_dir/transactions" "$job_dir/tags"
                 mv "$job_dir" "$l2_import_dir/failed/$job"
                 echo "METRIC l2_import_job result=failed job=$job partition=$failed_partition"
             else
