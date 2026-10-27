@@ -109,6 +109,7 @@ import { Ans104DataIndexer } from './workers/ans104-data-indexer.js';
 import { Ans104Unbundler } from './workers/ans104-unbundler.js';
 import { BlockImporter } from './workers/block-importer.js';
 import { L1BandImportWorker } from './workers/l1-band-import-worker.js';
+import { L2BandImportWorker } from './workers/l2-band-import-worker.js';
 import { BundleRepairWorker } from './workers/bundle-repair-worker.js';
 import { SymlinkCleanupWorker } from './workers/symlink-cleanup-worker.js';
 import { DataItemIndexer } from './workers/data-item-indexer.js';
@@ -583,6 +584,40 @@ export const l1BandImportWorker = config.L1_BAND_IMPORT_ENABLED
       allowUnsampled: config.L1_BAND_IMPORT_ALLOW_UNSAMPLED,
     })
   : undefined;
+
+/**
+ * The L2 import's worker, when enabled and able to run: it imports into
+ * ClickHouse only, and only bands bound to a publication.
+ */
+function makeL2BandImportWorker(): L2BandImportWorker | undefined {
+  if (!config.L2_BAND_IMPORT_ENABLED) return undefined;
+  const reason =
+    config.L2_BAND_IMPORT_TARGET !== 'clickhouse'
+      ? `L2_BAND_IMPORT_TARGET=${config.L2_BAND_IMPORT_TARGET} is not supported (only clickhouse)`
+      : config.CLICKHOUSE_URL === undefined
+        ? 'CLICKHOUSE_URL is not set'
+        : config.L2_BAND_IMPORT_PUBLICATION === undefined
+          ? 'L2_BAND_IMPORT_PUBLICATION is not set'
+          : config.L2_BAND_IMPORT_INDEXES.length === 0
+            ? 'L2_BAND_IMPORT_INDEXES names no index'
+            : undefined;
+  if (reason !== undefined) {
+    log.warn(`L2 band import is enabled but cannot run: ${reason}`);
+    return undefined;
+  }
+  return new L2BandImportWorker({
+    log,
+    indexes: config.L2_BAND_IMPORT_INDEXES,
+    publication: config.L2_BAND_IMPORT_PUBLICATION as string,
+    // The publication's key, as this gateway sees the registry.
+    registryUrl: `http://localhost:${config.PORT}`,
+    arweaveNodes: config.L2_BAND_IMPORT_ARWEAVE_NODES,
+    maxQueued: config.L2_BAND_IMPORT_MAX_QUEUED,
+    intervalMs: config.L2_BAND_IMPORT_INTERVAL_SECONDS * 1000,
+  });
+}
+
+export const l2BandImportWorker = makeL2BandImportWorker();
 
 export const envoyEndpointHealthWorker =
   config.ARWEAVE_PEER_DNS_RECORDS.length > 0
@@ -2315,6 +2350,7 @@ export const shutdown = async (exitCode = 0) => {
     await mempoolWatcher?.stop();
     await blockImporter.stop();
     await l1BandImportWorker?.stop();
+    await l2BandImportWorker?.stop();
     await dataItemIndexer.stop();
     await txRepairWorker.stop();
     await txImporter.stop();

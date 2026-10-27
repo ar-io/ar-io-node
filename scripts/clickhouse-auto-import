@@ -230,6 +230,9 @@ fi
 # Create directories
 mkdir -p "$dataset_dir"
 
+# L2 import jobs: see scripts/lib/l2-import-queue.sh.
+source "$SCRIPT_DIR/lib/l2-import-queue.sh"
+
 # ------------------------------------------------------------------------------
 # SWITCH OFF 'exit on error' so the script doesn't die in the main loop
 # ------------------------------------------------------------------------------
@@ -738,6 +741,14 @@ while true; do
 
     echo "METRIC cycle_summary batches=${cycle_batches} ok=${cycle_ok} skipped_empty=${cycle_skipped_empty} skipped_imported=${cycle_skipped_imported} export_failed=${cycle_export_failed} import_failed=${cycle_import_failed} prune_failed=${cycle_prune_failed} prune_unverified=${cycle_prune_unverified} debug_failed=${cycle_debug_failed} duration_s=$((loop_end_time - loop_start_time))"
 
+    # Sleep until the next cycle, loading queued L2 import jobs meanwhile.
     echo "Sleeping for $sleep_interval seconds..."
-    sleep "$sleep_interval"
+    sleep_until=$(( $(date +%s) + sleep_interval ))
+    while true; do
+        process_l2_import_queue
+        now_s=$(date +%s)
+        [ "$now_s" -ge "$sleep_until" ] && break
+        remaining_s=$(( sleep_until - now_s ))
+        sleep $(( remaining_s < l2_import_poll_s ? remaining_s : l2_import_poll_s ))
+    done
 done

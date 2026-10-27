@@ -378,6 +378,46 @@ export const optionMap = {
     alias: '--bucket <blocks>',
     description: 'Height bucket for missingByHeight (default 100000)',
   },
+  l2ImportTarget: {
+    alias: '--target <target>',
+    description:
+      "Where to import: 'clickhouse' writes a job for clickhouse-auto-import to load into this gateway's ClickHouse. Required ('sqlite' is not built yet)",
+  },
+  l2ImportBundlesDb: {
+    alias: '--bundles-db <path>',
+    description:
+      'The bundles.db holding the import ledger (parquet_l2_imports), written beside the running gateway (default data/sqlite/bundles.db)',
+  },
+  l2ImportCoreDb: {
+    alias: '--core-db <path>',
+    description:
+      "The gateway's core.db, read-only: the block of every height an item is written at comes from here (default data/sqlite/core.db)",
+  },
+  l2ImportJobsDir: {
+    alias: '--jobs-dir <path>',
+    description:
+      'Where jobs are queued for clickhouse-auto-import (queue/), and where it moves them when loaded (done/) or given up (failed/). Must be mounted in both containers (default data/etl/staging/l2-import)',
+  },
+  l2ImportTmpDir: {
+    alias: '--tmp-dir <path>',
+    description:
+      "Where DuckDB spills and jobs are written before they are queued (default data/tmp, the gateway's temp volume, never the container's own disk)",
+  },
+  l2ImportMaxBands: {
+    alias: '--max-bands <n>',
+    description:
+      'Write jobs for at most this many bands, newest first (default: as many as the queue has room for)',
+  },
+  l2ImportMaxQueued: {
+    alias: '--max-queued <n>',
+    description:
+      'Write no job while this many wait in the queue (default 2), so jobs never pile up faster than clickhouse-auto-import loads them',
+  },
+  l2ImportForget: {
+    alias: '--forget <band-id>',
+    description:
+      'Remove from ClickHouse the rows an import of this band wrote (its loaded job lists them), and forget the band in the ledger. A later run imports it again unless it is removed from the bands directory',
+  },
 } satisfies Record<string, CommanderOption>;
 
 export const globalOptions: CommanderOption[] = [optionMap.debug];
@@ -489,6 +529,35 @@ export const indexL2VerifyOptions: CommanderOption[] = [
   optionMap.allowExpired,
   optionMap.bandDeadline,
   optionMap.l2Concurrency,
+];
+
+export const indexL2ImportOptions: CommanderOption[] = [
+  optionMap.l2BandsDir,
+  optionMap.l2ImportTarget,
+  optionMap.l2ImportBundlesDb,
+  optionMap.l2ImportCoreDb,
+  optionMap.l2ImportJobsDir,
+  optionMap.l2ImportTmpDir,
+  optionMap.l2ImportMaxBands,
+  optionMap.l2ImportMaxQueued,
+  optionMap.l2ImportForget,
+  optionMap.onchain,
+  optionMap.arweaveNodes,
+  optionMap.onchainSeed,
+  optionMap.readTimeout,
+  optionMap.spillMax,
+  optionMap.duckdbThreads,
+  optionMap.l2Publication,
+  optionMap.l2PublisherKey,
+  optionMap.l2RegistryUrl,
+  optionMap.l2Index,
+  optionMap.l1BandsDir,
+  optionMap.allowAgreement,
+  optionMap.allowUnlocated,
+  optionMap.maxUnchecked,
+  optionMap.maxUnlocatedShare,
+  optionMap.allowExpired,
+  optionMap.bandDeadline,
 ];
 
 export const indexL1AuditOptions: CommanderOption[] = [

@@ -158,6 +158,36 @@ CREATE INDEX bundle_data_items_root_transaction_id_idx ON bundle_data_items (roo
 CREATE INDEX stable_data_items_indexed_at_idx ON stable_data_items (indexed_at);
 CREATE INDEX root_transaction_id_idx ON bundles (root_transaction_id);
 CREATE INDEX bundles_active_retry_priority_idx ON bundles (last_fully_indexed_at, retry_attempt_count, last_retried_at);
+CREATE TABLE parquet_l2_imports (
+  band_id TEXT NOT NULL,
+  -- 'clickhouse' or 'sqlite'.
+  target TEXT NOT NULL,
+  -- The index the band belongs to, e.g. 'ardrive-l2'.
+  index_name TEXT NOT NULL,
+  -- The wallet the band's publication is signed by.
+  publisher TEXT NOT NULL,
+  height_from INTEGER NOT NULL,
+  height_to INTEGER NOT NULL,
+  -- Digest of the band's heights, selection and row digests: the same band
+  -- rebuilt with different rows is a different import.
+  band_digest BLOB NOT NULL,
+  job TEXT,
+  -- Rows written, and the band's rows left out: already held by the target
+  -- at the same key (`present`) or at another height (`elsewhere`), held
+  -- with a different location or owner (`conflicting`, a subset of
+  -- `present`), or unlocated where the target needs a location.
+  rows_imported INTEGER,
+  rows_present INTEGER,
+  rows_elsewhere INTEGER,
+  rows_conflicting INTEGER,
+  rows_unlocated INTEGER,
+  -- JSON array of the allow flags the band was accepted with.
+  accepted TEXT,
+  started_at INTEGER NOT NULL,
+  queued_at INTEGER,
+  completed_at INTEGER,
+  PRIMARY KEY (band_id, target)
+);
 PRAGMA foreign_keys=OFF;
 BEGIN TRANSACTION;
 CREATE TABLE bundle_formats (

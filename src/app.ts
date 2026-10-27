@@ -95,6 +95,7 @@ if (system.clickhouseStreamer !== undefined) {
 if (config.START_WRITERS) {
   system.blockImporter.start();
   system.l1BandImportWorker?.start();
+  system.l2BandImportWorker?.start();
   system.txOffsetRepairWorker.start();
   system.txRepairWorker.start();
   system.bundleRepairWorker.start();

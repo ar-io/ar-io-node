@@ -11,6 +11,7 @@ on:
       - scripts/clickhouse-import
       - scripts/parquet-export
       - scripts/lib/common.sh
+      - scripts/lib/l2-import-queue.sh
       - src/database/clickhouse/**
       - src/database/duckdb/**
       - src/workers/parquet-exporter.ts

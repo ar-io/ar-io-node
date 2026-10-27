@@ -135,6 +135,35 @@ export interface IndexL2VerifyCLIOptions extends GlobalCLIOptions {
   concurrency?: string;
 }
 
+export interface IndexL2ImportCLIOptions extends GlobalCLIOptions {
+  bandsDir?: string;
+  target?: string;
+  bundlesDb?: string;
+  coreDb?: string;
+  jobsDir?: string;
+  tmpDir?: string;
+  maxBands?: string;
+  maxQueued?: string;
+  forget?: string;
+  onchain?: string;
+  seed?: string;
+  spillMax?: string;
+  duckdbThreads?: string;
+  arweaveNodes?: string;
+  readTimeout?: string;
+  publication?: string;
+  publisherKey?: string;
+  registryUrl?: string;
+  index?: string;
+  l1BandsDir?: string;
+  allowAgreement?: boolean;
+  allowUnlocated?: boolean;
+  maxUnchecked?: string;
+  maxUnlocatedShare?: string;
+  allowExpired?: boolean;
+  bandDeadline?: string;
+}
+
 export interface IndexL1AuditCLIOptions extends GlobalCLIOptions {
   coreDb?: string;
   dataFrom?: string;
