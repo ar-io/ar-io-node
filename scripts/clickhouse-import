@@ -746,12 +746,25 @@ FROM
     local content_hash="cityHash64(* EXCEPT (inserted_at, expires_at))"
     local insert_filter
     if [ "$keep_existing" = true ]; then
-      echo "    Inserting rows whose keys transactions lacks (keeping existing rows)..."
+      # A data item held anywhere within the margin is left out too: the
+      # same item in another bundle, indexed by the gateway itself. The L2
+      # import's job writer applies the same margin (HELD_MARGIN_HEIGHTS in
+      # src/lib/parquet-l2/import-clickhouse.ts) when it writes the job; this
+      # applies it again to whatever arrived since.
+      local margin=1000
+      local near_min=$(( min_height > margin ? min_height - margin : 0 ))
+      local near_max=$(( max_height + margin ))
+      echo "    Inserting rows transactions lacks, by key and by item id within ${margin} heights (keeping existing rows)..."
       insert_filter="sipHash128(height, block_transaction_index, is_data_item, id) NOT IN (
   SELECT sipHash128(height, block_transaction_index, is_data_item, id)
   FROM transactions
   WHERE height >= ${min_height} AND height <= ${max_height}
-)"
+)
+AND NOT (is_data_item AND sipHash128(id) IN (
+  SELECT sipHash128(id)
+  FROM transactions
+  WHERE height >= ${near_min} AND height <= ${near_max} AND is_data_item
+))"
     else
       echo "    Inserting new or changed rows into transactions table..."
       insert_filter="sipHash128(height, block_transaction_index, is_data_item, id, ${content_hash}) NOT IN (

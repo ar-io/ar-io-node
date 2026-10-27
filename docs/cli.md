@@ -1403,10 +1403,11 @@ What a run does, band by band, newest first:
 3. **Leaves alone what ClickHouse holds** (first writer wins).
    `transactions` keeps the newest row of a key, so a band row at a key the
    gateway already holds would replace the gateway's row. That is prevented
-   where it cannot race: when auto-import loads a job, it inserts only keys
-   `transactions` lacks then (`CLICKHOUSE_IMPORT_KEEP_EXISTING=true`), so an
-   item the gateway exported after the job was written keeps the gateway's
-   row. Before writing, the job is also trimmed, which is what the counts
+   where it cannot race: when auto-import loads a job, it inserts only rows
+   whose key `transactions` lacks then, and whose item it does not hold
+   within 1,000 heights at any key (`CLICKHOUSE_IMPORT_KEEP_EXISTING=true`),
+   so an item the gateway exported after the job was written keeps the
+   gateway's row, and gets no second placement. Before writing, the job is also trimmed, which is what the counts
    report: each 10,000-height window's
    ids are sent to ClickHouse (as external data) and the rows it holds for
    them, 1,000 heights either side, come back: an item held at the same key
