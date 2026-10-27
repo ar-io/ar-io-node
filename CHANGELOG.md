@@ -8,6 +8,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- `ar-io-node index-l2-import --target clickhouse` and its worker
+  (`L2_BAND_IMPORT_ENABLED`, off by default) load installed `parquet-l2`
+  bands, such as `ardrive-l2`, into a gateway's ClickHouse, so its GraphQL
+  answers for their data items without unbundling them. Each band is
+  verified first (bound to the publisher's signed publication, its roots
+  found in the L1 index, a sample of items read on chain) and refused whole
+  if a check fails. One placement is kept per item, items ClickHouse
+  already holds are left alone and disagreements counted
+  (`l2_band_import_conflicts_total`), and nothing above ClickHouse's top
+  height is written. Jobs are queued under `ETL_STAGING_PATH/l2-import` and
+  loaded by `clickhouse-auto-import`, one at a time between its own batches
+  (`CLICKHOUSE_AUTO_IMPORT_L2_POLL_INTERVAL`), with `clickhouse-import`'s
+  new `CLICKHOUSE_IMPORT_KEEP_EXISTING`, which inserts only keys ClickHouse
+  lacks, so a row the gateway exported meanwhile is never replaced. A ledger,
+  `parquet_l2_imports` in `bundles.db` (new migration), records each band;
+  `--forget <band>` removes what an import wrote. One 3.2M-item band of
+  `ardrive-l2` verifies and queues in about two minutes and loads in about
+  40 seconds.
+
 ### Changed
 
 ### Fixed

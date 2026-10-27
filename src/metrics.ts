@@ -2399,3 +2399,26 @@ export const l1BandImportUncoveredHeights = new promClient.Gauge({
   name: 'l1_band_import_uncovered_heights',
   help: 'Heights below the gateway that it lacks and no installed L1 band holds yet',
 });
+
+/** Runs of the L2 band import worker, by result. */
+export const l2BandImportRunsTotal = new promClient.Counter({
+  name: 'l2_band_import_runs_total',
+  help: 'L2 band import worker runs, by result (queued: jobs written for clickhouse-auto-import, idle, failed, deferred: a refused import waiting for its bands to change, unreadable: the on-chain sample could not be read)',
+  labelNames: ['result'] as const,
+});
+
+/** Data item rows the L2 band import worker has queued for ClickHouse. */
+export const l2BandImportRowsTotal = new promClient.Counter({
+  name: 'l2_band_import_rows_total',
+  help: 'Data item rows the L2 band import worker has queued for ClickHouse',
+});
+
+/**
+ * Items an L2 band places differently from the row ClickHouse already holds
+ * for them (another root, parent, owner, size or location). The gateway's
+ * row is kept; the count says how often a publisher and this gateway disagree.
+ */
+export const l2BandImportConflictsTotal = new promClient.Counter({
+  name: 'l2_band_import_conflicts_total',
+  help: 'Items an L2 band places differently from the row ClickHouse already holds (the held row is kept)',
+});

@@ -1782,6 +1782,70 @@ export const L1_BAND_IMPORT_CACHE_MIB = +env.varOrDefault(
   '512',
 );
 
+/**
+ * Import installed `parquet-l2` bands (subscribe to them with the
+ * index-swarm sidecar) into this gateway's ClickHouse, so its GraphQL
+ * answers for their data items without unbundling them. Every band is
+ * verified first; `clickhouse-auto-import` loads what is queued.
+ */
+export const L2_BAND_IMPORT_ENABLED =
+  env.varOrDefault('L2_BAND_IMPORT_ENABLED', 'false') === 'true';
+
+/** Installed L2 indexes to import, comma-separated, e.g. `ardrive-l2`. */
+export const L2_BAND_IMPORT_INDEXES = env
+  .varOrDefault('L2_BAND_IMPORT_INDEXES', '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter((s) => s.length > 0);
+
+/** Where to import: only `clickhouse` so far. */
+export const L2_BAND_IMPORT_TARGET = env.varOrDefault(
+  'L2_BAND_IMPORT_TARGET',
+  'clickhouse',
+);
+
+/**
+ * The publisher's signed index publication every imported band must be
+ * listed in, e.g. `https://turbo-gateway.com/ar-io/indexes`.
+ */
+export const L2_BAND_IMPORT_PUBLICATION = env.varOrUndefined(
+  'L2_BAND_IMPORT_PUBLICATION',
+);
+
+/** Seconds between import runs, counted from the end of the last. */
+export const L2_BAND_IMPORT_INTERVAL_SECONDS = +env.varOrDefault(
+  'L2_BAND_IMPORT_INTERVAL_SECONDS',
+  '600',
+);
+
+/**
+ * Arweave nodes the on-chain sample reads items from, comma-separated
+ * (default: the tip and data nodes `index-l2-verify` uses).
+ */
+export const L2_BAND_IMPORT_ARWEAVE_NODES = env
+  .varOrDefault('L2_BAND_IMPORT_ARWEAVE_NODES', '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter((s) => s.length > 0);
+
+/**
+ * On-chain sample items per band (of 20) that may go unread, nodes lacking
+ * their chunks, and the band still be imported (`--max-unchecked`). 0 by
+ * default: a band with any item unread waits and is tried again. An unread
+ * item is counted as possibly fabricated, and the bound the sample gives is
+ * stated with it; the ledger records the value a band was accepted with.
+ */
+export const L2_BAND_IMPORT_MAX_UNCHECKED = +env.varOrDefault(
+  'L2_BAND_IMPORT_MAX_UNCHECKED',
+  '0',
+);
+
+/** Jobs waiting for clickhouse-auto-import before a run writes no more. */
+export const L2_BAND_IMPORT_MAX_QUEUED = +env.varOrDefault(
+  'L2_BAND_IMPORT_MAX_QUEUED',
+  '2',
+);
+
 //
 // Verification
 //

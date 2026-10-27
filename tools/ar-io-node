@@ -21,6 +21,9 @@
 #   ./tools/ar-io-node index-l1-import --bands-dir data/indexes/installed/parquet-l1 \
 #     --core-db data/sqlite/core.db
 #   ./tools/ar-io-node index-l2-verify --bands-dir data/indexes/installed/ardrive-l2
+#   ./tools/ar-io-node index-l2-import --target clickhouse \
+#     --bands-dir data/indexes/installed/ardrive-l2 \
+#     --publication https://<publisher>/ar-io/indexes --registry-url http://core:4000
 #   ./tools/ar-io-node index-census --output data/indexes/census/short-roots.tsv
 #   ./tools/ar-io-node get-gateway --address <wallet>
 #
@@ -30,7 +33,10 @@
 # directory read-only and the ClickHouse settings; for index-l1-* commands
 # data/indexes read-only and the SQLite directory, read-write for
 # index-l1-import and read-only otherwise; for index-l2-* commands
-# data/indexes read-only; for index-l1-* and index-l2-* commands also a
+# data/indexes read-only; for index-l2-import also the SQLite directory
+# (its ledger is in bundles.db; it runs as that file's owner), the ETL
+# staging directory (its job queue), the temp volume and the ClickHouse
+# settings; for index-l1-* and index-l2-* commands also a
 # spill folder for DuckDB at /tmp, data/tmp/index-verify beside data/indexes
 # (created if missing; only for the checks that spill: index-l2-verify, and
 # index-l1-verify over --bands-dir), so a large check never fills the disk
@@ -257,6 +263,66 @@ case "${COMMAND}" in
     fi
     rewrite_paths --bundles-db --roots --output
     # CLICKHOUSE_URL names the ClickHouse service on the gateway's network.
+    join_gateway_network
+    ;;
+  index-l2-import)
+    # The queue and the spill are the gateway's own, mounted below: a queue
+    # elsewhere is one clickhouse-auto-import never reads, and a spill
+    # elsewhere would land in the container's layer, on `/`.
+    for opt in --jobs-dir --tmp-dir; do
+      if has_arg "${opt}"; then
+        echo "ar-io-node: ${opt} is not taken here: index-l2-import uses the gateway's own (ETL_STAGING_PATH/l2-import, where clickhouse-auto-import loads jobs, and TEMP_DATA_PATH)." >&2
+        exit 1
+      fi
+    done
+    # Bands and the L1 index are only read. The import writes its ledger in
+    # bundles.db (core.db is only read), queues jobs under the ETL staging
+    # directory, where clickhouse-auto-import loads them, and spills to the
+    # gateway's temp volume: the paths core and auto-import use, so a run
+    # from here and the gateway's own worker share one queue and one lock.
+    DATA_PATH="$(setting INDEX_SWARM_DATA_PATH)"
+    DATA_PATH="$(realpath -m "${DATA_PATH:-./data/indexes}")"
+    if [[ -d "${DATA_PATH}" ]]; then
+      DOCKER_ARGS+=(-v "${DATA_PATH}:/app/data/indexes:ro")
+      MOUNT_HOSTS+=("${DATA_PATH}")
+      MOUNT_TARGETS+=("data/indexes")
+    fi
+    SQLITE_PATH="$(setting SQLITE_DATA_PATH)"
+    SQLITE_PATH="$(realpath -m "${SQLITE_PATH:-./data/sqlite}")"
+    STAGING_PATH="$(setting ETL_STAGING_PATH)"
+    STAGING_PATH="$(realpath -m "${STAGING_PATH:-./data/etl/staging}")"
+    TMP_PATH="$(setting TEMP_DATA_PATH)"
+    TMP_PATH="$(realpath -m "${TMP_PATH:-./data/tmp}")"
+    mkdir -p "${STAGING_PATH}" "${TMP_PATH}" 2>/dev/null || true
+    DOCKER_ARGS+=(-v "${SQLITE_PATH}:/app/data/sqlite"
+      -v "${STAGING_PATH}:/app/data/etl/staging"
+      -v "${TMP_PATH}:/app/data/tmp")
+    MOUNT_HOSTS+=("${SQLITE_PATH}" "${STAGING_PATH}" "${TMP_PATH}")
+    MOUNT_TARGETS+=("data/sqlite" "data/etl/staging" "data/tmp")
+    # As whoever owns bundles.db, as index-l1-import runs as core.db's owner:
+    # root on a Docker install, as core and auto-import, which write and
+    # move the same jobs.
+    owner_of="${SQLITE_PATH}/bundles.db"
+    [[ -e "${owner_of}" ]] || owner_of="${SQLITE_PATH}"
+    owner="$(stat -c '%u:%g' "${owner_of}")"
+    for i in "${!DOCKER_ARGS[@]}"; do
+      if [[ "${DOCKER_ARGS[$i]}" == "--user" ]]; then
+        DOCKER_ARGS[$((i + 1))]="${owner}"
+      fi
+    done
+    # ClickHouse by name, as for index-census; the wallet so the import
+    # refuses bands this gateway published itself.
+    for name in CLICKHOUSE_URL CLICKHOUSE_USER CLICKHOUSE_PASSWORD AR_IO_WALLET; do
+      value="$(setting "${name}")"
+      if [[ -n "${value}" ]]; then
+        export "${name}=${value}"
+        DOCKER_ARGS+=(-e "${name}")
+      fi
+    done
+    mount_spill "${DATA_PATH}"
+    DOCKER_ARGS+=(-e "UV_THREADPOOL_SIZE=${UV_THREADPOOL_SIZE:-16}")
+    rewrite_paths --bands-dir --l1-bands-dir --publication --bundles-db \
+      --core-db
     join_gateway_network
     ;;
   index-l2-*)

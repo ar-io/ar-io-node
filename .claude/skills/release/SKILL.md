@@ -171,7 +171,7 @@ The paths each workflow builds on, for that check:
 | --- | --- |
 | `build-envoy` | `envoy/` |
 | `build-litestream` | `litestream/` |
-| `build-clickhouse-auto-import` | `Dockerfile.clickhouse-auto-import scripts/clickhouse-auto-import scripts/clickhouse-import scripts/parquet-export scripts/lib/common.sh src/database/clickhouse/ src/database/duckdb/ src/workers/parquet-exporter.ts src/database/composite-clickhouse.ts` |
+| `build-clickhouse-auto-import` | `Dockerfile.clickhouse-auto-import scripts/clickhouse-auto-import scripts/clickhouse-import scripts/parquet-export scripts/lib/common.sh scripts/lib/l2-import-queue.sh src/database/clickhouse/ src/database/duckdb/ src/workers/parquet-exporter.ts src/database/composite-clickhouse.ts` |
 
 So a ClickHouse schema change moves `ar-io-clickhouse-auto-import` as well as
 core.
