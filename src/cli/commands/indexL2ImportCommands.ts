@@ -61,7 +61,10 @@ import {
   recordQueued,
   reconcileJobs,
 } from '../../lib/parquet-l2/import-ledger.js';
-import { bandTablesDigest } from '../../lib/parquet-l2/layout.js';
+import {
+  bandTablesDigest,
+  idHeightRange,
+} from '../../lib/parquet-l2/layout.js';
 import {
   liveL2Bands,
   readL2BandsDir,
@@ -410,11 +413,22 @@ async function importBands({
     );
   }
 
+  // The heights of every job still in the queue, read from the queue
+  // itself, so a job the ledger never recorded counts too.
+  const queuedRanges: Array<[number, number]> = [];
+  for (const name of await fsp
+    .readdir(path.join(jobsDir, QUEUE_DIR))
+    .catch(() => [] as string[])) {
+    const range = idHeightRange(name.slice(0, name.lastIndexOf('.')));
+    if (range !== undefined) queuedRanges.push(range);
+  }
+
   // Newest first: the heights most asked for, as the L1 import does.
   const ledger = readLedger(db, 'clickhouse');
   const pending: L2BandOnDisk[] = [];
   const aboveCeiling: string[] = [];
   const waiting: string[] = [];
+  const behindQueued: string[] = [];
   let done = 0;
   for (const b of [...live].sort(
     (x, y) => y.band.heightRange[0] - x.band.heightRange[0],
@@ -435,6 +449,15 @@ async function importBands({
         continue;
       }
     }
+    // No job beside a queued job over the same heights (a band and its
+    // replacement): it would be built before the other loads, could list
+    // the same items, and its --forget would then take the other's rows.
+    // It is written once the other has loaded and is held.
+    const [from, to] = b.band.heightRange;
+    if (queuedRanges.some(([a, z]) => a <= to && from <= z)) {
+      behindQueued.push(b.id);
+      continue;
+    }
     pending.push(b);
   }
   const take = pending.slice(0, Math.min(room, maxBands ?? room));
@@ -448,6 +471,7 @@ async function importBands({
     waiting: waiting.length,
     pending: pending.length,
     aboveCeiling,
+    behindQueued,
     loaded: reconciled.loaded,
     failed: reconciled.failed,
   };

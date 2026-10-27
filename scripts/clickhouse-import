@@ -755,15 +755,19 @@ FROM
       local near_min=$(( min_height > margin ? min_height - margin : 0 ))
       local near_max=$(( max_height + margin ))
       echo "    Inserting rows transactions lacks, by key and by item id within ${margin} heights (keeping existing rows)..."
+      # Both sets are of the staged ids only: the rows tested are staged
+      # rows, so the answer is the same and the sets stay the job's size.
       insert_filter="sipHash128(height, block_transaction_index, is_data_item, id) NOT IN (
   SELECT sipHash128(height, block_transaction_index, is_data_item, id)
   FROM transactions
   WHERE height >= ${min_height} AND height <= ${max_height}
+    AND id IN (SELECT id FROM ${final_staging})
 )
 AND NOT (is_data_item AND sipHash128(id) IN (
   SELECT sipHash128(id)
   FROM transactions
   WHERE height >= ${near_min} AND height <= ${near_max} AND is_data_item
+    AND id IN (SELECT id FROM ${final_staging})
 ))"
     else
       echo "    Inserting new or changed rows into transactions table..."

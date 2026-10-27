@@ -1439,6 +1439,12 @@ run with nothing to do reads the bands directory, the ledger and
 ClickHouse's top height, and writes nothing. A republished band has a new
 id, and is checked and imported again; only its new items are written.
 
+No job is written over the heights of a job still in the queue (a band and
+its republished replacement, say): it would be built before the other
+loads, could list the same items, and `--forget` on it would then take the
+other's rows. Such a band is listed in `behindQueued` and written once the
+queued job has loaded.
+
 Runs take a lock (`--jobs-dir/.l2-import.lock`, held by the kernel, so
 across containers and released however a run ends): a second run is
 refused while one is going. Holding it, a run first removes what an
@@ -1511,7 +1517,8 @@ A job also carries `version`, `kind`, `bandId`, `bandDigest`, `index`,
 `publisher`, `indexedAt` and `createdAt`, as its `job.json` does. A band
 with nothing left to write has `"job": null` and its counts. `pending`
 counts the bands still to import, this run's included; `waiting` the bands
-whose jobs are queued. A run with a refusal prints its result on stderr
+whose jobs are queued; `behindQueued` the bands waiting for a queued job
+over their heights. A run with a refusal prints its result on stderr
 with `refused`, `refusal` and `refusals` (each band's failed `checks` and
 on-chain sample). `--forget`
 prints `{ "forgotten", "jobs", "indexedAt", "ids", "matched",

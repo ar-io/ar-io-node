@@ -264,6 +264,27 @@ describe('index-l2-import', () => {
     assert.equal(result.pending, 1);
   });
 
+  it('writes no job over the heights of a job still in the queue', async () => {
+    const { id: old } = await installBand(100, 199);
+    // A replacement of the same heights, whose old band's job still waits
+    // (here the old band is gone from the directory, as when superseded).
+    await fs.rm(path.join(bandsDir, `${old}~1`), { recursive: true });
+    const b = band(100, 199);
+    b.tables.data_items.rowDigest = hex64('replacement');
+    const id = l2BandId(b, bandPublisherTag(PUBLISHER));
+    await fs.mkdir(path.join(bandsDir, `${id}~1`));
+    await fs.writeFile(
+      path.join(bandsDir, `${id}~1`, BAND_FILE),
+      serializeBandFile(b),
+    );
+    await fs.mkdir(path.join(jobsDir, 'queue', `${old}.20261028T000000Z`), {
+      recursive: true,
+    });
+    const result = (await run({ maxQueued: '5' })) as Record<string, unknown>;
+    assert.equal(result.imported, 0);
+    assert.deepEqual(result.behindQueued, [id]);
+  });
+
   it('skips a band the ledger says is imported up to the ceiling', async () => {
     const { id, band: b } = await installBand(100, 199);
     const db = new Sqlite(bundlesDb);
