@@ -145,6 +145,30 @@ exit 0
       assert.deepEqual((await ls('queue')).sort(), ['band-c.1', 'band-d.1']);
     });
 
+    it('removes data a finished job kept, as when its removal was interrupted', async () => {
+      for (const outcome of ['done', 'failed']) {
+        const dir = path.join(
+          staging,
+          'l2-import',
+          outcome,
+          `band-${outcome}.1`,
+        );
+        await fs.mkdir(path.join(dir, 'transactions', 'data'), {
+          recursive: true,
+        });
+        await fs.mkdir(path.join(dir, 'tags'), { recursive: true });
+        await fs.writeFile(path.join(dir, 'job.json'), '{}');
+        await fs.writeFile(path.join(dir, 'written.parquet'), 'ids');
+      }
+      runQueue();
+      for (const outcome of ['done', 'failed']) {
+        assert.deepEqual((await ls(`${outcome}/band-${outcome}.1`)).sort(), [
+          'job.json',
+          'written.parquet',
+        ]);
+      }
+    });
+
     it('moves a job whose job.json cannot be read to failed/', async () => {
       await job('band-e.1', 'broken');
       const out = runQueue();

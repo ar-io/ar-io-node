@@ -23,8 +23,28 @@ if ! [[ "$l2_import_poll_s" =~ ^[1-9][0-9]{0,5}$ ]]; then
     exit 1
 fi
 
+# Removes the Parquet data left in finished jobs (done/, failed/), keeping
+# job.json and written.parquet: a job moves out of the queue before its data
+# is removed, so data whose removal failed or was interrupted is found here,
+# on the next poll, rather than kept for good.
+sweep_l2_import_payloads() {
+    local outcome job_dir table
+    for outcome in done failed; do
+        for job_dir in "$l2_import_dir/$outcome"/*/; do
+            [ -d "$job_dir" ] || continue
+            for table in blocks transactions tags; do
+                if [ -e "${job_dir}${table}" ]; then
+                    rm -rf "${job_dir}${table}" || \
+                        echo "Warning: could not remove ${job_dir}${table}" >&2
+                fi
+            done
+        done
+    done
+}
+
 process_l2_import_queue() {
     local queue="$l2_import_dir/queue"
+    sweep_l2_import_payloads
     [ -d "$queue" ] || return 0
     local job_dir job partitions partition attempts started ok failed_partition
     for job_dir in "$queue"/*/; do
