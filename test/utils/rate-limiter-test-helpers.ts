@@ -6,7 +6,7 @@
  */
 
 import { Request, Response } from 'express';
-import { mock } from 'node:test';
+import { Mock, mock } from 'node:test';
 import EventEmitter from 'node:events';
 
 /**
@@ -18,7 +18,11 @@ export function createMockRequest(
   ip: string,
   headers: Record<string, string | string[] | undefined> = {},
   baseUrl: string = '',
-): Partial<Request> & { resourceBucket?: any; ipBucket?: any } {
+): Omit<Partial<Request>, 'on'> & {
+  on: Mock<(...args: any[]) => undefined>;
+  resourceBucket?: any;
+  ipBucket?: any;
+} {
   return {
     method,
     path,
@@ -155,7 +159,7 @@ export function createMockLogger() {
  * Helper to create mock metrics
  */
 export function createMockMetrics() {
-  const incCalls: Record<string, any[]> = {};
+  const incCalls: Record<string, number> = {};
 
   return {
     rateLimitRequestsTotal: {

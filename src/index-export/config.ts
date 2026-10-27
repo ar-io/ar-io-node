@@ -20,12 +20,16 @@ import {
   parseL2Indexes,
   resolveL2Source,
 } from './kinds/parquet-l2/config.js';
+import type { L1WitnessConfig } from './kinds/parquet-l1/witness-inputs.js';
 import {
   DEFAULT_SQLITE_BUNDLES_PATH,
   resolveSourceConfigs,
   ResolvedSource,
   SourceEnv,
 } from './kinds/root-tx/sources/config.js';
+import { DEFAULT_L2_MAX_BAND_ITEMS } from './kinds/parquet-l2/planner.js';
+import { DEFAULT_ARWEAVE_NODE_URLS } from '../lib/onchain/arweave-nodes.js';
+import { DEFAULT_DUCKDB_THREADS } from '../lib/duckdb-threads.js';
 
 /** Where the service works: the shared index volume, fixed in compose. */
 export const DATA_DIR = 'data/indexes';
@@ -54,7 +58,8 @@ export const DEFAULT_RESETTLE_MAX_CHANGED = 20_000;
 export const DEFAULT_L2_MAX_READS = 200_000;
 /** `parquet-l2`: the build's DuckDB, and the items a source window holds. */
 export const DEFAULT_L2_DUCKDB_MEMORY = '2GB';
-export const DEFAULT_L2_DUCKDB_THREADS = 2;
+/** One: see {@link DEFAULT_DUCKDB_THREADS} (DuckDB 1.4 crashes on more). */
+export const DEFAULT_L2_DUCKDB_THREADS = DEFAULT_DUCKDB_THREADS;
 export const DEFAULT_L2_DUCKDB_SPILL_MAX_GB = 256;
 export const DEFAULT_L2_WINDOW_ITEMS = 50_000;
 /** `parquet-l2`: every how many gated re-settles a band with 404s is rebuilt. */
@@ -102,6 +107,13 @@ export interface ExportConfig {
    * off-peak. Raise it for an operator's one-time rebuild or bootstrap.
    */
   l1RunBudgetMs?: number;
+  /**
+   * Where `parquet-l1` witnesses (`l1-4`) come from: a directory of v1 data
+   * roots and Arweave's 2.0 checkpoint (`INDEX_EXPORT_L1_WITNESS_DIR`), and
+   * Arweave nodes (`INDEX_EXPORT_L1_WITNESS_NODES`). Nothing from either is
+   * published unless the chain confirms it.
+   */
+  l1Witness?: L1WitnessConfig;
   /** Gateway the header check reads roots from. Required. */
   headerCheckUrl: string;
   headerCheckTimeoutMs: number;
@@ -135,6 +147,11 @@ export interface ExportConfig {
    * rebuilt on every this many re-settles its fingerprint would skip.
    */
   l2RecheckUnreadableEvery?: number;
+  /**
+   * `parquet-l2`: the most items one `h` band holds. A range above it stays
+   * as its twenty `d` bands (`INDEX_EXPORT_L2_MAX_BAND_ITEMS`).
+   */
+  l2MaxBandItems?: number;
 }
 
 type Env = Record<string, string | undefined>;
@@ -303,6 +320,7 @@ export function parseExportConfig(env: Env, dataDir = DATA_DIR): ExportConfig {
     ...(l1RunBudgetMinutes !== undefined
       ? { l1RunBudgetMs: l1RunBudgetMinutes * 60_000 }
       : {}),
+    l1Witness: l1WitnessConfig(env),
     headerCheckUrl,
     headerCheckTimeoutMs: integer(env, 'INDEX_EXPORT_HEADER_CHECK_TIMEOUT_MS', {
       min: 1000,
@@ -363,7 +381,49 @@ export function parseExportConfig(env: Env, dataDir = DATA_DIR): ExportConfig {
             min: 1000,
             fallback: DEFAULT_L2_WINDOW_ITEMS,
           }) as number,
+          l2MaxBandItems: integer(env, 'INDEX_EXPORT_L2_MAX_BAND_ITEMS', {
+            min: 1,
+            fallback: DEFAULT_L2_MAX_BAND_ITEMS,
+          }) as number,
         }
       : {}),
+  };
+}
+
+/** `INDEX_EXPORT_L1_WITNESS_*`: where `parquet-l1` witnesses come from. */
+function l1WitnessConfig(env: Env): L1WitnessConfig {
+  const dir = value(env, 'INDEX_EXPORT_L1_WITNESS_DIR');
+  // Unless told otherwise, the nodes the gateway already reads chunks from:
+  // its PREFERRED_CHUNK_GET_NODE_URLS, else the default tip and data nodes.
+  let name = 'INDEX_EXPORT_L1_WITNESS_NODES';
+  let listed = value(env, name);
+  if (listed === undefined) {
+    name = 'PREFERRED_CHUNK_GET_NODE_URLS';
+    listed = value(env, name);
+  }
+  const nodes =
+    listed === undefined
+      ? DEFAULT_ARWEAVE_NODE_URLS
+      : listed
+          .split(',')
+          .map((url) => url.trim())
+          .filter((url) => url.length > 0);
+  for (const url of nodes) {
+    let parsed: URL;
+    try {
+      parsed = new URL(url);
+    } catch {
+      throw new Error(`${name}: ${url} is not a URL`);
+    }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      throw new Error(`${name}: ${url} is not http(s)`);
+    }
+    if (parsed.username !== '' || parsed.password !== '') {
+      throw new Error(`${name}: ${url} may not carry a user or password`);
+    }
+  }
+  return {
+    ...(dir !== undefined ? { dir } : {}),
+    nodes,
   };
 }

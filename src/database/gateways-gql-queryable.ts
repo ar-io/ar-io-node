@@ -557,7 +557,9 @@ function mapRemoteTransaction(
  * equivalent. Callers flip the sign for DESC.
  *
  * Tuple matches the SQL/ClickHouse ORDER BY on
- * (height, blockTransactionIndex, data_item_id, indexed_at, id). Both
+ * (height, blockTransactionIndex, data_item_id, id). Not indexed_at: each
+ * gateway stamps its own, so it can't order rows merged across sources
+ * (#947). Both
  * backends sort the id and data_item_id columns as raw bytes (BLOB), so
  * this comparator decodes the base64url values back to Buffers before
  * comparison — ASCII ordering over base64url does not match binary byte
@@ -583,10 +585,6 @@ function compareTxCursorsAsc(aCursor: string, bCursor: string): number {
 
   const diCmp = compareIdBytes(a.dataItemId, b.dataItemId);
   if (diCmp !== 0) return diCmp;
-
-  const aia = a.indexedAt ?? 0;
-  const bia = b.indexedAt ?? 0;
-  if (aia !== bia) return aia - bia;
 
   return compareIdBytes(a.id, b.id);
 }

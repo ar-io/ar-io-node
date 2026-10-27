@@ -157,9 +157,10 @@ export const spawnFill: FillRunner = (args, onLog, register) =>
  * Every range is verified before a row of it is written
  * (`verifyBeforeImport`): the band checked whole, and bound to the chain by
  * the block this gateway holds above it. Blocks that cannot be bound — below
- * the 2.0 fork, or holding a format-1 transaction with data, which is every
- * `l1-3` band below height 2,000,000 — are refused unless `allowUnverified`
- * (`L1_BAND_IMPORT_ALLOW_UNVERIFIED`) accepts them. A run that fails or is
+ * the 2.0 fork, or holding a format-1 transaction with data, in a band
+ * without `l1-4` witnesses (every `l1-3` band below height 2,000,000) — are
+ * refused unless `allowUnverified` (`L1_BAND_IMPORT_ALLOW_UNVERIFIED`)
+ * accepts them. An `l1-4` band's witnesses bind them, so it needs no flag. A run that fails or is
  * refused counts as `failed`, never `idle`. The one quiet case is a bands
  * directory that was never created (nothing installed yet, on a new
  * gateway): `idle`, with the reason logged.
@@ -241,6 +242,8 @@ export class L1BandImportWorker {
     /**
      * Fill from blocks the checks cannot bind (`--allow-unbound
      * --allow-unverified-format1`): `L1_BAND_IMPORT_ALLOW_UNVERIFIED`.
+     * Needed only for bands without witnesses (`l1-3` and older); an
+     * `l1-4` band's witnesses bind those blocks.
      */
     allowUnverified?: boolean;
     /** Injected in tests: how the bands directory is looked at. */

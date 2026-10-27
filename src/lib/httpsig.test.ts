@@ -8,10 +8,9 @@ import { afterEach, describe, it } from 'node:test';
 import { strict as assert } from 'node:assert';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
-
-import bs58 from 'bs58';
 
 import {
   TRIGGER_HEADERS,
@@ -28,6 +27,13 @@ import {
   getSolanaAddress,
   initHttpSig,
 } from './httpsig.js';
+
+// bs58 v4 ships no type declarations (httpsig.ts imports it untyped). Load
+// the same module and declare the two functions these tests call.
+const bs58 = createRequire(import.meta.url)('bs58') as {
+  encode(source: Uint8Array): string;
+  decode(source: string): Buffer;
+};
 
 describe('httpsig lib', () => {
   // Temp directory for key file tests

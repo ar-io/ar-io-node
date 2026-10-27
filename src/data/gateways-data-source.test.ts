@@ -61,7 +61,7 @@ beforeEach(async () => {
     },
   });
 
-  requestAttributes = { origin: 'node-url', hops: 0 };
+  requestAttributes = { origin: 'node-url', hops: 0, clientIps: [] };
 });
 
 afterEach(async () => {
@@ -336,7 +336,7 @@ describe('GatewayDataSource', () => {
 
       await dataSource.getData({
         id: 'some-id',
-        requestAttributes: { hops: 0 },
+        requestAttributes: { hops: 0, clientIps: [] },
       });
 
       assert.equal(requestParams.params['ar-io-hops'], 1);
@@ -416,6 +416,7 @@ describe('GatewayDataSource', () => {
       const richAttributes: RequestAttributes = {
         origin: 'node-url',
         hops: 0,
+        clientIps: [],
         via: ['upstream-node'],
         arnsBasename: 'example',
       };
@@ -459,6 +460,7 @@ describe('GatewayDataSource', () => {
       const richAttributes: RequestAttributes = {
         origin: 'node-url',
         hops: 0,
+        clientIps: [],
         via: ['upstream-node'],
         arnsBasename: 'example',
       };
@@ -488,7 +490,7 @@ describe('GatewayDataSource', () => {
     it('should increment hops in the response', async () => {
       const data = await dataSource.getData({
         id: 'some-id',
-        requestAttributes: { hops: 2 },
+        requestAttributes: { hops: 2, clientIps: [] },
       });
 
       assert.equal(data.requestAttributes?.hops, 3);
@@ -812,6 +814,7 @@ describe('GatewayDataSource', () => {
 
         const requestAttributesWithArns: RequestAttributes = {
           hops: 1,
+          clientIps: [],
           origin: 'test-origin',
           originNodeRelease: '42',
           arnsRecord: 'subdomain',
@@ -844,6 +847,7 @@ describe('GatewayDataSource', () => {
 
         const requestAttributesPartial: RequestAttributes = {
           hops: 0,
+          clientIps: [],
           arnsBasename: 'example',
           // arnsRecord is undefined
         };
@@ -1015,7 +1019,11 @@ describe('GatewayDataSource', () => {
       await assert.rejects(
         dataSource.getData({
           id: 'some-id',
-          requestAttributes: { hops: 0, skipRemoteForwarding: true },
+          requestAttributes: {
+            hops: 0,
+            clientIps: [],
+            skipRemoteForwarding: true,
+          },
         }),
         /Remote forwarding skipped for compute-origin request/,
       );
@@ -1255,7 +1263,11 @@ describe('GatewayDataSource', () => {
 
         const data = await ds.getData({
           id: 'test-id',
-          requestAttributes: { hops: 0, via: ['gateway-a.example.com'] },
+          requestAttributes: {
+            hops: 0,
+            clientIps: [],
+            via: ['gateway-a.example.com'],
+          },
         });
 
         assert.equal(data.size, 123);
@@ -1290,7 +1302,11 @@ describe('GatewayDataSource', () => {
 
         const data = await ds.getData({
           id: 'test-id',
-          requestAttributes: { hops: 0, via: ['GATEWAY-A.EXAMPLE.COM'] },
+          requestAttributes: {
+            hops: 0,
+            clientIps: [],
+            via: ['GATEWAY-A.EXAMPLE.COM'],
+          },
         });
 
         assert.equal(data.size, 123);
@@ -1300,7 +1316,11 @@ describe('GatewayDataSource', () => {
       it('should allow forwarding when the target gateway is not in the via chain', async () => {
         const data = await dataSource.getData({
           id: 'test-id',
-          requestAttributes: { hops: 0, via: ['other-gateway.example.com'] },
+          requestAttributes: {
+            hops: 0,
+            clientIps: [],
+            via: ['other-gateway.example.com'],
+          },
         });
 
         assert.equal(data.size, 123);
@@ -1320,6 +1340,7 @@ describe('GatewayDataSource', () => {
             id: 'test-id',
             requestAttributes: {
               hops: 0,
+              clientIps: [],
               via: ['gateway-a.example.com', 'gateway-b.example.com'],
             },
           }),
@@ -1333,7 +1354,7 @@ describe('GatewayDataSource', () => {
         await assert.rejects(
           dataSource.getData({
             id: 'test-id',
-            requestAttributes: { hops: 10 },
+            requestAttributes: { hops: 10, clientIps: [] },
           }),
           /Maximum hops \(3\) exceeded/,
         );
@@ -1343,7 +1364,7 @@ describe('GatewayDataSource', () => {
         await assert.rejects(
           dataSource.getData({
             id: 'test-id',
-            requestAttributes: { hops: 3 },
+            requestAttributes: { hops: 3, clientIps: [] },
           }),
           /Maximum hops \(3\) exceeded/,
         );
@@ -1352,7 +1373,7 @@ describe('GatewayDataSource', () => {
       it('should allow hops below max and increment hops in response', async () => {
         const data = await dataSource.getData({
           id: 'test-id',
-          requestAttributes: { hops: 2 },
+          requestAttributes: { hops: 2, clientIps: [] },
         });
 
         assert.equal(data.requestAttributes?.hops, 3);

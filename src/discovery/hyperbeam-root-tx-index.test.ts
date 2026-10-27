@@ -34,7 +34,14 @@ function createMockBoundarySource(result: any) {
 
 function createMockOffsetSource(result: any) {
   return {
-    getDataItemByOffset: mock.fn(() => Promise.resolve(result)),
+    getDataItemByOffset: mock.fn(
+      (
+        _dataItemId: string,
+        _rootBundleId: string,
+        _targetDataOffset: number,
+        _signal?: AbortSignal,
+      ) => Promise.resolve(result),
+    ),
   };
 }
 

@@ -12,9 +12,12 @@ import { deepHash } from '../src/lib/parquet-l1/block-hash.js';
 import {
   ChainBlock,
   computeTxRoot,
+  FORK_1_6,
   FORK_2_0,
+  FORK_2_5,
   nextHashListMerkle,
 } from '../src/lib/parquet-l1/chain.js';
+import { FORK_1_8 } from '../src/lib/parquet-l1/tx-signature.js';
 import { syntheticHeader } from './parquet-l1-headers.js';
 
 /** `STRICT_DATA_SPLIT_THRESHOLD` (`ar_consensus.hrl`): padding begins above it. */
@@ -84,8 +87,14 @@ export async function buildCoreDb(
     last_retarget, reward_addr, reward_pool, block_size, weave_size,
     usd_to_ar_rate_dividend, usd_to_ar_rate_divisor,
     scheduled_usd_to_ar_rate_dividend, scheduled_usd_to_ar_rate_divisor,
-    hash_list_merkle, tx_root, tx_count, missing_tx_count)
-    VALUES (?, ?, ?, ?, ?, ?, '1', '2', 3, ?, '4', ?, ?, 1, 10, 1, 10, ?, ?, ?, 0)`);
+    hash_list_merkle, tx_root, tx_count, wallet_list, missing_tx_count)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 3, ?, '4', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`);
+  /** A block's wallet list digest, as every header carries one: 32 bytes before 2.0, 48 after. */
+  const walletList = (height: number) =>
+    crypto
+      .createHash(height < FORK_2_0 ? 'sha256' : 'sha384')
+      .update(`wallets-${height}`)
+      .digest();
   if (verifiable) {
     db.exec(
       'CREATE TABLE test_signatures (id BLOB PRIMARY KEY, signature BLOB NOT NULL, data BLOB)',
@@ -132,7 +141,7 @@ export async function buildCoreDb(
               scheduled_usd_to_ar_rate_dividend: 1,
               scheduled_usd_to_ar_rate_divisor: 10,
               hash_list_merkle: merkle,
-              wallet_list: null,
+              wallet_list: walletList(height),
               tx_root: txRoot,
             },
             pendingIds,
@@ -140,7 +149,28 @@ export async function buildCoreDb(
           'base64url',
         );
       }
-      insertRow.run(height, indepHash, ...values.slice(2));
+      // USD rates from the 2.5 fork, which introduced them.
+      const [dividend, divisor] = height >= FORK_2_5 ? [1, 10] : [null, null];
+      const rest = values.slice(2);
+      // Difficulty as a gateway stores it: a float (N.0) below the 1.8
+      // fork, no cumulative difficulty below 1.6.
+      const diff = height < FORK_1_8 ? '1.0' : '1';
+      const cumulative =
+        height < FORK_1_6 ? null : height < FORK_1_8 ? '2.0' : '2';
+      insertRow.run(
+        height,
+        indepHash,
+        ...rest.slice(0, 4),
+        diff,
+        cumulative,
+        ...rest.slice(4, 7),
+        dividend,
+        divisor,
+        dividend,
+        divisor,
+        ...rest.slice(7),
+        walletList(height),
+      );
       return indepHash;
     },
   };
@@ -173,7 +203,8 @@ export async function buildCoreDb(
     previous_block: random(48),
     weave_size: weaveStart,
     tx_root: Buffer.alloc(0),
-    hash_list_merkle: random(48),
+    // Headers carry no hash_list_merkle below the 1.6 fork.
+    hash_list_merkle: first - 1 < FORK_1_6 ? null : random(48),
   };
   previous.indep_hash = insertBlock.run(
     previous.height,
@@ -299,7 +330,7 @@ export async function buildCoreDb(
             ? random(32)
             : Buffer.alloc(0)
           : ((await computeTxRoot(h, txs)) ?? Buffer.alloc(0)),
-      hash_list_merkle: nextHashListMerkle(previous),
+      hash_list_merkle: h < FORK_1_6 ? null : nextHashListMerkle(previous),
     };
     block.indep_hash = insertBlock.run(
       h,
@@ -315,6 +346,19 @@ export async function buildCoreDb(
       block.tx_root,
       txs.length,
     );
+    // Where each transaction's data ends in the weave: the weave below,
+    // then the block's transactions in tx_root order, padded from 2.5.
+    const offsets = new Map<string, number>();
+    let position = Number(previous.weave_size);
+    for (const tx of [...txs].sort(
+      (a, b) => a.format - b.format || Buffer.compare(a.id, b.id),
+    )) {
+      offsets.set(tx.id.toString('hex'), position + tx.data_size);
+      position +=
+        h >= FORK_2_5
+          ? Math.ceil(tx.data_size / 262144) * 262144
+          : tx.data_size;
+    }
     for (const tx of txs) {
       insertLink.run(block.indep_hash, tx.id, tx.bti);
       insertTx.run(
@@ -327,7 +371,7 @@ export async function buildCoreDb(
         tx.data_size,
         tx.data_root,
         2,
-        h * 10 + tx.bti,
+        offsets.get(tx.id.toString('hex')) as number,
         verifiable ? null : tx.signature,
       );
       if (tx.signature !== null) {

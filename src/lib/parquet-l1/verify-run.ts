@@ -20,6 +20,8 @@
 import type { ArweaveNodePool } from '../onchain/arweave-nodes.js';
 import { anchorBlock, type AnchorResult } from './anchor.js';
 import { FORK_2_0 } from './block-hash.js';
+import type { Fork20Pins } from './chain.js';
+import { bindingsAssurance } from './column-bindings.js';
 import { addFailure, type VerifyCheck } from './checks.js';
 import { L1Judge, type JudgeBlockRow, type JudgeUnbound } from './judge.js';
 import { runSample, type SampleOptions, type SampleSummary } from './sample.js';
@@ -38,6 +40,12 @@ export interface L1Allowances {
   incomplete?: boolean;
   /** `--allow-unverified-format1`: blocks whose tx_root needs a v1 data root. */
   unverifiedFormat1?: boolean;
+  /**
+   * `--allow-unsampled`: with a sample asked for, `--sample-format1 0` over
+   * a range holding format-1 transactions with data from the 2.0 fork,
+   * whose format nothing else checks.
+   */
+  unsampled?: boolean;
 }
 
 export interface L1RunOptions {
@@ -61,6 +69,18 @@ export interface L1RunOptions {
   assurance?: string[];
   /** Flags the caller accepted something with. */
   accepted?: string[];
+  /**
+   * The chain's 2.0 seed folds, for a test chain; mainnet's
+   * (`FORK_2_0_FOLD_PINS`) otherwise. Never from a command line.
+   */
+  foldPins?: Fork20Pins;
+  /**
+   * The caller draws the sample itself, and gates an undrawn one (the
+   * importer): no `sample_blocks` or `sample_format1` gate here.
+   */
+  sampleGated?: boolean;
+  /** Report the judge's `witnesses` check: the source reads `l1-4` bands. */
+  witnesses?: boolean;
   /** Failures the caller found in rows the judge does not walk (wallets, stray tags), under the judge's check names. */
   judgeFailures?: Array<{
     check: Parameters<L1Judge['fail']>[0];
@@ -82,6 +102,11 @@ export interface L1VerifyReport {
     indepHash?: string;
     /** Each header served was recomputed from its own fields. */
     recomputed: true;
+    /**
+     * Below the 2.0 fork: anchored by the pinned folds both of the range's
+     * folds reach at its top, not by a header served.
+     */
+    pinned?: true;
     machines: number;
     sources: AnchorResult['sources'];
     mismatches: AnchorResult['mismatches'];
@@ -102,6 +127,10 @@ export interface L1VerifyReport {
   accountingChecked: number;
   accountingSkipped: number;
   txRootChecked: number;
+  /** Pre-2.0 blocks a witnessed 2.0 seed fold binds to the chain (`l1-4`). */
+  foldBound: number;
+  /** Format-1 transactions with data from the 2.0 fork, which only the format-1 draw checks are format 1. */
+  format1Txs: number;
   checks: VerifyCheck[];
   seconds: number;
 }
@@ -142,6 +171,8 @@ export async function runL1Verify(
   }
   const judge = new L1Judge(from, to, {
     txRoot: options.txRoot !== false,
+    ...(options.foldPins !== undefined ? { foldPins: options.foldPins } : {}),
+    ...(options.witnesses === true ? { witnesses: true } : {}),
     ...(prior !== undefined
       ? { prior: { ...prior, tx_count: null } as JudgeBlockRow }
       : {}),
@@ -151,6 +182,7 @@ export async function runL1Verify(
     judge.fail(f.check, f.height, f.found, f.expected);
   }
   const judged = judge.finish();
+  const t0 = judged.totals;
   const checks: VerifyCheck[] = [...(options.checks ?? []), ...judged.checks];
   const skipped = [...(options.skipped ?? [])];
   // Without the block below, the first block's link and size are the base
@@ -171,7 +203,22 @@ export async function runL1Verify(
   let refuted = false;
   let anchorReport: L1VerifyReport['anchor'];
   const anchorCheck: VerifyCheck = { name: 'anchor', ok: true, detail: '' };
-  if (options.pool === undefined) {
+  if (to < FORK_2_0 && judged.totals.pinnedAt === to) {
+    // No pre-2.0 header recomputes, but the range's two folds reach the
+    // values this build pins at its top, and those fold on to block
+    // 422,250's hash_list_merkle: the range is bound to the chain there.
+    anchored = true;
+    anchorReport = {
+      height: to,
+      recomputed: true,
+      pinned: true,
+      machines: 0,
+      sources: [],
+      mismatches: [],
+      problems: [],
+    };
+    anchorCheck.detail = `the range is bound at ${to} by its folds: the 2.0 seed fold and the fold of its 2.0 hashes reach the values pinned in this build there (FORK_2_0_FOLD_PINS, FORK_2_0_H2_PINS), which fold on to block 422,250's hash_list_merkle`;
+  } else if (options.pool === undefined) {
     skipped.push('anchor');
     anchorCheck.detail =
       'not anchored: no source was given (--anchor-from), so nothing outside this index vouches for it';
@@ -252,7 +299,12 @@ export async function runL1Verify(
       }
     }
   }
-  if (anchored) {
+  if (anchored && anchorReport?.pinned === true) {
+    checks.push(anchorCheck);
+    assurance.push(
+      `anchored at ${to} by the pinned folds: no header was fetched; every pre-2.0 block of the range is bound as the fold binds it (see below)`,
+    );
+  } else if (anchored) {
     checks.push(anchorCheck);
     assurance.push(
       `anchored at ${anchorReport?.height ?? to}: ${anchorReport?.machines ?? 0} distinct machines agreed on a header whose hash was recomputed from its fields, and the index equals it. Agreement means the sources' upstream nodes agree: two gateways proxying /block/ to their operators' chosen Arweave nodes are not two independent nodes.`,
@@ -279,6 +331,14 @@ export async function runL1Verify(
         expected: 'an anchor (--anchor-from), or --allow-unanchored',
       });
     }
+  }
+
+  // Bands: what no check binds, by column (column-bindings.ts).
+  if (options.witnesses === true) assurance.push(...bindingsAssurance());
+  if (t0.foldBound > 0) {
+    assurance.push(
+      `${t0.foldBound} pre-2.0 blocks: indep_hash, weave_size and transition tx_root bound to the chain through the witnessed 2.0 seed fold, which reaches the folds pinned in this build (the last equal to block 422,250's hash_list_merkle); every other header field and the block's transaction ids bound to Arweave's checkpoint of them (genesis_data/hash_list_1_0, whose fold of 2.0 hashes is pinned in this build), Arweave-checkpointed rather than chain-bound; their transactions' data sizes and data roots through the transition tx_root, recomputed`,
+    );
   }
 
   // The samples.
@@ -333,6 +393,47 @@ export async function runL1Verify(
     assurance.push(
       'no sample: transaction ids, their order and every transaction field are unchecked against the chain',
     );
+  }
+
+  // What only a draw checks, left undrawn, needs --allow-unsampled: the
+  // order of each block's transactions and the header fields no hash
+  // carries (the block draw), and that a format-1 transaction with data
+  // is one (the format-1 draw; a witnessed root binds its size and root,
+  // never its format). As the importer refuses them.
+  const sampled = options.pool !== undefined && options.sample !== undefined;
+  const gates: Array<[string, boolean, string, string]> = [
+    [
+      'sample_blocks',
+      // Unsampled, an anchored run (a pre-2.0 range bound by its pinned
+      // folds needs no source) would otherwise pass with these unchecked;
+      // an unanchored one already fails, or names --allow-unanchored.
+      judged.totals.blocks > 0 &&
+        (sampled ? (options.sample as SampleOptions).blocks <= 0 : anchored),
+      `${judged.totals.blocks} blocks, none of their headers drawn (${sampled ? '--sample-blocks 0' : 'no sample'}): the order of their transactions and the header fields no hash carries are checked by nothing`,
+      'the block draw over them (--sample-blocks), or --allow-unsampled',
+    ],
+    [
+      'sample_format1',
+      judged.totals.format1Txs > 0 &&
+        (!sampled ||
+          ((options.sample as SampleOptions).format1PerStratum ??
+            (options.sample as SampleOptions).txsPerStratum) <= 0),
+      `${judged.totals.format1Txs} format-1 transactions with data from the 2.0 fork, none drawn (${sampled ? '--sample-format1 0' : 'no sample'}): that they are format 1 is checked by nothing, so a format-2 transaction relabelled format 1 would pass`,
+      'the format-1 draw over them (--anchor-from, --sample-format1), or --allow-unsampled',
+    ],
+  ];
+  for (const [name, gated, detail, expected] of gates) {
+    if (!gated || options.sampleGated === true) continue;
+    const gate: VerifyCheck = { name, ok: true, detail };
+    if (allow.unsampled === true) {
+      if (!accepted.includes('--allow-unsampled')) {
+        accepted.push('--allow-unsampled');
+      }
+      assurance.push(`accepted (--allow-unsampled): ${detail}`);
+    } else {
+      addFailure(gate, { height: to, found: detail, expected });
+    }
+    checks.push(gate);
   }
 
   // What was left unbound, and whether it was accepted.
@@ -395,6 +496,8 @@ export async function runL1Verify(
     accountingChecked: t.accountingChecked,
     accountingSkipped: t.accountingSkipped,
     txRootChecked: t.txRootChecked,
+    foldBound: t.foldBound,
+    format1Txs: t.format1Txs,
     checks,
     seconds: (Date.now() - started) / 1000,
   };

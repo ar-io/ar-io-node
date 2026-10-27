@@ -50,7 +50,7 @@ services:
       - observer
 
   core:
-    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-6c5cf67c55ac3264e527647f08ee0a5f2ce0fec7}
+    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-69b40afceb16267ecd5c27b7ecb79aa1f365c17e}
     build:
       context: .
     restart: unless-stopped
@@ -338,7 +338,7 @@ services:
       - AWS_ELASTICACHE_TURBO_HOST=${AWS_ELASTICACHE_TURBO_HOST:-}
       - AWS_ELASTICACHE_TURBO_USE_TLS=${AWS_ELASTICACHE_TURBO_USE_TLS:-}
       - AWS_ELASTICACHE_TURBO_PORT=${AWS_ELASTICACHE_TURBO_PORT:-}
-      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-86}
+      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-87}
       - CHUNK_POST_MIN_SUCCESS_COUNT=${CHUNK_POST_MIN_SUCCESS_COUNT:-}
       - CHUNK_POST_MIN_PREFERRED_SUCCESS_COUNT=${CHUNK_POST_MIN_PREFERRED_SUCCESS_COUNT:-}
       - CHUNK_POST_MAX_CONSECUTIVE_FAILURES=${CHUNK_POST_MAX_CONSECUTIVE_FAILURES:-}
@@ -645,7 +645,7 @@ services:
       - ar-io-network
 
   clickhouse-auto-import:
-    image: ghcr.io/ar-io/ar-io-clickhouse-auto-import:${CLICKHOUSE_AUTO_IMPORT_IMAGE_TAG:-226ef06930babf540c1211e6d38d45b0707b73aa}
+    image: ghcr.io/ar-io/ar-io-clickhouse-auto-import:${CLICKHOUSE_AUTO_IMPORT_IMAGE_TAG:-69b40afceb16267ecd5c27b7ecb79aa1f365c17e}
     profiles:
       - clickhouse
     build:
@@ -756,7 +756,7 @@ services:
       - TURBO_UPLOAD_SERVICE_URL=${TURBO_UPLOAD_SERVICE_URL:-}
       - RUN_OBSERVER=${RUN_OBSERVER:-true}
       - MIN_RELEASE_NUMBER=${MIN_RELEASE_NUMBER:-0}
-      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-86}
+      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-87}
       - AR_IO_SDK_LOG_LEVEL=${AR_IO_SDK_LOG_LEVEL:-none}
       # Reference Gateway Configuration
       # The bundled observer references THIS node's own gateway by default (its
@@ -848,7 +848,7 @@ services:
   # have, so a separate image would be roughly a gigabyte of duplicate layers
   # per operator for code that is already present.
   index-swarm:
-    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-6c5cf67c55ac3264e527647f08ee0a5f2ce0fec7}
+    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-69b40afceb16267ecd5c27b7ecb79aa1f365c17e}
     build:
       context: .
     entrypoint: ['/nodejs/bin/node', 'dist/index-swarm/main.js']
@@ -974,7 +974,7 @@ services:
     # The core image, at its own tag when set: the service can move to a
     # release before core does, and must not run an image that predates it.
     # Like core's, this build tags the core image.
-    image: ghcr.io/ar-io/ar-io-core:${INDEX_EXPORT_IMAGE_TAG:-${CORE_IMAGE_TAG:-6c5cf67c55ac3264e527647f08ee0a5f2ce0fec7}}
+    image: ghcr.io/ar-io/ar-io-core:${INDEX_EXPORT_IMAGE_TAG:-${CORE_IMAGE_TAG:-69b40afceb16267ecd5c27b7ecb79aa1f365c17e}}
     build:
       context: .
     entrypoint: ['/nodejs/bin/node', 'dist/index-export/main.js']
@@ -1016,6 +1016,12 @@ services:
       - INDEX_EXPORT_ROOT_TX_RESETTLE_MAX_CHANGED=${INDEX_EXPORT_ROOT_TX_RESETTLE_MAX_CHANGED:-20000}
       - INDEX_EXPORT_START_HEIGHT=${INDEX_EXPORT_START_HEIGHT:-}
       - INDEX_EXPORT_L1_RUN_BUDGET_MINUTES=${INDEX_EXPORT_L1_RUN_BUDGET_MINUTES:-}
+      # parquet-l1 witnesses (l1-4): a directory inside the container (under
+      # data/indexes, say) and Arweave nodes; nothing unconfirmed is published.
+      # The nodes default to the core's PREFERRED_CHUNK_GET_NODE_URLS.
+      - INDEX_EXPORT_L1_WITNESS_DIR=${INDEX_EXPORT_L1_WITNESS_DIR:-}
+      - INDEX_EXPORT_L1_WITNESS_NODES=${INDEX_EXPORT_L1_WITNESS_NODES:-}
+      - PREFERRED_CHUNK_GET_NODE_URLS=${PREFERRED_CHUNK_GET_NODE_URLS:-}
       # parquet-l2: the selections to build, and where from (see envs.md).
       - INDEX_EXPORT_L2_INDEXES=${INDEX_EXPORT_L2_INDEXES:-}
       - INDEX_EXPORT_L2_SOURCE=${INDEX_EXPORT_L2_SOURCE:-}
@@ -1027,6 +1033,7 @@ services:
       - INDEX_EXPORT_L2_DUCKDB_THREADS=${INDEX_EXPORT_L2_DUCKDB_THREADS:-}
       - INDEX_EXPORT_L2_DUCKDB_SPILL_MAX_GB=${INDEX_EXPORT_L2_DUCKDB_SPILL_MAX_GB:-}
       - INDEX_EXPORT_L2_WINDOW_ITEMS=${INDEX_EXPORT_L2_WINDOW_ITEMS:-}
+      - INDEX_EXPORT_L2_MAX_BAND_ITEMS=${INDEX_EXPORT_L2_MAX_BAND_ITEMS:-}
       - INDEX_EXPORT_L2_RECHECK_UNREADABLE_EVERY=${INDEX_EXPORT_L2_RECHECK_UNREADABLE_EVERY:-}
       - INDEX_EXPORT_HEADER_CHECK_URL=${INDEX_EXPORT_HEADER_CHECK_URL:-}
       - INDEX_EXPORT_HEADER_CHECK_TIMEOUT_MS=${INDEX_EXPORT_HEADER_CHECK_TIMEOUT_MS:-30000}
@@ -1036,6 +1043,15 @@ services:
       # of the disk.
       - NODE_OPTIONS=--max-old-space-size=4096
       - UV_THREADPOOL_SIZE=16
+      # glibc's allocator, held to two arenas and returning large frees to
+      # the system: a build's DuckDB work, query after query, otherwise
+      # leaves freed memory in per-thread arenas and the process grows to
+      # several times what any one query uses (a 12M-item L2 band: 16.8 GB
+      # by default, 3.3 GB with these, the same band). See "Memory and
+      # disk" in docs/index-export.md.
+      - MALLOC_ARENA_MAX=${INDEX_EXPORT_MALLOC_ARENA_MAX:-2}
+      - MALLOC_MMAP_THRESHOLD_=${INDEX_EXPORT_MALLOC_MMAP_THRESHOLD:-131072}
+      - MALLOC_TRIM_THRESHOLD_=${INDEX_EXPORT_MALLOC_TRIM_THRESHOLD:-131072}
     mem_limit: 6g
     blkio_config:
       weight: 100
@@ -1074,7 +1090,7 @@ services:
   # have one: the engine never runs without a password. Runs by default; the
   # old `--profile index-swarm-torrent` flag is still accepted.
   index-swarm-engine-init:
-    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-6c5cf67c55ac3264e527647f08ee0a5f2ce0fec7}
+    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-69b40afceb16267ecd5c27b7ecb79aa1f365c17e}
     entrypoint: ['/nodejs/bin/node', 'dist/index-swarm/engine-init.js']
     restart: 'no'
     volumes:

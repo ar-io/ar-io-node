@@ -7,8 +7,8 @@
 import { strict as assert } from 'node:assert';
 import { afterEach, before, beforeEach, describe, it, mock } from 'node:test';
 import { PassThrough } from 'node:stream';
-import axios from 'axios';
-import { ARIORead, ARIO } from '@ar.io/sdk';
+import axios, { AxiosRequestConfig } from 'axios';
+import { ARIORead } from '@ar.io/sdk';
 import { Readable } from 'node:stream';
 import { RequestAttributes, ContiguousDataAttributesStore } from '../types.js';
 import { ArIODataSource } from './ar-io-data-source.js';
@@ -74,8 +74,6 @@ beforeEach(async () => {
     },
   });
 
-  mock.method(ARIO, 'init', () => mockedArIOInstance);
-
   mock.method(axios, 'get', mockedAxiosGet);
 
   mock.method(metrics.getDataErrorsTotal, 'inc');
@@ -84,7 +82,7 @@ beforeEach(async () => {
 
   peerManager = new ArIOPeerManager({
     log,
-    networkProcess: ARIO.init(),
+    networkProcess: mockedArIOInstance,
     nodeWallet: 'localNode',
     initialPeers: {
       peer1: 'http://peer1.com',
@@ -99,7 +97,7 @@ beforeEach(async () => {
     dataAttributesStore: mockDataAttributesStore,
   });
 
-  requestAttributes = { origin: 'node-url', hops: 0 };
+  requestAttributes = { origin: 'node-url', hops: 0, clientIps: [] };
 });
 
 afterEach(async () => {
@@ -292,7 +290,7 @@ describe('ArIODataSource', () => {
     it('should increment hops and origin if requestAttributes are provided', async () => {
       const data = await dataSource.getData({
         id: 'dataId',
-        requestAttributes: { hops: 2 },
+        requestAttributes: { hops: 2, clientIps: [] },
       });
 
       assert.deepEqual(data, {
@@ -729,24 +727,29 @@ describe('ArIODataSource', () => {
           }),
         );
 
-        mock.method(axios, 'get', async (url, config) => {
-          // Verify expected digest header is sent
-          assert.equal(
-            config.headers[headerNames.expectedDigest],
-            expectedHash,
-          );
+        mock.method(
+          axios,
+          'get',
+          async (_url: string, config: AxiosRequestConfig) => {
+            // Verify expected digest header is sent
+            assert.ok(config.headers);
+            assert.equal(
+              config.headers[headerNames.expectedDigest],
+              expectedHash,
+            );
 
-          return {
-            status: 200,
-            data: streamData,
-            headers: {
-              'content-length': '10',
-              'content-type': 'application/octet-stream',
-              [headerNames.digest.toLowerCase()]: expectedHash,
-              [headerNames.verified.toLowerCase()]: 'true',
-            },
-          };
-        });
+            return {
+              status: 200,
+              data: streamData,
+              headers: {
+                'content-length': '10',
+                'content-type': 'application/octet-stream',
+                [headerNames.digest.toLowerCase()]: expectedHash,
+                [headerNames.verified.toLowerCase()]: 'true',
+              },
+            };
+          },
+        );
 
         const data = await dataSource.getData({
           id: 'dataId',
@@ -821,20 +824,25 @@ describe('ArIODataSource', () => {
       it('should not send expected digest header when no hash is provided', async () => {
         const streamData = Readable.from(['data without hash']);
 
-        mock.method(axios, 'get', async (url, config) => {
-          // Verify expected digest header is NOT sent
-          assert.equal(config.headers[headerNames.expectedDigest], undefined);
+        mock.method(
+          axios,
+          'get',
+          async (_url: string, config: AxiosRequestConfig) => {
+            // Verify expected digest header is NOT sent
+            assert.ok(config.headers);
+            assert.equal(config.headers[headerNames.expectedDigest], undefined);
 
-          return {
-            status: 200,
-            data: streamData,
-            headers: {
-              'content-length': '10',
-              'content-type': 'application/octet-stream',
-              [headerNames.verified.toLowerCase()]: 'true',
-            },
-          };
-        });
+            return {
+              status: 200,
+              data: streamData,
+              headers: {
+                'content-length': '10',
+                'content-type': 'application/octet-stream',
+                [headerNames.verified.toLowerCase()]: 'true',
+              },
+            };
+          },
+        );
 
         const data = await dataSource.getData({ id: 'dataId' });
 
@@ -846,20 +854,10 @@ describe('ArIODataSource', () => {
         const expectedHash = 'test-hash-123';
         const streamData = Readable.from(['data without digest']);
 
-        mock.method(axios, 'get', async () => ({
-          status: 200,
-          data: streamData,
-          headers: {
-            'content-length': '10',
-            'content-type': 'application/octet-stream',
-            // No digest header provided by peer
-            [headerNames.verified.toLowerCase()]: 'true',
-          },
-        }));
-
-        const data = await dataSource.getData({
-          id: 'dataId',
-          dataAttributes: {
+        // The expected hash comes from the data attributes store, not from
+        // getData's arguments, so seed the store with it.
+        mockDataAttributesStore.getDataAttributes = mock.fn(() =>
+          Promise.resolve({
             hash: expectedHash,
             size: 10,
             isManifest: false,
@@ -867,9 +865,34 @@ describe('ArIODataSource', () => {
             verified: true,
             offset: 0,
             signature: null,
-          },
-        });
+          }),
+        );
 
+        let sentExpectedDigest: unknown;
+        mock.method(
+          axios,
+          'get',
+          async (_url: string, config: AxiosRequestConfig) => {
+            assert.ok(config.headers);
+            sentExpectedDigest = config.headers[headerNames.expectedDigest];
+            return {
+              status: 200,
+              data: streamData,
+              headers: {
+                'content-length': '10',
+                'content-type': 'application/octet-stream',
+                // No digest header provided by peer
+                [headerNames.verified.toLowerCase()]: 'true',
+              },
+            };
+          },
+        );
+
+        const data = await dataSource.getData({ id: 'dataId' });
+
+        // The expected hash was in play (sent to the peer), yet the response
+        // is accepted because the peer supplied no digest to compare.
+        assert.equal(sentExpectedDigest, expectedHash);
         assert.equal(data.stream, streamData);
         assert.equal(data.size, 10);
       });
@@ -897,6 +920,7 @@ describe('ArIODataSource', () => {
 
         const requestAttributesWithArns: RequestAttributes = {
           hops: 1,
+          clientIps: [],
           origin: 'test-origin',
           originNodeRelease: '42',
           arnsRecord: 'subdomain',
@@ -922,7 +946,7 @@ describe('ArIODataSource', () => {
       it('should include only provided request attributes as query parameters', async () => {
         let requestConfig: any;
 
-        mock.method(axios, 'get', async (url: string, config: any) => {
+        mock.method(axios, 'get', async (_url: string, config: any) => {
           requestConfig = config;
           return {
             status: 200,
@@ -938,6 +962,7 @@ describe('ArIODataSource', () => {
 
         const requestAttributesPartial: RequestAttributes = {
           hops: 0,
+          clientIps: [],
           arnsBasename: 'example',
           // arnsRecord is undefined
         };
@@ -960,7 +985,7 @@ describe('ArIODataSource', () => {
       it('should handle empty request attributes', async () => {
         let requestConfig: any;
 
-        mock.method(axios, 'get', async (url: string, config: any) => {
+        mock.method(axios, 'get', async (_url: string, config: any) => {
           requestConfig = config;
           return {
             status: 200,
@@ -994,7 +1019,7 @@ describe('ArIODataSource', () => {
       let capturedHeaders: any;
       let capturedParams: any;
 
-      mock.method(axios, 'get', async (url: string, config: any) => {
+      mock.method(axios, 'get', async (_url: string, config: any) => {
         capturedHeaders = config.headers;
         capturedParams = config.params;
         return {
@@ -1013,6 +1038,7 @@ describe('ArIODataSource', () => {
         id: 'dataId',
         requestAttributes: {
           hops: 1,
+          clientIps: [],
           origin: 'test-origin',
           originNodeRelease: 'v1.2.3',
         },
@@ -1033,7 +1059,7 @@ describe('ArIODataSource', () => {
       let capturedHeaders: any;
       let capturedParams: any;
 
-      mock.method(axios, 'get', async (url: string, config: any) => {
+      mock.method(axios, 'get', async (_url: string, config: any) => {
         capturedHeaders = config.headers;
         capturedParams = config.params;
         return {
@@ -1052,6 +1078,7 @@ describe('ArIODataSource', () => {
         id: 'dataId',
         requestAttributes: {
           hops: 1,
+          clientIps: [],
         },
       });
 
@@ -1070,7 +1097,7 @@ describe('ArIODataSource', () => {
       let capturedHeaders: any;
       let capturedParams: any;
 
-      mock.method(axios, 'get', async (url: string, config: any) => {
+      mock.method(axios, 'get', async (_url: string, config: any) => {
         capturedHeaders = config.headers;
         capturedParams = config.params;
         return {
@@ -1102,7 +1129,7 @@ describe('ArIODataSource', () => {
       let capturedHeaders: any;
       let capturedParams: any;
 
-      mock.method(axios, 'get', async (url: string, config: any) => {
+      mock.method(axios, 'get', async (_url: string, config: any) => {
         capturedHeaders = config.headers;
         capturedParams = config.params;
         return {
@@ -1122,6 +1149,7 @@ describe('ArIODataSource', () => {
         id: 'dataId',
         requestAttributes: {
           hops: 0,
+          clientIps: [],
           origin: nodeUrl,
           originNodeRelease: release,
         },
@@ -1143,7 +1171,7 @@ describe('ArIODataSource', () => {
       const capturedHeaders: any[] = [];
       const capturedParams: any[] = [];
 
-      mock.method(axios, 'get', async (url: string, config: any) => {
+      mock.method(axios, 'get', async (_url: string, config: any) => {
         capturedHeaders.push({ ...config.headers });
         capturedParams.push({ ...config.params });
         callCount++;
@@ -1170,6 +1198,7 @@ describe('ArIODataSource', () => {
         id: 'dataId',
         requestAttributes: {
           hops: 1,
+          clientIps: [],
           origin: 'original-node',
           originNodeRelease: 'v1.0.0',
         },
@@ -1198,7 +1227,7 @@ describe('ArIODataSource', () => {
         // Single-peer manager so both concurrent getData calls go to the same peer
         const singlePeerManager = new ArIOPeerManager({
           log,
-          networkProcess: ARIO.init(),
+          networkProcess: mockedArIOInstance,
           nodeWallet: 'localNode',
           initialPeers: { peer1: 'http://peer1.com' },
           initialCategories: ['data'],
@@ -1259,7 +1288,7 @@ describe('ArIODataSource', () => {
 
         const singlePeerManager = new ArIOPeerManager({
           log,
-          networkProcess: ARIO.init(),
+          networkProcess: mockedArIOInstance,
           nodeWallet: 'localNode',
           initialPeers: { peer1: 'http://peer1.com' },
           initialCategories: ['data'],
@@ -1299,7 +1328,7 @@ describe('ArIODataSource', () => {
 
         const singlePeerManager = new ArIOPeerManager({
           log,
-          networkProcess: ARIO.init(),
+          networkProcess: mockedArIOInstance,
           nodeWallet: 'localNode',
           initialPeers: { peer1: 'http://peer1.com' },
           initialCategories: ['data'],
@@ -1347,7 +1376,7 @@ describe('ArIODataSource', () => {
 
         const singlePeerManager = new ArIOPeerManager({
           log,
-          networkProcess: ARIO.init(),
+          networkProcess: mockedArIOInstance,
           nodeWallet: 'localNode',
           initialPeers: { peer1: 'http://peer1.com' },
           initialCategories: ['data'],
@@ -1404,7 +1433,11 @@ describe('ArIODataSource', () => {
       await assert.rejects(
         dataSource.getData({
           id: 'dataId',
-          requestAttributes: { hops: 0, skipRemoteForwarding: true },
+          requestAttributes: {
+            hops: 0,
+            clientIps: [],
+            skipRemoteForwarding: true,
+          },
         }),
         /Remote forwarding skipped for compute-origin request/,
       );
@@ -1416,7 +1449,7 @@ describe('ArIODataSource', () => {
     it('should include request attribute headers along with other headers', async () => {
       let capturedHeaders: any;
 
-      mock.method(axios, 'get', async (url: string, config: any) => {
+      mock.method(axios, 'get', async (_url: string, config: any) => {
         capturedHeaders = config.headers;
         return {
           // PE-9081: 206 required when Range header is sent;
@@ -1438,6 +1471,7 @@ describe('ArIODataSource', () => {
         region,
         requestAttributes: {
           hops: 1,
+          clientIps: [],
           origin: 'test-node',
         },
       });

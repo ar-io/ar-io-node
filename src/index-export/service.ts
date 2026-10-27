@@ -81,12 +81,15 @@ import {
   L1Outcome,
   L1PublishedBand,
   L1Step,
+  L1WitnessOutcome,
   planL1,
   planL1Derive,
   planL1Normalize,
+  planL1Witness,
   runL1Derive,
   runL1Normalize,
   runL1Step,
+  runL1Witness,
 } from './kinds/parquet-l1/kind.js';
 import { deriveL2Bands, L2LiveBand } from './kinds/parquet-l2/bands.js';
 import type { L2IndexConfig } from './kinds/parquet-l2/config.js';
@@ -110,6 +113,10 @@ import {
   planL2Resettle,
   planL2Rolls,
   planL2Tip,
+  bandItems,
+  capL2Freezes,
+  DEFAULT_L2_MAX_BAND_ITEMS,
+  planL2Splits,
 } from './kinds/parquet-l2/planner.js';
 import type { L2ItemSource } from './kinds/parquet-l2/source.js';
 import { fingerprintL2Band } from './kinds/parquet-l2/fingerprint.js';
@@ -166,6 +173,39 @@ const DRY_RUN_STALE_MS = 12 * 3600_000;
 const HISTORY_KEPT = 8;
 
 const STAGING_PREFIX = '.band-build-';
+/** A band split's staged parts, in the work directory. */
+const SPLIT_PREFIX = '.split-';
+/**
+ * Written into a split's stage once every part has passed, before any is
+ * moved: a stage holding it is published, by this run or, if this run is
+ * interrupted while moving, by the next.
+ */
+const SPLIT_READY = 'split-ready.json';
+
+/**
+ * Moves every part of a ready split still in its stage into the index's
+ * directory, then removes the stage. Safe to repeat: a part already moved
+ * is skipped.
+ */
+async function publishStagedSplit(stage: string): Promise<{
+  band: string;
+  parts: string[];
+}> {
+  const ready = JSON.parse(
+    await fs.readFile(path.join(stage, SPLIT_READY), 'utf8'),
+  ) as { publishDir: string; band: string; parts: string[] };
+  await fs.mkdir(ready.publishDir, { recursive: true });
+  for (const id of ready.parts) {
+    const from = path.join(stage, id);
+    const exists = await fs.stat(from).then(
+      () => true,
+      () => false,
+    );
+    if (exists) await fs.rename(from, path.join(ready.publishDir, id));
+  }
+  await fs.rm(stage, { recursive: true, force: true });
+  return { band: ready.band, parts: ready.parts };
+}
 const GIB = 1024 ** 3;
 
 export interface RunOptions {
@@ -239,6 +279,8 @@ export interface RunReport {
    * every publisher of their rows writes it.
    */
   l1Normalized?: L1NormalizeOutcome[];
+  /** Published `parquet-l1` bands whose witnesses were added in place (`l1-4`). */
+  l1Witnessed?: L1WitnessOutcome[];
   gateUrl: string;
   /** Disk the run's builds needed together (each step's scratch and band). */
   peakBytes: number;
@@ -308,6 +350,22 @@ export function reportForOutput(report: RunReport): unknown {
 }
 
 /** The overall result of a run: the worst of its steps. */
+/**
+ * The root-TX index's own result of a run: every other index's outcomes
+ * left out (`parquet-l1` builds, derives, settles and witnesses, and
+ * `parquet-l2`), so one index's failure is never another's.
+ */
+export function rootTxResult(report: RunReport): string {
+  return runResult({
+    ...report,
+    l1Steps: [],
+    l1Derived: [],
+    l1Normalized: [],
+    l1Witnessed: [],
+    l2: [],
+  });
+}
+
 export function runResult(report: RunReport): string {
   if (report.locked !== undefined) return 'locked';
   if (report.failed !== undefined) {
@@ -329,6 +387,7 @@ export function runResult(report: RunReport): string {
     ...(report.l1Steps ?? []),
     ...(report.l1Derived ?? []),
     ...(report.l1Normalized ?? []),
+    ...(report.l1Witnessed ?? []),
     ...(report.l2 ?? []).flatMap((index) => [
       ...index.steps,
       ...(index.derived ?? []),
@@ -1371,6 +1430,7 @@ export class ExportService {
       // wait hours for builds.
       await this.normalizeL1Files(report, workDir, dryRun);
       await this.deriveL1Lookups(report, workDir, dryRun);
+      await this.witnessL1Bands(report, workDir, dryRun);
       // The budget is the builds': it starts after the derive.
       const started = this.now();
       const heights = coreHeights(config.coreDbPath);
@@ -1443,6 +1503,9 @@ export class ExportService {
           ...(this.lock !== undefined
             ? { stillHeld: async () => this.lock?.held() ?? false }
             : {}),
+          ...(config.l1Witness !== undefined
+            ? { witness: config.l1Witness }
+            : {}),
         });
         report.l1Steps.push(outcome);
         report.peakBytes +=
@@ -1476,6 +1539,58 @@ export class ExportService {
       log.error('L1 export stopped', { error: message });
     }
     await this.deriveL1Lookups(report, workDir, dryRun);
+    await this.witnessL1Bands(report, workDir, dryRun);
+  }
+
+  /**
+   * Adds witnesses to every published band with current tables and
+   * lookups but none (`l1-3`), in place, keeping its id: built from the
+   * witness inputs and checked against the chain before the band is
+   * touched (`runL1Witness`). Reads no `core.db`. Called after the lookups
+   * are derived, before the builds and after them; each band once a run.
+   * A band whose witnesses cannot be had or confirmed is left as it is
+   * and tried again next run.
+   */
+  private async witnessL1Bands(
+    report: RunReport,
+    workDir: string,
+    dryRun: boolean,
+  ): Promise<void> {
+    const { config, log } = this.deps;
+    try {
+      const state = indexState(await loadState(this.stateFile), L1_INDEX);
+      const confirmed = new Set(
+        Object.entries(state.layoutConfirmed ?? {})
+          .filter(([, rules]) => rules === PARQUET_L1_TABLE_RULES)
+          .map(([id]) => id),
+      );
+      const bands = await deriveL1Bands(config.l1PublishDir, config.publisher);
+      const handled = new Set((report.l1Witnessed ?? []).map((d) => d.id));
+      const due = planL1Witness(bands, confirmed).filter(
+        (b) => !handled.has(b.id),
+      );
+      if (due.length === 0) return;
+      await assertSameFilesystem(workDir, config.l1PublishDir);
+      report.l1Witnessed ??= [];
+      for (const band of due) {
+        report.l1Witnessed.push(
+          await runL1Witness(band, {
+            workDir,
+            dryRun,
+            log,
+            witness: config.l1Witness ?? { nodes: [] },
+            ...(this.lock !== undefined
+              ? { stillHeld: async () => this.lock?.held() ?? false }
+              : {}),
+          }),
+        );
+      }
+      recordL1Bands(await deriveL1Bands(config.l1PublishDir, config.publisher));
+    } catch (error) {
+      log.error('L1 witnesses not added', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   /**
@@ -1810,7 +1925,11 @@ export class ExportService {
               : {}),
             ...(walletsDb !== undefined ? { walletsDb } : {}),
           });
-        const run = async (step: L2Step, bands: L2LiveBand[]) => {
+        const run = async (
+          step: L2Step,
+          bands: L2LiveBand[],
+          stageDir?: string,
+        ) => {
           entry.plan.push(describeL2Step(step));
           await this.checkL2Disk(
             dryRun
@@ -1834,6 +1953,7 @@ export class ExportService {
           const outcome = await runL2Step(step, {
             ...context,
             history: named,
+            ...(stageDir !== undefined ? { stageDir } : {}),
           });
           entry.steps.push(outcome);
           report.peakBytes += outcome.bandBytes ?? 0;
@@ -1851,6 +1971,7 @@ export class ExportService {
         const fingerprinted = async (
           step: L2Step,
           bands: L2LiveBand[],
+          stageDir?: string,
         ): Promise<L2Outcome> => {
           const taken = await fingerprintOf(step);
           let gate: L2Outcome['gate'] | undefined;
@@ -1927,7 +2048,7 @@ export class ExportService {
               return skipped;
             }
           }
-          const outcome = await run(step, bands);
+          const outcome = await run(step, bands, stageDir);
           if (gate !== undefined) outcome.gate = gate;
           const kept =
             outcome.result === 'published' || outcome.result === 'unchanged'
@@ -1968,8 +2089,10 @@ export class ExportService {
         // 1. Freeze, in height order. A dry run publishes nothing, so what
         // it built counts as frozen for the tip.
         let bands = await live();
-        // With a range, only its re-settles.
-        const freezes =
+        const maxItems = config.l2MaxBandItems ?? DEFAULT_L2_MAX_BAND_ITEMS;
+        // With a range, only its re-settles. A whole range over the band
+        // size cap (by the source's count) is frozen d by d instead.
+        const planned =
           range !== undefined
             ? []
             : planL2Freezes({
@@ -1978,6 +2101,20 @@ export class ExportService {
                 settleBlocks,
                 ...(startHeight !== undefined ? { startHeight } : {}),
               });
+        const counts = new Map<number, number>();
+        if (source.count !== undefined) {
+          for (const step of planned.filter((s) => s.role === 'h')) {
+            counts.set(
+              step.heightRange[0],
+              await source.count(
+                step.heightRange[0],
+                step.heightRange[1],
+                index.selection,
+              ),
+            );
+          }
+        }
+        const freezes = capL2Freezes(planned, counts, maxItems);
         let builtTop: number | undefined;
         for (const [i, step] of freezes.entries()) {
           if (i > 0 && overBudget()) {
@@ -1998,10 +2135,109 @@ export class ExportService {
           builtTop = step.heightRange[1];
         }
 
-        // 2. Roll every range of twenty frozen d bands into its h.
+        // 2. Roll every range of twenty frozen d bands into its h, unless
+        // together they are over the band size cap.
         bands = await live();
-        for (const step of range !== undefined ? [] : planL2Rolls(bands)) {
+        for (const step of range !== undefined
+          ? []
+          : planL2Rolls(bands, maxItems)) {
           await fingerprinted(step, bands);
+        }
+
+        // 2b. Split every h over the cap into its twenty d bands. Each part
+        // is built, compared with the h's rows at its own heights and
+        // header-checked as a re-settle is, then staged; only when every
+        // part has passed are they moved into place together, each naming
+        // the h as superseded, so neither this planner nor a subscriber
+        // ever sees the range half covered. The moves start only after a
+        // ready marker is written into the stage: a run interrupted while
+        // moving leaves it, and the next run finishes the moves before
+        // anything else (clearStaging). With --range, only splits inside
+        // it; a dry run builds the parts and publishes nothing.
+        bands = await live();
+        for (const split of planL2Splits(bands, maxItems).filter(
+          (s) =>
+            range === undefined ||
+            (s.band.from >= range[0] && s.band.to <= range[1]),
+        )) {
+          if (overBudget()) {
+            for (const part of split.parts) {
+              entry.plan.push(describeL2Step(part, "the run's time budget"));
+            }
+            continue;
+          }
+          // Named for the split alone: the lock makes it this run's. A dry
+          // run stages nothing (its parts stop before publishing), so it
+          // never touches a real run's stage.
+          const stage = path.join(
+            workDir,
+            `${SPLIT_PREFIX}${index.name}-${split.band.from}`,
+          );
+          if (!dryRun) await fs.rm(stage, { recursive: true, force: true });
+          // Set once the ready marker is written: from then on the stage is
+          // the record of an unfinished publish, kept if the moves fail.
+          let ready = false;
+          try {
+            const outcomes: L2Outcome[] = [];
+            for (const part of split.parts) {
+              const outcome = await fingerprinted(part, bands, stage);
+              outcomes.push(outcome);
+              if (
+                outcome.result !== 'published' &&
+                outcome.result !== 'dry_run'
+              ) {
+                break;
+              }
+            }
+            const failed =
+              outcomes.length !== split.parts.length ||
+              outcomes.some(
+                (o) => o.result !== 'published' && o.result !== 'dry_run',
+              );
+            if (failed) {
+              log.warn('Band split not published: a part did not pass', {
+                index: index.name,
+                band: split.band.id,
+                failed: outcomes.at(-1)?.heightRange,
+                result: outcomes.at(-1)?.result,
+                reason: outcomes.at(-1)?.reason,
+              });
+            } else if (!dryRun) {
+              if (this.lock !== undefined && !(await this.lock.held())) {
+                log.warn('Band split not published: the lock was lost', {
+                  index: index.name,
+                  band: split.band.id,
+                });
+              } else {
+                // Written whole or not at all: a reader sees no marker
+                // (nothing moved yet, the stage is dropped) or a complete one.
+                const marker = path.join(stage, SPLIT_READY);
+                await fs.writeFile(
+                  `${marker}.tmp`,
+                  JSON.stringify({
+                    publishDir: index.publishDir,
+                    band: split.band.id,
+                    parts: outcomes.map((o) => o.id),
+                  }),
+                );
+                await fs.rename(`${marker}.tmp`, marker);
+                ready = true;
+                await publishStagedSplit(stage);
+                ready = false;
+                for (const o of outcomes) delete o.stagedAt;
+                log.info('Band split published', {
+                  index: index.name,
+                  band: split.band.id,
+                  items: bandItems(split.band),
+                  parts: outcomes.map((o) => o.id),
+                });
+              }
+            }
+          } finally {
+            if (!dryRun && !ready) {
+              await fs.rm(stage, { recursive: true, force: true });
+            }
+          }
         }
 
         // 3. The tip. After a failed freeze it still covers the heights the
@@ -2039,6 +2275,7 @@ export class ExportService {
         if (options.resettle !== undefined || intervalMs > 0) {
           bands = await live();
           const steps = planL2Resettle(bands, {
+            maxItems,
             now: this.now(),
             intervalMs,
             force: options.resettle !== undefined,
@@ -2223,6 +2460,9 @@ export class ExportService {
     at: string,
   ): void {
     for (const step of index.steps) {
+      // A part of a split left staged (another part failed, or the lock was
+      // lost) was never published: nothing to record.
+      if (step.stagedAt !== undefined) continue;
       if (step.result === 'published' || step.result === 'unchanged') {
         state.lastSuccess[step.role] = at;
         metrics.lastSuccess.set(
@@ -2363,10 +2603,35 @@ export class ExportService {
     }
   }
 
-  /** Removes staging that runs killed before their cleanup left. */
+  /**
+   * Removes staging that runs killed before their cleanup left, and
+   * finishes a band split a run was interrupted while publishing: its parts
+   * had all passed, and some may already be live, superseding the band they
+   * replace, so the rest must follow.
+   */
   private async clearStaging(): Promise<void> {
     const { workDir } = this.deps.config;
     for (const name of await fs.readdir(workDir)) {
+      if (name.startsWith(SPLIT_PREFIX)) {
+        const stage = path.join(workDir, name);
+        const ready = await fs.stat(path.join(stage, SPLIT_READY)).then(
+          () => true,
+          () => false,
+        );
+        if (ready) {
+          const done = await publishStagedSplit(stage);
+          this.deps.log.warn(
+            'Finished publishing a band split an interrupted run left',
+            { name, ...done },
+          );
+        } else {
+          this.deps.log.warn('Removing a band split an interrupted run left', {
+            name,
+          });
+          await fs.rm(stage, { recursive: true, force: true });
+        }
+        continue;
+      }
       if (!name.startsWith(STAGING_PREFIX)) continue;
       this.deps.log.warn('Removing staging an interrupted run left', { name });
       await fs.rm(path.join(workDir, name), { recursive: true, force: true });
@@ -2551,13 +2816,7 @@ export class ExportService {
         reasons: [report.failed.reason, report.failed.message],
       };
     }
-    const result = runResult({
-      ...report,
-      l1Steps: [],
-      l1Derived: [],
-      l1Normalized: [],
-      l2: [],
-    });
+    const result = rootTxResult(report);
     if (result === 'couldnt_check') {
       const attempts = (state.retry?.attempts ?? 0) + 1;
       const delay = Math.min(

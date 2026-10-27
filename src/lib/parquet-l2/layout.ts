@@ -488,11 +488,22 @@ export function statsLookup(statTags: readonly string[]): LookupSpec {
       `WITH items AS (
          SELECT DISTINCT id, height, data_size
          FROM read_parquet(${sqlPaths(t.data_items)})),
-       picked AS (
-         SELECT height, id, tag_name AS name, arg_min(tag_value, tag_index) AS value
+       -- An item's first value of each stat tag, by its lowest tag_index.
+       -- Found as an integer minimum and joined back for the value, not as
+       -- arg_min(tag_value, tag_index): DuckDB 1.4.2 cannot spill an
+       -- aggregate whose state holds a BLOB, so arg_min ran a 69M-item
+       -- band out of the build's 2 GB limit; this form spills and gives
+       -- the same rows (a (height, id, tag_index) is one row of tags).
+       first_index AS (
+         SELECT height, id, tag_name, min(tag_index) AS tag_index
          FROM read_parquet(${sqlPaths(t.tags)})
          WHERE ${tagNameIn('tag_name', statTags)}
-         GROUP BY height, id, tag_name)
+         GROUP BY height, id, tag_name),
+       picked AS (
+         SELECT f.height, f.id, f.tag_name AS name, t.tag_value AS value
+         FROM first_index f
+         JOIN read_parquet(${sqlPaths(t.tags)}) t
+           ON t.height = f.height AND t.id = f.id AND t.tag_index = f.tag_index)
        SELECT ${bucket} AS bucket, ''::BLOB AS name, ''::BLOB AS value,
               count(*)::UBIGINT AS items,
               coalesce(sum(data_size), 0)::UBIGINT AS bytes

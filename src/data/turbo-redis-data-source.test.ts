@@ -259,7 +259,7 @@ describe('TurboRedisDataSource', () => {
           dataItemId: testDataId,
           payloadContentType: 'text/plain',
           payloadStartOffset: 0,
-          requestAttributes: { hops: 1, origin: 'test-origin' },
+          requestAttributes: { hops: 1, origin: 'test-origin', clientIps: [] },
         });
 
       assert.deepEqual(result.requestAttributes, {
@@ -367,6 +367,7 @@ describe('TurboRedisDataSource', () => {
       const requestAttributes: RequestAttributes = {
         hops: 0,
         origin: 'test-origin',
+        clientIps: [],
       };
       const result = await turboRedisDataSource.getData({
         id: testDataId,

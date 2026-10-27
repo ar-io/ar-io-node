@@ -78,7 +78,8 @@ describe('KvDebounceCache', () => {
       });
       let callCount = 0;
       let lastCallTimestamp = 0;
-      const kvDebounceStore = new KvDebounceStore({
+      // Constructed only to show construction alone does not hydrate
+      new KvDebounceStore({
         kvBufferStore,
         cacheHitDebounceTtl: 100,
         cacheMissDebounceTtl: 10,
@@ -163,7 +164,7 @@ describe('KvDebounceCache', () => {
       await new Promise((resolve) => setTimeout(resolve, 105));
 
       // trigger another get to cause the refresh on hit
-      const result2 = await kvDebounceStore.get(key);
+      await kvDebounceStore.get(key);
       assert.equal(callCount, 2);
       assert.ok(lastCallTimestamp >= Date.now() - 100);
 

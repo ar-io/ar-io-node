@@ -18,6 +18,13 @@
       "verdict": "verified",
       "failing": [],
       "anchored": true
+    },
+    "options": {
+      "sample": {
+        "blocks": 2,
+        "txs": 0,
+        "format1": 0
+      }
     }
   },
   {
@@ -332,7 +339,7 @@
     ],
     "options": {
       "sample": {
-        "blocks": 0,
+        "blocks": 2,
         "txs": 100
       }
     },
@@ -373,7 +380,7 @@
     ],
     "options": {
       "sample": {
-        "blocks": 0,
+        "blocks": 2,
         "txs": 100
       }
     },
@@ -443,7 +450,7 @@
   {
     "id": "l1-anchor-sample-format",
     "description": "A8/B F2: a format-2 transaction relabelled format 1, accepted as unverified format 1, then caught by its signature",
-    "tampered": "transactions.format, republished",
+    "tampered": "band made l1-3 (no witnesses), transactions.format, republished; that block's offsets dropped (NULL), as a forger would, so they do not give it away",
     "kind": "l1-anchor",
     "nodes": [
       {
@@ -457,18 +464,28 @@
     ],
     "options": {
       "sample": {
-        "blocks": 0,
+        "blocks": 2,
         "txs": 100
       },
       "allowUnverifiedFormat1": true
     },
     "ops": [
       {
+        "op": "dropWitnesses",
+        "band": 1
+      },
+      {
         "op": "setFormat",
         "band": 1,
         "height": 1900011,
         "bti": 0,
         "format": 1
+      },
+      {
+        "op": "rewrite",
+        "band": 1,
+        "table": "transactions",
+        "select": "SELECT * REPLACE (CASE WHEN height = 1900011 THEN NULL ELSE \"offset\" END AS \"offset\") FROM SRC"
       },
       {
         "op": "republish",
@@ -539,7 +556,8 @@
       "sample": {
         "blocks": 0,
         "txs": 0
-      }
+      },
+      "allowUnsampled": true
     },
     "ops": [
       {
@@ -572,7 +590,7 @@
   {
     "id": "l1-anchor-r2-format1-flip-sampled",
     "description": "Round 2 (judge R6, D3): under --allow-unverified-format1 a format-2 transaction relabelled format 1 is caught by the format-1 draw",
-    "tampered": "transactions.format flipped to 1 beside a forged data_root, republished",
+    "tampered": "band made l1-3 (no witnesses), transactions.format flipped to 1 beside a forged data_root, republished; that block's offsets dropped (NULL), as a forger would, so they do not give it away",
     "kind": "l1-anchor",
     "nodes": [
       {
@@ -587,17 +605,27 @@
     "options": {
       "allowUnverifiedFormat1": true,
       "sample": {
-        "blocks": 0,
+        "blocks": 2,
         "txs": 0,
         "format1": 5
       }
     },
     "ops": [
       {
+        "op": "dropWitnesses",
+        "band": 0
+      },
+      {
         "op": "rewrite",
         "band": 0,
         "table": "transactions",
         "select": "SELECT * REPLACE (CASE WHEN height = 1900003 AND block_transaction_index = 0 THEN 1::UTINYINT ELSE format END AS format, CASE WHEN height = 1900003 AND block_transaction_index = 2 THEN from_hex(repeat('ab', 32)) ELSE data_root END AS data_root) FROM SRC"
+      },
+      {
+        "op": "rewrite",
+        "band": 0,
+        "table": "transactions",
+        "select": "SELECT * REPLACE (CASE WHEN height = 1900003 THEN NULL ELSE \"offset\" END AS \"offset\") FROM SRC"
       },
       {
         "op": "republish",

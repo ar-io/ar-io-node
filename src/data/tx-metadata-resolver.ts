@@ -48,7 +48,9 @@ export interface ResolvedTxMetadata {
   parentId?: string;
   rootTransactionId?: string;
   isStable?: boolean;
-  // Offset fields from binary extraction (used for persistence)
+  // Offset fields from binary extraction (used for persistence). The header
+  // offsets are relative to the item's own start, as extractDataItemMeta
+  // reads them; itemOffset is where the item starts in the root.
   signatureOffset?: number;
   signatureSize?: number;
   ownerOffset?: number;
@@ -326,11 +328,21 @@ export class TxMetadataResolver {
       anchor: resolved.anchor,
       signature: resolved.signature,
       signature_type: resolved.signatureType ?? 1,
-      signature_offset: resolved.signatureOffset ?? 0,
+      // Stored on the same base as offset and data_offset, as the unbundler
+      // writes them: the signature and owner fetchers read from that base,
+      // and an item-relative value (2) there returns the bundle's own header
+      // bytes as the item's signature and owner.
+      signature_offset:
+        resolved.signatureOffset != null
+          ? resolved.itemOffset + resolved.signatureOffset
+          : 0,
       signature_size: resolved.signatureSize ?? 0,
       owner: resolved.owner,
       owner_address: resolved.ownerAddress,
-      owner_offset: resolved.ownerOffset ?? 0,
+      owner_offset:
+        resolved.ownerOffset != null
+          ? resolved.itemOffset + resolved.ownerOffset
+          : 0,
       owner_size: resolved.ownerSize ?? 0,
       target: resolved.target,
       content_type: resolved.contentType,

@@ -29,6 +29,14 @@
  * declared here beside the tables, described in `band.json` like them, and
  * left out of the band's id, which covers only the tables' rows.
  *
+ * From `l1-4` a band also carries witness files
+ * ({@link PARQUET_L1_WITNESSES}): what the chain committed to that the
+ * tables cannot hold — the v1 data roots of its format-1 transactions, and
+ * below the 2.0 fork each block's transition `tx_root` and the 2.0 seed
+ * fold. With them a verifier binds those blocks to the chain as it binds
+ * every other. Like lookups they are described in `band.json` and left out
+ * of the band's id, so a band gains them in place.
+ *
  * The exporter that writes bands and the kind that checks them both read
  * this module, so the two cannot drift.
  */
@@ -42,12 +50,21 @@ import {
 } from '../parquet/lookups.js';
 
 /** The layout version a band is written with, in its `band.json`. */
-export const PARQUET_L1_SCHEMA = 'l1-3';
+export const PARQUET_L1_SCHEMA = 'l1-4';
+
+/**
+ * The layout of a band with lookups and no witnesses: what a band reaches
+ * by deriving its lookups (`l1-2` to `l1-3`) before its witnesses are added
+ * (`l1-3` to `l1-4`), and what a new band is written as when its witnesses
+ * cannot be had yet.
+ */
+export const PARQUET_L1_LOOKUPS_SCHEMA = 'l1-3';
 
 /**
  * The layout whose rules the tables are written by. `l1-3` added lookups and
- * kept `l1-2`'s tables, so a band whose tables are current under `l1-2`
- * reaches `l1-3` by deriving its lookups, without rebuilding.
+ * `l1-4` witnesses, each keeping `l1-2`'s tables, so a band whose tables are
+ * current under `l1-2` reaches `l1-4` by deriving its lookups and adding its
+ * witnesses, without rebuilding.
  */
 export const PARQUET_L1_TABLE_RULES = 'l1-2';
 
@@ -68,7 +85,7 @@ export const PARQUET_L1_TABLE_RULES = 'l1-2';
  * bands, which defeats comparing their digests. `l1-2` writes one canonical
  * value instead ({@link canonicalTxRoot}).
  */
-export const PARQUET_L1_SCHEMAS = ['l1-1', 'l1-2', 'l1-3'] as const;
+export const PARQUET_L1_SCHEMAS = ['l1-1', 'l1-2', 'l1-3', 'l1-4'] as const;
 export type ParquetL1Schema = (typeof PARQUET_L1_SCHEMAS)[number];
 
 /**
@@ -135,7 +152,12 @@ export function tablesCurrent(
   id: string,
   confirmed: ReadonlySet<string>,
 ): boolean {
-  return schema === 'l1-2' || schema === 'l1-3' || confirmed.has(id);
+  return (
+    schema === 'l1-2' ||
+    schema === 'l1-3' ||
+    schema === 'l1-4' ||
+    confirmed.has(id)
+  );
 }
 
 /**
@@ -144,7 +166,16 @@ export function tablesCurrent(
  * them ({@link tablesCurrent}), never rebuilt.
  */
 export function lookupsCurrent(schema: ParquetL1Schema): boolean {
-  return schema === PARQUET_L1_SCHEMA;
+  return schema === 'l1-3' || schema === 'l1-4';
+}
+
+/**
+ * Whether a band carries witnesses ({@link PARQUET_L1_WITNESSES}). A band
+ * with current tables and lookups but no witnesses is upgraded by adding
+ * them in place, never rebuilt.
+ */
+export function witnessesCurrent(schema: ParquetL1Schema): boolean {
+  return schema === 'l1-4';
 }
 
 /**
@@ -411,7 +442,83 @@ export const PARQUET_L1_LOOKUP_DIGEST_ORDER: LookupDigestOrder = 'legacy-text';
 
 /** The lookups a layout declares: none before `l1-3`. */
 export function lookupsOf(schema: ParquetL1Schema): LookupSpec[] {
-  return schema === 'l1-3' ? PARQUET_L1_LOOKUPS : [];
+  return schema === 'l1-3' || schema === 'l1-4' ? PARQUET_L1_LOOKUPS : [];
+}
+
+/** A witness file's spec: its rows are digested like a table's, in its order. */
+export type WitnessSpec = TableSpec;
+
+/** `witness_v1_data_roots`: the v1 data root of each format-1 transaction with data. */
+export const V1_DATA_ROOTS_WITNESS: WitnessSpec = {
+  name: 'v1_data_roots',
+  file: 'witness_v1_data_roots.parquet',
+  orderBy: ['height', 'id'],
+  columns: [
+    col('height', 'UBIGINT'),
+    col('id', 'BLOB'),
+    col('data_root', 'BLOB'),
+  ],
+};
+
+/**
+ * `witness_fork_2_0`: below the 2.0 fork, each block's transition
+ * `tx_root`, the 2.0 seed fold after it, and its 2.0 hash (`h2`).
+ */
+export const FORK_2_0_WITNESS: WitnessSpec = {
+  name: 'fork_2_0',
+  file: 'witness_fork_2_0.parquet',
+  orderBy: ['height'],
+  columns: [
+    col('height', 'UBIGINT'),
+    col('tx_root', 'BLOB'),
+    col('fold', 'BLOB'),
+    col('h2', 'BLOB'),
+  ],
+};
+
+/**
+ * The witnesses an `l1-4` band carries: what the chain committed to that its
+ * tables cannot hold, so that a verifier binds every block as it binds a
+ * post-2.0 block without format-1 data.
+ *
+ * - `v1_data_roots` (every `l1-4` band): one row `(height, id, data_root)`
+ *   per format-1 transaction with `data_size > 0`, sorted by height and id.
+ *   A format-1 header carries no data root (the root is of its data), so
+ *   the tables leave it null ({@link canonicalDataRoot}); with these the
+ *   block's `tx_root` is recomputed, and a wrong root fails it. A
+ *   transaction whose data no node serves has no row, and its block stays
+ *   unbound (`txRootFormat1`), as under `l1-3`.
+ * - `fork_2_0` (a band holding heights below the 2.0 fork): one row
+ *   `(height, tx_root, fold, h2)` per pre-2.0 height: the block's
+ *   transition `tx_root` (empty for a block without transactions),
+ *   recomputed from its transactions and their v1 roots; the 2.0 seed fold
+ *   after it (`foldBlockIndexEntry` of the fold below and `[indep_hash,
+ *   weave_size, tx_root]`), whose value at 422,249 is block 422,250's
+ *   `hash_list_merkle`, pinned with others (`FORK_2_0_FOLD_PINS`); and the
+ *   block's 2.0 hash (`hash20Of10Block`: every header field, its sorted
+ *   transaction ids and its transition `tx_root`), which Arweave lists in
+ *   `genesis_data/hash_list_1_0` and whose fold is pinned too
+ *   (`FORK_2_0_H2_PINS`). The first binds each pre-2.0 block's hash,
+ *   weave size and transactions to the chain; the second binds every other
+ *   header field to Arweave's checkpoint of them.
+ *
+ * Every row is checked; none is trusted. Both are derived from the chain,
+ * not from the tables, so they are left out of the band's id.
+ */
+export const PARQUET_L1_WITNESSES: WitnessSpec[] = [
+  V1_DATA_ROOTS_WITNESS,
+  FORK_2_0_WITNESS,
+];
+
+/** The witnesses a layout declares for a band of these heights: none before `l1-4`. */
+export function witnessesOf(
+  schema: ParquetL1Schema,
+  heightRange: readonly [number, number],
+): WitnessSpec[] {
+  if (schema !== 'l1-4') return [];
+  return heightRange[0] < FORK_2_0
+    ? [V1_DATA_ROOTS_WITNESS, FORK_2_0_WITNESS]
+    : [V1_DATA_ROOTS_WITNESS];
 }
 
 /**
@@ -435,6 +542,11 @@ export interface ParquetL1Band {
    * tables, so not part of the band's id ({@link bandTablesDigest}).
    */
   lookups?: Record<string, LookupDescription>;
+  /**
+   * Per witness, from `l1-4` ({@link witnessesOf}): rows, and a digest of the
+   * rows in the witness's order. Not part of the band's id.
+   */
+  witnesses?: Record<string, { rows: number; rowDigest: string }>;
   /**
    * Ids of bands this one replaces. Only in a band written before band files
    * were made the same for every publisher: the ids carry the publisher's
@@ -499,6 +611,7 @@ export function bandTime(topBlockTimestamp: number): string {
  */
 export function serializeBandFile(band: ParquetL1Band): string {
   const lookups = lookupsOf(band.schema);
+  const witnesses = witnessesOf(band.schema, band.heightRange);
   const canonical = {
     version: band.version,
     schema: band.schema,
@@ -520,6 +633,19 @@ export function serializeBandFile(band: ParquetL1Band): string {
               {
                 rows: band.lookups![name].rows,
                 rowDigest: band.lookups![name].rowDigest,
+              },
+            ]),
+          ),
+        }
+      : {}),
+    ...(witnesses.length > 0 && band.witnesses !== undefined
+      ? {
+          witnesses: Object.fromEntries(
+            witnesses.map(({ name }) => [
+              name,
+              {
+                rows: band.witnesses![name].rows,
+                rowDigest: band.witnesses![name].rowDigest,
               },
             ]),
           ),
@@ -754,6 +880,49 @@ export function parseBandFile(text: string): ParquetL1Band {
       parsedLookups[name] = { rows: entry.rows, rowDigest: entry.rowDigest };
     }
   }
+  // Exactly the witnesses the layout declares for these heights: none
+  // before `l1-4`, and `fork_2_0` only below the 2.0 fork.
+  const expectedWitnesses = witnessesOf(schema, [range[0], range[1]]);
+  let parsedWitnesses: ParquetL1Band['witnesses'];
+  if (expectedWitnesses.length === 0) {
+    if (band.witnesses !== undefined) {
+      throw new Error(`${BAND_FILE}: layout ${schema} has no witnesses`);
+    }
+  } else {
+    const witnesses = band.witnesses;
+    if (
+      typeof witnesses !== 'object' ||
+      witnesses === null ||
+      Array.isArray(witnesses)
+    ) {
+      throw new Error(`${BAND_FILE}: layout ${schema} needs witnesses`);
+    }
+    const names = new Set(expectedWitnesses.map((spec) => spec.name));
+    for (const name of Object.keys(witnesses)) {
+      if (!names.has(name)) {
+        throw new Error(
+          `${BAND_FILE}: unknown witness ${JSON.stringify(name)} for heights ${range[0]}-${range[1]}`,
+        );
+      }
+    }
+    parsedWitnesses = {};
+    for (const { name } of expectedWitnesses) {
+      const entry = (witnesses as Record<string, unknown>)[name] as
+        | Record<string, unknown>
+        | undefined;
+      if (
+        entry === undefined ||
+        !isHeight(entry.rows) ||
+        typeof entry.rowDigest !== 'string' ||
+        !/^[0-9a-f]{64}$/.test(entry.rowDigest)
+      ) {
+        throw new Error(
+          `${BAND_FILE}: witness ${name} needs rows and a 64-hex rowDigest`,
+        );
+      }
+      parsedWitnesses[name] = { rows: entry.rows, rowDigest: entry.rowDigest };
+    }
+  }
   let supersedes: string[] | undefined;
   if (band.supersedes !== undefined) {
     if (
@@ -770,23 +939,36 @@ export function parseBandFile(text: string): ParquetL1Band {
     heightRange: [range[0], range[1]],
     tables: parsedTables,
     ...(parsedLookups !== undefined ? { lookups: parsedLookups } : {}),
+    ...(parsedWitnesses !== undefined ? { witnesses: parsedWitnesses } : {}),
     ...(supersedes !== undefined ? { supersedes } : {}),
     createdAt: band.createdAt,
   };
 }
 
 /**
- * Every file a band of a layout holds, sorted: its description, one Parquet
- * file per table, and one per lookup the layout declares. Publisher,
- * subscriber and verifier all take a band's files from here, by the layout
- * its `band.json` names.
+ * Every file a band of a layout and heights holds, sorted: its description,
+ * one Parquet file per table, one per lookup the layout declares, and one
+ * per witness it declares for those heights. Publisher, subscriber and
+ * verifier all take a band's files from here, by the layout its `band.json`
+ * names.
  */
-export function bandFiles(schema: ParquetL1Schema): string[] {
+export function bandFiles(
+  schema: ParquetL1Schema,
+  heightRange: readonly [number, number],
+): string[] {
   return [
     BAND_FILE,
     ...PARQUET_L1_TABLES.map((table) => table.file),
     ...lookupsOf(schema).map((spec) => spec.file),
+    ...witnessesOf(schema, heightRange).map((spec) => spec.file),
   ].sort();
+}
+
+/** Every file name a band of any layout and heights this build reads may hold. */
+export function knownBandFiles(): Set<string> {
+  return new Set(
+    PARQUET_L1_SCHEMAS.flatMap((schema) => bandFiles(schema, [0, 0])),
+  );
 }
 
 /**

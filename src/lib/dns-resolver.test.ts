@@ -25,7 +25,10 @@ describe('DnsResolver', () => {
 
   describe('resolveUrl', () => {
     it('should resolve hostname to IPv4 address', async () => {
-      const mockResolve4 = mock.fn(async () => ['192.168.1.1', '192.168.1.2']);
+      const mockResolve4 = mock.fn(async (_hostname: string) => [
+        '192.168.1.1',
+        '192.168.1.2',
+      ]);
       mock.method(dns, 'resolve4', mockResolve4);
 
       const result = await dnsResolver.resolveUrl(

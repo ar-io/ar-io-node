@@ -4,6 +4,232 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Release 87] - 2026-10-26
+
+This is a **recommended release** focused on **index builds that fit
+ordinary gateways, chain-bound L1 witnesses, and data correctness**. Key
+highlights include index-export's memory held near its work by holding
+glibc's allocator to two arenas (a 12M-item `parquet-l2` band now builds
+at 3.3 GB instead of 16.8 GB) and DuckDB running one thread by default,
+avoiding a DuckDB 1.4 crash in large spilled aggregates; a `parquet-l2`
+band size cap that keeps dense ranges as sub-range bands; `parquet-l1`
+layout `l1-4`, whose witness files bind format-1 and pre-2.0 blocks to the
+chain, built by index-export; `ar-io-node index-census` to find items the
+indexer indexed but ClickHouse never received, and a ClickHouse import fix
+so the prune no longer drops unexported items; GraphQL pages that no
+longer lose or repeat transactions where pending and mined rows meet; and
+security updates to `multer`, `undici`, `express`/`body-parser`,
+`form-data` and `ajv`. Gateways that subscribe to `parquet-l1` need this
+release to take bands published as `l1-4`.
+
+### Security
+
+- Dependency updates for advisories in the HTTP and fetch stack, none
+  imported by gateway code directly: `multer` 2.5.0 (DoS via a pending
+  async file, orphaned disk writes), `undici` 7.30.1 (DoS on excessive
+  errors, unbounded `EventSource` memory, SRI bypass), `express` 4.22.3
+  with `body-parser` 1.20.9 (DoS via trailing bytes) and `body-parser`
+  2.4.0 under `@apollo/server`, `form-data` 3.0.5 (CRLF injection in
+  multipart field names), `ajv` 8.20.0 (ReDoS with `$data`), `fast-uri`
+  3.1.9 and `stream-json` 3.7.0. `yarn audit` of production dependencies
+  shows no high or critical advisory new since Release 86; those left
+  are in build tooling (`node-gyp`) and SDK response validation (`zod`).
+
+### Added
+
+- **`ar-io-node index-census`: check ClickHouse holds every item the
+  indexer indexed.** Read-only on `bundles.db` and ClickHouse: it compares
+  each root's matched item count with the distinct ids ClickHouse holds
+  under it, then lists the missing ids, so lost rows can be re-queued.
+  On turbo-gateway.com it found 1.41 million items unbundled April–June
+  2026 missing from ClickHouse on both nodes. See
+  [docs/cli.md](docs/cli.md#index-census).
+- **`parquet-l2` band size cap (`INDEX_EXPORT_L2_MAX_BAND_ITEMS`, default
+  10,000,000).** A 100,000-height range is one band only while it holds at
+  most that many items; above it the range stays as its twenty
+  5,000-height bands. A settled range is counted at the source before it
+  is frozen whole; twenty sub-range bands are rolled into one only while
+  their items sum to the cap or less; and a band already over the cap is
+  split into its sub-range bands, each built, compared with the old band's
+  rows at its own heights and header-checked as a re-settle is, then all
+  published together, each superseding the old band (subscribers keep it
+  until every part is installed). On turbo-gateway.com, `ardrive-l2`'s
+  1,800,000–1,899,999 band holds 69 million items, and its build peaked at
+  13 GB of native memory, killed twice in a 16 GB container; its densest
+  sub-range holds 12 million. Sub-range bands are already valid, so
+  subscribers, verifiers and readers need no change. See
+  [docs/index-export.md](docs/index-export.md#band-size-cap).
+- **`parquet-l1` layout `l1-4`: witness files that bind every block of
+  the chain**, so a full mainnet band set verifies and imports with no
+  `--allow-*` flag. A band adds `witness_v1_data_roots.parquet` (the v1
+  data root of each format-1 transaction with data) and, below the 2.0
+  fork, `witness_fork_2_0.parquet` (each block's transition `tx_root` and
+  the 2.0 seed fold after it), described in `band.json` and added in place
+  without changing the band's id. `index-l1-verify --bands-dir` and
+  `index-l1-import` recompute `tx_root` with the witnessed roots (a wrong
+  one fails `tx_root`, never falls back to unbound), recompute each pre-2.0
+  block's transition `tx_root` from its transactions, and carry the 2.0
+  seed fold block to block until it reaches block 422,250's
+  `hash_list_merkle` or a fold pinned in this build (heights 99,999,
+  199,999, 299,999, 399,999, 422,249; the first four recomputed by a test
+  from Arweave's own 2.0 checkpoint, the last equal to block 422,250's
+  `hash_list_merkle`). Every other pre-2.0 header field, and the
+  transaction ids, are bound through each block's "2.0 hash"
+  (`witness_fork_2_0.h2`), recomputed from the band's fields and folded to
+  pins of Arweave's `genesis_data/hash_list_1_0`: Arweave-checkpointed
+  rather than chain-bound, and said so. A pre-2.0 block is bound only when
+  both folds reach their pins. Under `l1-4` a format-1 transaction's
+  `data_root` column must be NULL. A block whose witness is missing stays
+  in its `unbound` class. New `witnesses` and `hash_list_1_0` checks; the
+  result gains `foldBound` and `format1Txs`.
+- Every column a band carries has a declared binding
+  (`column-bindings.ts`, shown in docs/cli.md), checked by a test. Bands'
+  `content_type` and `content_encoding` are recomputed from their tags,
+  and `offset` (NULL, or where the data ends in the weave) from the weave,
+  failing the new `canonical` check otherwise. The block sample now draws
+  pre-2.0 heights too, attested by `--anchor-min` machines
+  (`blocksAttested`): what binds a pre-2.0 block's transaction order.
+- An `l1-4` band must hold every witness (a `witness_fork_2_0` row per
+  pre-2.0 height, a v1 root per format-1 transaction with data); any of its
+  blocks left unbound fails `witnesses`, whatever `--allow-*` flag is given
+  (`--allow-unbound`, `--allow-unverified-format1` and
+  `L1_BAND_IMPORT_ALLOW_UNVERIFIED` accept bands without witnesses only).
+  The `INDEX_EXPORT_L1_WITNESS_MAX_MISSING` knob is gone.
+- A pre-2.0 range ending at a pinned height is anchored there by its
+  witnessed folds (`anchor.pinned`), so pre-2.0 bands verify and import
+  with no `--allow-unanchored`.
+- `--sample-blocks 0`, and an undrawn format-1 sample (no sources, or every
+  count 0), need `--allow-unsampled` in `index-l1-verify` as in
+  `index-l1-import`.
+- Bands store one spelling per value: difficulties as `N.0` below the 1.8
+  fork and `N` from it, no cumulative difficulty below 1.6, the reward pool
+  as `N`, an unclaimed reward address as empty bytes, a wallet list always,
+  no `hash_list_merkle` below 1.6 (the `canonical` check).
+  The exporter re-spells what `core.db` holds into those forms, never
+  changing a value, and refuses a value that isn't a whole number or a
+  block without a wallet list.
+- Under `l1-4` the importer writes the witnessed v1 roots and transition
+  `tx_root`s over whatever `core.db` kept.
+- `index-l1-verify --bands-dir` and `index-l1-import` refuse an `l1-1`
+  band: its columns were its publisher's gateway's, not canonical. Both
+  known publishers are on `l1-3`.
+- `--sample-format1 0` over format-1 transactions with data from the 2.0
+  fork now needs `--allow-unsampled`, in `index-l1-import` (whatever their
+  witnesses) and `index-l1-verify` (new flag there): only the format-1 draw
+  checks a transaction is format 1. Block 422,250's `hash_list_merkle` is now checked
+  against the fold through 422,249 whenever a range holds both. Readers
+  accept `l1-1` to `l1-4`; `--core-db` holds no witnesses and is unchanged.
+  See [docs/index-publication.md](docs/index-publication.md#witness-files)
+  and [docs/cli.md](docs/cli.md#what-binds-what).
+- **`index-export` builds `l1-4` witnesses** for new bands and adds them
+  to published `l1-3` bands in place, from v1 roots in a witness directory
+  and Arweave nodes (`INDEX_EXPORT_L1_WITNESS_DIR`,
+  `INDEX_EXPORT_L1_WITNESS_NODES`; unset, the core's
+  `PREFERRED_CHUNK_GET_NODE_URLS`, else its default tip and data nodes,
+  each asked through the node pool so a dead node rests instead of
+  costing every chunk a timeout),
+  keeping only what the chain confirms and judging the band with them, as
+  its consumers do, before anything is published. Reported as
+  `l1Witnessed` and `index_export_runs_total{kind="witness"}`. See
+  [docs/index-export.md](docs/index-export.md#layout-l1-4-and-witness-files).
+
+### Changed
+
+- **DuckDB runs one thread by default in index-export and the index CLI.**
+  The `duckdb` Node binding stops at DuckDB 1.4, whose hash aggregate can
+  crash the process (SIGSEGV, exit 139) merging a large aggregate that
+  spilled while running on more than one thread
+  ([duckdb#23757](https://github.com/duckdb/duckdb/pull/23757), fixed in
+  1.5 only). On turbo-gateway.com it killed a band split at its compare (4
+  of 33 repeats of that compare crashed at two threads, none of 35 at one)
+  and a full `index-l2-verify` of ardrive-l2 (which passed at one). L2
+  band builds (`INDEX_EXPORT_L2_DUCKDB_THREADS`, now 1), L1 band writes,
+  and the databases of `index-l1-verify`, `index-l2-verify` and
+  `index-l1-import` (new `--duckdb-threads`, default 1) now run one thread.
+  Results are unchanged; large steps take longer.
+- `L1_BAND_IMPORT_ALLOW_UNVERIFIED` is needed only for bands without
+  witnesses (`l1-3` and older); `l1-4` bands fill under the strict default.
+- Wording: a pre-2.0 block hash is described per era (from the 1.6 fork a
+  deep hash over the header fields and the full wallet list; below it a
+  SHA-384 over the header as JSON with the full hash list and wallet list).
+- better-sqlite3 is now 12.11.1, up from 9.6.0, which moves the
+  gateway's bundled SQLite from 3.45.3 to 3.53.2. 9.x does not compile
+  on Node.js 24, so this unblocks the move off Node.js 22 before its end
+  of life (2027-04-30). The database file format is unchanged: a gateway
+  can roll back to an earlier release without touching `data/sqlite`.
+
+### Fixed
+
+- **The ClickHouse import no longer prunes items it has not exported.**
+  The prune threshold was the newest `indexed_at` of a stable data item,
+  but the flush copies `indexed_at` from when an item was first indexed,
+  so an item unbundled earlier (or re-queued) and flushed while a batch
+  exported landed below the threshold after the export had read its
+  range: it was pruned from SQLite, never reached ClickHouse, and its
+  bundle stayed fully indexed, so nothing retried it. Stable items now
+  carry `stable_at`, stamped by the flush itself, and the prune follows
+  it. Adds a nullable column to `stable_data_items` in `bundles.db`
+  (instant; migration `2026.10.21T00.00.00`).
+- **On-demand data items' signature and owner offsets are stored on the
+  same base as their data.** An item found through the root-tx index and
+  read from its bundle had `offset` and `data_offset` stored relative to
+  the root but `signature_offset` and `owner_offset` relative to the item,
+  so GraphQL's `signature` and `owner` for it returned the bundle's own
+  header bytes.
+- **GraphQL pages no longer lose or repeat transactions where pending and
+  mined rows meet** ([#947](https://github.com/ar-io/ar-io-node/issues/947)).
+  Pending rows are walked by the full sort tuple, NULL heights sort the
+  same in the merged query as in each leg, an ascending walk reaches the
+  pending rows after the mined ones, a new data item's cursor carries its
+  own id, and the second leg is read until the page's look-ahead row is
+  had. In an ascending walk the ClickHouse legs no longer start over once
+  a page ends on a pending row (they hold only mined rows), and pending
+  rows sort and page by data item and id rather than by `indexed_at`,
+  which each indexer stamps for itself, so a gateway federating several
+  indexers no longer repeats pending items. A pending-row cursor issued
+  before the upgrade may skip one pending row once, as the order changes
+  under it. Thanks to @saravanan619 (#1096).
+- The abort-signal middleware no longer assigns `req.signal`, which Node
+  24 defines as a getter: on Node 24 every request would have failed with
+  a 500. The gateway's own signal (aborted only when the client leaves
+  before the response) is kept.
+- **index-export's memory no longer grows to several times its work.**
+  The service (and the CLI's verifiers) now run with glibc's allocator held
+  to two arenas and returning large frees to the system
+  (`MALLOC_ARENA_MAX=2`, `MALLOC_MMAP_THRESHOLD_=131072`,
+  `MALLOC_TRIM_THRESHOLD_=131072`). A build runs DuckDB query after query
+  in one process, and with glibc's defaults the memory each frees stayed in
+  per-thread arenas: building a 12.0M-item `parquet-l2` band peaked at
+  16.8 GB of anonymous memory though no single query used more than
+  2.6 GB, and denser bands were OOM-killed in 16 GB. The same band now
+  builds at 3.3 GB, about 15% slower, byte-identical. Override with
+  `INDEX_EXPORT_MALLOC_ARENA_MAX`, `INDEX_EXPORT_MALLOC_MMAP_THRESHOLD` and
+  `INDEX_EXPORT_MALLOC_TRIM_THRESHOLD`.
+- **`parquet-l2` layout `l2-2`: the stats derive no longer runs a large
+  band out of memory.** Each item's first value of a stat tag was taken
+  with `arg_min(tag_value, tag_index)`, an aggregate whose BLOB state
+  DuckDB 1.4.2 cannot spill, so the 69-million-item h1.8M band of
+  `ardrive-l2` failed at the build's 2 GB limit, both in the in-place
+  upgrade and in a rebuild. It is now the lowest `tag_index` per item and
+  tag, joined back for the value: the same rows, and the same band derives
+  in about 6 minutes at 2 GB.
+- The `--publication` examples in `docs/cli.md`,
+  `docs/index-publication.md`, `docs/index-verification.md`, the
+  `index-l2-verify` help, and the `--publication` option description gave
+  the signed index publication's URL as
+  `https://<gateway>/ar-io/indexes/publication.json`, which returns 404.
+  The gateway serves it at `https://<gateway>/ar-io/indexes`; the examples
+  now use that. The local file `data/indexes/published/publication.json`
+  is unchanged.
+- `keccak` (pulled in by `@dha-team/arbundles`, and loaded by every
+  SQLite worker thread) is pinned to 3.0.4. Version 3.0.2 kept one
+  process-wide reference to its class constructor, so a worker thread
+  loading it while another started or exited could abort the whole
+  process (`Check failed: node->IsInUse()`, a segfault, or on macOS
+  `libc++abi: terminating due to uncaught exception of type Napi::Error`).
+- Shutdown now waits until every SQLite worker thread has exited, and no
+  longer respawns a worker that dies while the gateway is stopping.
+
 ## [Release 86] - 2026-10-23
 
 This is an **urgent, recommended release** focused on **the Node.js

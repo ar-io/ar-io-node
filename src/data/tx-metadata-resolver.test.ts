@@ -279,6 +279,41 @@ describe('TxMetadataResolver', () => {
       assert.equal(dataItemIndexWriter.saveDataItem.mock.callCount(), 1);
     });
 
+    it('stores header offsets on the same base as offset and data_offset', async () => {
+      const resolver = new TxMetadataResolver({
+        log,
+        gqlQueryable,
+        rootTxIndex,
+        ans104OffsetSources: [offsetSource],
+        dataItemIndexWriter,
+      });
+
+      await resolver.resolve(TEST_ID);
+
+      const [item] = dataItemIndexWriter.saveDataItem.mock.calls[0].arguments;
+      // The item starts at 100 in the root; its header offsets from
+      // extractDataItemMeta are relative to that start.
+      assert.equal(item.offset, MOCK_OFFSET_RESULT.itemOffset);
+      assert.equal(
+        item.data_offset,
+        MOCK_OFFSET_RESULT.itemOffset + MOCK_DATA_ITEM_META.headerSize,
+      );
+      assert.equal(
+        item.signature_offset,
+        MOCK_OFFSET_RESULT.itemOffset + MOCK_DATA_ITEM_META.signatureOffset,
+      );
+      assert.equal(
+        item.owner_offset,
+        MOCK_OFFSET_RESULT.itemOffset + MOCK_DATA_ITEM_META.ownerOffset,
+      );
+      // The layout every other writer keeps, and parquet-l2 checks.
+      assert.equal(item.signature_offset, item.offset + 2);
+      assert.equal(
+        item.owner_offset,
+        item.signature_offset + MOCK_DATA_ITEM_META.signatureSize,
+      );
+    });
+
     it('should return resolved metadata even if saveDataItem throws', async () => {
       dataItemIndexWriter.saveDataItem = mock.fn(() =>
         Promise.reject(new Error('DB write failed')),

@@ -21,7 +21,12 @@ import {
 } from '../../test/index-export-service-fixture.js';
 import { CsvOverlaySource } from './kinds/root-tx/sources/csv.js';
 import { ExportLock } from './lock.js';
-import { reportForOutput, RETRY_FIRST_MS, runResult } from './service.js';
+import {
+  reportForOutput,
+  RETRY_FIRST_MS,
+  rootTxResult,
+  runResult,
+} from './service.js';
 import { updateIndexState } from './state.js';
 
 describe('ExportService', () => {
@@ -487,5 +492,28 @@ describe('ExportService', () => {
       },
     );
     assert.equal(await svc.nextRunAt(), ctx.now + 5 * 60_000);
+  });
+});
+
+describe('rootTxResult', () => {
+  it("leaves every other index's outcomes out, L1 witnesses included", () => {
+    const report = {
+      steps: [{ result: 'published' }],
+      l1Steps: [{ result: 'rejected' }],
+      l1Derived: [{ result: 'couldnt_check' }],
+      l1Normalized: [{ result: 'couldnt_check' }],
+      l1Witnessed: [{ result: 'couldnt_check' }],
+      l2: [],
+    } as never;
+    assert.equal(runResult(report), 'rejected');
+    assert.equal(rootTxResult(report), 'published');
+    assert.equal(
+      rootTxResult({
+        steps: [{ result: 'published' }],
+        l1Steps: [],
+        l1Witnessed: [{ result: 'couldnt_check' }],
+      } as never),
+      'published',
+    );
   });
 });

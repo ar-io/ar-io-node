@@ -75,11 +75,13 @@ export interface IndexL1ImportCLIOptions extends GlobalCLIOptions {
   concurrency?: string;
   readTimeout?: string;
   spillMax?: string;
+  duckdbThreads?: string;
   spillReserveGb?: string;
 }
 
 export interface IndexL1VerifyCLIOptions extends GlobalCLIOptions {
   spillMax?: string;
+  duckdbThreads?: string;
   spillReserveGb?: string;
   coreDb?: string;
   bandsDir?: string;
@@ -112,6 +114,7 @@ export interface IndexL2VerifyCLIOptions extends GlobalCLIOptions {
   onchain?: string;
   seed?: string;
   spillMax?: string;
+  duckdbThreads?: string;
   arweaveNodes?: string;
   gatewayUrl?: string;
   readTimeout?: string;
@@ -146,4 +149,14 @@ export interface IndexBandExportCLIOptions extends GlobalCLIOptions {
   to?: string;
   output?: string;
   force?: boolean;
+}
+
+export interface IndexCensusCLIOptions extends GlobalCLIOptions {
+  bundlesDb?: string;
+  from?: string;
+  to?: string;
+  roots?: string;
+  output?: string;
+  force?: boolean;
+  bucket?: string;
 }

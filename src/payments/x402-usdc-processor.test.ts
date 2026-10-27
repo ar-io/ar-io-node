@@ -7,11 +7,8 @@
 
 import { describe, it, beforeEach, afterEach, mock } from 'node:test';
 import assert from 'node:assert';
-import { Request, Response } from 'express';
+import { Request } from 'express';
 import { X402UsdcProcessor } from './x402-usdc-processor.js';
-import { createTestLogger } from '../../test/test-logger.js';
-
-const log = createTestLogger({ suite: 'X402UsdcProcessor' });
 
 /**
  * NOTE: These tests are limited to methods that don't require mocking external modules.
@@ -33,32 +30,6 @@ const createMockRequest = (overrides: Partial<Request> = {}): Request => {
     },
     ...overrides,
   } as Request;
-};
-
-// Helper to create mock Express Response
-const createMockResponse = (): Response => {
-  const res: any = {
-    statusCode: 200,
-    headers: {},
-    body: undefined,
-    status: mock.fn((code: number) => {
-      res.statusCode = code;
-      return res;
-    }),
-    json: mock.fn((data: any) => {
-      res.body = data;
-      return res;
-    }),
-    send: mock.fn((data: any) => {
-      res.body = data;
-      return res;
-    }),
-    setHeader: mock.fn((name: string, value: string) => {
-      res.headers[name.toLowerCase()] = value;
-      return res;
-    }),
-  };
-  return res as Response;
 };
 
 describe('X402UsdcProcessor', () => {

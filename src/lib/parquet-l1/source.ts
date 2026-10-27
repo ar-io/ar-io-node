@@ -13,6 +13,7 @@
  * on what counts as right.
  */
 import type { L1BlockRow } from './anchor.js';
+import { FORK_2_0 } from './block-hash.js';
 import type { JudgeBlock, L1Judge } from './judge.js';
 import type { IndexedTx } from './tx-signature.js';
 
@@ -81,6 +82,19 @@ export interface WindowRows {
     block_transaction_index: number;
     transaction_id: Buffer | null;
   }>;
+  /**
+   * What the window's band witnesses (`l1-4`), absent for an index that
+   * carries none. `fork20` is absent for a band with no `fork_2_0` witness.
+   */
+  witnesses?: {
+    v1: Array<{ height: number; id: Buffer; data_root: Buffer }>;
+    fork20?: Array<{
+      height: number;
+      tx_root: Buffer;
+      fold: Buffer;
+      h2: Buffer;
+    }>;
+  };
 }
 
 /**
@@ -144,6 +158,36 @@ export function groupWindow(rows: WindowRows, judge: L1Judge): JudgeBlock[] {
       for (const id of ids) {
         block.strayLinks.push({ block_transaction_index: index, id });
       }
+    }
+  }
+  if (rows.witnesses !== undefined) {
+    // Rows at a height with no block, repeated, or malformed are failed by
+    // the band's own witness check (`witnesses.ts`); here each block takes
+    // what is there for it, and a block without a row is left unbound.
+    const v1 = new Map<number, Map<string, Buffer>>();
+    for (const row of rows.witnesses.v1) {
+      const at = v1.get(row.height) ?? new Map<string, Buffer>();
+      at.set(row.id.toString('base64url'), row.data_root);
+      v1.set(row.height, at);
+    }
+    const fork20 =
+      rows.witnesses.fork20 === undefined
+        ? undefined
+        : new Map(rows.witnesses.fork20.map((row) => [row.height, row]));
+    for (const block of byHeight.values()) {
+      const h = block.row.height;
+      const row = fork20?.get(h);
+      block.witness = {
+        v1Roots: v1.get(h) ?? new Map(),
+        ...(fork20 !== undefined && h < FORK_2_0
+          ? {
+              fork20:
+                row === undefined
+                  ? null
+                  : { txRoot: row.tx_root, fold: row.fold, h2: row.h2 },
+            }
+          : {}),
+      };
     }
   }
   return [...byHeight.values()].sort((a, b) => a.row.height - b.row.height);

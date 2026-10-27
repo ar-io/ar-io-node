@@ -8,9 +8,27 @@
 import { describe, it, beforeEach, afterEach, mock } from 'node:test';
 import * as assert from 'node:assert';
 import { ArweaveCompositeClient } from './composite-client.js';
-import { Arweave } from 'arweave';
+import Arweave from 'arweave';
 import * as winston from 'winston';
 import * as metrics from '../metrics.js';
+import { PartialJsonBlock } from '../types.js';
+
+// PartialJsonBlock fields the offset search never reads; each mocked block
+// spreads these and sets height, weave_size and txs itself.
+const BLOCK_DEFAULTS: Omit<PartialJsonBlock, 'height' | 'weave_size' | 'txs'> =
+  {
+    indep_hash: '',
+    nonce: '',
+    hash: '',
+    timestamp: 0,
+    diff: '0',
+    reward_addr: '',
+    reward_pool: '0',
+    block_size: '0',
+    wallet_list: '',
+    tx_root: '',
+    tags: [],
+  };
 
 // Read the current value of block_offset_resolution_total for a given outcome.
 // The counter is process-global and accumulates across tests, so assertions
@@ -67,7 +85,6 @@ describe('ArweaveCompositeClient Binary Search', () => {
       txStore: mockTxStore,
       failureSimulator: mockFailureSimulator,
       peerManager: mockPeerManager,
-      cacheCheckPeriodSeconds: 0, // Disable timers in tests
     });
   });
 
@@ -86,6 +103,7 @@ describe('ArweaveCompositeClient Binary Search', () => {
 
       // Mock getBlockByHeight to return blocks that don't contain the target offset
       client.getBlockByHeight = mock.fn(async (height: number) => ({
+        ...BLOCK_DEFAULTS,
         height,
         weave_size: '1000000', // All blocks have weave_size much larger than target
         txs: [],
@@ -111,12 +129,14 @@ describe('ArweaveCompositeClient Binary Search', () => {
       client.getBlockByHeight = mock.fn(async (height: number) => {
         if (height >= containingBlockHeight) {
           return {
+            ...BLOCK_DEFAULTS,
             height,
             weave_size: '2500', // Contains the target offset
             txs: [txId],
           };
         }
         return {
+          ...BLOCK_DEFAULTS,
           height,
           weave_size: '1000', // Doesn't contain the target offset
           txs: [],
@@ -151,6 +171,7 @@ describe('ArweaveCompositeClient Binary Search', () => {
 
       // Mock getBlockByHeight to return blocks with empty transaction lists
       client.getBlockByHeight = mock.fn(async (height: number) => ({
+        ...BLOCK_DEFAULTS,
         height,
         weave_size: height >= 50 ? '2500' : '1000',
         txs: [], // Empty transaction list
@@ -172,12 +193,14 @@ describe('ArweaveCompositeClient Binary Search', () => {
       client.getBlockByHeight = mock.fn(async (height: number) => {
         if (height >= containingBlockHeight) {
           return {
+            ...BLOCK_DEFAULTS,
             height,
             weave_size: '2500',
             txs: [failingTxId],
           };
         }
         return {
+          ...BLOCK_DEFAULTS,
           height,
           weave_size: '1000',
           txs: [],
@@ -206,6 +229,7 @@ describe('ArweaveCompositeClient Binary Search', () => {
 
       // Mock getBlockByHeight - should only be called once due to caching
       const getBlockMock = mock.fn(async (height: number) => ({
+        ...BLOCK_DEFAULTS,
         height,
         weave_size: height >= 50 ? '2500' : '1000',
         txs: [],
@@ -257,6 +281,7 @@ describe('ArweaveCompositeClient Binary Search', () => {
 
       // Mock getBlockByHeight
       client.getBlockByHeight = mock.fn(async (height: number) => ({
+        ...BLOCK_DEFAULTS,
         height,
         weave_size: height >= 50 ? '2000' : '1000', // Exact match
         txs: [txId],
@@ -285,6 +310,7 @@ describe('ArweaveCompositeClient Binary Search', () => {
 
       // Mock getBlockByHeight - even the first block is too large
       client.getBlockByHeight = mock.fn(async (height: number) => ({
+        ...BLOCK_DEFAULTS,
         height,
         weave_size: '1000',
         txs: [],
@@ -302,6 +328,7 @@ describe('ArweaveCompositeClient Binary Search', () => {
 
       // Mock getBlockByHeight - all blocks are smaller
       client.getBlockByHeight = mock.fn(async (height: number) => ({
+        ...BLOCK_DEFAULTS,
         height,
         weave_size: '1000',
         txs: [],
@@ -330,6 +357,7 @@ describe('ArweaveCompositeClient Binary Search', () => {
 
       // Mock getBlockByHeight to return block with our test transactions
       client.getBlockByHeight = mock.fn(async (height: number) => ({
+        ...BLOCK_DEFAULTS,
         height,
         weave_size: '345449412300000', // Large enough to contain target offset
         txs: txIds,
@@ -389,6 +417,7 @@ describe('ArweaveCompositeClient Binary Search', () => {
 
         // Mock getBlockByHeight
         client.getBlockByHeight = mock.fn(async (height: number) => ({
+          ...BLOCK_DEFAULTS,
           height,
           weave_size: '15000', // Large enough to contain our transaction
           txs: [txId],
@@ -434,6 +463,7 @@ describe('ArweaveCompositeClient Binary Search', () => {
 
         // Mock getBlockByHeight
         client.getBlockByHeight = mock.fn(async (height: number) => ({
+          ...BLOCK_DEFAULTS,
           height,
           weave_size: '15000',
           txs: [txId],
@@ -466,6 +496,7 @@ describe('ArweaveCompositeClient Binary Search', () => {
       client.cleanup();
 
       const getBlockMock = mock.fn(async (height: number) => ({
+        ...BLOCK_DEFAULTS,
         height,
         weave_size: '2500',
         txs: ['tx'],
@@ -474,7 +505,7 @@ describe('ArweaveCompositeClient Binary Search', () => {
       const getHeightMock = mock.fn(async () => 100);
       client.getHeight = getHeightMock;
 
-      const indexMock = mock.fn(async () => ({
+      const indexMock = mock.fn(async (_offset: number) => ({
         height: 50,
         weaveSize: 2500,
         prevWeaveSize: 1000,
@@ -498,6 +529,7 @@ describe('ArweaveCompositeClient Binary Search', () => {
       client.cleanup();
 
       const getBlockMock = mock.fn(async (height: number) => ({
+        ...BLOCK_DEFAULTS,
         height,
         weave_size: height >= 50 ? '2500' : '1000',
         txs: [],
@@ -527,6 +559,7 @@ describe('ArweaveCompositeClient Binary Search', () => {
       client.cleanup();
 
       const getBlockMock = mock.fn(async (height: number) => ({
+        ...BLOCK_DEFAULTS,
         height,
         weave_size: height >= 50 ? '2500' : '1000',
         txs: [],
@@ -552,6 +585,7 @@ describe('ArweaveCompositeClient Binary Search', () => {
       client.cleanup();
 
       const getBlockMock = mock.fn(async (height: number) => ({
+        ...BLOCK_DEFAULTS,
         height,
         weave_size: height >= 50 ? '2500' : '1000',
         txs: [],
@@ -575,6 +609,7 @@ describe('ArweaveCompositeClient Binary Search', () => {
       client.cleanup();
 
       const getBlockMock = mock.fn(async (height: number) => ({
+        ...BLOCK_DEFAULTS,
         height,
         weave_size: height >= 50 ? '2500' : '1000',
         txs: [],
@@ -607,6 +642,7 @@ describe('ArweaveCompositeClient Binary Search', () => {
       // smaller weave_size than the index claimed (e.g. a reorg). Must not
       // trust it; fall through to the chain search.
       const getBlockMock = mock.fn(async (height: number) => ({
+        ...BLOCK_DEFAULTS,
         height,
         weave_size: height >= 60 ? '2500' : '1000',
         txs: [],
@@ -634,6 +670,7 @@ describe('ArweaveCompositeClient Binary Search', () => {
       const before = await outcomeCount('local_index_hit_unstable');
 
       const getBlockMock = mock.fn(async (height: number) => ({
+        ...BLOCK_DEFAULTS,
         height,
         weave_size: '2500',
         txs: ['tx'],
@@ -643,7 +680,7 @@ describe('ArweaveCompositeClient Binary Search', () => {
       client.getHeight = getHeightMock;
 
       // Candidate resolved from new_blocks (the not-yet-stable tip).
-      const indexMock = mock.fn(async () => ({
+      const indexMock = mock.fn(async (_offset: number) => ({
         height: 50,
         weaveSize: 2500,
         prevWeaveSize: 1000,
@@ -676,6 +713,7 @@ describe('ArweaveCompositeClient Binary Search', () => {
       // trust it — fall back to the chain search and return the correct block,
       // never wrong bytes.
       const getBlockMock = mock.fn(async (height: number) => ({
+        ...BLOCK_DEFAULTS,
         height,
         weave_size: height >= 60 ? '2500' : '1000',
         txs: [],
@@ -712,6 +750,7 @@ describe('ArweaveCompositeClient Binary Search', () => {
 
       // Mock getBlockByHeight
       client.getBlockByHeight = mock.fn(async (height: number) => ({
+        ...BLOCK_DEFAULTS,
         height,
         weave_size: height >= 50 ? '2500' : '1000',
         txs: [txId],
@@ -719,20 +758,22 @@ describe('ArweaveCompositeClient Binary Search', () => {
 
       // Mock getTxOffset - should only be called once due to caching
       const getTxOffsetMock = mock.fn(async () => ({
-        offset: '2000',
-        size: '500',
+        offset: 2000,
+        size: 500,
       }));
       client.getTxOffset = getTxOffsetMock;
 
-      // First search
-      await client.findTxByOffset(targetOffset);
+      // First search fetches the offset of the block's only transaction
+      const first = await client.findTxByOffset(targetOffset);
+      assert.strictEqual(first?.txId, txId);
+      assert.strictEqual(getTxOffsetMock.mock.calls.length, 1);
 
-      // Second search should use cached tx offset
-      await client.findTxByOffset(targetOffset);
-
-      // getTxOffset should be called multiple times due to binary search,
-      // but for the same transaction it should use cache on subsequent calls
-      assert.ok((getTxOffsetMock as any).mock.calls.length > 0);
+      // Second search should use the cached tx offset
+      const second = await client.findTxByOffset(targetOffset);
+      assert.strictEqual(second?.txId, txId);
+      assert.strictEqual(second?.txStartOffset, 1501);
+      assert.strictEqual(second?.txEndOffset, 2000);
+      assert.strictEqual(getTxOffsetMock.mock.calls.length, 1);
     });
   });
 });

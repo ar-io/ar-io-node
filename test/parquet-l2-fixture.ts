@@ -276,6 +276,18 @@ export class MemoryL2Source implements L2ItemSource {
     return this.top;
   }
 
+  async count(
+    from: number,
+    to: number,
+    selection: ParquetL2Selection,
+  ): Promise<number> {
+    const selected = selectionMatcher(selection);
+    return this.items.filter(
+      (row) =>
+        row.height >= from && row.height <= to && selected(row.tags ?? []),
+    ).length;
+  }
+
   async *windows(
     from: number,
     to: number,

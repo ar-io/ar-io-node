@@ -113,7 +113,6 @@ describe('buildResolverSignal', () => {
   });
 
   it('does NOT count when writableEnded is true even if ctx.responseSent missed (defense-in-depth)', async () => {
-    const req = new FakeReq() as unknown as Request;
     const res = new FakeRes() as unknown as Response;
     const ctx = newCtx();
     const before = await cancelCount('client_disconnect');
@@ -130,7 +129,6 @@ describe('buildResolverSignal', () => {
   });
 
   it('counts a cancellation when res close fires before any "response sent" signal', async () => {
-    const req = new FakeReq() as unknown as Request;
     const res = new FakeRes() as unknown as Response;
     const ctx = newCtx();
     const before = await cancelCount('client_disconnect');

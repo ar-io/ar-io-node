@@ -16,17 +16,19 @@ jobs:
     runs-on: ${{ matrix.os }}
     # Backstop only. A hung poll used to run out the 360-minute default and
     # burn a runner; the E2E waits now time out on their own well before this.
-    # Sized to the whole job, not the test suite: a healthy ubuntu run takes
-    # ~21 minutes because it also builds the core Docker image and runs the
-    # E2E tests after the ~3-minute unit suite. (An earlier value of 20 was set
-    # from the suite time alone and cancelled healthy builds mid-image-build.)
+    # Sized to the whole job, not the test suite: it also builds the core
+    # Docker image and, on develop and main, runs the E2E tests (~7-9 minutes)
+    # after the unit suite. The unit suite under coverage takes ~14 minutes on
+    # a fast runner and ~21-23 on a slow one (measured 2026-10), so a healthy
+    # develop run lasts 22-42 minutes. 40 cancelled four healthy develop runs
+    # mid-E2E in one day, and an earlier 20 cancelled them mid-image-build.
     #
-    # Still well under the previous 60, which was generous enough that a hung
-    # test process burned a full hour and silently skipped the `images` job
-    # that publishes release containers -- such a run reads "cancelled" rather
-    # than "failed", so nothing surfaces as broken. Paired with
-    # --test-force-exit and --test-timeout in the test scripts.
-    timeout-minutes: 40
+    # Still under the old 60, which was generous enough that a hung test
+    # process burned a full hour and silently skipped the `images` job that
+    # publishes release containers -- such a run reads "cancelled" rather than
+    # "failed", so nothing surfaces as broken. Paired with --test-force-exit
+    # and --test-timeout in the test scripts.
+    timeout-minutes: 55
     permissions:
       checks: write
       contents: read
@@ -45,6 +47,10 @@ jobs:
       - run: yarn --immutable --immutable-cache
       - run: yarn build
       - run: yarn lint:check
+      # `yarn build` uses tsconfig.prod.json, which excludes *.test.ts, so
+      # this is the only per-push check that type-checks test code. It must
+      # stay at zero errors.
+      - run: yarn typecheck
       - run: yarn test:ci
       # Run E2E tests on the integration and release branches only.
       #
@@ -125,9 +131,11 @@ jobs:
   # Linux containers, so this only guards against breaking local development
   # on macOS: it runs after merges to develop and main, nothing depends on it
   # (in particular not `images`), and a failure reports to Slack instead of
-  # blocking anything.
+  # blocking anything. Dispatching the workflow by hand runs it on any branch
+  # (`gh workflow run build-core.yml --ref <branch>`), to check a macOS fix
+  # before it merges.
   test-macos:
-    if: github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
     runs-on: macos-latest
     timeout-minutes: 40
     permissions:

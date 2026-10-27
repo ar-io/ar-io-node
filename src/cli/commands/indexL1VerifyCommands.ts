@@ -50,6 +50,10 @@ import type { SampleOptions } from '../../lib/parquet-l1/sample.js';
 import type { IndexL1VerifyCLIOptions, JsonSerializable } from '../types.js';
 import { requiredStringFromOptions } from '../utils.js';
 import { resolvePublication } from './index-publication-options.js';
+import {
+  DEFAULT_DUCKDB_THREADS,
+  parseDuckdbThreads,
+} from '../../lib/duckdb-threads.js';
 
 /**
  * The most a check may spill unless `--spill-max` says otherwise. The lookup
@@ -84,7 +88,8 @@ export const SPILL_HEARTBEAT_FILE = '.heartbeat';
 const HEARTBEAT_MS = 60_000;
 
 /**
- * A DuckDB session for checking bands: bounded memory, two threads, no
+ * A DuckDB session for checking bands: bounded memory, `threads` threads
+ * (default {@link DEFAULT_DUCKDB_THREADS}: DuckDB 1.4 can crash on more), no
  * extensions, and somewhere it can always spill.
  *
  * Without a `temp_directory`, an in-memory DuckDB spills to `.tmp` under the
@@ -105,6 +110,8 @@ export async function openBandsDuck(
     tmpRoot?: string;
     prefix?: string;
     spillMax?: string;
+    /** DuckDB's threads per database (default {@link DEFAULT_DUCKDB_THREADS}). */
+    threads?: number;
     /** Injected in tests: the bytes free under the temp root. */
     freeBytes?: (dir: string) => Promise<number>;
     /** Space always left free under the spill (default {@link SPILL_RESERVE_BYTES}). */
@@ -128,6 +135,7 @@ export async function openBandsDuck(
   close(): Promise<void>;
 }> {
   const spillMax = options.spillMax ?? BANDS_SPILL_MAX;
+  const threads = options.threads ?? DEFAULT_DUCKDB_THREADS;
   if (!SPILL_MAX_PATTERN.test(spillMax)) {
     throw new Error(
       `--spill-max must be a size such as 16GB or 512MB, not ${spillMax}`,
@@ -209,7 +217,7 @@ export async function openBandsDuck(
     const opened = await Database.create(':memory:');
     try {
       await opened.exec(
-        `SET memory_limit = '2GB'; SET threads = 2; SET temp_directory = '${dir.replace(/'/g, "''")}'; SET max_temp_directory_size = '${capOf(capBytes)}'; SET autoinstall_known_extensions = false; SET autoload_known_extensions = false;`,
+        `SET memory_limit = '2GB'; SET threads = ${threads}; SET temp_directory = '${dir.replace(/'/g, "''")}'; SET max_temp_directory_size = '${capOf(capBytes)}'; SET autoinstall_known_extensions = false; SET autoload_known_extensions = false;`,
       );
     } catch (error) {
       await opened.close().catch(() => undefined);
@@ -338,7 +346,10 @@ export function anchorPool(
   });
 }
 
-/** The sample a run draws: none without sources, or with every count 0. */
+/**
+ * The sample a run draws: none without sources. Every count 0 is still a
+ * sample, of nothing, so the run's gates on an undrawn sample apply.
+ */
 export function sampleOptions(
   options: {
     sampleBlocks?: string;
@@ -355,9 +366,7 @@ export function sampleOptions(
   const txs = whole(options.sampleTxs, '--sample-txs') ?? DEFAULT_SAMPLE_TXS;
   const format1 =
     whole(options.sampleFormat1, '--sample-format1') ?? DEFAULT_SAMPLE_FORMAT1;
-  if (pool === undefined || (blocks === 0 && txs === 0 && format1 === 0)) {
-    return undefined;
-  }
+  if (pool === undefined) return undefined;
   return {
     seed: whole(options.seed, '--seed') ?? crypto.randomInt(2 ** 31),
     blocks,
@@ -376,12 +385,14 @@ export function allowances(options: {
   allowUnbound?: boolean;
   allowIncomplete?: boolean;
   allowUnverifiedFormat1?: boolean;
+  allowUnsampled?: boolean;
 }): L1Allowances {
   return {
     unanchored: options.allowUnanchored === true,
     unbound: options.allowUnbound === true,
     incomplete: options.allowIncomplete === true,
     unverifiedFormat1: options.allowUnverifiedFormat1 === true,
+    unsampled: options.allowUnsampled === true,
   };
 }
 
@@ -484,6 +495,7 @@ export async function indexL1VerifyCLICommand(
     );
     const session = await openBandsDuck({
       ...(options.spillMax !== undefined ? { spillMax: options.spillMax } : {}),
+      threads: parseDuckdbThreads(options.duckdbThreads),
       ...(deps.freeBytes !== undefined ? { freeBytes: deps.freeBytes } : {}),
       reserveBytes: spillReserveBytes(options.spillReserveGb),
     });

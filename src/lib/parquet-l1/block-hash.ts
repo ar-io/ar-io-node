@@ -18,9 +18,11 @@
  *
  * **Fails closed.** A header this cannot recompute exactly throws
  * {@link HeaderUnverifiable} with a named reason, never a pass:
- * - below the 2.0 fork (a 1.0 block hash is a deep hash over the full wallet
- *   list, which no header carries; see {@link hash20Of10Block} for what can
- *   be checked there instead);
+ * - below the 2.0 fork (from the 1.6 fork a block hash is a deep hash over
+ *   the header fields and the full wallet list; below it, a SHA-384 over the
+ *   header as JSON with the full hash list and wallet list; no header
+ *   carries either list; see {@link hash20Of10Block} and the 2.0 seed fold,
+ *   {@link foldBlockIndexEntry}, for what can be checked there instead);
  * - a JSON key this does not know for the header's era, so a future fork
  *   that adds a field cannot pass by having it ignored;
  * - a feature mainnet has not exercised in any header this was tested
@@ -397,7 +399,7 @@ function recompute(json: unknown): {
   if (h < FORK_2_0) {
     throw unverifiable(
       h,
-      'below the 2.0 fork a block hash is a deep hash over the full wallet list, which no header carries',
+      'below the 2.0 fork a block hash covers the full wallet list (from the 1.6 fork a deep hash over the header fields and the list; below it a SHA-384 over the header as JSON with the full hash list and wallet list), which no header carries',
     );
   }
   const { required, optional } = keysFor(h);
@@ -665,7 +667,7 @@ export interface Block10Columns {
   last_retarget: number | bigint | string;
   diff: number | bigint | string;
   cumulative_diff: number | bigint | string | null;
-  /** `null` for `unclaimed`. */
+  /** `null` (or empty) for `unclaimed`. */
   reward_addr: Buffer | null;
   reward_pool: number | bigint | string;
   block_size: number | bigint | string;
@@ -710,7 +712,12 @@ export function hash20Of10Block(
     sorted,
     ib(storedInt(block.block_size)),
     ib(storedInt(block.weave_size)),
-    block.reward_addr ?? Buffer.from('unclaimed'),
+    // `unclaimed`, which an index holds as no address: NULL, or the empty
+    // bytes an indexer writes for the genesis block. An address is 32
+    // bytes, so neither can be one.
+    block.reward_addr === null || block.reward_addr.length === 0
+      ? Buffer.from('unclaimed')
+      : block.reward_addr,
     [],
     [ib(1n), Buffer.alloc(0), Buffer.alloc(0), Buffer.alloc(0)],
   ]);
@@ -753,6 +760,20 @@ export function blockIndexEntryHash(entry: BlockIndexEntry): Buffer {
  */
 export function hashListMerkleSeed(entries: Iterable<BlockIndexEntry>): Buffer {
   let root: Buffer = Buffer.alloc(0);
-  for (const entry of entries) root = sha384(root, blockIndexEntryHash(entry));
+  for (const entry of entries) root = foldBlockIndexEntry(root, entry);
   return root;
+}
+
+/**
+ * One step of {@link hashListMerkleSeed}: the fold after `entry`, given the
+ * fold of every entry below it (`ar_unbalanced_merkle:root/3`). From the
+ * 2.0 fork on this is how each block's `hash_list_merkle` follows from the
+ * block below; below it, it is the running 2.0 seed an `l1-4` band's
+ * `witness_fork_2_0` records per height.
+ */
+export function foldBlockIndexEntry(
+  previous: Buffer,
+  entry: BlockIndexEntry,
+): Buffer {
+  return sha384(previous, blockIndexEntryHash(entry));
 }

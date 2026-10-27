@@ -89,7 +89,8 @@ describe('ArNSNamesCache', () => {
   });
 
   it('should return name requested during initial hydration once complete', async () => {
-    let resolveHydrate: () => void;
+    // Assigned synchronously by the Promise executor below.
+    let resolveHydrate!: () => void;
     const hydratePromise = new Promise<void>((resolve) => {
       resolveHydrate = resolve;
     });
@@ -294,7 +295,6 @@ describe('ArNSNamesCache', () => {
 
   it('should debounce on a cache miss', async () => {
     let callCount = 0;
-    let lastCallTimestamp = 0;
     const debounceCache = new ArNSNamesCache({
       log,
       cacheHitDebounceTtl: 10000, // don't refresh the cache on a hit
@@ -306,7 +306,6 @@ describe('ArNSNamesCache', () => {
         // on first call, return empty, then return success
         async getArNSRecords() {
           callCount++;
-          lastCallTimestamp = Date.now();
           // on first two calls, return empty, then return success
           if (callCount === 1) {
             return {
@@ -406,11 +405,11 @@ describe('ArNSNamesCache', () => {
       log,
       registryCache,
       networkProcess: {
-        getArNSRecords: async ({ cursor }) => {
+        getArNSRecords: async ({ cursor }: { cursor?: string }) => {
           callCount++;
 
           // First page succeeds
-          if (!cursor) {
+          if (cursor === undefined) {
             return {
               items: [{ name: 'name-1', processId: 'process-1' }],
               nextCursor: 'cursor-1',
@@ -454,11 +453,11 @@ describe('ArNSNamesCache', () => {
       registryCache,
       cacheMissDebounceTtl: 100, // Short debounce to allow re-hydration in test
       networkProcess: {
-        getArNSRecords: async ({ cursor }) => {
+        getArNSRecords: async ({ cursor }: { cursor?: string }) => {
           callCount++;
 
           // First page succeeds
-          if (!cursor) {
+          if (cursor === undefined) {
             return {
               items: [{ name: 'name-1', processId: 'process-1' }],
               nextCursor: 'cursor-1',

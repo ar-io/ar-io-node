@@ -90,7 +90,7 @@ describe('ParquetL1Kind', () => {
     assert.equal(descriptor.records, 3);
     assert.deepEqual(
       descriptor.files.map((f) => f.name),
-      bandFiles('l1-2'),
+      bandFiles('l1-2', [0, 0]),
     );
     assert.ok(descriptor.files.every((f) => /^[0-9a-f]{64}$/.test(f.sha256)));
     assert.deepEqual(descriptor.metadata, {
@@ -106,7 +106,7 @@ describe('ParquetL1Kind', () => {
     // The facts file is the publisher's, never one of the band's files.
     assert.deepEqual(
       descriptor.files.map((f) => f.name),
-      bandFiles('l1-2'),
+      bandFiles('l1-2', [0, 0]),
     );
   });
 
@@ -249,7 +249,10 @@ describe('ParquetL1Kind', () => {
       current: {},
     });
     assert.ok(installed[descriptor.id] !== undefined);
-    assert.deepEqual((await fs.readdir(target)).sort(), bandFiles('l1-2'));
+    assert.deepEqual(
+      (await fs.readdir(target)).sort(),
+      bandFiles('l1-2', [0, 0]),
+    );
     installed = await kind.retire({
       bandId: descriptor.id,
       dir: target,
@@ -293,7 +296,7 @@ describe('ParquetL1Kind', () => {
       const descriptor = await kind.describe(band);
       assert.deepEqual(
         descriptor.files.map((f) => f.name),
-        bandFiles('l1-3'),
+        bandFiles('l1-3', [0, 0]),
       );
       assert.equal((descriptor.metadata as any).schema, 'l1-3');
       await kind.validate(descriptor, band);
@@ -352,7 +355,7 @@ describe('ParquetL1Kind', () => {
       const descriptor = await kind.describe(band);
       assert.deepEqual(
         descriptor.files.map((f) => f.name),
-        bandFiles('l1-2'),
+        bandFiles('l1-2', [0, 0]),
       );
       await kind.validate(descriptor, band);
     });
@@ -367,7 +370,10 @@ describe('ParquetL1Kind', () => {
         targetDir: target,
         current: {},
       });
-      assert.deepEqual((await fs.readdir(target)).sort(), bandFiles('l1-3'));
+      assert.deepEqual(
+        (await fs.readdir(target)).sort(),
+        bandFiles('l1-3', [0, 0]),
+      );
     });
   });
 });

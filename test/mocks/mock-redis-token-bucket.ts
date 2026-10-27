@@ -9,6 +9,7 @@ import type {
   TokenBucket,
   RateLimiterRedisClient,
   BucketConsumptionResult,
+  AddPaidTokensResult,
 } from '../../src/lib/rate-limiter-redis.js';
 
 /**
@@ -28,6 +29,8 @@ export class MockRedisTokenBucketClient implements RateLimiterRedisClient {
     this.getOrCreateBucketAndConsume =
       this.getOrCreateBucketAndConsume.bind(this);
     this.consumeTokens = this.consumeTokens.bind(this);
+    this.addPaidTokens = this.addPaidTokens.bind(this);
+    this.getBucketState = this.getBucketState.bind(this);
     this.defineCommand = this.defineCommand.bind(this);
   }
 
@@ -72,6 +75,7 @@ export class MockRedisTokenBucketClient implements RateLimiterRedisClient {
       bucket = {
         key,
         tokens: capacity,
+        paidTokens: 0,
         lastRefill: now,
         capacity,
         refillRate,
@@ -307,6 +311,60 @@ export class MockRedisTokenBucketClient implements RateLimiterRedisClient {
       regularConsumed,
       success,
     };
+  }
+
+  /**
+   * Simulates the Redis Lua script for addPaidTokens
+   * (src/lib/redis-lua/add-paid-tokens.lua): gets or creates the bucket,
+   * refills regular tokens by elapsed time (capped at base capacity),
+   * refreshes capacity/refillRate from config, then adds paid tokens.
+   *
+   * @returns AddPaidTokensResult with the updated bucket and tokens added
+   */
+  async addPaidTokens(
+    key: string,
+    capacity: number,
+    refillRate: number,
+    now: number,
+    ttlSeconds: number,
+    paidTokensToAdd: number,
+  ): Promise<AddPaidTokensResult> {
+    let bucket = this.buckets.get(key);
+
+    if (bucket) {
+      const elapsedSeconds = (now - bucket.lastRefill) / 1000;
+      const tokensToAdd = Math.floor(elapsedSeconds * bucket.refillRate);
+      if (tokensToAdd > 0) {
+        bucket.tokens = Math.min(bucket.capacity, bucket.tokens + tokensToAdd);
+        bucket.lastRefill = now;
+      }
+      bucket.capacity = capacity;
+      bucket.refillRate = refillRate;
+    } else {
+      bucket = {
+        key,
+        tokens: capacity,
+        paidTokens: 0,
+        lastRefill: now,
+        capacity,
+        refillRate,
+      };
+    }
+
+    bucket.paidTokens += paidTokensToAdd;
+
+    this.setTTL(key, ttlSeconds * 1000);
+    this.buckets.set(key, bucket);
+
+    return { bucket, paidTokensAdded: paidTokensToAdd };
+  }
+
+  /**
+   * Returns the stored bucket state, or null when the key does not exist
+   * (mirrors HGETALL on a missing key).
+   */
+  async getBucketState(key: string): Promise<TokenBucket | null> {
+    return this.buckets.get(key) ?? null;
   }
 
   /**

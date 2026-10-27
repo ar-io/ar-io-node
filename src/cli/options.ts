@@ -150,12 +150,12 @@ export const optionMap = {
   allowUnbound: {
     alias: '--allow-unbound',
     description:
-      'Pass with pre-2.0 blocks, which nothing binds: their hashes cannot be recomputed and the layout carries no transition tx_root witnesses. Listed in unbound.pre20 either way',
+      "Pass with pre-2.0 blocks that nothing binds: their hashes cannot be recomputed, and no witnessed 2.0 seed fold (an l1-4 band's witness_fork_2_0) reaches a value the chain fixes for them (every one with --core-db or an l1-3 band). Listed in unbound.pre20 either way",
   },
   allowUnverifiedFormat1: {
     alias: '--allow-unverified-format1',
     description:
-      'Pass with post-2.0 blocks whose tx_root could not be recomputed because they hold a format-1 transaction with data (the layout carries no v1 data roots). Listed in unbound.txRootFormat1 either way',
+      'Pass with blocks whose tx_root could not be recomputed because they hold a format-1 transaction with data whose v1 data root no witness gives (every one with --core-db or an l1-3 band). Listed in unbound.txRootFormat1 either way',
   },
   allowIncomplete: {
     alias: '--allow-incomplete',
@@ -165,12 +165,12 @@ export const optionMap = {
   allowUnsampled: {
     alias: '--allow-unsampled',
     description:
-      'Write with no sample of headers and signatures (no --anchor-from, or every --sample-* 0): transaction ids, their order and every transaction field are then unchecked against the chain',
+      'Import: write with no sample of headers and signatures (no --anchor-from, or every --sample-* 0): transaction ids, their order and every transaction field are then unchecked against the chain. Both: accept --sample-format1 0 over format-1 transactions with data from the 2.0 fork, whose format nothing else checks',
   },
   sampleFormat1: {
     alias: '--sample-format1 <n>',
     description:
-      'Format-1 transactions drawn per band from blocks whose tx_root cannot be recomputed, checked against the chain (default 200; 0 to skip): what catches a format-2 transaction relabelled format 1. Needs --anchor-from',
+      'Format-1 transactions with data drawn per band from the 2.0 fork, checked against the chain (default 200; 0 to skip): what catches a format-2 transaction relabelled format 1, which a witnessed root does not. Needs --anchor-from',
   },
   sampleBlocks: {
     alias: '--sample-blocks <n>',
@@ -226,6 +226,11 @@ export const optionMap = {
     description:
       "Seeds --onchain's sample, to repeat a run (the result reports the seed it drew when none is given)",
   },
+  duckdbThreads: {
+    alias: '--duckdb-threads <n>',
+    description:
+      "DuckDB's threads per database, 1 to 64 (default 1). More can be faster, but DuckDB 1.4, the newest the Node binding has, can crash (SIGSEGV) merging a large aggregate that spilled while running on more than one (duckdb/duckdb#23757). The result is the same at any value",
+  },
   spillMax: {
     alias: '--spill-max <size>',
     description:
@@ -234,7 +239,7 @@ export const optionMap = {
   l2Publication: {
     alias: '--publication <path|url>',
     description:
-      "The publisher's signed index publication (a file, such as data/indexes/published/publication.json, or a URL, such as https://<gateway>/ar-io/indexes/publication.json): every band must be listed in it and every file must have the size and SHA-256 it signs. Needs --publisher-key or --registry-url. Without it the bands are checked only for internal consistency (publisherBound: false)",
+      "The publisher's signed index publication (a file, such as data/indexes/published/publication.json, or a URL, such as https://<gateway>/ar-io/indexes): every band must be listed in it and every file must have the size and SHA-256 it signs. Needs --publisher-key or --registry-url. Without it the bands are checked only for internal consistency (publisherBound: false)",
   },
   l2PublisherKey: {
     alias: '--publisher-key <address>',
@@ -289,7 +294,7 @@ export const optionMap = {
   l2Concurrency: {
     alias: '--concurrency <n>',
     description:
-      'How many DuckDB databases check side by side, two threads and 2GB of memory each: bands, and the tables and lookups of a band, are read on them at once, sharing the spill cap (default: a quarter of the CPUs, at most 4, at least 1). At most 16, and at most UV_THREADPOOL_SIZE less 2: each database holds a libuv thread while it reads, and DNS and file reads need the rest (tools/ar-io-node sets UV_THREADPOOL_SIZE=16). The result is the same at any value',
+      'How many DuckDB databases check side by side, --duckdb-threads threads (one unless asked) and 2GB of memory each: bands, and the tables and lookups of a band, are read on them at once, sharing the spill cap (default: a quarter of the CPUs, at most 4, at least 1). At most 16, and at most UV_THREADPOOL_SIZE less 2: each database holds a libuv thread while it reads, and DNS and file reads need the rest (tools/ar-io-node sets UV_THREADPOOL_SIZE=16). The result is the same at any value',
   },
   l2SkipLookups: {
     alias: '--skip-lookups',
@@ -344,6 +349,35 @@ export const optionMap = {
     description:
       'Where to write the records, as CSV with a header line (read it with index-band-build --skip-header). Required',
   },
+  bundlesDb: {
+    alias: '--bundles-db <path>',
+    description:
+      "The bundle indexer's bundles.db, opened read-only (default data/sqlite/bundles.db)",
+  },
+  censusFrom: {
+    alias: '--from <height>',
+    description:
+      'Lowest root transaction height to check. Short roots with no L1 row in ClickHouse are reported only without --from and --to',
+  },
+  censusTo: {
+    alias: '--to <height>',
+    description:
+      'Highest root transaction height to check (default: the top ClickHouse holds)',
+  },
+  censusRoots: {
+    alias: '--roots <path>',
+    description:
+      'Check only these root transactions, one id per line or the first column of a TSV ("-" reads stdin). Every one is checked item by item, so this also verifies re-queued bundles',
+  },
+  censusOutput: {
+    alias: '--output <path>',
+    description:
+      'Write each short root as a TSV line (root, height, expected, held_under_root, listed, here, elsewhere, expired, missing, class); the roots of class missing are the ones to re-queue',
+  },
+  bucket: {
+    alias: '--bucket <blocks>',
+    description: 'Height bucket for missingByHeight (default 100000)',
+  },
 } satisfies Record<string, CommanderOption>;
 
 export const globalOptions: CommanderOption[] = [optionMap.debug];
@@ -396,6 +430,7 @@ export const indexL1ImportOptions: CommanderOption[] = [
   optionMap.sampleConcurrency,
   optionMap.readTimeout,
   optionMap.spillMax,
+  optionMap.duckdbThreads,
   optionMap.spillReserveGb,
 ];
 
@@ -405,6 +440,7 @@ export const indexL1VerifyOptions: CommanderOption[] = [
   optionMap.skipTxRoot,
   optionMap.skipLookups,
   optionMap.spillMax,
+  optionMap.duckdbThreads,
   optionMap.spillReserveGb,
   optionMap.fromHeight,
   optionMap.toHeight,
@@ -414,6 +450,7 @@ export const indexL1VerifyOptions: CommanderOption[] = [
   optionMap.allowUnbound,
   optionMap.allowIncomplete,
   optionMap.allowUnverifiedFormat1,
+  optionMap.allowUnsampled,
   optionMap.sampleBlocks,
   optionMap.sampleTxs,
   optionMap.sampleFormat1,
@@ -439,6 +476,7 @@ export const indexL2VerifyOptions: CommanderOption[] = [
   optionMap.toHeight,
   optionMap.l2SkipLookups,
   optionMap.spillMax,
+  optionMap.duckdbThreads,
   optionMap.l2Publication,
   optionMap.l2PublisherKey,
   optionMap.l2RegistryUrl,
@@ -467,4 +505,14 @@ export const indexBandExportOptions: CommanderOption[] = [
   optionMap.to,
   optionMap.output,
   optionMap.force,
+];
+
+export const indexCensusOptions: CommanderOption[] = [
+  optionMap.bundlesDb,
+  optionMap.censusFrom,
+  optionMap.censusTo,
+  optionMap.censusRoots,
+  optionMap.censusOutput,
+  optionMap.force,
+  optionMap.bucket,
 ];

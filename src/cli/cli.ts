@@ -23,6 +23,7 @@ import {
   indexL1VerifyOptions,
   indexL2VerifyOptions,
   indexBandVerifyOptions,
+  indexCensusOptions,
 } from './options.js';
 import { passthroughArgs, runSdkCli, sdkCli } from './passthrough.js';
 import type {
@@ -33,6 +34,7 @@ import type {
   IndexL2VerifyCLIOptions,
   IndexL1VerifyCLIOptions,
   IndexBandVerifyCLIOptions,
+  IndexCensusCLIOptions,
 } from './types.js';
 import { applyOptions, makeCommand } from './utils.js';
 
@@ -51,6 +53,8 @@ const indexL1VerifyCommands = async () =>
   import('./commands/indexL1VerifyCommands.js');
 const indexL1AuditCommands = async () =>
   import('./commands/indexL1AuditCommands.js');
+const indexCensusCommands = async () =>
+  import('./commands/indexCensusCommands.js');
 
 const sdk = sdkCli();
 
@@ -221,7 +225,7 @@ makeCommand<IndexL2VerifyCLIOptions>({
     '',
     'Example:',
     '  ar-io-node index-l2-verify --bands-dir data/indexes/installed/ardrive-l2 \\',
-    '    --publication https://turbo-gateway.com/ar-io/indexes/publication.json \\',
+    '    --publication https://turbo-gateway.com/ar-io/indexes \\',
     '    --registry-url http://core:4000',
     '',
     "Read-only, no gateway or database needed. Checks every band's id against",
@@ -260,6 +264,35 @@ makeCommand<IndexL1AuditCLIOptions>({
     'from the index alone. This fetches that data and recomputes tx_root.',
     'Read-only, and the data source need not be trusted. Exits 1 on a',
     'mismatch, or if nothing could be audited.',
+    CONTRACT,
+  ].join('\n'),
+);
+
+makeCommand<IndexCensusCLIOptions>({
+  name: 'index-census',
+  description:
+    "Check that this gateway's ClickHouse holds every data item its bundle indexer indexed",
+  options: indexCensusOptions,
+  action: async (options) =>
+    (await indexCensusCommands()).indexCensusCLICommand(options, {
+      log: createCliLogger({ debug: options.debug === true }),
+    }),
+}).addHelpText(
+  'after',
+  [
+    '',
+    'Example:',
+    '  ar-io-node index-census --bundles-db data/sqlite/bundles.db \\',
+    '    --output data/indexes/census/short-roots.tsv',
+    '',
+    'Read-only on bundles.db and ClickHouse (CLICKHOUSE_URL, CLICKHOUSE_USER,',
+    'CLICKHOUSE_PASSWORD), so the gateway can stay up. Compares each root',
+    "transaction's indexed item count with what ClickHouse holds under it,",
+    'then looks up every item of the roots that come up short: held under',
+    'another root (a duplicate), expired (in transaction_ids, not',
+    'transactions), or missing (never imported; re-queue the bundle with',
+    'POST /ar-io/admin/queue-bundle). Needs the transaction_ids table',
+    'backfilled. Run again with --roots on the re-queued roots to verify.',
     CONTRACT,
   ].join('\n'),
 );

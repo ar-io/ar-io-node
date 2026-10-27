@@ -307,7 +307,7 @@ describe('verifyCoreDb', () => {
     const accepted = await verifyCoreDb(db, {
       from: LOW,
       to: TOP,
-      allow: { unanchored: true, unverifiedFormat1: true },
+      allow: { unanchored: true, unverifiedFormat1: true, unsampled: true },
     });
     assert.equal(accepted.ok, true);
   });

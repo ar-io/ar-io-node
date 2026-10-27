@@ -21,8 +21,10 @@
  * and that block was synced from the gateway's own nodes), or, with none,
  * by a network anchor (`--anchor-from`). It must also build on the block
  * held below it. Blocks the checks cannot bind (`unbound`: below the 2.0
- * fork, or holding a format-1 transaction with data) are refused unless
- * accepted (`--allow-unbound`, `--allow-unverified-format1`).
+ * fork, or holding a format-1 transaction with data, where the band
+ * carries no `l1-4` witness for them) are refused unless accepted
+ * (`--allow-unbound`, `--allow-unverified-format1`). An `l1-4` band's
+ * witnesses bind both, so a whole chain of them imports with no flag.
  *
  * A band replaces its own height range, and is recorded in
  * `parquet_l1_imports` before its rows are written and completed after
@@ -52,12 +54,16 @@ import {
   PARQUET_L1_TABLES,
   ParquetL1Band,
   TableSpec,
+  V1_DATA_ROOTS_WITNESS,
+  type WitnessSpec,
+  witnessesOf,
 } from './layout.js';
 import { IMPORT_ORDER, readTable } from './read.js';
 import {
   type ChainBlock,
   expectedHashListMerkle,
   FORK_2_0,
+  type Fork20Pins,
   PREDECESSOR_HAS_NO_MERKLE,
 } from './chain.js';
 import { anchorBlock } from './anchor.js';
@@ -918,6 +924,12 @@ export interface ImportVerification {
   };
   /** The sample drawn from the bands before writing; needs `pool`. */
   sample?: SampleOptions;
+  /**
+   * The chain's 2.0 seed folds, for a test chain below the 2.0 fork;
+   * mainnet's (`FORK_2_0_FOLD_PINS`) otherwise. Never from a command line
+   * or the environment.
+   */
+  foldPins?: Fork20Pins;
 }
 
 type HeldBlock = Pick<
@@ -1112,8 +1124,13 @@ export async function verifyBeforeImport(
   const out = await verifyBands(duck, bandsDir, {
     only: bands.map((b) => b.id),
     lookups: false,
-    // Anchored here, below, against what core.db holds.
+    // Anchored here, below, against what core.db holds, and sampled here
+    // too, with the gates on an undrawn sample below.
     allow: { ...allow, unanchored: true },
+    sampleGated: true,
+    ...(verification.foldPins !== undefined
+      ? { foldPins: verification.foldPins }
+      : {}),
   });
   const failing = out.checks.filter((c) => !c.ok);
   const refuse = (what: string, checks: VerifyCheck[]) =>
@@ -1183,6 +1200,12 @@ export async function verifyBeforeImport(
       notes.push(`the block core.db holds at ${to + 1} cannot vouch: ${doubt}`);
     }
   }
+  if (binding === undefined && out.anchored && out.anchor?.pinned === true) {
+    // Below the 2.0 fork no header recomputes; the bands' folds reach the
+    // pins at their top, which bind them to the chain there.
+    binding = { kind: 'anchored', accepted };
+    boundBy = `the bands' folds reach the folds pinned at ${to}, which fold on to block 422,250's hash_list_merkle`;
+  }
   if (binding === undefined && verification.pool !== undefined) {
     const result = await anchorBlock(
       verification.pool,
@@ -1248,7 +1271,11 @@ export async function verifyBeforeImport(
     const format1 = options.format1PerStratum ?? options.txsPerStratum;
     const gaps: Array<[string, string, string | undefined]> = [];
     if (options.blocks <= 0) {
-      gaps.push(['sample_blocks', '--sample-blocks 0', undefined]);
+      gaps.push([
+        'sample_blocks',
+        '--sample-blocks 0',
+        "the order of each block's transactions and the header fields no hash carries would be unchecked",
+      ]);
     }
     if (options.txsPerStratum <= 0) {
       gaps.push([
@@ -1261,8 +1288,8 @@ export async function verifyBeforeImport(
       gaps.push([
         'sample_format1',
         '--sample-format1 0',
-        out.unbound.txRootFormat1 !== undefined
-          ? 'a transaction relabelled format 1 in the blocks accepted with --allow-unverified-format1 would be unchecked'
+        out.unbound.txRootFormat1 !== undefined || out.format1Txs > 0
+          ? 'a transaction relabelled format 1 would be unchecked: only the format-1 draw checks a format-1 transaction with data is one, witnessed or not'
           : undefined,
       ]);
     }
@@ -1321,6 +1348,68 @@ export async function verifyBeforeImport(
     ...(sample !== undefined ? { sample } : {}),
   };
 }
+
+/**
+ * Every row an import writes to `core.db` from a band, by statement. One
+ * copy, read by `column-bindings.test.ts` to check that every column
+ * written has a declared binding (`column-bindings.ts`).
+ */
+export const IMPORT_SQL = {
+  wallets:
+    'INSERT OR IGNORE INTO wallets (address, public_modulus) VALUES (?, ?)',
+  blocks: `INSERT OR REPLACE INTO stable_blocks (indep_hash, height,
+      previous_block, nonce, hash, block_timestamp, tx_count, block_size, diff,
+      cumulative_diff, last_retarget, reward_addr, reward_pool, weave_size,
+      usd_to_ar_rate_dividend, usd_to_ar_rate_divisor,
+      scheduled_usd_to_ar_rate_dividend, scheduled_usd_to_ar_rate_divisor,
+      hash_list_merkle, wallet_list, tx_root, missing_tx_count)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+  transactions: `INSERT OR REPLACE INTO stable_transactions (id,
+      block_transaction_index, target, quantity, reward, last_tx, data_size,
+      content_type, format, height, owner_address, data_root, offset,
+      content_encoding, tag_count, signature, indexed_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  link: `INSERT OR IGNORE INTO stable_block_transactions
+      (block_indep_hash, transaction_id, block_transaction_index) VALUES (?, ?, ?)`,
+  missing: `INSERT OR IGNORE INTO missing_transactions
+      (block_indep_hash, transaction_id, height) VALUES (?, ?, ?)`,
+  tagName: 'INSERT OR IGNORE INTO tag_names (hash, name) VALUES (?, ?)',
+  tagValue: 'INSERT OR IGNORE INTO tag_values (hash, value) VALUES (?, ?)',
+  tag: `INSERT OR IGNORE INTO stable_transaction_tags (tag_name_hash,
+      tag_value_hash, height, block_transaction_index, transaction_tag_index,
+      transaction_id) VALUES (?, ?, ?, ?, ?, ?)`,
+  // Derived from the rows, not incremented: an import that runs twice
+  // must land on the same number.
+  countMissing: `UPDATE stable_blocks SET missing_tx_count =
+      (SELECT COUNT(*) FROM missing_transactions m WHERE m.height = stable_blocks.height)
+      WHERE height BETWEEN ? AND ?`,
+  // A band without witnesses holds no format-1 data_root (the header
+  // carries none, so gateways disagree), but a gateway that computed one
+  // keeps it. Keyed by transaction id, which names the same transaction
+  // on any fork.
+  keepDataRoots: `INSERT INTO parquet_l1_kept_data_roots (id, data_root)
+      SELECT id, data_root FROM stable_transactions
+      WHERE height BETWEEN ? AND ? AND format = 1
+        AND data_root IS NOT NULL AND length(data_root) > 0`,
+  restoreDataRoots: `UPDATE stable_transactions
+      SET data_root = k.data_root
+      FROM parquet_l1_kept_data_roots k
+      WHERE stable_transactions.id = k.id`,
+  // An l1-4 band's witnesses, verified with the band: what is written for
+  // a format-1 transaction's data_root and a pre-2.0 block's tx_root,
+  // over whatever the gateway kept (a root that contradicts one never
+  // stays).
+  witnessDataRoot: `UPDATE stable_transactions SET data_root = ?
+      WHERE id = ? AND height = ?`,
+  witnessTxRoot: 'UPDATE stable_blocks SET tx_root = ? WHERE height = ?',
+  // The ledger: the import's own record, no band value.
+  pending: `INSERT OR REPLACE INTO parquet_l1_imports (band_id,
+      height_from, height_to, band_digest, rows_imported, started_at,
+      completed_at) VALUES (?, ?, ?, ?, NULL, ?, NULL)`,
+  completed: `UPDATE parquet_l1_imports
+      SET rows_imported = ?, completed_at = ?, binding = ?, accepted = ?
+      WHERE band_id = ?`,
+} as const;
 
 /**
  * Imports one band, or the part of it `heights` names, ending with its
@@ -1404,55 +1493,23 @@ export async function importBand(
   db.exec(`CREATE TEMP TABLE IF NOT EXISTS parquet_l1_kept_data_roots
     (id BLOB PRIMARY KEY, data_root BLOB NOT NULL)`);
   const insert = {
-    wallets: db.prepare(
-      'INSERT OR IGNORE INTO wallets (address, public_modulus) VALUES (?, ?)',
-    ),
-    blocks:
-      db.prepare(`INSERT OR REPLACE INTO stable_blocks (indep_hash, height,
-      previous_block, nonce, hash, block_timestamp, tx_count, block_size, diff,
-      cumulative_diff, last_retarget, reward_addr, reward_pool, weave_size,
-      usd_to_ar_rate_dividend, usd_to_ar_rate_divisor,
-      scheduled_usd_to_ar_rate_dividend, scheduled_usd_to_ar_rate_divisor,
-      hash_list_merkle, wallet_list, tx_root, missing_tx_count)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`),
-    transactions: db.prepare(`INSERT OR REPLACE INTO stable_transactions (id,
-      block_transaction_index, target, quantity, reward, last_tx, data_size,
-      content_type, format, height, owner_address, data_root, offset,
-      content_encoding, tag_count, signature, indexed_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
-    link: db.prepare(`INSERT OR IGNORE INTO stable_block_transactions
-      (block_indep_hash, transaction_id, block_transaction_index) VALUES (?, ?, ?)`),
-    missing: db.prepare(`INSERT OR IGNORE INTO missing_transactions
-      (block_indep_hash, transaction_id, height) VALUES (?, ?, ?)`),
-    tagName: db.prepare(
-      'INSERT OR IGNORE INTO tag_names (hash, name) VALUES (?, ?)',
-    ),
-    tagValue: db.prepare(
-      'INSERT OR IGNORE INTO tag_values (hash, value) VALUES (?, ?)',
-    ),
-    tag: db.prepare(`INSERT OR IGNORE INTO stable_transaction_tags (tag_name_hash,
-      tag_value_hash, height, block_transaction_index, transaction_tag_index,
-      transaction_id) VALUES (?, ?, ?, ?, ?, ?)`),
-    // Derived from the rows, not incremented: an import that runs twice
-    // must land on the same number.
-    countMissing: db.prepare(`UPDATE stable_blocks SET missing_tx_count =
-      (SELECT COUNT(*) FROM missing_transactions m WHERE m.height = stable_blocks.height)
-      WHERE height BETWEEN ? AND ?`),
+    wallets: db.prepare(IMPORT_SQL.wallets),
+    blocks: db.prepare(IMPORT_SQL.blocks),
+    transactions: db.prepare(IMPORT_SQL.transactions),
+    link: db.prepare(IMPORT_SQL.link),
+    missing: db.prepare(IMPORT_SQL.missing),
+    tagName: db.prepare(IMPORT_SQL.tagName),
+    tagValue: db.prepare(IMPORT_SQL.tagValue),
+    tag: db.prepare(IMPORT_SQL.tag),
+    countMissing: db.prepare(IMPORT_SQL.countMissing),
     hashAt: db
       .prepare('SELECT indep_hash FROM stable_blocks WHERE height = ?')
       .pluck(),
-    // A band holds no format-1 data_root (the header carries none, so
-    // gateways disagree), but a gateway that computed one keeps it. Keyed by
-    // transaction id, which names the same transaction on any fork.
     forgetKeptDataRoots: db.prepare('DELETE FROM parquet_l1_kept_data_roots'),
-    keepDataRoots: db.prepare(`INSERT INTO parquet_l1_kept_data_roots
-      SELECT id, data_root FROM stable_transactions
-      WHERE height BETWEEN ? AND ? AND format = 1
-        AND data_root IS NOT NULL AND length(data_root) > 0`),
-    restoreDataRoots: db.prepare(`UPDATE stable_transactions
-      SET data_root = k.data_root
-      FROM parquet_l1_kept_data_roots k
-      WHERE stable_transactions.id = k.id`),
+    keepDataRoots: db.prepare(IMPORT_SQL.keepDataRoots),
+    restoreDataRoots: db.prepare(IMPORT_SQL.restoreDataRoots),
+    witnessDataRoot: db.prepare(IMPORT_SQL.witnessDataRoot),
+    witnessTxRoot: db.prepare(IMPORT_SQL.witnessTxRoot),
     // Read before the range is cleared: see `keptTxRoots`.
     storedTxRoots:
       db.prepare(`SELECT height, indep_hash, tx_root FROM stable_blocks
@@ -1465,12 +1522,8 @@ export async function importBand(
         'SELECT block_transaction_index FROM stable_transactions WHERE id = ?',
       )
       .pluck(),
-    pending: db.prepare(`INSERT OR REPLACE INTO parquet_l1_imports (band_id,
-      height_from, height_to, band_digest, rows_imported, started_at,
-      completed_at) VALUES (?, ?, ?, ?, NULL, ?, NULL)`),
-    completed: db.prepare(`UPDATE parquet_l1_imports
-      SET rows_imported = ?, completed_at = ?, binding = ?, accepted = ?
-      WHERE band_id = ?`),
+    pending: db.prepare(IMPORT_SQL.pending),
+    completed: db.prepare(IMPORT_SQL.completed),
     // An earlier attempt at these heights is finished with: this band
     // cleared the range and rewrote it. Leaving the row would hold
     // `haveTo` below a band nothing can ever finish — a tip superseded
@@ -1843,9 +1896,37 @@ export async function importBand(
         batchRows,
       );
     }
+    // An l1-4 band's witnessed roots, checked with the band before any row
+    // was written, replace whatever the gateway kept. Read before the write
+    // lock is taken: online, nothing is held across an await.
+    const witnessed: Array<[WitnessSpec, Array<Record<string, unknown>>]> = [];
+    for (const spec of witnessesOf(band.schema, band.heightRange)) {
+      const file = path.join(dir, spec.file).replace(/'/g, "''");
+      witnessed.push([
+        spec,
+        (await duck.all(
+          spec === V1_DATA_ROOTS_WITNESS
+            ? `SELECT height, id, data_root AS root FROM read_parquet('${file}') WHERE height BETWEEN ${from} AND ${to}`
+            : `SELECT height, tx_root AS root FROM read_parquet('${file}') WHERE height BETWEEN ${from} AND ${Math.min(to, FORK_2_0 - 1)}`,
+        )) as Array<Record<string, unknown>>,
+      ]);
+    }
     begin();
     insert.restoreDataRoots.run();
     insert.forgetKeptDataRoots.run();
+    for (const [spec, rows] of witnessed) {
+      for (const r of rows) {
+        if (spec === V1_DATA_ROOTS_WITNESS) {
+          insert.witnessDataRoot.run(
+            asBuffer(r.root),
+            asBuffer(r.id),
+            Number(r.height),
+          );
+        } else {
+          insert.witnessTxRoot.run(asBuffer(r.root), Number(r.height));
+        }
+      }
+    }
     insert.countMissing.run(from, to);
     insert.completed.run(
       rows,

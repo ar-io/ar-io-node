@@ -72,12 +72,10 @@ class MockChunkSource implements ChunkByAnySource, ChunkDataByAnySource {
     return this.chunk;
   }
 
-  async getChunkDataByAny(
-    params: ChunkDataByAnySourceParams,
-  ): Promise<ChunkData> {
+  async getChunkDataByAny(): Promise<ChunkData> {
     return {
+      hash: this.chunk.hash,
       chunk: this.chunk.chunk,
-      data_path: this.chunk.data_path,
       source: this.chunk.source,
     };
   }

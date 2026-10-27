@@ -21,6 +21,7 @@
 #   ./tools/ar-io-node index-l1-import --bands-dir data/indexes/installed/parquet-l1 \
 #     --core-db data/sqlite/core.db
 #   ./tools/ar-io-node index-l2-verify --bands-dir data/indexes/installed/ardrive-l2
+#   ./tools/ar-io-node index-census --output data/indexes/census/short-roots.tsv
 #   ./tools/ar-io-node get-gateway --address <wallet>
 #
 # Mounts only what a command needs: data/indexes for index-band-* commands
@@ -34,6 +35,8 @@
 # (created if missing; only for the checks that spill: index-l2-verify, and
 # index-l1-verify over --bands-dir), so a large check never fills the disk
 # under `/`;
+# for index-census the SQLite directory read-only, the ClickHouse settings
+# and data/indexes for --output;
 # for any other command only the file
 # a --wallet-file names, read-only. Band commands never take a key. It runs as
 # your user, so data/indexes/published/<index> must be writable by you;
@@ -167,6 +170,17 @@ mount_spill() {
     exit 1
   fi
   DOCKER_ARGS+=(-v "${spill}:/tmp" -e TMPDIR=/tmp)
+  # The allocator settings index-export runs with (docker-compose.yaml),
+  # with the same overrides: without them a verifier's DuckDB work leaves
+  # freed memory in glibc's arenas and the process grows far past what any
+  # one query uses.
+  local arenas mmap trim
+  arenas="$(setting INDEX_EXPORT_MALLOC_ARENA_MAX)"
+  mmap="$(setting INDEX_EXPORT_MALLOC_MMAP_THRESHOLD)"
+  trim="$(setting INDEX_EXPORT_MALLOC_TRIM_THRESHOLD)"
+  DOCKER_ARGS+=(-e "MALLOC_ARENA_MAX=${arenas:-2}"
+    -e "MALLOC_MMAP_THRESHOLD_=${mmap:-131072}"
+    -e "MALLOC_TRIM_THRESHOLD_=${trim:-131072}")
 }
 # Join the gateway's network, so URLs such as http://core:4000 work.
 join_gateway_network() {
@@ -214,6 +228,35 @@ case "${COMMAND}" in
         DOCKER_ARGS+=(-v "$(realpath -e "${SECRETS_DIR}"):/run/secrets/index-export:ro")
       fi
     fi
+    join_gateway_network
+    ;;
+  index-census)
+    # Read-only on both: the gateway's SQLite (bundles.db) and its ClickHouse
+    # settings, passed by name as for index-band-export. --output goes under
+    # data/indexes, the only writable mount.
+    DATA_PATH="$(setting INDEX_SWARM_DATA_PATH)"
+    DATA_PATH="$(realpath -m "${DATA_PATH:-./data/indexes}")"
+    mkdir -p "${DATA_PATH}"
+    DOCKER_ARGS+=(-v "${DATA_PATH}:/app/data/indexes"
+      -e AR_IO_NODE_CLI_DATA_DIR=/app/data/indexes)
+    MOUNT_HOSTS+=("${DATA_PATH}")
+    MOUNT_TARGETS+=("data/indexes")
+    for name in CLICKHOUSE_URL CLICKHOUSE_USER CLICKHOUSE_PASSWORD; do
+      value="$(setting "${name}")"
+      if [[ -n "${value}" ]]; then
+        export "${name}=${value}"
+        DOCKER_ARGS+=(-e "${name}")
+      fi
+    done
+    SQLITE_PATH="$(setting SQLITE_DATA_PATH)"
+    SQLITE_PATH="$(realpath -m "${SQLITE_PATH:-./data/sqlite}")"
+    if [[ -d "${SQLITE_PATH}" ]]; then
+      DOCKER_ARGS+=(-v "${SQLITE_PATH}:/app/data/sqlite:ro")
+      MOUNT_HOSTS+=("${SQLITE_PATH}")
+      MOUNT_TARGETS+=("data/sqlite")
+    fi
+    rewrite_paths --bundles-db --roots --output
+    # CLICKHOUSE_URL names the ClickHouse service on the gateway's network.
     join_gateway_network
     ;;
   index-l2-*)

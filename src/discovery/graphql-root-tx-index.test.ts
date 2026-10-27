@@ -106,7 +106,7 @@ describe('GraphQLRootTxIndex', () => {
       const rootBundleId = 'root-bundle-456';
 
       const mockAxiosInstance = {
-        post: mock.fn((url: string, body: any) => {
+        post: mock.fn((_url: string, body: any) => {
           if (body.query.includes('getMetadata')) {
             // Metadata query for data item
             return Promise.resolve({
@@ -196,7 +196,7 @@ describe('GraphQLRootTxIndex', () => {
       const rootTxId = 'root-tx-123';
 
       const mockAxiosInstance = {
-        post: mock.fn((url: string, body: any) => {
+        post: mock.fn((_url: string, body: any) => {
           if (body.query.includes('getBundleParent')) {
             // Transaction is not bundled - it's a root
             return Promise.resolve({
@@ -331,7 +331,7 @@ describe('GraphQLRootTxIndex', () => {
       });
 
       const mockAxiosInstance = {
-        post: mock.fn((url: string, body: any) => {
+        post: mock.fn((_url: string, body: any) => {
           // Allow metadata query but nothing else
           if (body.query.includes('getMetadata')) {
             return Promise.resolve({
@@ -447,7 +447,7 @@ describe('GraphQLRootTxIndex', () => {
       const rootBundleId = 'root-bundle-456';
 
       const mockAxiosInstance = {
-        post: mock.fn((url: string, body: any) => {
+        post: mock.fn((_url: string, body: any) => {
           if (body.query.includes('getMetadata')) {
             return Promise.resolve({
               status: 200,

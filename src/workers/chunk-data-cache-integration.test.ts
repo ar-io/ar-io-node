@@ -402,8 +402,10 @@ describe('chunk data cache index (end-to-end)', () => {
       chunkSize: 20,
       hash: toB64Url(Buffer.alloc(32, 9)),
       dataPath: toB64Url(Buffer.alloc(8, 1)),
+      txPath: undefined,
       origin: 1,
       cachedAt: Math.floor(Date.now() / 1000) - 86400,
+      confirmedAt: undefined,
     });
 
     mock.method(fs.promises, 'statfs', async () => fakeStatfs(99));
@@ -438,8 +440,10 @@ describe('chunk data cache index (end-to-end)', () => {
       chunkSize: 20,
       hash: toB64Url(Buffer.alloc(32, 10)),
       dataPath: toB64Url(Buffer.alloc(8, 1)),
+      txPath: undefined,
       origin: 1,
       cachedAt: old,
+      confirmedAt: undefined,
     });
     // Confirmed on chain: the invariant no longer applies.
     worker.confirmChunkPlacements(dr, Math.floor(Date.now() / 1000));

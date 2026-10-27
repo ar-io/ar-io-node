@@ -15,10 +15,8 @@ import type { RateLimiter } from '../limiter/types.js';
 import type {
   PaymentProcessor,
   PaymentRequirementsContext,
-  PaymentPayload,
-  PaymentRequirements,
 } from '../payments/types.js';
-import type { Request } from 'express';
+import type { PaymentRequirements } from 'x402/types';
 import * as paymentUtils from '../payments/payment-processor-utils.js';
 import * as config from '../config.js';
 
@@ -33,6 +31,7 @@ describe('Rate limit routes', () => {
 
   beforeEach(() => {
     // Use the actual ADMIN_API_KEY from config (generated at module load time)
+    assert.ok(config.ADMIN_API_KEY !== undefined);
     adminKey = config.ADMIN_API_KEY;
 
     app = express();
@@ -59,10 +58,15 @@ describe('Rate limit routes', () => {
       isBrowserRequest: mock.fn(() => false),
       calculateRequirements: mock.fn(
         (context: PaymentRequirementsContext): PaymentRequirements => ({
-          amount: context.contentSize.toString(),
-          currency: 'USDC',
-          address: 'test-address',
-          timestamp: Date.now(),
+          scheme: 'exact',
+          description: `Test payment for ${context.contentSize} bytes`,
+          network: 'base-sepolia',
+          maxAmountRequired: context.contentSize.toString(),
+          payTo: '0x0000000000000000000000000000000000000001',
+          asset: '0x0000000000000000000000000000000000000002',
+          resource: `${context.protocol}://${context.host}${context.originalUrl}`,
+          mimeType: context.contentType,
+          maxTimeoutSeconds: 300,
         }),
       ),
       extractPayment: mock.fn(() => undefined),

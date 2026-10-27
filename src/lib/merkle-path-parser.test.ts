@@ -6,7 +6,7 @@
  */
 
 import { strict as assert } from 'node:assert';
-import { describe, it, before } from 'node:test';
+import { describe, it } from 'node:test';
 import { readFileSync } from 'node:fs';
 import crypto from 'node:crypto';
 import { validatePath } from 'arweave/node/lib/merkle.js';

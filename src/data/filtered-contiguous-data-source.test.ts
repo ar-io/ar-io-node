@@ -26,6 +26,7 @@ const mockContiguousData = {
   requestAttributes: {
     hops: 1,
     origin: 'test-origin',
+    clientIps: [],
   },
 };
 
@@ -114,6 +115,7 @@ describe('FilteredContiguousDataSource', () => {
       const requestAttributes: RequestAttributes = {
         hops: 1,
         origin: 'allowed-origin.com',
+        clientIps: [],
       };
 
       const data = await filteredDataSource.getData({

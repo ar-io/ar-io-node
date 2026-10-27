@@ -284,7 +284,14 @@ describe('indexL1VerifyCLICommand', () => {
     ).run('999999999999', h);
     db.close();
     const result = await run(
-      { anchorFrom: ANCHORS, sampleBlocks: '0', sampleTxs: '100', seed: '5' },
+      {
+        anchorFrom: ANCHORS,
+        sampleBlocks: '0',
+        sampleTxs: '100',
+        seed: '5',
+        // No block drawn: accepted, so only the transaction draw speaks.
+        allowUnsampled: true,
+      },
       nodes(),
     );
     assert.equal(result.ok, false);
@@ -461,6 +468,38 @@ describe('openBandsDuck', () => {
 
   // Plenty free, so the cap is --spill-max's.
   const roomy = async () => 10 * 2 ** 40;
+
+  it('runs one DuckDB thread per database unless asked, in the databases it opens more of too', async () => {
+    // DuckDB 1.4 can crash merging a spilled aggregate on more than one.
+    const threadsOf = async (duck: {
+      all: (sql: string) => Promise<unknown[]>;
+    }) => {
+      const [row] = (await duck.all(
+        "SELECT current_setting('threads')::INTEGER AS n",
+      )) as Array<{ n: number }>;
+      return Number(row.n);
+    };
+    const one = await openBandsDuck({ tmpRoot: root, freeBytes: roomy });
+    try {
+      assert.equal(await threadsOf(one.duck), 1);
+      const [more] = await one.openMore(1);
+      assert.equal(await threadsOf(more), 1);
+    } finally {
+      await one.close();
+    }
+    const three = await openBandsDuck({
+      tmpRoot: root,
+      freeBytes: roomy,
+      threads: 3,
+    });
+    try {
+      assert.equal(await threadsOf(three.duck), 3);
+      const [more] = await three.openMore(1);
+      assert.equal(await threadsOf(more), 3);
+    } finally {
+      await three.close();
+    }
+  });
 
   it('spills to a folder of its own under the temp root, and removes it on close', async () => {
     const session = await openBandsDuck({ tmpRoot: root, freeBytes: roomy });

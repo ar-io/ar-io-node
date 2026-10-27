@@ -26,6 +26,39 @@ import * as metrics from '../metrics.js';
 import { createTestLogger } from '../../test/test-logger.js';
 
 const log = createTestLogger({ suite: 'AttributeFetcher' });
+
+/**
+ * AttributeFetchers is abstract and its helpers are protected. This concrete
+ * subclass exposes them unchanged so the base behaviour can be tested
+ * directly.
+ */
+class TestAttributeFetchers extends AttributeFetchers {
+  public override fetchDataFromParent(
+    params: Parameters<AttributeFetchers['fetchDataFromParent']>[0],
+  ) {
+    return super.fetchDataFromParent(params);
+  }
+
+  public override getDataItemAttributes(id: string) {
+    return super.getDataItemAttributes(id);
+  }
+
+  public override getTransactionAttributes(id: string) {
+    return super.getTransactionAttributes(id);
+  }
+}
+
+type AttributeLookups = Pick<
+  TestAttributeFetchers,
+  'getDataItemAttributes' | 'getTransactionAttributes'
+>;
+
+/**
+ * The fetchers' tests stub the protected attribute lookups on the instance,
+ * as a subclass could, to steer which branch runs.
+ */
+const lookupsOf = (fetcher: AttributeFetchers): AttributeLookups =>
+  fetcher as unknown as AttributeLookups;
 interface Mocks {
   dataSource: ContiguousDataSource;
   dataIndex: ContiguousDataIndex;
@@ -67,12 +100,12 @@ const createMocks = (): Mocks => ({
 
 describe('AttributeFetcher', () => {
   let mocks: Mocks;
-  let attributeFetcher: AttributeFetchers;
+  let attributeFetcher: TestAttributeFetchers;
 
   beforeEach(() => {
     mocks = createMocks();
 
-    attributeFetcher = new AttributeFetchers({
+    attributeFetcher = new TestAttributeFetchers({
       log,
       dataSource: mocks.dataSource,
       dataIndex: mocks.dataIndex,
@@ -112,7 +145,7 @@ describe('AttributeFetcher', () => {
       }));
 
       // fetchDataFromParent is protected; reached the way a subclass would.
-      await (attributeFetcher as any).fetchDataFromParent({
+      await attributeFetcher.fetchDataFromParent({
         parentId: 'testParent',
         offset: 100,
         size: testBuffer.length,
@@ -508,11 +541,15 @@ describe('SignatureFetcher', () => {
     it('should fetch and return signature if not in attributes', async () => {
       const testSignatureBuffer = Buffer.from('testSignature');
 
-      mock.method(signatureFetcher, 'getDataItemAttributes', async () => ({
-        parentId: 'id',
-        signatureOffset: 1,
-        signatureSize: testSignatureBuffer.length,
-      }));
+      mock.method(
+        lookupsOf(signatureFetcher),
+        'getDataItemAttributes',
+        async () => ({
+          parentId: 'id',
+          signatureOffset: 1,
+          signatureSize: testSignatureBuffer.length,
+        }),
+      );
 
       mock.method(mocks.dataSource, 'getData', async () => ({
         stream: {
@@ -579,11 +616,15 @@ describe('SignatureFetcher', () => {
     // be silently forwarded into fetchDataFromParent and triggered the
     // upstream-returns-full-bundle leak. These cases now bail out early.
     it('should return undefined when attribute store returns signatureSize=0', async () => {
-      mock.method(signatureFetcher, 'getDataItemAttributes', async () => ({
-        parentId: 'parent',
-        signatureOffset: 0,
-        signatureSize: 0,
-      }));
+      mock.method(
+        lookupsOf(signatureFetcher),
+        'getDataItemAttributes',
+        async () => ({
+          parentId: 'parent',
+          signatureOffset: 0,
+          signatureSize: 0,
+        }),
+      );
       const getDataMock = mock.method(mocks.dataSource, 'getData', async () => {
         throw new Error('getData should never be called when size=0');
       });
@@ -599,11 +640,15 @@ describe('SignatureFetcher', () => {
     });
 
     it('should return undefined when attribute store returns missing signatureSize', async () => {
-      mock.method(signatureFetcher, 'getDataItemAttributes', async () => ({
-        parentId: 'parent',
-        signatureOffset: 0,
-        // signatureSize intentionally omitted
-      }));
+      mock.method(
+        lookupsOf(signatureFetcher),
+        'getDataItemAttributes',
+        async () => ({
+          parentId: 'parent',
+          signatureOffset: 0,
+          // signatureSize intentionally omitted
+        }),
+      );
       const getDataMock = mock.method(mocks.dataSource, 'getData', async () => {
         throw new Error(
           'getData should never be called when signatureSize is missing',
@@ -617,11 +662,15 @@ describe('SignatureFetcher', () => {
     });
 
     it('should return undefined when signatureOffset is negative', async () => {
-      mock.method(signatureFetcher, 'getDataItemAttributes', async () => ({
-        parentId: 'parent',
-        signatureOffset: -1,
-        signatureSize: 512,
-      }));
+      mock.method(
+        lookupsOf(signatureFetcher),
+        'getDataItemAttributes',
+        async () => ({
+          parentId: 'parent',
+          signatureOffset: -1,
+          signatureSize: 512,
+        }),
+      );
       const getDataMock = mock.method(mocks.dataSource, 'getData', async () => {
         throw new Error('getData should never be called');
       });
@@ -671,7 +720,7 @@ describe('SignatureFetcher', () => {
     it('should fetch and return signature from chain if no attributes found', async () => {
       const testChainSignature = 'testChainSignature';
       mock.method(
-        signatureFetcher,
+        lookupsOf(signatureFetcher),
         'getTransactionAttributes',
         async () => undefined,
       );
@@ -800,11 +849,15 @@ describe('OwnerFetcher', () => {
     it('should fetch and return owner if attributes exist', async () => {
       const testOwnerBuffer = Buffer.from('testOwner');
 
-      mock.method(ownerFetcher, 'getDataItemAttributes', async () => ({
-        parentId: 'id',
-        ownerOffset: 1,
-        ownerSize: testOwnerBuffer.length,
-      }));
+      mock.method(
+        lookupsOf(ownerFetcher),
+        'getDataItemAttributes',
+        async () => ({
+          parentId: 'id',
+          ownerOffset: 1,
+          ownerSize: testOwnerBuffer.length,
+        }),
+      );
 
       mock.method(mocks.dataSource, 'getData', async () => ({
         stream: {
@@ -859,11 +912,15 @@ describe('OwnerFetcher', () => {
 
     // PE-9081: caller-side validation, parallel to SignatureFetcher.
     it('should return undefined when attribute store returns ownerSize=0', async () => {
-      mock.method(ownerFetcher, 'getDataItemAttributes', async () => ({
-        parentId: 'parent',
-        ownerOffset: 0,
-        ownerSize: 0,
-      }));
+      mock.method(
+        lookupsOf(ownerFetcher),
+        'getDataItemAttributes',
+        async () => ({
+          parentId: 'parent',
+          ownerOffset: 0,
+          ownerSize: 0,
+        }),
+      );
       const getDataMock = mock.method(mocks.dataSource, 'getData', async () => {
         throw new Error('getData should never be called when ownerSize=0');
       });
@@ -876,11 +933,15 @@ describe('OwnerFetcher', () => {
     });
 
     it('should return undefined when attribute store returns missing ownerSize', async () => {
-      mock.method(ownerFetcher, 'getDataItemAttributes', async () => ({
-        parentId: 'parent',
-        ownerOffset: 0,
-        // ownerSize intentionally omitted
-      }));
+      mock.method(
+        lookupsOf(ownerFetcher),
+        'getDataItemAttributes',
+        async () => ({
+          parentId: 'parent',
+          ownerOffset: 0,
+          // ownerSize intentionally omitted
+        }),
+      );
       const getDataMock = mock.method(mocks.dataSource, 'getData', async () => {
         throw new Error('getData should never be called');
       });
@@ -892,11 +953,15 @@ describe('OwnerFetcher', () => {
     });
 
     it('should return undefined when ownerOffset is negative', async () => {
-      mock.method(ownerFetcher, 'getDataItemAttributes', async () => ({
-        parentId: 'parent',
-        ownerOffset: -1,
-        ownerSize: 512,
-      }));
+      mock.method(
+        lookupsOf(ownerFetcher),
+        'getDataItemAttributes',
+        async () => ({
+          parentId: 'parent',
+          ownerOffset: -1,
+          ownerSize: 512,
+        }),
+      );
       const getDataMock = mock.method(mocks.dataSource, 'getData', async () => {
         throw new Error('getData should never be called');
       });
@@ -1037,9 +1102,13 @@ describe('OwnerFetcher', () => {
     });
 
     it('should return owner if attributes exist', async () => {
-      mock.method(ownerFetcher, 'getTransactionAttributes', async () => ({
-        owner: 'owner',
-      }));
+      mock.method(
+        lookupsOf(ownerFetcher),
+        'getTransactionAttributes',
+        async () => ({
+          owner: 'owner',
+        }),
+      );
 
       const result = await ownerFetcher.getTransactionOwner({
         id: 'id',
@@ -1051,7 +1120,7 @@ describe('OwnerFetcher', () => {
 
     it('should fetch owner from chain field if no attributes found', async () => {
       mock.method(
-        ownerFetcher,
+        lookupsOf(ownerFetcher),
         'getTransactionAttributes',
         async () => undefined,
       );
@@ -1067,7 +1136,7 @@ describe('OwnerFetcher', () => {
 
     it('should fetch owner from chain transaction if chain field is empty', async () => {
       mock.method(
-        ownerFetcher,
+        lookupsOf(ownerFetcher),
         'getTransactionAttributes',
         async () => undefined,
       );
@@ -1096,7 +1165,7 @@ describe('OwnerFetcher', () => {
 
     it('should fetch owner from chain transaction if chain field is undefined', async () => {
       mock.method(
-        ownerFetcher,
+        lookupsOf(ownerFetcher),
         'getTransactionAttributes',
         async () => undefined,
       );
@@ -1125,7 +1194,7 @@ describe('OwnerFetcher', () => {
 
     it('should fetch and return undefined if owner from chain is empty', async () => {
       mock.method(
-        ownerFetcher,
+        lookupsOf(ownerFetcher),
         'getTransactionAttributes',
         async () => undefined,
       );
@@ -1141,7 +1210,7 @@ describe('OwnerFetcher', () => {
 
     it('should return undefined if no owner found anywhere', async () => {
       mock.method(
-        ownerFetcher,
+        lookupsOf(ownerFetcher),
         'getTransactionAttributes',
         async () => undefined,
       );
@@ -1187,8 +1256,9 @@ describe('attribute_fetch_total metric labels', () => {
     outcome: string;
   }): Promise<number> => {
     const out = await metrics.attributeFetchCounter.get();
+    const keys = Object.keys(labels) as (keyof typeof labels)[];
     const sample = out.values.find((v) =>
-      Object.entries(labels).every(([k, val]) => v.labels[k] === val),
+      keys.every((k) => v.labels[k] === labels[k]),
     );
     return sample?.value ?? 0;
   };

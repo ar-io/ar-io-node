@@ -464,11 +464,33 @@ type DebugInfo = {
     maxBundleUnbundledAt: number;
     maxBundleFullyIndexedAt: number;
     maxStableDataItemIndexedAt: number;
+    /**
+     * When the newest stable data item row was written. The ClickHouse
+     * import's prune threshold: unlike indexed_at, a row flushed after it is
+     * read can't fall below it. -1 when no row has one yet.
+     */
+    maxStableDataItemStableAt: number;
     maxNewDataItemIndexedAt: number;
   };
   errors: string[];
   warnings: string[];
 };
+
+/**
+ * Which stable data items to delete: those in the height range below one
+ * threshold. `stableAtThreshold` (a `maxStableDataItemStableAt` read before
+ * exporting the range) deletes only rows that were in the range when it was
+ * read, so only rows the export saw. `indexedAtThreshold` is kept for older
+ * callers but can delete rows the export never saw: the flush copies
+ * indexed_at from new_data_items, so a row flushed late can carry an old one.
+ */
+export type PruneStableDataItemsParams = {
+  startHeight: number;
+  endHeight: number;
+} & (
+  | { stableAtThreshold: number; indexedAtThreshold?: undefined }
+  | { indexedAtThreshold: number; stableAtThreshold?: undefined }
+);
 
 export class StandaloneSqliteDatabaseWorker {
   private log: winston.Logger;
@@ -529,7 +551,7 @@ export class StandaloneSqliteDatabaseWorker {
   saveBundlesStableDataFn: Sqlite.Transaction;
   deleteCoreStaleNewDataFn: Sqlite.Transaction;
   deleteBundlesStaleNewDataFn: Sqlite.Transaction;
-  deleteStableDataItemsWithHeightAndIndexedAtFn: Sqlite.Transaction;
+  pruneStableDataItemsFn: Sqlite.Transaction;
 
   constructor({
     log,
@@ -932,17 +954,32 @@ export class StandaloneSqliteDatabaseWorker {
       },
     );
 
-    this.deleteStableDataItemsWithHeightAndIndexedAtFn =
+    this.pruneStableDataItemsFn =
       this.dbs.bundles.transaction(
         ({
           indexedAtThreshold,
+          stableAtThreshold,
           startHeight,
           endHeight,
-        }: {
-          indexedAtThreshold: number;
-          startHeight: number;
-          endHeight: number;
-        }) => {
+        }: PruneStableDataItemsParams) => {
+          // By stable_at when given: see PruneStableDataItemsParams.
+          if (stableAtThreshold !== undefined) {
+            // Delete the tags which reference data items first
+            this.stmts.bundles.deleteStableDataItemTagsWithHeightAndStableAt.run(
+              {
+                stable_at_threshold: stableAtThreshold,
+                start_height: startHeight,
+                end_height: endHeight,
+              },
+            );
+            this.stmts.bundles.deleteStableDataItemsWithHeightAndStableAt.run({
+              stable_at_threshold: stableAtThreshold,
+              start_height: startHeight,
+              end_height: endHeight,
+            });
+            return;
+          }
+
           // Delete the tags which reference data items first
           this.stmts.bundles.deleteStableDataItemTagsWithHeightAndIndexedAt.run(
             {
@@ -1979,6 +2016,7 @@ export class StandaloneSqliteDatabaseWorker {
         maxBundleFullyIndexedAt: bundleStats.max_fully_indexed_at,
         maxNewDataItemIndexedAt: dataItemStats.max_new_indexed_at,
         maxStableDataItemIndexedAt: dataItemStats.max_stable_indexed_at,
+        maxStableDataItemStableAt: dataItemStats.max_stable_stable_at ?? -1,
       },
       errors,
       warnings,
@@ -2559,23 +2597,28 @@ export class StandaloneSqliteDatabaseWorker {
         cursorHeight == null &&
         cursorIndexedAt != null
       ) {
+        // Pending rows sort by (data_item_id, id) — see the ORDER BY below
+        // and the merged ORDER BY in getGqlNewTransactions — and the cursor
+        // walks that same tuple. For plain transactions data_item_id is the
+        // constant x'00'; for data items it is the item id itself. Not
+        // indexed_at: each gateway stamps its own, so a cursor from another
+        // indexer (federation) would re-admit the same row (#947).
+        const dataItemIdField = source === 'new_items' ? 'id' : "x'00'";
+        const cursorDataItemIdBytes = cursorDataItemId
+          ? fromB64Url(cursorDataItemId)
+          : Buffer.from([0]);
+        const cursorIdBytes = cursorId
+          ? fromB64Url(cursorId)
+          : Buffer.from([0]);
         query.where(
           sql.or(
             sql.and(
-              // indexed_at is only considered when the height is null
               sql.isNull(`${heightSortTableAlias}.height`),
               sql.or(
-                // If the indexed_at is less than the cursor, the ID is not
-                // considered
-                sql.lt(`${txTableAlias}.indexed_at`, cursorIndexedAt),
+                sql.lt(dataItemIdField, cursorDataItemIdBytes),
                 sql.and(
-                  // If the indexedAt is the same as the cursor, the ID is
-                  // compared
-                  sql.lte(`${txTableAlias}.indexed_at`, cursorIndexedAt),
-                  sql.lt(
-                    'id',
-                    cursorId ? fromB64Url(cursorId) : Buffer.from([0]),
-                  ),
+                  sql.eq(dataItemIdField, cursorDataItemIdBytes),
+                  sql.lt('id', cursorIdBytes),
                 ),
               ),
             ),
@@ -2585,7 +2628,14 @@ export class StandaloneSqliteDatabaseWorker {
           ),
         );
       } else if (cursorHeight != null && cursorBlockTransactionIndex != null) {
-        let dataItemIdField = source === 'stable_items' ? 'sdi.id' : "x'00'";
+        // The third sort key: a data item's own id (sdi.id, or id in
+        // new_data_items), x'00' for a plain transaction.
+        const dataItemIdField =
+          source === 'stable_items'
+            ? 'sdi.id'
+            : source === 'new_items'
+              ? 'id'
+              : "x'00'";
         query.where(
           sql.lte(`${heightSortTableAlias}.height`, cursorHeight),
           sql.or(
@@ -2620,7 +2670,6 @@ export class StandaloneSqliteDatabaseWorker {
       } else {
         orderBy += `, 3 DESC`;
       }
-      orderBy += `, indexed_at DESC`;
       orderBy += `, 5 DESC`;
       query.orderBy(orderBy);
     } else {
@@ -2629,18 +2678,27 @@ export class StandaloneSqliteDatabaseWorker {
         cursorHeight == null &&
         cursorIndexedAt != null
       ) {
+        // Pending rows sort by (data_item_id, id) — see the ORDER BY below
+        // and the merged ORDER BY in getGqlNewTransactions — and the cursor
+        // walks that same tuple. For plain transactions data_item_id is the
+        // constant x'00'; for data items it is the item id itself. Not
+        // indexed_at: each gateway stamps its own, so a cursor from another
+        // indexer (federation) would re-admit the same row (#947).
+        const dataItemIdField = source === 'new_items' ? 'id' : "x'00'";
+        const cursorDataItemIdBytes = cursorDataItemId
+          ? fromB64Url(cursorDataItemId)
+          : Buffer.from([0]);
+        const cursorIdBytes = cursorId
+          ? fromB64Url(cursorId)
+          : Buffer.from([0]);
         query.where(
           // indexed_at is only considered when the height is null
           sql.isNull(`${heightSortTableAlias}.height`),
           sql.or(
-            // If the indexed_at is greater than the cursor, the ID is not
-            // considered
-            sql.gt(`${txTableAlias}.indexed_at`, cursorIndexedAt),
+            sql.gt(dataItemIdField, cursorDataItemIdBytes),
             sql.and(
-              // If the indexed_at is the same as the cursor, the ID is
-              // compared
-              sql.gte(`${txTableAlias}.indexed_at`, cursorIndexedAt),
-              sql.gt('id', cursorId ? fromB64Url(cursorId) : Buffer.from([0])),
+              sql.eq(dataItemIdField, cursorDataItemIdBytes),
+              sql.gt('id', cursorIdBytes),
             ),
           ),
         );
@@ -2648,8 +2706,15 @@ export class StandaloneSqliteDatabaseWorker {
         cursorHeight != undefined &&
         cursorBlockTransactionIndex != undefined
       ) {
-        let dataItemIdField = source === 'stable_items' ? 'sdi.id' : "x'00'";
-        query.where(
+        // The third sort key: a data item's own id (sdi.id, or id in
+        // new_data_items), x'00' for a plain transaction.
+        const dataItemIdField =
+          source === 'stable_items'
+            ? 'sdi.id'
+            : source === 'new_items'
+              ? 'id'
+              : "x'00'";
+        const afterCursor = sql.and(
           sql.gte(`${heightSortTableAlias}.height`, cursorHeight),
           sql.or(
             sql.gt(`${heightSortTableAlias}.height`, cursorHeight),
@@ -2675,6 +2740,13 @@ export class StandaloneSqliteDatabaseWorker {
             ),
           ),
         );
+        query.where(
+          ['new_txs', 'new_items'].includes(source)
+            ? // Pending rows (NULL height) sort after every mined row in
+              // ascending order (NULLS LAST)
+              sql.or(afterCursor, sql.isNull(`${heightSortTableAlias}.height`))
+            : afterCursor,
+        );
       }
       let orderBy = `${heightSortTableAlias}.height ASC NULLS LAST`;
       orderBy += `, ${blockTransactionIndexSortTableAlias}.block_transaction_index ASC NULLS LAST`;
@@ -2683,7 +2755,6 @@ export class StandaloneSqliteDatabaseWorker {
       } else {
         orderBy += `, 3 ASC`;
       }
-      orderBy += `, indexed_at ASC`;
       orderBy += `, 5 ASC`;
       query.orderBy(orderBy);
     }
@@ -2761,6 +2832,9 @@ export class StandaloneSqliteDatabaseWorker {
     const itemsFinalSql = `${itemsSql} LIMIT ${pageSize + 1}`;
 
     const sqlSortOrder = sortOrder === 'HEIGHT_DESC' ? 'DESC' : 'ASC';
+    // Pending rows (NULL height) placed as the per-leg queries place them;
+    // SQLite's default (NULL smallest) is the opposite in both orders.
+    const nulls = sortOrder === 'HEIGHT_DESC' ? 'NULLS FIRST' : 'NULLS LAST';
     // `l1Only` forces the base-layer (transactions) leg only, dropping the
     // bundled data-item leg regardless of `bundledIn`.
     const includeTxs = l1Only || bundledIn === undefined || bundledIn === null;
@@ -2778,7 +2852,7 @@ export class StandaloneSqliteDatabaseWorker {
     }
 
     sqlParts.push(
-      `ORDER BY 1 ${sqlSortOrder}, 2 ${sqlSortOrder}, 3 ${sqlSortOrder}, 4 ${sqlSortOrder}, 5 ${sqlSortOrder}`,
+      `ORDER BY 1 ${sqlSortOrder} ${nulls}, 2 ${sqlSortOrder} ${nulls}, 3 ${sqlSortOrder}, 5 ${sqlSortOrder}`,
     );
     sqlParts.push(`LIMIT ${pageSize + 1}`);
     const sql = sqlParts.join(' ');
@@ -2991,6 +3065,14 @@ export class StandaloneSqliteDatabaseWorker {
     l1Only?: boolean;
   }) {
     let txs: GqlTransaction[] = [];
+    // Each leg returns up to pageSize + 1 rows, the extra one telling
+    // hasNextPage; the next leg is read until that row is had.
+    const needMore = () => txs.length <= pageSize;
+    // A pending row's cursor (no height) is past every mined row in
+    // ascending order (NULLS LAST): the stable tables hold nothing after it,
+    // and a height-less cursor would not narrow them at all.
+    const pastMinedRows =
+      !!cursor && decodeTransactionGqlCursor(cursor).height == null;
 
     if (sortOrder === 'HEIGHT_DESC') {
       txs = this.getGqlNewTransactions({
@@ -3007,7 +3089,7 @@ export class StandaloneSqliteDatabaseWorker {
         l1Only,
       });
 
-      if (txs.length < pageSize) {
+      if (needMore()) {
         const lastTxHeight = txs[txs.length - 1]?.height;
         txs = txs.concat(
           this.getGqlStableTransactions({
@@ -3027,21 +3109,23 @@ export class StandaloneSqliteDatabaseWorker {
         );
       }
     } else {
-      txs = this.getGqlStableTransactions({
-        pageSize,
-        cursor,
-        sortOrder,
-        ids,
-        recipients,
-        owners,
-        minHeight,
-        maxHeight,
-        bundledIn,
-        tags,
-        l1Only,
-      });
+      txs = pastMinedRows
+        ? []
+        : this.getGqlStableTransactions({
+            pageSize,
+            cursor,
+            sortOrder,
+            ids,
+            recipients,
+            owners,
+            minHeight,
+            maxHeight,
+            bundledIn,
+            tags,
+            l1Only,
+          });
 
-      if (txs.length < pageSize) {
+      if (needMore()) {
         const lastTxHeight = txs[txs.length - 1]?.height;
         txs = txs.concat(
           this.getGqlNewTransactions({
@@ -3593,20 +3677,8 @@ export class StandaloneSqliteDatabaseWorker {
     return walCheckpoint[0];
   }
 
-  pruneStableDataItems({
-    indexedAtThreshold,
-    startHeight,
-    endHeight,
-  }: {
-    indexedAtThreshold: number;
-    startHeight: number;
-    endHeight: number;
-  }) {
-    this.deleteStableDataItemsWithHeightAndIndexedAtFn({
-      indexedAtThreshold,
-      startHeight,
-      endHeight,
-    });
+  pruneStableDataItems(params: PruneStableDataItemsParams) {
+    this.pruneStableDataItemsFn(params);
   }
 }
 
@@ -3736,6 +3808,23 @@ export class StandaloneSqliteDatabase
 
   private saveDataContentAttributesCache: LRUCache<string, boolean>;
 
+  /**
+   * Set by {@link stop}. A worker that exits after this is not respawned.
+   */
+  private stopping = false;
+
+  /**
+   * Every worker thread that has been spawned and has not yet exited, keyed
+   * by pool and role, each with a promise that settles on its `exit` event.
+   * Includes workers that are still starting up and so are not yet in
+   * {@link workers}, which only holds workers that have come online.
+   */
+  private liveWorkers = new Set<{
+    pool: WorkerPoolName;
+    role: WorkerRoleName;
+    exited: Promise<void>;
+  }>();
+
   private newDataItemsCount: number = 0;
   private lastFlushDataItemsTime: number = Date.now();
 
@@ -3859,11 +3948,25 @@ export class StandaloneSqliteDatabase
         },
       });
 
+      let markExited!: () => void;
+      const live = {
+        pool,
+        role,
+        exited: new Promise<void>((resolve) => {
+          markExited = resolve;
+        }),
+      };
+      self.liveWorkers.add(live);
+
       let job: any = null; // Current item from the queue
       let error: any = null; // Error that caused the worker to crash
+      // Set once the worker acknowledges `terminate`: it is about to exit and
+      // must take no other job, or it could swallow a terminate job queued
+      // for a sibling, which would then never exit.
+      let terminating = false;
 
       function takeWork() {
-        if (!job && self.workQueues[pool][role].length) {
+        if (!terminating && !job && self.workQueues[pool][role].length) {
           // If there's a job in the queue, send it to the worker
           job = self.workQueues[pool][role].shift();
 
@@ -3931,6 +4034,9 @@ export class StandaloneSqliteDatabase
           } else {
             job.resolve(result);
           }
+          if (job.message.method === 'terminate') {
+            terminating = true;
+          }
           job = null;
           takeWork(); // Check if there's more work to do
         })
@@ -3942,6 +4048,8 @@ export class StandaloneSqliteDatabase
           self.workers[pool][role] = self.workers[pool][role].filter(
             (w) => w.takeWork !== takeWork,
           );
+          self.liveWorkers.delete(live);
+          markExited();
           if (job) {
             job.reject(error || new Error('worker died'));
           }
@@ -3949,7 +4057,14 @@ export class StandaloneSqliteDatabase
             self.log.error('Worker stopped with exit code ' + code, {
               exitCode: code,
             });
-            spawn(pool, role); // Worker died, so spawn a new one
+            // Worker died, so spawn a new one -- unless we are stopping. A
+            // worker that cannot start (for example against an unmigrated
+            // database, where its constructor's prepare() throws) would
+            // otherwise be respawned forever, and there would always be one
+            // inside better-sqlite3 when the process exits.
+            if (!self.stopping) {
+              spawn(pool, role);
+            }
           }
         });
     }
@@ -3967,39 +4082,52 @@ export class StandaloneSqliteDatabase
     });
   }
 
+  /**
+   * Stops every SQLite worker thread and resolves once all of them have
+   * exited.
+   *
+   * Queues one `terminate` job per live worker -- including workers still
+   * starting up, which take theirs when they come online -- and stops
+   * respawning workers that die. It waits for each worker's `exit` event
+   * rather than for the jobs, because a worker that crashes during startup
+   * never takes its job.
+   *
+   * Resolving only after every thread has exited matters to callers that
+   * exit the process next (`shutdown()`, and test files run with
+   * `--test-force-exit`): tearing down a worker that is still inside a native
+   * addon aborts the whole process under Node 22 ("FATAL ERROR:
+   * v8::ToLocalChecked Empty MaybeLocal" from better-sqlite3 on Linux,
+   * "libc++abi: terminating due to uncaught exception of type Napi::Error"
+   * on macOS).
+   */
   async stop() {
     const log = this.log.child({ method: 'stop' });
-    const promises: Promise<void>[] = [];
+    this.stopping = true;
 
+    const live = [...this.liveWorkers];
+    for (const { pool, role } of live) {
+      log.debug('Creating stop job for worker', { pool, role });
+      this.workQueues[pool][role].push({
+        // stop() waits on the worker's exit, not on this job.
+        resolve: () => {},
+        reject: () => {},
+        message: {
+          method: 'terminate',
+        },
+      });
+    }
+    this.drainQueue();
+
+    await Promise.all(live.map(({ exited }) => exited));
+
+    // Workers that crashed during startup never took their terminate jobs.
     for (const pool of WORKER_POOL_NAMES) {
       for (const role of WORKER_ROLE_NAMES) {
-        if (this.workers[pool][role] !== undefined) {
-          for (const _ of this.workers[pool][role]) {
-            if (
-              this.workQueues[pool][role] &&
-              typeof this.workQueues[pool][role].push === 'function'
-            ) {
-              log.debug('Creating stop job for worker', { pool, role });
-              promises.push(
-                new Promise((resolve) => {
-                  this.workQueues[pool][role].push({
-                    resolve,
-                    // by always resolving, we prevent shutdown procedure from
-                    // perpetually waiting for a response from the worker
-                    reject: resolve,
-                    message: {
-                      method: 'terminate',
-                    },
-                  });
-                }),
-              );
-              this.drainQueue();
-            }
-          }
-        }
+        this.workQueues[pool][role] = this.workQueues[pool][role].filter(
+          (job) => job.message?.method !== 'terminate',
+        );
       }
     }
-    await Promise.all(promises);
 
     log.debug('Stopped successfully.');
   }
@@ -4922,11 +5050,9 @@ export class StandaloneSqliteDatabase
     return this.queueWrite('data', 'saveVerificationPriority', [id, priority]);
   }
 
-  async pruneStableDataItems(params: {
-    indexedAtThreshold: number;
-    startHeight: number;
-    endHeight: number;
-  }): Promise<void> {
+  async pruneStableDataItems(
+    params: PruneStableDataItemsParams,
+  ): Promise<void> {
     return this.queueWrite('bundles', 'pruneStableDataItems', [params]);
   }
 

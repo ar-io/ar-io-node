@@ -4,8 +4,14 @@
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+// Must stay the first import: it moves the process into a temporary
+// directory with migrated SQLite databases before system.ts (loaded by the
+// resolvers) opens `data/sqlite/*.db`. See test/system-test-env.ts.
+import { systemTestDir } from '../../../test/system-test-env.js';
+
 import { strict as assert } from 'node:assert';
-import { describe, it, mock } from 'node:test';
+import fs from 'node:fs';
+import { after, describe, it, mock } from 'node:test';
 import { GraphQLResolveInfo, OperationDefinitionNode, parse } from 'graphql';
 
 import {
@@ -24,7 +30,18 @@ import {
   resolvers,
 } from './resolvers.js';
 import { GqlTransaction } from '../../types.js';
-import { ownerFetcher } from '../../system.js';
+import { db, ownerFetcher } from '../../system.js';
+
+// Importing the resolvers boots system.ts, which starts the SQLite worker
+// threads. Stop them before the file ends: `test:ci` runs with
+// --test-force-exit, and a worker killed while still preparing its
+// statements aborts the process under Node 22 ("FATAL ERROR:
+// v8::ToLocalChecked Empty MaybeLocal"). better-sqlite3 9.x and 12.x both do
+// this, so the wait is needed whichever is installed.
+after(async () => {
+  await db.stop();
+  fs.rmSync(systemTestDir, { recursive: true, force: true });
+});
 
 const GQL_TX = {
   id: 'LXCrfCRLHB7YyLGAeQoio00qb7LwT3UO3a-2TSDli8Q',

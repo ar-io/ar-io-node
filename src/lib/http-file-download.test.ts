@@ -501,10 +501,19 @@ describe('downloadFile', () => {
     const expectedSize = 1000;
     const chunk = Buffer.alloc(64 * 1024, 1);
     // Endless, with no declared length, so only the stream itself can tell.
+    // Stop at the first failed write or once the response closes: after the
+    // client hangs up, the write callback keeps firing with an error while
+    // res.destroyed can still be false, and that tight loop overflows the
+    // async-resource map Node 24's test runner keeps.
     handler = (_req, res) => {
+      let closed = false;
+      res.on('close', () => {
+        closed = true;
+      });
       res.writeHead(200);
-      const next = () => {
-        if (!res.destroyed) res.write(chunk, next);
+      const next = (error?: Error | null) => {
+        if (closed || res.destroyed || error != null) return;
+        res.write(chunk, next);
       };
       next();
     };
