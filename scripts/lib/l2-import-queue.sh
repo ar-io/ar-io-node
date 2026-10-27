@@ -60,11 +60,15 @@ process_l2_import_queue() {
         done
         if [ "$ok" = true ]; then
             mkdir -p "$l2_import_dir/done"
-            # What --forget needs stays: job.json and written.parquet.
-            rm -rf "$job_dir/blocks" "$job_dir/transactions" "$job_dir/tags"
             jq -n --arg job "$job" --argjson at "$(date +%s)" \
                 '{job: $job, loadedAt: $at}' > "$job_dir/loaded.json"
+            # Out of the queue first, whole, then trimmed: interrupted between
+            # the two, the job is loaded and merely keeps its data.
             mv "$job_dir" "$l2_import_dir/done/$job"
+            # What --forget needs stays: job.json and written.parquet.
+            rm -rf "$l2_import_dir/done/$job/blocks" \
+                "$l2_import_dir/done/$job/transactions" \
+                "$l2_import_dir/done/$job/tags"
             echo "METRIC l2_import_job result=loaded job=$job duration_s=$(( $(date +%s) - started ))"
         else
             attempts=$(( $(cat "$job_dir/attempts" 2>/dev/null || echo 0) + 1 ))
@@ -72,11 +76,13 @@ process_l2_import_queue() {
             if [ "$attempts" -ge "$l2_import_max_attempts" ]; then
                 mkdir -p "$l2_import_dir/failed"
                 echo "clickhouse-import failed on $failed_partition, attempt $attempts of $l2_import_max_attempts" >> "$job_dir/failed.txt"
+                mv "$job_dir" "$l2_import_dir/failed/$job"
                 # Kept: job.json and written.parquet, so --forget finds rows
                 # of partitions that did load. The band's data goes; the
                 # gateway writes the band again later.
-                rm -rf "$job_dir/blocks" "$job_dir/transactions" "$job_dir/tags"
-                mv "$job_dir" "$l2_import_dir/failed/$job"
+                rm -rf "$l2_import_dir/failed/$job/blocks" \
+                    "$l2_import_dir/failed/$job/transactions" \
+                    "$l2_import_dir/failed/$job/tags"
                 echo "METRIC l2_import_job result=failed job=$job partition=$failed_partition"
             else
                 echo "METRIC l2_import_job result=retry job=$job partition=$failed_partition attempt=$attempts"
