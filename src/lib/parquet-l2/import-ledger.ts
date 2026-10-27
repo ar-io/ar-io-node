@@ -54,15 +54,45 @@ export const LOADED_FILE = 'loaded.json';
 
 export class L2LedgerRefused extends Error {}
 
-/** Refuses a `bundles.db` that has not run the ledger migration. */
+/** The ledger's columns the importer reads and writes. */
+export const L2_LEDGER_COLUMNS = [
+  'band_id',
+  'target',
+  'index_name',
+  'publisher',
+  'height_from',
+  'height_to',
+  'band_digest',
+  'job',
+  'rows_imported',
+  'rows_present',
+  'rows_elsewhere',
+  'rows_conflicting',
+  'rows_unlocated',
+  'accepted',
+  'started_at',
+  'queued_at',
+  'completed_at',
+] as const;
+
+/**
+ * Refuses a `bundles.db` without the ledger. The table itself is checked,
+ * not the migrations list: the gateway records every database's migrations
+ * in `core.db`, never in `bundles.db`.
+ */
 export function assertL2LedgerMigrated(db: Sqlite.Database): void {
-  const migrated = db
-    .prepare('SELECT 1 FROM migrations WHERE name = ?')
-    .pluck()
-    .get(L2_LEDGER_MIGRATION);
-  if (migrated === undefined) {
+  const columns = new Set(
+    db
+      .prepare("SELECT name FROM pragma_table_info('parquet_l2_imports')")
+      .pluck()
+      .all() as string[],
+  );
+  const missing = L2_LEDGER_COLUMNS.filter((c) => !columns.has(c));
+  if (missing.length > 0) {
     throw new L2LedgerRefused(
-      `bundles.db has not run ${L2_LEDGER_MIGRATION}: run \`yarn db:migrate up\` (or restart the gateway on this release) first`,
+      columns.size === 0
+        ? `bundles.db has no parquet_l2_imports table (${L2_LEDGER_MIGRATION}): run \`yarn db:migrate up\` (or restart the gateway on this release) first`
+        : `bundles.db's parquet_l2_imports lacks ${missing.join(', ')}: run \`yarn db:migrate up\` first`,
     );
   }
 }

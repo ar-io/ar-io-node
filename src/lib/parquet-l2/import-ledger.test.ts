@@ -14,8 +14,6 @@ import Sqlite from 'better-sqlite3';
 import type { L2ImportJob } from './import-clickhouse.js';
 import {
   assertL2LedgerMigrated,
-  L2_LEDGER_MIGRATION,
-  L2LedgerRefused,
   readLedger,
   recordNothingToWrite,
   recordQueued,
@@ -56,13 +54,11 @@ const jobFor = (bandId: string, job: string): L2ImportJob => ({
   createdAt: '2026-10-28T00:00:00.000Z',
 });
 
+/** bundles.db as the migrations leave it (they record themselves in core.db). */
 function ledgerDb(migrated = true): Sqlite.Database {
   const db = new Sqlite(':memory:');
   db.exec(SCHEMA);
-  db.exec('CREATE TABLE migrations (name TEXT PRIMARY KEY)');
-  if (migrated) {
-    db.prepare('INSERT INTO migrations VALUES (?)').run(L2_LEDGER_MIGRATION);
-  }
+  if (!migrated) db.exec('DROP TABLE parquet_l2_imports');
   return db;
 }
 
@@ -75,12 +71,27 @@ describe('L2 import ledger', () => {
     await fs.rm(jobsDir, { recursive: true, force: true });
   });
 
-  it('refuses a bundles.db that has not run the migration', () => {
+  it('refuses a bundles.db without the ledger, and needs no migrations table there', () => {
     assert.throws(
       () => assertL2LedgerMigrated(ledgerDb(false)),
-      L2LedgerRefused,
+      /no parquet_l2_imports table/,
     );
-    assertL2LedgerMigrated(ledgerDb());
+    const db = ledgerDb();
+    assert.equal(
+      db
+        .prepare("SELECT count(*) FROM sqlite_master WHERE name = 'migrations'")
+        .pluck()
+        .get(),
+      0,
+      'as on a gateway',
+    );
+    assertL2LedgerMigrated(db);
+  });
+
+  it('refuses a ledger missing a column the importer writes', () => {
+    const db = ledgerDb();
+    db.exec('ALTER TABLE parquet_l2_imports DROP COLUMN rows_elsewhere');
+    assert.throws(() => assertL2LedgerMigrated(db), /lacks rows_elsewhere/);
   });
 
   it('records a queued job, then a band with nothing left to write', () => {
