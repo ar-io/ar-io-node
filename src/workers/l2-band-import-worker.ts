@@ -197,6 +197,9 @@ export class L2BandImportWorker {
     const run = this.runs.find((r) => r.index === index);
     if (run === undefined) return undefined;
     const started = Date.now();
+    // A worker never started is stopped too (tests run it so); only one
+    // stopped while this run was going was shut down under it.
+    const wasRunning = !this.stopped;
     let entries: string;
     try {
       entries = (await this.listDir(run.dir)).sort().join('\n');
@@ -211,6 +214,9 @@ export class L2BandImportWorker {
       }
       entries = '';
     }
+    // Shut down while the directory was read: start no child that stop()
+    // has already passed by.
+    if (wasRunning && this.stopped) return undefined;
     const last = this.refused.get(index);
     if (
       last !== undefined &&
@@ -225,7 +231,6 @@ export class L2BandImportWorker {
       return undefined;
     }
 
-    const wasRunning = !this.stopped;
     try {
       const result = await this.runImport(
         run.args,

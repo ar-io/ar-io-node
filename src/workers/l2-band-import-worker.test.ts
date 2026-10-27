@@ -83,6 +83,24 @@ describe('L2BandImportWorker', () => {
     assert.equal(run.calls[1][5], 'data/indexes/installed/other-l2');
   });
 
+  it('starts no import when stopped while it read the bands directory', async () => {
+    const run = runner([]);
+    let w: L2BandImportWorker | undefined = undefined;
+    w = worker(run, {
+      firstRunDelayMs: 0,
+      listDir: async () => {
+        // Shutdown begins while the directory is read; stop() sets the flag
+        // at once and then waits for this run, so it is not awaited here.
+        void w?.stop();
+        return ['band-a'];
+      },
+    });
+    w.start();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await w.stop();
+    assert.equal(run.calls.length, 0);
+  });
+
   it('leaves out --max-unchecked at its default of 0', async () => {
     const run = runner([]);
     await worker(run).runOnce('ardrive-l2');
