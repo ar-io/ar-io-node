@@ -86,9 +86,6 @@ import { resolvePublication } from './index-publication-options.js';
 /** Jobs waiting in the queue before a run writes no more. */
 export const DEFAULT_MAX_QUEUED = 2;
 
-/** Where jobs go: beside auto-import's own staging, mounted in both. */
-export const DEFAULT_JOBS_DIR = 'data/etl/staging/l2-import';
-
 /** Where DuckDB spills and scratch files go: the gateway's temp volume. */
 export const DEFAULT_TMP_DIR = 'data/tmp';
 
@@ -198,7 +195,15 @@ export async function indexL2ImportCLICommand(
   }
   const bandsDir = requiredStringFromOptions(options, 'bandsDir');
   const bundlesDbPath = options.bundlesDb ?? 'data/sqlite/bundles.db';
-  const jobsDir = options.jobsDir ?? DEFAULT_JOBS_DIR;
+  // Where clickhouse-auto-import looks: ETL_STAGING_PATH/l2-import. Unset
+  // in the core container (both containers mount the host path at
+  // data/etl/staging), set by .env under `yarn start`.
+  const jobsDir =
+    options.jobsDir ??
+    path.join(
+      nonEmpty(env.ETL_STAGING_PATH) ?? 'data/etl/staging',
+      'l2-import',
+    );
   const index = path.basename(path.resolve(bandsDir));
 
   const clickhouseUrl = nonEmpty(env.CLICKHOUSE_URL);

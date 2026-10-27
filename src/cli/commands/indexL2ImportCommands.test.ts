@@ -195,6 +195,20 @@ describe('index-l2-import', () => {
     assert.deepEqual(await fs.readdir(tmpDir), ['not-ours']);
   });
 
+  it('queues under ETL_STAGING_PATH/l2-import when no --jobs-dir is given', async () => {
+    const staging = path.join(root, 'staging');
+    await indexL2ImportCLICommand(
+      { target: 'clickhouse', bandsDir, bundlesDb, coreDb, tmpDir },
+      {
+        log,
+        env: { ...env, ETL_STAGING_PATH: staging },
+        held: heldWithTop(10_000_000),
+      },
+    );
+    // The run's lock sits in the jobs directory it used.
+    await fs.access(path.join(staging, 'l2-import', '.l2-import.lock'));
+  });
+
   it('refuses any target but clickhouse', async () => {
     await assert.rejects(run({ target: 'sqlite' }), /not built yet/);
     await assert.rejects(run({ target: 'postgres' }), L2ImportRefused);

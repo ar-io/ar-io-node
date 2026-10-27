@@ -1468,7 +1468,7 @@ the bands directory.
 | `--bands-dir <path>` | The index's installed bands, `data/indexes/installed/<index>`. Its name is the index's name in the ledger. Required |
 | `--bundles-db <path>` | The `bundles.db` holding the ledger, written beside the running gateway (default `data/sqlite/bundles.db`) |
 | `--core-db <path>` | The gateway's `core.db`, read-only: the block of every height an item is written at comes from `stable_blocks` (default `data/sqlite/core.db`). A height it lacks is refused, since `clickhouse-import` would drop its items silently |
-| `--jobs-dir <path>` | Where jobs are queued, mounted in core and `clickhouse-auto-import` alike (default `data/etl/staging/l2-import`, under `ETL_STAGING_PATH`) |
+| `--jobs-dir <path>` | Where jobs are queued: `l2-import` under `ETL_STAGING_PATH`, where `clickhouse-auto-import` looks (default `$ETL_STAGING_PATH/l2-import`, or `data/etl/staging/l2-import` where it is unset, as in the core container, which mounts it there). Through `tools/ar-io-node`, the node's own staging directory |
 | `--tmp-dir <path>` | Where DuckDB spills and scratch files go (default `data/tmp`, the gateway's temp volume rather than the container's own disk) |
 | `--max-bands <n>` | Write jobs for at most this many bands (default: as many as the queue has room for) |
 | `--max-queued <n>` | Write no job while this many wait in the queue (default 2) |
