@@ -18,6 +18,10 @@ import {
   OwnerSource,
 } from '../types.js';
 import winston from 'winston';
+import {
+  ownerMatchesAddress,
+  signatureMatchesId,
+} from '../lib/attribute-checks.js';
 import { toB64Url } from '../lib/encoding.js';
 import { isEmptyString } from '../lib/string.js';
 import * as metrics from '../metrics.js';
@@ -38,7 +42,9 @@ type AttributeSource =
   | 'chain'
   | 'derived'
   | 'incomplete_root';
-type AttributeOutcome = 'hit' | 'aborted' | 'error' | 'not_found';
+// `invalid`: a value that does not hash to what it must (a signature to its
+// id, an owner key to its address): never served, never cached.
+type AttributeOutcome = 'hit' | 'aborted' | 'error' | 'not_found' | 'invalid';
 // Which owner_store key served a cache hit (PE-9120). Subset of AttributeSource.
 type OwnerCacheSource = 'store_address' | 'store_id';
 
@@ -375,6 +381,25 @@ export class SignatureFetcher
     this.signatureStore = signatureStore;
   }
 
+  /**
+   * The cached signature for `id`, or undefined. A cached value that does
+   * not hash to the id is removed and counted, and reads as a miss.
+   */
+  private async cachedSignature(
+    id: string,
+    subject: AttributeSubject,
+    start: number,
+  ): Promise<string | undefined> {
+    const signature = await this.signatureStore.get(id);
+    if (signature === undefined || signatureMatchesId(signature, id)) {
+      return signature;
+    }
+    this.log.warn('Cached signature does not hash to the id; removed', { id });
+    recordAttributeFetch('signature', subject, 'store', 'invalid', start);
+    await this.signatureStore.del(id).catch(() => undefined);
+    return undefined;
+  }
+
   async getDataItemSignature({
     id,
     parentId,
@@ -391,8 +416,7 @@ export class SignatureFetcher
     const log = this.log.child({ method: 'getDataItemSignature' });
     const start = Date.now();
     log.debug('Fetching data item signature', { id });
-    const signature = await this.signatureStore.get(id);
-
+    const signature = await this.cachedSignature(id, 'data_item', start);
     if (signature !== undefined) {
       log.debug('Data item signature fetched from store', { id });
       recordAttributeFetch('signature', 'data_item', 'store', 'hit', start);
@@ -420,15 +444,29 @@ export class SignatureFetcher
         }
 
         if (typeof dataItemAttributes.signature === 'string') {
-          await this.signatureStore.set(id, dataItemAttributes.signature);
+          if (signatureMatchesId(dataItemAttributes.signature, id)) {
+            await this.signatureStore.set(id, dataItemAttributes.signature);
+            recordAttributeFetch(
+              'signature',
+              'data_item',
+              'attributes',
+              'hit',
+              start,
+            );
+            return dataItemAttributes.signature;
+          }
+          // A stored signature that is not this item's: read it from the
+          // parent instead.
+          log.warn('Stored signature does not hash to the data item id', {
+            id,
+          });
           recordAttributeFetch(
             'signature',
             'data_item',
             'attributes',
-            'hit',
+            'invalid',
             start,
           );
-          return dataItemAttributes.signature;
         }
 
         parentId = dataItemAttributes.parentId;
@@ -477,6 +515,24 @@ export class SignatureFetcher
         signal,
       });
 
+      if (!signatureMatchesId(signature, id)) {
+        // The bytes at the stored offset are not this item's signature: the
+        // offset is wrong. Served, they would be a wrong answer; cached, they
+        // would stay one.
+        log.warn(
+          'Signature read from the parent does not hash to the data item id; its stored signature offset is wrong',
+          { id, parentId, signatureOffset, signatureSize },
+        );
+        recordAttributeFetch(
+          'signature',
+          'data_item',
+          'parent_data',
+          'invalid',
+          start,
+        );
+        return undefined;
+      }
+
       await this.signatureStore.set(id, signature);
       recordAttributeFetch(
         'signature',
@@ -513,8 +569,7 @@ export class SignatureFetcher
     const start = Date.now();
     log.debug('Fetching transaction signature', { id });
 
-    const signature = await this.signatureStore.get(id);
-
+    const signature = await this.cachedSignature(id, 'transaction', start);
     if (signature !== undefined) {
       log.debug('Transaction signature fetched from store', { id });
       recordAttributeFetch('signature', 'transaction', 'store', 'hit', start);
@@ -528,7 +583,10 @@ export class SignatureFetcher
         this.log.warn('No attributes found for transaction', { id });
       }
 
-      if (typeof transactionAttributes?.signature === 'string') {
+      if (
+        typeof transactionAttributes?.signature === 'string' &&
+        signatureMatchesId(transactionAttributes.signature, id)
+      ) {
         await this.signatureStore.set(id, transactionAttributes.signature);
         recordAttributeFetch(
           'signature',
@@ -545,6 +603,23 @@ export class SignatureFetcher
         'signature',
         signal,
       );
+
+      if (
+        typeof signatureFromChain === 'string' &&
+        !signatureMatchesId(signatureFromChain, id)
+      ) {
+        log.warn('Signature from the chain source does not hash to the id', {
+          id,
+        });
+        recordAttributeFetch(
+          'signature',
+          'transaction',
+          'chain',
+          'invalid',
+          start,
+        );
+        return undefined;
+      }
 
       if (typeof signatureFromChain === 'string') {
         await this.signatureStore.set(id, signatureFromChain);
@@ -636,6 +711,21 @@ export class OwnerFetcher extends AttributeFetchers implements OwnerSource {
       if (value === undefined) {
         throw new Error('owner-store miss');
       }
+      // A key that is not the owner's is a miss, and is removed: under the
+      // address it would answer for every item of that owner.
+      if (
+        ownerAddress !== undefined &&
+        ownerAddress.length > 0 &&
+        !ownerMatchesAddress(value, ownerAddress)
+      ) {
+        this.log.warn('Cached owner key does not hash to the owner address', {
+          id,
+          ownerAddress,
+          source,
+        });
+        await this.ownerStore.del(key).catch(() => undefined);
+        throw new Error('owner-store entry invalid');
+      }
       return { owner: value, source };
     };
     const reads: Promise<{ owner: string; source: OwnerCacheSource }>[] = [];
@@ -663,10 +753,47 @@ export class OwnerFetcher extends AttributeFetchers implements OwnerSource {
     if (owner === undefined) {
       return;
     }
+    // Callers check the key first (ownerInvalid); this keeps a wrong one out
+    // of the cache whatever the caller did.
+    if (
+      ownerAddress !== undefined &&
+      ownerAddress.length > 0 &&
+      !ownerMatchesAddress(owner, ownerAddress)
+    ) {
+      return;
+    }
     await this.ownerStore.set(id, owner);
     if (ownerAddress !== undefined && ownerAddress.length > 0) {
       await this.ownerStore.set(ownerAddress, owner);
     }
+  }
+
+  /**
+   * Whether `owner` is provably not the key of `ownerAddress`, logged and
+   * counted. Without an address there is nothing to check it against.
+   */
+  private ownerInvalid(
+    owner: string,
+    ownerAddress: string | undefined,
+    subject: AttributeSubject,
+    source: AttributeSource,
+    start: number,
+    context: Record<string, unknown>,
+  ): boolean {
+    if (
+      ownerAddress === undefined ||
+      ownerAddress.length === 0 ||
+      ownerMatchesAddress(owner, ownerAddress)
+    ) {
+      return false;
+    }
+    this.log.warn('Owner key does not hash to the owner address', {
+      ownerAddress,
+      source,
+      ...context,
+    });
+    recordAttributeFetch('owner', subject, source, 'invalid', start);
+    return true;
   }
 
   /** Collapse concurrent fetches for one owner address to a single in-flight call. */
@@ -814,6 +941,25 @@ export class OwnerFetcher extends AttributeFetchers implements OwnerSource {
         signal,
       });
 
+      if (
+        this.ownerInvalid(
+          owner,
+          ownerAddress,
+          'data_item',
+          'parent_data',
+          start,
+          {
+            id,
+            parentId,
+            ownerOffset,
+            ownerSize,
+          },
+        )
+      ) {
+        // The bytes at the stored offset are not the owner's key.
+        return undefined;
+      }
+
       await this.cacheOwner(ownerAddress, id, owner);
       recordAttributeFetch('owner', 'data_item', 'parent_data', 'hit', start);
       return owner;
@@ -878,7 +1024,15 @@ export class OwnerFetcher extends AttributeFetchers implements OwnerSource {
 
       if (
         transactionAttributes !== undefined &&
-        typeof transactionAttributes.owner === 'string'
+        typeof transactionAttributes.owner === 'string' &&
+        !this.ownerInvalid(
+          transactionAttributes.owner,
+          ownerAddress,
+          'transaction',
+          'attributes',
+          start,
+          { id },
+        )
       ) {
         await this.cacheOwner(ownerAddress, id, transactionAttributes.owner);
         recordAttributeFetch(
@@ -938,6 +1092,19 @@ export class OwnerFetcher extends AttributeFetchers implements OwnerSource {
           'not_found',
           start,
         );
+        return undefined;
+      }
+
+      if (
+        this.ownerInvalid(
+          ownerFromChain,
+          ownerAddress,
+          'transaction',
+          resolvedSource,
+          start,
+          { id },
+        )
+      ) {
         return undefined;
       }
 

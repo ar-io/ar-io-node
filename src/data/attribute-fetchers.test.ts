@@ -24,6 +24,18 @@ import {
 } from '../types.js';
 import * as metrics from '../metrics.js';
 import { createTestLogger } from '../../test/test-logger.js';
+import { fromB64Url, sha256B64Url } from '../lib/encoding.js';
+
+// Values that hash as real ones do: an id is the SHA-256 of its signature,
+// an owner address the SHA-256 of its key. The fetchers check both.
+const SIG = Buffer.from('testSignature');
+const SIG_B64 = SIG.toString('base64url');
+const SIG_ID = sha256B64Url(SIG);
+const CHAIN_SIG_B64 = 'testChainSignature';
+const CHAIN_SIG_ID = sha256B64Url(fromB64Url(CHAIN_SIG_B64));
+const OWNER = Buffer.from('testOwner');
+const OWNER_B64 = OWNER.toString('base64url');
+const OWNER_ADDR = sha256B64Url(OWNER);
 
 const log = createTestLogger({ suite: 'AttributeFetcher' });
 
@@ -83,10 +95,12 @@ const createMocks = (): Mocks => ({
   signatureStore: {
     get: mock.fn(),
     set: mock.fn(),
+    del: mock.fn(),
   } as unknown as SignatureStore,
   ownerStore: {
     get: mock.fn(),
     set: mock.fn(),
+    del: mock.fn(),
   } as unknown as SignatureStore,
   dataItemAttributesStore: {
     get: mock.fn(),
@@ -494,7 +508,7 @@ describe('SignatureFetcher', () => {
       );
 
       const result = await signatureFetcher.getDataItemSignature({
-        id: 'id',
+        id: SIG_ID,
       });
 
       assert.strictEqual(result, undefined);
@@ -505,17 +519,13 @@ describe('SignatureFetcher', () => {
     });
 
     it('should return signature from signature store if it exists', async () => {
-      mock.method(
-        mocks.signatureStore,
-        'get',
-        async () => 'signature-from-store',
-      );
+      mock.method(mocks.signatureStore, 'get', async () => SIG_B64);
 
       const result = await signatureFetcher.getDataItemSignature({
-        id: 'id',
+        id: SIG_ID,
       });
 
-      assert.strictEqual(result, 'signature-from-store');
+      assert.strictEqual(result, SIG_B64);
       assert.strictEqual(
         (mocks.signatureStore.set as any).mock.calls.length,
         0,
@@ -524,14 +534,14 @@ describe('SignatureFetcher', () => {
 
     it('should return signature if it exists in attributes', async () => {
       mock.method(mocks.dataIndex, 'getDataItemAttributes', async () => ({
-        signature: 'signature',
+        signature: SIG_B64,
       }));
 
       const result = await signatureFetcher.getDataItemSignature({
-        id: 'id',
+        id: SIG_ID,
       });
 
-      assert.strictEqual(result, 'signature');
+      assert.strictEqual(result, SIG_B64);
       assert.strictEqual(
         (mocks.signatureStore.set as any).mock.calls.length,
         1,
@@ -560,7 +570,7 @@ describe('SignatureFetcher', () => {
       }));
 
       const result = await signatureFetcher.getDataItemSignature({
-        id: 'id',
+        id: SIG_ID,
       });
 
       assert.strictEqual(result, testSignatureBuffer.toString('base64url'));
@@ -582,7 +592,7 @@ describe('SignatureFetcher', () => {
       }));
 
       const result = await signatureFetcher.getDataItemSignature({
-        id: 'id',
+        id: SIG_ID,
         parentId: 'parent',
         signatureOffset: 1,
         signatureSize: testSignatureBuffer.length,
@@ -601,7 +611,7 @@ describe('SignatureFetcher', () => {
       });
 
       const result = await signatureFetcher.getDataItemSignature({
-        id: 'id',
+        id: SIG_ID,
       });
 
       assert.strictEqual(result, undefined);
@@ -629,7 +639,9 @@ describe('SignatureFetcher', () => {
         throw new Error('getData should never be called when size=0');
       });
 
-      const result = await signatureFetcher.getDataItemSignature({ id: 'id' });
+      const result = await signatureFetcher.getDataItemSignature({
+        id: SIG_ID,
+      });
 
       assert.strictEqual(result, undefined);
       assert.strictEqual(getDataMock.mock.calls.length, 0);
@@ -655,7 +667,9 @@ describe('SignatureFetcher', () => {
         );
       });
 
-      const result = await signatureFetcher.getDataItemSignature({ id: 'id' });
+      const result = await signatureFetcher.getDataItemSignature({
+        id: SIG_ID,
+      });
 
       assert.strictEqual(result, undefined);
       assert.strictEqual(getDataMock.mock.calls.length, 0);
@@ -675,7 +689,9 @@ describe('SignatureFetcher', () => {
         throw new Error('getData should never be called');
       });
 
-      const result = await signatureFetcher.getDataItemSignature({ id: 'id' });
+      const result = await signatureFetcher.getDataItemSignature({
+        id: SIG_ID,
+      });
 
       assert.strictEqual(result, undefined);
       assert.strictEqual(getDataMock.mock.calls.length, 0);
@@ -684,17 +700,13 @@ describe('SignatureFetcher', () => {
 
   describe('getTransactionSignature', () => {
     it('should return signature from signature store if it exists', async () => {
-      mock.method(
-        mocks.signatureStore,
-        'get',
-        async () => 'signature-from-store',
-      );
+      mock.method(mocks.signatureStore, 'get', async () => SIG_B64);
 
       const result = await signatureFetcher.getTransactionSignature({
-        id: 'id',
+        id: SIG_ID,
       });
 
-      assert.strictEqual(result, 'signature-from-store');
+      assert.strictEqual(result, SIG_B64);
       assert.strictEqual(
         (mocks.signatureStore.set as any).mock.calls.length,
         0,
@@ -703,14 +715,14 @@ describe('SignatureFetcher', () => {
 
     it('should return signature if it exists in attributes', async () => {
       mock.method(mocks.dataIndex, 'getTransactionAttributes', async () => ({
-        signature: 'signature',
+        signature: SIG_B64,
       }));
 
       const result = await signatureFetcher.getTransactionSignature({
-        id: 'id',
+        id: SIG_ID,
       });
 
-      assert.strictEqual(result, 'signature');
+      assert.strictEqual(result, SIG_B64);
       assert.strictEqual(
         (mocks.signatureStore.set as any).mock.calls.length,
         1,
@@ -718,7 +730,7 @@ describe('SignatureFetcher', () => {
     });
 
     it('should fetch and return signature from chain if no attributes found', async () => {
-      const testChainSignature = 'testChainSignature';
+      const testChainSignature = CHAIN_SIG_B64;
       mock.method(
         lookupsOf(signatureFetcher),
         'getTransactionAttributes',
@@ -731,7 +743,7 @@ describe('SignatureFetcher', () => {
       );
 
       const result = await signatureFetcher.getTransactionSignature({
-        id: 'id',
+        id: CHAIN_SIG_ID,
       });
 
       assert.strictEqual(result, testChainSignature);
@@ -742,7 +754,7 @@ describe('SignatureFetcher', () => {
     });
 
     it('should fetch and return signature from chain if not in attributes', async () => {
-      const testChainSignature = 'testChainSignature';
+      const testChainSignature = CHAIN_SIG_B64;
 
       mock.method(mocks.dataIndex, 'getTransactionAttributes', async () => ({
         signature: undefined,
@@ -755,7 +767,7 @@ describe('SignatureFetcher', () => {
       );
 
       const result = await signatureFetcher.getTransactionSignature({
-        id: 'id',
+        id: CHAIN_SIG_ID,
       });
 
       assert.strictEqual(result, testChainSignature);
@@ -773,7 +785,7 @@ describe('SignatureFetcher', () => {
       mock.method(mocks.chainSource, 'getTxField', async () => undefined);
 
       const result = await signatureFetcher.getTransactionSignature({
-        id: 'id',
+        id: SIG_ID,
       });
 
       assert.strictEqual(result, undefined);
@@ -789,7 +801,7 @@ describe('SignatureFetcher', () => {
       });
 
       const result = await signatureFetcher.getTransactionSignature({
-        id: 'id',
+        id: SIG_ID,
       });
 
       assert.strictEqual(result, undefined);
@@ -974,7 +986,7 @@ describe('OwnerFetcher', () => {
   });
 
   describe('address-keyed owner cache (PE-9120)', () => {
-    const ADDR = 'owner-address-1';
+    const ADDR = OWNER_ADDR;
 
     const ownerStreamMock = () =>
       mock.method(mocks.dataSource, 'getData', async () => ({
@@ -987,7 +999,7 @@ describe('OwnerFetcher', () => {
 
     it('returns from the address-keyed entry without fetching', async () => {
       mock.method(mocks.ownerStore, 'get', async (key: string) =>
-        key === ADDR ? 'owner-by-address' : undefined,
+        key === ADDR ? OWNER_B64 : undefined,
       );
       const getDataMock = ownerStreamMock();
 
@@ -999,14 +1011,14 @@ describe('OwnerFetcher', () => {
         ownerAddress: ADDR,
       });
 
-      assert.strictEqual(result, 'owner-by-address');
+      assert.strictEqual(result, OWNER_B64);
       assert.strictEqual(getDataMock.mock.calls.length, 0);
       assert.strictEqual((mocks.ownerStore.set as any).mock.calls.length, 0);
     });
 
     it('falls back to the id-keyed entry when address misses', async () => {
       mock.method(mocks.ownerStore, 'get', async (key: string) =>
-        key === 'item-1' ? 'owner-by-id' : undefined,
+        key === 'item-1' ? OWNER_B64 : undefined,
       );
       const getDataMock = ownerStreamMock();
 
@@ -1018,7 +1030,7 @@ describe('OwnerFetcher', () => {
         ownerAddress: ADDR,
       });
 
-      assert.strictEqual(result, 'owner-by-id');
+      assert.strictEqual(result, OWNER_B64);
       assert.strictEqual(getDataMock.mock.calls.length, 0);
     });
 
@@ -1287,8 +1299,8 @@ describe('attribute_fetch_total metric labels', () => {
   });
 
   it('signature/data_item/store/hit fires when signatureStore returns a value', async () => {
-    mock.method(mocks.signatureStore, 'get', async () => 'cached-sig');
-    await signatureFetcher.getDataItemSignature({ id: 'id' });
+    mock.method(mocks.signatureStore, 'get', async () => SIG_B64);
+    await signatureFetcher.getDataItemSignature({ id: SIG_ID });
     assert.equal(
       await counterValue({
         kind: 'signature',
@@ -1329,8 +1341,8 @@ describe('attribute_fetch_total metric labels', () => {
       signature: null,
       owner: null,
     }));
-    mock.method(mocks.chainSource, 'getTxField', async () => 'chain-sig');
-    await signatureFetcher.getTransactionSignature({ id: 'id' });
+    mock.method(mocks.chainSource, 'getTxField', async () => CHAIN_SIG_B64);
+    await signatureFetcher.getTransactionSignature({ id: CHAIN_SIG_ID });
     assert.equal(
       await counterValue({
         kind: 'signature',
@@ -1404,5 +1416,163 @@ describe('attribute_fetch_total metric labels', () => {
       }),
       1,
     );
+  });
+});
+
+describe('signatures and owner keys are checked before they are served or cached', () => {
+  let mocks: Mocks;
+  let signatureFetcher: SignatureFetcher;
+  let ownerFetcher: OwnerFetcher;
+  const WRONG = Buffer.from('bytes at a wrong offset');
+
+  const invalidCount = async (kind: string, source: string) =>
+    (await metrics.attributeFetchCounter.get()).values.find(
+      (v) =>
+        v.labels.kind === kind &&
+        v.labels.source === source &&
+        v.labels.outcome === 'invalid',
+    )?.value ?? 0;
+
+  const parentBytes = (bytes: Buffer) =>
+    mock.method(mocks.dataSource, 'getData', async () => ({
+      stream: {
+        [Symbol.asyncIterator]: async function* () {
+          yield bytes;
+        },
+      },
+    }));
+
+  beforeEach(() => {
+    metrics.attributeFetchCounter.reset();
+    mocks = createMocks();
+    signatureFetcher = new SignatureFetcher({
+      log,
+      dataSource: mocks.dataSource,
+      dataIndex: mocks.dataIndex,
+      chainSource: mocks.chainSource,
+      dataItemAttributesStore: mocks.dataItemAttributesStore,
+      transactionAttributesStore: mocks.transactionAttributesStore,
+      signatureStore: mocks.signatureStore,
+    });
+    ownerFetcher = new OwnerFetcher({
+      log,
+      dataSource: mocks.dataSource,
+      dataIndex: mocks.dataIndex,
+      chainSource: mocks.chainSource,
+      dataItemAttributesStore: mocks.dataItemAttributesStore,
+      transactionAttributesStore: mocks.transactionAttributesStore,
+      ownerStore: mocks.ownerStore,
+    });
+  });
+
+  it('drops a cached signature that does not hash to the id, and reads it again', async () => {
+    mock.method(mocks.signatureStore, 'get', async () =>
+      WRONG.toString('base64url'),
+    );
+    const del = mock.method(mocks.signatureStore, 'del', async () => undefined);
+    parentBytes(SIG);
+
+    const result = await signatureFetcher.getDataItemSignature({
+      id: SIG_ID,
+      parentId: 'parent',
+      signatureOffset: 2,
+      signatureSize: SIG.length,
+    });
+
+    assert.equal(result, SIG_B64);
+    assert.equal(del.mock.calls.length, 1);
+    assert.equal(await invalidCount('signature', 'store'), 1);
+  });
+
+  it('neither serves nor caches a signature read at a wrong offset', async () => {
+    mock.method(mocks.signatureStore, 'get', async () => undefined);
+    parentBytes(WRONG);
+
+    const result = await signatureFetcher.getDataItemSignature({
+      id: SIG_ID,
+      parentId: 'parent',
+      signatureOffset: 2,
+      signatureSize: WRONG.length,
+    });
+
+    assert.equal(result, undefined);
+    assert.equal((mocks.signatureStore.set as any).mock.calls.length, 0);
+    assert.equal(await invalidCount('signature', 'parent_data'), 1);
+  });
+
+  it('refuses a transaction signature from the chain source that does not hash to the id', async () => {
+    mock.method(mocks.signatureStore, 'get', async () => undefined);
+    mock.method(mocks.dataIndex, 'getTransactionAttributes', async () => ({
+      signature: null,
+    }));
+    mock.method(mocks.chainSource, 'getTxField', async () =>
+      WRONG.toString('base64url'),
+    );
+
+    const result = await signatureFetcher.getTransactionSignature({
+      id: SIG_ID,
+    });
+
+    assert.equal(result, undefined);
+    assert.equal((mocks.signatureStore.set as any).mock.calls.length, 0);
+    assert.equal(await invalidCount('signature', 'chain'), 1);
+  });
+
+  it('drops a cached owner key that does not hash to the address, and fetches the right one', async () => {
+    mock.method(mocks.ownerStore, 'get', async () =>
+      WRONG.toString('base64url'),
+    );
+    const del = mock.method(mocks.ownerStore, 'del', async () => undefined);
+    parentBytes(OWNER);
+
+    const result = await ownerFetcher.getDataItemOwner({
+      id: 'item-1',
+      parentId: 'parent',
+      ownerOffset: 514,
+      ownerSize: OWNER.length,
+      ownerAddress: OWNER_ADDR,
+    });
+
+    assert.equal(result, OWNER_B64);
+    assert.ok(del.mock.calls.length >= 1, 'the wrong entries are removed');
+    const keys = (mocks.ownerStore.set as any).mock.calls
+      .map((c: any) => c.arguments[0])
+      .sort();
+    assert.deepEqual(keys, ['item-1', OWNER_ADDR].sort());
+  });
+
+  it('neither serves nor caches an owner key read at a wrong offset', async () => {
+    mock.method(mocks.ownerStore, 'get', async () => undefined);
+    parentBytes(WRONG);
+
+    const result = await ownerFetcher.getDataItemOwner({
+      id: 'item-1',
+      parentId: 'parent',
+      ownerOffset: 514,
+      ownerSize: WRONG.length,
+      ownerAddress: OWNER_ADDR,
+    });
+
+    assert.equal(result, undefined);
+    assert.equal((mocks.ownerStore.set as any).mock.calls.length, 0);
+    assert.equal(await invalidCount('owner', 'parent_data'), 1);
+  });
+
+  it('caches by id as before when no owner address is known to check against', async () => {
+    mock.method(mocks.ownerStore, 'get', async () => undefined);
+    parentBytes(WRONG);
+
+    const result = await ownerFetcher.getDataItemOwner({
+      id: 'item-1',
+      parentId: 'parent',
+      ownerOffset: 514,
+      ownerSize: WRONG.length,
+    });
+
+    assert.equal(result, WRONG.toString('base64url'));
+    const keys = (mocks.ownerStore.set as any).mock.calls.map(
+      (c: any) => c.arguments[0],
+    );
+    assert.deepEqual(keys, ['item-1']);
   });
 });

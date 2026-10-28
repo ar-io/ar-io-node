@@ -599,7 +599,9 @@ export const attributeFetchCounter = new promClient.Counter({
     'fetchDataFromParent — data items only), `chain` (chainSource — ' +
     'transactions only), `derived` (secp256k1 owner-from-tx recovery), ' +
     '`incomplete_root` (PE-9073 guard fired). `outcome` is one of `hit`, ' +
-    '`aborted`, `error`, `not_found`.',
+    '`aborted`, `error`, `not_found`, `invalid` (a signature that does not ' +
+    'hash to its id, or an owner key that does not hash to its address: ' +
+    'neither served nor cached).',
   labelNames: ['kind', 'subject', 'source', 'outcome'],
 });
 
