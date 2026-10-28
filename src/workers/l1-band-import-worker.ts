@@ -101,12 +101,20 @@ export function parseTrailingJson(text: string): FillSummary | undefined {
   }
 }
 
-/** Spawns the CLI as a child of this process. */
-export const spawnFill: FillRunner = (args, onLog, register) =>
+/**
+ * Spawns the CLI as a child of this process, with this process's
+ * environment, or `env` when given.
+ */
+export const spawnFill = (
+  args: string[],
+  onLog: (level: string, line: string) => void,
+  register: (child: ChildProcess) => void,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<FillProcessResult> =>
   new Promise((resolve, reject) => {
     const child = spawn(process.execPath, args, {
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: process.env,
+      env,
     });
     register(child);
     let stdout = '';

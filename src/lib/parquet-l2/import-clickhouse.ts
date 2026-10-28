@@ -195,6 +195,18 @@ const num = (n: number | null) => (n === null ? '\\N' : String(n));
 export const PLACEMENT_ORDER = `("offset" IS NULL), height, block_transaction_index, root_parent_offset NULLS LAST, "offset" NULLS LAST`;
 
 /**
+ * {@link PLACEMENT_ORDER} as one comparable value, for `arg_min`: a struct
+ * compares field by field, and a NULL location sorts last as the largest
+ * UBIGINT.
+ */
+export const PLACEMENT_KEY = `struct_pack(
+  u := "offset" IS NULL,
+  h := height,
+  b := block_transaction_index,
+  r := coalesce(root_parent_offset, 18446744073709551615::UBIGINT),
+  o := coalesce("offset", 18446744073709551615::UBIGINT))`;
+
+/**
  * Writes one band's job into `<jobsDir>/queue`. Reads the band through
  * `duck`, ClickHouse through `held`, and blocks through `blocks`. The job is
  * assembled in `<jobsDir>/.partial` and renamed into the queue when whole;
@@ -254,13 +266,22 @@ export async function writeClickHouseJob({
     Number(Object.values((await duck.all(sql))[0])[0]);
 
   try {
-    // One placement per item, then the ceiling.
+    // One placement per item, then the ceiling. Picked by a grouped
+    // aggregate over the id, the sort key and each row's place in the file,
+    // then the rows fetched by that place: both spill to disk. A window over
+    // whole rows held every column of the band in memory and ran out on an
+    // 8M-item band at DuckDB's 2 GB.
+    const numbered = `read_parquet(${sqlString(path.join(bandDir, 'data_items.parquet'))}, file_row_number = true)`;
+    await duck.exec(`
+      CREATE OR REPLACE TEMP TABLE l2i_pick AS
+      SELECT arg_min(file_row_number, ${PLACEMENT_KEY}) AS row_number
+      FROM ${numbered}
+      GROUP BY id`);
     await duck.exec(`
       CREATE OR REPLACE TEMP TABLE l2i_first AS
-      SELECT * EXCLUDE (rn) FROM (
-        SELECT *, row_number() OVER (PARTITION BY id ORDER BY ${PLACEMENT_ORDER}) AS rn
-        FROM ${items}
-      ) WHERE rn = 1`);
+      SELECT * EXCLUDE (file_row_number) FROM ${numbered}
+      SEMI JOIN l2i_pick p ON p.row_number = file_row_number`);
+    await duck.exec('DROP TABLE l2i_pick');
     await duck.exec(`
       CREATE OR REPLACE TEMP TABLE l2i_chosen AS
       SELECT * FROM l2i_first WHERE height <= ${ceiling}`);
@@ -518,6 +539,7 @@ export async function writeClickHouseJob({
     };
   } finally {
     for (const t of [
+      'l2i_pick',
       'l2i_first',
       'l2i_chosen',
       'l2i_held',

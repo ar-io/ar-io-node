@@ -10,6 +10,8 @@ import { describe, it } from 'node:test';
 import { createTestLogger } from '../../test/test-logger.js';
 import * as metrics from '../metrics.js';
 import {
+  IMPORT_ALLOCATOR_ENV,
+  importEnv,
   L2BandImportWorker,
   L2ImportRunner,
   L2ImportSummary,
@@ -50,6 +52,16 @@ const runs = async (result: string) =>
   (await metrics.l2BandImportRunsTotal.get()).values.find(
     (v) => v.labels.result === result,
   )?.value ?? 0;
+
+describe('importEnv', () => {
+  it("adds glibc's allocator settings, and keeps an operator's own", () => {
+    assert.deepEqual(importEnv({ PATH: '/bin' }), {
+      ...IMPORT_ALLOCATOR_ENV,
+      PATH: '/bin',
+    });
+    assert.equal(importEnv({ MALLOC_ARENA_MAX: '4' }).MALLOC_ARENA_MAX, '4');
+  });
+});
 
 describe('L2BandImportWorker', () => {
   it('runs index-l2-import into ClickHouse for each index', async () => {
@@ -187,6 +199,23 @@ describe('L2BandImportWorker', () => {
     entries = ['band-b'];
     await w.runOnce('ardrive-l2');
     assert.equal(run.calls.length, 2);
+  });
+
+  it('waits after a run that failed without refusing, at most two hours', async () => {
+    let now = 0;
+    const crashed = { code: 1 };
+    const run = runner([crashed, crashed, crashed]);
+    const w = worker(run, { now: () => now });
+    await w.runOnce('ardrive-l2');
+    now = 30_000;
+    await w.runOnce('ardrive-l2');
+    assert.equal(run.calls.length, 1, 'not retried within the interval');
+    now = 60_000;
+    await w.runOnce('ardrive-l2');
+    assert.equal(run.calls.length, 2);
+    now = 60_000 + 90_000;
+    await w.runOnce('ardrive-l2');
+    assert.equal(run.calls.length, 2, 'the wait doubled');
   });
 
   it('counts an unreadable sample apart from a refusal', async () => {
