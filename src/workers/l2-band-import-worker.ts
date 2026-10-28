@@ -36,6 +36,30 @@ export type L2ImportRunner = (
   register: (child: ChildProcess) => void,
 ) => Promise<{ code: number | null; summary?: L2ImportSummary; tail: string }>;
 
+/**
+ * glibc's allocator settings the import runs with, as index-export does
+ * (docker-compose.yaml, INDEX_EXPORT_MALLOC_*), unless the environment sets
+ * them. Without them DuckDB's freed memory stays in glibc's arenas: an
+ * 8M-item band peaked at 5.9 GiB with DuckDB held to 2 GB, and at 2.4 GiB
+ * with them.
+ */
+export const IMPORT_ALLOCATOR_ENV = {
+  MALLOC_ARENA_MAX: '2',
+  MALLOC_MMAP_THRESHOLD_: '131072',
+  MALLOC_TRIM_THRESHOLD_: '131072',
+} as const;
+
+/** The import's environment: this process's, with the allocator settings. */
+export function importEnv(
+  env: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  return { ...IMPORT_ALLOCATOR_ENV, ...env };
+}
+
+/** Spawns the import with {@link importEnv}. */
+export const spawnImport: L2ImportRunner = (args, onLog, register) =>
+  spawnFill(args, onLog, register, importEnv());
+
 /** The longest an import whose sample could not be read waits before it is tried again. */
 export const UNREADABLE_MAX_BACKOFF_MS = 2 * 3600 * 1000;
 
@@ -62,12 +86,13 @@ export class L2BandImportWorker {
   private firstRunDelayMs: number;
   private runImport: L2ImportRunner;
   private listDir: (dir: string) => Promise<string[]>;
+  private hasBandFile: (file: string) => Promise<boolean>;
   private now: () => number;
   private maxBackoffMs: number;
   private refused = new Map<
     string,
     {
-      kind: 'refused' | 'unreadable';
+      kind: 'refused' | 'unreadable' | 'failed';
       entries: string;
       until: number;
       backoffMs: number;
@@ -89,9 +114,14 @@ export class L2BandImportWorker {
     maxUnchecked = 0,
     intervalMs,
     firstRunDelayMs = 120_000,
-    runImport = spawnFill as L2ImportRunner,
+    runImport = spawnImport,
     invocation = cliInvocation(),
     listDir = (dir: string) => fsp.readdir(dir),
+    hasBandFile = (file: string) =>
+      fsp.access(file).then(
+        () => true,
+        () => false,
+      ),
     now = Date.now,
     maxBackoffMs = 24 * 3600 * 1000,
   }: {
@@ -113,6 +143,8 @@ export class L2BandImportWorker {
     runImport?: L2ImportRunner;
     invocation?: string[];
     listDir?: (dir: string) => Promise<string[]>;
+    /** Injected in tests: whether a band directory still holds band.json. */
+    hasBandFile?: (file: string) => Promise<boolean>;
     now?: () => number;
     maxBackoffMs?: number;
   }) {
@@ -121,6 +153,7 @@ export class L2BandImportWorker {
     this.firstRunDelayMs = firstRunDelayMs;
     this.runImport = runImport;
     this.listDir = listDir;
+    this.hasBandFile = hasBandFile;
     this.now = now;
     this.maxBackoffMs = maxBackoffMs;
     this.runs = indexes.map((index) => {
@@ -202,7 +235,17 @@ export class L2BandImportWorker {
     const wasRunning = !this.stopped;
     let entries: string;
     try {
-      entries = (await this.listDir(run.dir)).sort().join('\n');
+      // Each entry with whether it still holds a band: retiring a band
+      // removes its band.json minutes before its directory, and the bands
+      // read change then, so a band refused before is no reason to wait.
+      const names = (await this.listDir(run.dir)).sort();
+      const marked = await Promise.all(
+        names.map(
+          async (name) =>
+            `${name}:${(await this.hasBandFile(path.join(run.dir, name, 'band.json'))) ? 1 : 0}`,
+        ),
+      );
+      entries = marked.join('\n');
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
         metrics.l2BandImportRunsTotal.inc({ result: 'idle' });
@@ -273,12 +316,19 @@ export class L2BandImportWorker {
         metrics.l2BandImportRunsTotal.inc({
           result: unreadable ? 'unreadable' : 'failed',
         });
-        if (summary?.refused !== undefined) {
-          const kind = unreadable ? 'unreadable' : 'refused';
+        // A refused band waits until it changes; so does a run that failed
+        // without refusing (a crash, an outage), up to two hours, since it
+        // may pass next time but should not be retried at every interval.
+        if (!(wasRunning && this.stopped)) {
+          const kind =
+            summary?.refused === undefined
+              ? 'failed'
+              : unreadable
+                ? 'unreadable'
+                : 'refused';
           const same = last?.kind === kind && last.entries === entries;
-          const cap = unreadable
-            ? UNREADABLE_MAX_BACKOFF_MS
-            : this.maxBackoffMs;
+          const cap =
+            kind === 'refused' ? this.maxBackoffMs : UNREADABLE_MAX_BACKOFF_MS;
           const backoffMs = same
             ? Math.min(cap, (last?.backoffMs ?? 0) * 2)
             : this.intervalMs;
