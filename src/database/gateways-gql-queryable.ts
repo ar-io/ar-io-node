@@ -124,6 +124,13 @@ const DEFAULT_TRANSACTION_NODE_FIELDS = `
  */
 const REQUIRED_CO_FIELDS_BY_FIELD: Record<string, readonly string[]> = {
   block: ['id', 'timestamp', 'height', 'previous'],
+  // The flat GqlTransaction keeps an amount only in winston
+  // (`mapRemoteTransaction` reads `quantity.winston` / `fee.winston`), and
+  // the local Amount resolver derives `ar` from it. Forwarding a user's
+  // `quantity { ar }` as is left winston unrequested, so it mapped to '0'
+  // and every amount read 0 AR unless `winston` was selected too.
+  quantity: ['winston'],
+  fee: ['winston'],
 };
 
 /**
