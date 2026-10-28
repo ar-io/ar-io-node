@@ -92,7 +92,7 @@ export function assertL2LedgerMigrated(db: Sqlite.Database): void {
     throw new L2LedgerRefused(
       columns.size === 0
         ? `bundles.db has no parquet_l2_imports table (${L2_LEDGER_MIGRATION}): run \`yarn db:migrate up\` (or restart the gateway on this release) first`
-        : `bundles.db's parquet_l2_imports lacks ${missing.join(', ')}: run \`yarn db:migrate up\` first`,
+        : `bundles.db's parquet_l2_imports lacks ${missing.join(', ')}, so it was not made by ${L2_LEDGER_MIGRATION}; migrating again will not change it (the table exists). Repair it to that migration's schema; it holds only the import ledger (imported rows stay in ClickHouse, and each job's ids in done/)`,
     );
   }
 }
