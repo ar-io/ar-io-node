@@ -31,6 +31,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- GraphQL amounts from upstream gateways (`GATEWAYS_GQL_URLS`) read 0 AR
+  when a query selected `quantity { ar }` or `fee { ar }` without
+  `winston`. The query forwarded upstream now always asks for `winston`,
+  which the gateway derives `ar` from. Stored data was never wrong, so
+  nothing needs reindexing.
+
 ## [Release 87] - 2026-10-26
 
 This is a **recommended release** focused on **index builds that fit
