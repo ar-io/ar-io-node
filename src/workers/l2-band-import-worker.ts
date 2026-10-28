@@ -86,6 +86,7 @@ export class L2BandImportWorker {
   private firstRunDelayMs: number;
   private runImport: L2ImportRunner;
   private listDir: (dir: string) => Promise<string[]>;
+  private hasBandFile: (file: string) => Promise<boolean>;
   private now: () => number;
   private maxBackoffMs: number;
   private refused = new Map<
@@ -116,6 +117,11 @@ export class L2BandImportWorker {
     runImport = spawnImport,
     invocation = cliInvocation(),
     listDir = (dir: string) => fsp.readdir(dir),
+    hasBandFile = (file: string) =>
+      fsp.access(file).then(
+        () => true,
+        () => false,
+      ),
     now = Date.now,
     maxBackoffMs = 24 * 3600 * 1000,
   }: {
@@ -137,6 +143,8 @@ export class L2BandImportWorker {
     runImport?: L2ImportRunner;
     invocation?: string[];
     listDir?: (dir: string) => Promise<string[]>;
+    /** Injected in tests: whether a band directory still holds band.json. */
+    hasBandFile?: (file: string) => Promise<boolean>;
     now?: () => number;
     maxBackoffMs?: number;
   }) {
@@ -145,6 +153,7 @@ export class L2BandImportWorker {
     this.firstRunDelayMs = firstRunDelayMs;
     this.runImport = runImport;
     this.listDir = listDir;
+    this.hasBandFile = hasBandFile;
     this.now = now;
     this.maxBackoffMs = maxBackoffMs;
     this.runs = indexes.map((index) => {
@@ -226,7 +235,17 @@ export class L2BandImportWorker {
     const wasRunning = !this.stopped;
     let entries: string;
     try {
-      entries = (await this.listDir(run.dir)).sort().join('\n');
+      // Each entry with whether it still holds a band: retiring a band
+      // removes its band.json minutes before its directory, and the bands
+      // read change then, so a band refused before is no reason to wait.
+      const names = (await this.listDir(run.dir)).sort();
+      const marked = await Promise.all(
+        names.map(
+          async (name) =>
+            `${name}:${(await this.hasBandFile(path.join(run.dir, name, 'band.json'))) ? 1 : 0}`,
+        ),
+      );
+      entries = marked.join('\n');
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
         metrics.l2BandImportRunsTotal.inc({ result: 'idle' });

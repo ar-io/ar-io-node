@@ -218,6 +218,27 @@ describe('L2BandImportWorker', () => {
     assert.equal(run.calls.length, 2, 'the wait doubled');
   });
 
+  it('tries a refused index again when a band is retired, its directory not yet gone', async () => {
+    let now = 0;
+    let retired = false;
+    const run = runner([
+      { code: 1, summary: { refused: 'band-a: a check failed' } },
+      { code: 0, summary: { imported: 1 } },
+    ]);
+    const w = worker(run, {
+      now: () => now,
+      listDir: async () => ['band-a', 'band-b'],
+      hasBandFile: async (file) => !(retired && file.includes('band-a')),
+    });
+    await w.runOnce('ardrive-l2');
+    now = 1_000;
+    await w.runOnce('ardrive-l2');
+    assert.equal(run.calls.length, 1, 'same bands: waits');
+    retired = true;
+    await w.runOnce('ardrive-l2');
+    assert.equal(run.calls.length, 2, 'band-a retired: tried again at once');
+  });
+
   it('counts an unreadable sample apart from a refusal', async () => {
     const before = await runs('unreadable');
     const run = runner([
