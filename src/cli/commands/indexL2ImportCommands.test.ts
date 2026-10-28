@@ -22,7 +22,6 @@ import {
 } from '../../lib/index-publication.js';
 import type { ClickHouseHeld } from '../../lib/parquet-l2/clickhouse-held.js';
 import { L2ImportRefused } from '../../lib/parquet-l2/import-clickhouse.js';
-import { L2_LEDGER_MIGRATION } from '../../lib/parquet-l2/import-ledger.js';
 import {
   BAND_FILE,
   bandTablesDigest,
@@ -115,8 +114,6 @@ describe('index-l2-import', () => {
     bundlesDb = path.join(root, 'bundles.db');
     const db = new Sqlite(bundlesDb);
     db.exec(SCHEMA);
-    db.exec('CREATE TABLE migrations (name TEXT PRIMARY KEY)');
-    db.prepare('INSERT INTO migrations VALUES (?)').run(L2_LEDGER_MIGRATION);
     db.close();
     // The test's own core.db, never the checkout's data/sqlite.
     coreDb = path.join(root, 'core.db');
@@ -226,9 +223,9 @@ describe('index-l2-import', () => {
 
   it('refuses a bundles.db without the ledger migration', async () => {
     const db = new Sqlite(bundlesDb);
-    db.exec('DELETE FROM migrations');
+    db.exec('DROP TABLE parquet_l2_imports');
     db.close();
-    await assert.rejects(run({}), /has not run/);
+    await assert.rejects(run({}), /no parquet_l2_imports table/);
   });
 
   it('refuses --onchain 0 and --max-unchecked at or above --onchain', async () => {
