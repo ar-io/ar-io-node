@@ -31,6 +31,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- GraphQL no longer serves, or caches, a data item's signature or owner key
+  read from a wrong offset. A signature is used only when its SHA-256 is the
+  id, and an owner key only when its SHA-256 is the owner address; anything
+  else counts as `attribute_fetch_total{outcome="invalid"}` and is logged
+  with the offset that produced it. Cached entries that fail either check
+  are removed. Rows with item-relative owner and signature offsets had been
+  served wrong signatures, and, through the owner cache keyed by address,
+  wrong owner keys for every item of the same owner.
+
 ## [Release 87] - 2026-10-26
 
 This is a **recommended release** focused on **index builds that fit
