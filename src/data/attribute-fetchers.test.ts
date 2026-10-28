@@ -1518,6 +1518,21 @@ describe('signatures and owner keys are checked before they are served or cached
     assert.equal(await invalidCount('signature', 'chain'), 1);
   });
 
+  it('counts a stored transaction signature that does not hash to the id, then reads the chain', async () => {
+    mock.method(mocks.signatureStore, 'get', async () => undefined);
+    mock.method(mocks.dataIndex, 'getTransactionAttributes', async () => ({
+      signature: WRONG.toString('base64url'),
+    }));
+    mock.method(mocks.chainSource, 'getTxField', async () => SIG_B64);
+
+    const result = await signatureFetcher.getTransactionSignature({
+      id: SIG_ID,
+    });
+
+    assert.equal(result, SIG_B64);
+    assert.equal(await invalidCount('signature', 'attributes'), 1);
+  });
+
   it('drops a cached owner key that does not hash to the address, and fetches the right one', async () => {
     mock.method(mocks.ownerStore, 'get', async () =>
       WRONG.toString('base64url'),
@@ -1535,6 +1550,8 @@ describe('signatures and owner keys are checked before they are served or cached
 
     assert.equal(result, OWNER_B64);
     assert.ok(del.mock.calls.length >= 1, 'the wrong entries are removed');
+    assert.equal(await invalidCount('owner', 'store_address'), 1);
+    assert.equal(await invalidCount('owner', 'store_id'), 1);
     const keys = (mocks.ownerStore.set as any).mock.calls
       .map((c: any) => c.arguments[0])
       .sort();

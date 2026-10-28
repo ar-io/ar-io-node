@@ -583,19 +583,30 @@ export class SignatureFetcher
         this.log.warn('No attributes found for transaction', { id });
       }
 
-      if (
-        typeof transactionAttributes?.signature === 'string' &&
-        signatureMatchesId(transactionAttributes.signature, id)
-      ) {
-        await this.signatureStore.set(id, transactionAttributes.signature);
+      if (typeof transactionAttributes?.signature === 'string') {
+        if (signatureMatchesId(transactionAttributes.signature, id)) {
+          await this.signatureStore.set(id, transactionAttributes.signature);
+          recordAttributeFetch(
+            'signature',
+            'transaction',
+            'attributes',
+            'hit',
+            start,
+          );
+          return transactionAttributes.signature;
+        }
+        // A stored signature that is not this transaction's: read it from
+        // the chain instead.
+        log.warn('Stored signature does not hash to the transaction id', {
+          id,
+        });
         recordAttributeFetch(
           'signature',
           'transaction',
           'attributes',
-          'hit',
+          'invalid',
           start,
         );
-        return transactionAttributes.signature;
       }
 
       const signatureFromChain = await this.chainSource.getTxField(
@@ -702,6 +713,8 @@ export class OwnerFetcher extends AttributeFetchers implements OwnerSource {
   private async readCachedOwner(
     ownerAddress: string | undefined,
     id: string,
+    subject: AttributeSubject,
+    start: number,
   ): Promise<{ owner: string; source: OwnerCacheSource } | undefined> {
     const hitOrThrow = async (
       key: string,
@@ -723,6 +736,7 @@ export class OwnerFetcher extends AttributeFetchers implements OwnerSource {
           ownerAddress,
           source,
         });
+        recordAttributeFetch('owner', subject, source, 'invalid', start);
         await this.ownerStore.del(key).catch(() => undefined);
         throw new Error('owner-store entry invalid');
       }
@@ -849,7 +863,12 @@ export class OwnerFetcher extends AttributeFetchers implements OwnerSource {
     const start = Date.now();
     log.debug('Fetching data item owner', { id, ownerAddress });
 
-    const cached = await this.readCachedOwner(ownerAddress, id);
+    const cached = await this.readCachedOwner(
+      ownerAddress,
+      id,
+      'data_item',
+      start,
+    );
     if (cached !== undefined) {
       log.debug('Data item owner fetched from store', { id });
       recordAttributeFetch('owner', 'data_item', cached.source, 'hit', start);
@@ -992,7 +1011,12 @@ export class OwnerFetcher extends AttributeFetchers implements OwnerSource {
     const start = Date.now();
     log.debug('Fetching transaction owner', { id, ownerAddress });
 
-    const cached = await this.readCachedOwner(ownerAddress, id);
+    const cached = await this.readCachedOwner(
+      ownerAddress,
+      id,
+      'transaction',
+      start,
+    );
     if (cached !== undefined) {
       log.debug('Transaction owner fetched from store', { id });
       recordAttributeFetch('owner', 'transaction', cached.source, 'hit', start);
