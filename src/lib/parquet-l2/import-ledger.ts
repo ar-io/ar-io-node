@@ -328,8 +328,8 @@ const exists = (p: string) =>
  * part way leaves a row whose counts match what is in the database.
  *
  * `rows_imported` adds up over every run of a band (a resumed run and one
- * past a higher ceiling write only rows not yet there). `rows_present` and
- * `rows_conflicting` count rows the gateway wrote itself, so a later run,
+ * past a higher ceiling write only rows not yet there). `rows_present`,
+ * `rows_elsewhere` and `rows_conflicting` count rows the gateway wrote itself, so a later run,
  * which finds this band's own rows, does not count them; they and
  * `rows_unlocated` describe the band's latest run.
  */
@@ -362,6 +362,7 @@ export class SqliteImportLedger {
       `UPDATE parquet_l2_imports SET
          rows_imported = rows_imported + @written,
          rows_present = rows_present + @present,
+         rows_elsewhere = rows_elsewhere + @elsewhere,
          rows_conflicting = rows_conflicting + @conflicting
        WHERE band_id = @bandId AND target = 'sqlite'`,
     );
@@ -408,10 +409,16 @@ export class SqliteImportLedger {
     {
       written,
       present,
+      elsewhere,
       conflicting,
-    }: { written: number; present: number; conflicting: number },
+    }: {
+      written: number;
+      present: number;
+      elsewhere: number;
+      conflicting: number;
+    },
   ): void {
-    this.progress.run({ bandId, written, present, conflicting });
+    this.progress.run({ bandId, written, present, elsewhere, conflicting });
   }
 
   /** The run wrote everything up to `heightTo`. */

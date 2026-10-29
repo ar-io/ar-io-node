@@ -1523,14 +1523,17 @@ removes the items a band wrote, and their tags, a batch at a time: those
 whose `indexed_at` and `stable_at` are both the band's `createdAt` (the
 gateway's flush sets `stable_at` when it flushes, after the item was
 indexed). The band must still be in `--bands-dir`, for its `createdAt`.
-Wallets and tag names stay. The result is `{ "imported", "imports":
+A band republished over the same heights can share that `createdAt`, so
+its rows go too; the ledger rows of every SQLite import over those heights
+are removed with the band's (`reset`), and the next run writes their items
+again. Wallets and tag names stay. The result is `{ "imported", "imports":
 [{ "band", "heightRange", "counts", "conflictExamples" }] }` with the
 summary fields above (no `waiting`, `loaded` or `failed`); `counts` has
 `bandRows`, `otherPlacements`, `aboveCeiling`, `unlocated`, `present`,
 `conflicting`, `elsewhere`, `alreadyImported`, `written`, `tags` and
 `noOwnerKey` (items written whose owner's key the band lacks, which SQLite
 GraphQL cannot show). `--forget` prints `{ "forgotten", "target",
-"indexedAt", "heightRange", "items", "tags" }`.
+"indexedAt", "heightRange", "items", "tags", "reset" }`.
 
 ### `index-l2-import` result
 

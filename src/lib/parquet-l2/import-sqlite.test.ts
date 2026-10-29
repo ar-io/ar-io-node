@@ -280,6 +280,14 @@ describe('importBandIntoSqlite', () => {
     assert.equal(item(2)!.offset, 9999);
     assert.equal(item(2)!.indexed_at, 1700000000);
     assert.equal(tagCount(1) + tagCount(2) + tagCount(3), 0);
+    assert.deepEqual(
+      db
+        .prepare(
+          "SELECT rows_present, rows_conflicting, rows_elsewhere FROM parquet_l2_imports WHERE target = 'sqlite'",
+        )
+        .get(),
+      { rows_present: 2, rows_conflicting: 1, rows_elsewhere: 1 },
+    );
   });
 
   it('writes the same rows twice as once, and knows its own rows the second time', async () => {
@@ -446,6 +454,38 @@ describe('importBandIntoSqlite', () => {
     assert.equal(counts.noOwnerKey, 1);
   });
 
+  it('forgetting a band resets a republished band over its heights, whose rows went too', async () => {
+    await writeBand(duck, dir, [
+      { id: id(1), height: 110, location: { rpo: 0, offset: 0 } },
+    ]);
+    await run();
+    // The same heights, republished with the same createdAt: it finds the
+    // first band's rows its own and is recorded complete.
+    await run({ bandId: 'l2-h100-199-republished' });
+    // A band elsewhere keeps its ledger row.
+    db.prepare(
+      `INSERT INTO parquet_l2_imports (band_id, target, index_name, publisher,
+         height_from, height_to, band_digest, started_at, completed_at)
+       VALUES ('l2-h300-399-other', 'sqlite', 'ardrive-l2', 'p', 300, 399, x'00', 1, 2)`,
+    ).run();
+    const removed = await forgetSqliteBand({
+      db,
+      bandId: 'l2-h100-199-test',
+      heightRange: [100, 199],
+      indexedAt: INDEXED_AT,
+      yieldMs: 0,
+    });
+    assert.deepEqual(removed.reset, ['l2-h100-199-republished']);
+    assert.equal(item(1), undefined);
+    assert.deepEqual(
+      [...readLedger(db, 'sqlite').keys()],
+      ['l2-h300-399-other'],
+    );
+    // The next run writes it again.
+    const { counts } = await run({ bandId: 'l2-h100-199-republished' });
+    assert.equal(counts.written, 1);
+  });
+
   it('forgets exactly what the band wrote', async () => {
     await writeBand(duck, dir, [
       { id: id(1), height: 110, location: { rpo: 0, offset: 0 } },
@@ -470,7 +510,7 @@ describe('importBandIntoSqlite', () => {
       batch: 1,
       yieldMs: 0,
     });
-    assert.deepEqual(removed, { items: 1, tags: 2 });
+    assert.deepEqual(removed, { items: 1, tags: 2, reset: [] });
     assert.equal(item(1), undefined);
     assert.ok(item(2) !== undefined);
     assert.ok(item(3) !== undefined);

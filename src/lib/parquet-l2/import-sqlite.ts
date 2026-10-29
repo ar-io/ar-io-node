@@ -385,14 +385,26 @@ export async function importBandIntoSqlite({
     };
     let open = false;
     let txStarted = 0;
-    let inTx = { written: 0, present: 0, conflicting: 0, rows: 0 };
+    let inTx = {
+      written: 0,
+      present: 0,
+      conflicting: 0,
+      elsewhere: 0,
+      rows: 0,
+    };
 
     const commit = async () => {
       if (!open) return;
       ledger.addProgress(bandId, inTx);
       db.exec('COMMIT');
       open = false;
-      inTx = { written: 0, present: 0, conflicting: 0, rows: 0 };
+      inTx = {
+        written: 0,
+        present: 0,
+        conflicting: 0,
+        elsewhere: 0,
+        rows: 0,
+      };
       if (now() - lastCheckpoint >= checkpointMs) {
         db.pragma('wal_checkpoint(TRUNCATE)');
         lastCheckpoint = now();
@@ -491,6 +503,7 @@ export async function importBandIntoSqlite({
               Number(held.block_transaction_index) !== r.block_transaction_index
             ) {
               counts.elsewhere += 1;
+              inTx.elsewhere += 1;
             } else {
               counts.present += 1;
               inTx.present += 1;
@@ -549,7 +562,7 @@ export const SQLITE_FORGET_BATCH = 5_000;
 /**
  * Removes what imports of one band wrote into `bundles.db`: its items and
  * their tags, a batch at a time beside the running gateway, then its ledger
- * row. A row is the band's when its `indexed_at` and `stable_at` are both
+ * row, and those of every other SQLite import over the same heights. A row is the band's when its `indexed_at` and `stable_at` are both
  * the band's `createdAt`, as only the importer writes them; the gateway's
  * flush sets `stable_at` when it flushes, after the item was indexed. The
  * wallets and tag names an import added stay: other rows may use them.
@@ -571,7 +584,7 @@ export async function forgetSqliteBand({
   batch?: number;
   yieldMs?: number;
   sleep?: (ms: number) => Promise<void>;
-}): Promise<{ items: number; tags: number }> {
+}): Promise<{ items: number; tags: number; reset: string[] }> {
   const select = db
     .prepare(
       `SELECT id FROM stable_data_items
@@ -610,6 +623,20 @@ export async function forgetSqliteBand({
   db.prepare(
     "DELETE FROM parquet_l2_imports WHERE band_id = ? AND target = 'sqlite'",
   ).run(bandId);
+  // Rows are told apart by `indexed_at`, the band's `createdAt`, and a band
+  // republished over the same heights can carry the same one: its rows were
+  // the ones just removed. Its ledger row goes too, so the next run writes
+  // its items again (a run writes only what is missing), rather than
+  // holding it complete over heights that are now empty.
+  const reset = db
+    .prepare(
+      `DELETE FROM parquet_l2_imports
+       WHERE target = 'sqlite' AND band_id != ?
+         AND height_from <= ? AND height_to >= ?
+       RETURNING band_id`,
+    )
+    .pluck()
+    .all(bandId, heightRange[1], heightRange[0]) as string[];
   db.pragma('wal_checkpoint(TRUNCATE)');
-  return { items, tags };
+  return { items, tags, reset };
 }
