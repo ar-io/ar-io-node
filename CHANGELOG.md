@@ -35,6 +35,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- GraphQL no longer lists a data item's tags twice when the item was
+  indexed from two bundles (or imported from an L2 band and later
+  unbundled). The stable flush keeps the first stored row of an item, but
+  wrote the tags of every placement beside it; it now writes tags only
+  where it stores the item. Tag rows already duplicated are not removed.
 - GraphQL no longer serves, or caches, a data item's signature or owner key
   read from a wrong offset. A signature is used only when its SHA-256 is the
   id, and an owner key only when its SHA-256 is the owner address; anything

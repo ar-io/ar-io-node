@@ -3524,6 +3524,106 @@ describe('StandaloneSqliteDatabase', () => {
     });
   });
 
+  describe('flushStableDataItems tags follow the stored item', () => {
+    // stable_data_items holds one row per id and the flush never replaces
+    // it, but its tag rows are keyed by placement: an item flushed again
+    // from another bundle (or imported first from an L2 band) used to gain
+    // a second tag set at the other placement, and GraphQL, reading tags by
+    // id, listed them twice.
+    const rootA = toB64Url(crypto.randomBytes(32));
+    const rootB = toB64Url(crypto.randomBytes(32));
+    const tags = [
+      { name: 'App-Name', value: 'ArDrive-App' },
+      { name: 'Content-Type', value: 'text/plain' },
+    ];
+    const heightA = 778_000;
+    const heightB = 778_100;
+
+    const stage = async (id: string, rootTxId: string, height: number) => {
+      const item = normalizeAns104DataItem({
+        rootTxId,
+        parentId: rootTxId,
+        parentIndex: -1,
+        index: 0,
+        ans104DataItem: { ...dataItem, id, tags },
+        filter: '{"always": true}',
+        dataHash: '',
+        rootParentOffset: 0,
+      });
+      await db.saveDataItem(item);
+      bundlesDb
+        .prepare('UPDATE new_data_items SET height = @height WHERE id = @id')
+        .run({ height, id: fromB64Url(id) });
+      bundlesDb
+        .prepare(
+          'UPDATE new_data_item_tags SET height = @height WHERE data_item_id = @id',
+        )
+        .run({ height, id: fromB64Url(id) });
+      await db.flushStableDataItems(height + 1, Date.now());
+    };
+    const tagHeights = (id: string) =>
+      (
+        bundlesDb
+          .prepare(
+            'SELECT DISTINCT height FROM stable_data_item_tags WHERE data_item_id = @id ORDER BY height',
+          )
+          .all({ id: fromB64Url(id) }) as { height: number }[]
+      ).map((r) => r.height);
+    const gqlTags = (id: string) =>
+      bundlesDb
+        .prepare(
+          loadSql(fileURLToPath(new URL('./sql/bundles', import.meta.url)))[
+            'selectStableDataItemTags'
+          ],
+        )
+        .all({ id: fromB64Url(id) });
+
+    beforeEach(() => {
+      const link = coreDb.prepare(
+        `INSERT INTO stable_block_transactions (
+           block_indep_hash, transaction_id, block_transaction_index
+         ) VALUES (@hash, @tx, @bti)`,
+      );
+      link.run({ hash: crypto.randomBytes(32), tx: fromB64Url(rootA), bti: 3 });
+      link.run({ hash: crypto.randomBytes(32), tx: fromB64Url(rootB), bti: 7 });
+    });
+
+    it('writes the tags of an item it stores', async () => {
+      const id = toB64Url(crypto.randomBytes(32));
+      await stage(id, rootA, heightA);
+      assert.deepEqual(tagHeights(id), [heightA]);
+      assert.equal(gqlTags(id).length, tags.length);
+    });
+
+    it('adds no second tag set when the item is flushed again from another bundle', async () => {
+      const id = toB64Url(crypto.randomBytes(32));
+      await stage(id, rootA, heightA);
+      await stage(id, rootB, heightB);
+      const stored = bundlesDb
+        .prepare('SELECT height FROM stable_data_items WHERE id = @id')
+        .get({ id: fromB64Url(id) }) as { height: number };
+      assert.equal(stored.height, heightA);
+      assert.deepEqual(tagHeights(id), [heightA]);
+      assert.equal(gqlTags(id).length, tags.length);
+    });
+
+    it('adds no tags to an item stored first at another placement, without tags', async () => {
+      // As an L2 import of an item whose tags it did not write, or any row
+      // stored at another placement before the gateway flushed it.
+      const id = toB64Url(crypto.randomBytes(32));
+      bundlesDb
+        .prepare(
+          `INSERT INTO stable_data_items (id, parent_id, root_transaction_id,
+             height, block_transaction_index, anchor, owner_address,
+             data_offset, data_size, tag_count, indexed_at, stable_at)
+           VALUES (@id, @root, @root, @height, 3, x'', x'00', 0, 1, 0, 1, 1)`,
+        )
+        .run({ id: fromB64Url(id), root: fromB64Url(rootA), height: heightA });
+      await stage(id, rootB, heightB);
+      assert.deepEqual(tagHeights(id), []);
+    });
+  });
+
   describe('pruneStableDataItems by stable_at (late flush race)', () => {
     // The ClickHouse import reads a threshold, exports a height range, then
     // prunes the range below the threshold. The flush copies indexed_at from
