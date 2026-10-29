@@ -40,11 +40,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   served wrong signatures, and, through the owner cache keyed by address,
   wrong owner keys for every item of the same owner.
 
-- GraphQL amounts from upstream gateways (`GATEWAYS_GQL_URLS`) read 0 AR
-  when a query selected `quantity { ar }` or `fee { ar }` without
-  `winston`. The query forwarded upstream now always asks for `winston`,
-  which the gateway derives `ar` from. Stored data was never wrong, so
-  nothing needs reindexing.
+- GraphQL results merged from upstream gateways (`GATEWAYS_GQL_URLS`) lost
+  fields the query had asked for, because the selection forwarded upstream
+  left out what the gateway reads back. Amounts read 0 AR when a query
+  selected `quantity { ar }` or `fee { ar }` without `winston`; `parent`
+  was null without `bundledIn`; and a field selected twice under different
+  aliases (`a: tags { name } b: tags { value }`) kept only the first
+  selection's sub-fields, which failed the whole query for tags. The
+  forwarded selection now always asks for `winston`, merges every selection
+  of a field, and the parent is read from `parent` or `bundledIn`. Stored
+  data was never wrong, so nothing needs reindexing.
 
 ## [Release 87] - 2026-10-26
 

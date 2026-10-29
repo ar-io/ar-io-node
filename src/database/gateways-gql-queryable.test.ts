@@ -12,6 +12,7 @@ import { OperationDefinitionNode, SelectionSetNode, parse } from 'graphql';
 import { createTestLogger } from '../../test/test-logger.js';
 import {
   resolveTxFee,
+  resolveTxParent,
   resolveTxQuantity,
 } from '../routes/graphql/resolvers.js';
 import {
@@ -314,6 +315,33 @@ describe('renderTransactionNodeSelection', () => {
       `{ transactions { edges { node { id anchor anchor } } } }`,
     );
     assert.equal(canon(render(sel)), 'id anchor');
+  });
+
+  it('merges every selection of one field, aliased or not', () => {
+    // Forwarding only the first `tags` left `value` unrequested, so Tag.value
+    // came back null and failed the whole query.
+    const sel = nodeSelection(
+      `{ transactions { edges { node { id a: tags { name } b: tags { value } d1: data { size } d2: data { type } o1: owner { address } o2: owner { key } } } } }`,
+    );
+    assert.equal(
+      canon(render(sel)),
+      'id tags { name value } data { size type } owner { address key }',
+    );
+  });
+
+  it('merges repeated amounts and still adds winston once', () => {
+    const sel = nodeSelection(
+      `{ transactions { edges { node { id q1: quantity { ar } q2: quantity { ar } } } } }`,
+    );
+    assert.equal(canon(render(sel)), 'id quantity { ar winston }');
+  });
+
+  it('falls back to undefined when any nested selection contains a fragment', () => {
+    const sel = nodeSelection(
+      `fragment T on Tag { name }
+       { transactions { edges { node { id t: tags { ...T } } } } }`,
+    );
+    assert.equal(render(sel), undefined);
   });
 
   it('falls back to undefined when encountering fragment spreads', () => {
@@ -1202,8 +1230,8 @@ describe('amounts from an upstream gateway, whatever subfields are asked for', (
       if (sel.kind !== 'Field') continue;
       const name = sel.name.value;
       if (name === 'id') node.id = record.id;
-      if (name === 'bundledIn') {
-        node.bundledIn =
+      if (name === 'bundledIn' || name === 'parent') {
+        node[name] =
           record.bundledIn === null ? null : { id: record.bundledIn };
       }
       if (name === 'quantity' || name === 'fee') {
@@ -1353,6 +1381,37 @@ describe('amounts from an upstream gateway, whatever subfields are asked for', (
       });
     }
   }
+
+  it('reads parent { id } without bundledIn, for lists and transaction(id)', async () => {
+    const { remote } = upstream();
+    const result = await remote.getGqlTransactions({
+      pageSize: 10,
+      sortOrder: 'HEIGHT_DESC',
+      tags: [],
+      ids: records.map((r) => r.id),
+      nodeSelection: nodeSelection(
+        `{ transactions { edges { node { id parent { id } } } } }`,
+      ),
+    });
+    const byId = new Map(result.edges.map((e) => [e.node.id, e.node]));
+    assert.deepEqual(resolveTxParent(byId.get(records[1].id)!), {
+      id: records[1].bundledIn,
+    });
+    assert.equal(resolveTxParent(byId.get(records[0].id)!), null);
+
+    const doc = parse(`{ transaction(id: "x") { id parent { id } } }`);
+    const op = doc.definitions[0] as OperationDefinitionNode;
+    const field = op.selectionSet.selections[0] as {
+      selectionSet: SelectionSetNode;
+    };
+    const tx = await remote.getGqlTransaction({
+      id: records[1].id,
+      nodeSelection: field.selectionSet,
+    });
+    assert.ok(tx !== null);
+    assert.deepEqual(resolveTxParent(tx), { id: records[1].bundledIn });
+    assert.equal(tx.isDataItem, true);
+  });
 
   it('reads quantity { ar } right for transaction(id) too', async () => {
     const { remote } = upstream();
