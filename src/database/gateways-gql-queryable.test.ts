@@ -11,6 +11,11 @@ import { OperationDefinitionNode, SelectionSetNode, parse } from 'graphql';
 
 import { createTestLogger } from '../../test/test-logger.js';
 import {
+  resolveTxFee,
+  resolveTxParent,
+  resolveTxQuantity,
+} from '../routes/graphql/resolvers.js';
+import {
   GqlBlock,
   GqlBlocksResult,
   GqlQueryable,
@@ -310,6 +315,33 @@ describe('renderTransactionNodeSelection', () => {
       `{ transactions { edges { node { id anchor anchor } } } }`,
     );
     assert.equal(canon(render(sel)), 'id anchor');
+  });
+
+  it('merges every selection of one field, aliased or not', () => {
+    // Forwarding only the first `tags` left `value` unrequested, so Tag.value
+    // came back null and failed the whole query.
+    const sel = nodeSelection(
+      `{ transactions { edges { node { id a: tags { name } b: tags { value } d1: data { size } d2: data { type } o1: owner { address } o2: owner { key } } } } }`,
+    );
+    assert.equal(
+      canon(render(sel)),
+      'id tags { name value } data { size type } owner { address key }',
+    );
+  });
+
+  it('merges repeated amounts and still adds winston once', () => {
+    const sel = nodeSelection(
+      `{ transactions { edges { node { id q1: quantity { ar } q2: quantity { ar } } } } }`,
+    );
+    assert.equal(canon(render(sel)), 'id quantity { ar winston }');
+  });
+
+  it('falls back to undefined when any nested selection contains a fragment', () => {
+    const sel = nodeSelection(
+      `fragment T on Tag { name }
+       { transactions { edges { node { id t: tags { ...T } } } } }`,
+    );
+    assert.equal(render(sel), undefined);
   });
 
   it('falls back to undefined when encountering fragment spreads', () => {
@@ -1149,5 +1181,266 @@ describe('GatewaysGqlQueryable soft deadline', () => {
     assert.equal(warnings.length, 1);
     assert.equal(warnings[0].code, 'UPSTREAM_SOFT_DEADLINE');
     assert.equal(warnings[0].source, 'http://slow.example');
+  });
+});
+
+/**
+ * Amounts through an upstream gateway. The upstream here answers as a real
+ * GraphQL server does: only the subfields the forwarded query selects. A
+ * user asking for `quantity { ar }` alone used to have it forwarded as is,
+ * so winston never came back and the amount mapped to 0.
+ */
+describe('amounts from an upstream gateway, whatever subfields are asked for', () => {
+  const { RemoteGqlQueryable } = fanoutInternals;
+  const RECIPIENT = 'LWga1NAbY9mdKftPpYBGORLCig4SJ4zgzGJsaaCdVxA';
+  const OWNER = 'owner-address-of-the-sender-xxxxxxxxxxxxxxx';
+  // An L1 transfer of 2.464754868051 AR (block 2,027,105) and a data item.
+  const records = [
+    {
+      id: 'hNYhcV2153yNLl_vtejDCFQLahMAbxGE14tOQ6kTFGw',
+      owner: OWNER,
+      recipient: RECIPIENT,
+      quantity: '2464754868051',
+      fee: '42361404',
+      height: 2027105,
+      bundledIn: null as string | null,
+    },
+    {
+      id: 'dataItemXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX',
+      owner: OWNER,
+      recipient: RECIPIENT,
+      quantity: '0',
+      fee: '0',
+      height: 2027105,
+      bundledIn: 'bundleXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX',
+    },
+  ];
+  const arOf = (winston: string) =>
+    (BigInt(winston) / 10n ** 12n).toString() +
+    '.' +
+    (BigInt(winston) % 10n ** 12n).toString().padStart(12, '0');
+
+  /** The node a GraphQL server would return for this selection. */
+  function answer(
+    record: (typeof records)[number],
+    selection: SelectionSetNode,
+  ): Record<string, unknown> {
+    const node: Record<string, unknown> = {};
+    for (const sel of selection.selections) {
+      if (sel.kind !== 'Field') continue;
+      const name = sel.name.value;
+      if (name === 'id') node.id = record.id;
+      if (name === 'bundledIn' || name === 'parent') {
+        node[name] =
+          record.bundledIn === null ? null : { id: record.bundledIn };
+      }
+      if (name === 'quantity' || name === 'fee') {
+        const winston = record[name];
+        const amount: Record<string, string> = {};
+        for (const sub of sel.selectionSet?.selections ?? []) {
+          if (sub.kind !== 'Field') continue;
+          if (sub.name.value === 'winston') amount.winston = winston;
+          if (sub.name.value === 'ar') amount.ar = arOf(winston);
+        }
+        node[name] = amount;
+      }
+    }
+    return node;
+  }
+
+  /** An upstream that runs each forwarded query against `records`. */
+  function upstream() {
+    const queries: string[] = [];
+    const instance = axios.create({
+      adapter: async (cfg) => {
+        const { query, variables } = JSON.parse(cfg.data as string);
+        queries.push(query);
+        const op = parse(query).definitions[0] as OperationDefinitionNode;
+        const root = op.selectionSet.selections[0] as {
+          name: { value: string };
+          selectionSet: SelectionSetNode;
+        };
+        let data: unknown;
+        if (root.name.value === 'transaction') {
+          const record = records.find((r) => r.id === variables.id);
+          data = {
+            transaction:
+              record === undefined ? null : answer(record, root.selectionSet),
+          };
+        } else {
+          const edgesField = root.selectionSet.selections.find(
+            (s) => s.kind === 'Field' && s.name.value === 'edges',
+          ) as { selectionSet: SelectionSetNode };
+          const nodeField = edgesField.selectionSet.selections.find(
+            (s) => s.kind === 'Field' && s.name.value === 'node',
+          ) as { selectionSet: SelectionSetNode };
+          const matching = records.filter(
+            (r) =>
+              (variables.ids === undefined || variables.ids.includes(r.id)) &&
+              (variables.owners === undefined ||
+                variables.owners.includes(r.owner)) &&
+              (variables.recipients === undefined ||
+                variables.recipients.includes(r.recipient)),
+          );
+          data = {
+            transactions: {
+              pageInfo: { hasNextPage: false },
+              edges: matching.map((r, i) => ({
+                cursor: encodeTransactionGqlCursor({
+                  height: r.height,
+                  blockTransactionIndex: i,
+                  dataItemId: r.bundledIn === null ? 'AA' : r.id,
+                  indexedAt: 0,
+                  id: r.id,
+                }),
+                node: answer(r, nodeField.selectionSet),
+              })),
+            },
+          };
+        }
+        return {
+          data: { data },
+          status: 200,
+          statusText: 'OK',
+          headers: {},
+          config: cfg,
+        } as any;
+      },
+    });
+    return {
+      queries,
+      remote: new RemoteGqlQueryable(
+        'http://upstream.example',
+        instance,
+        {
+          timeout: 5000,
+          errorThresholdPercentage: 100,
+          rollingCountTimeout: 10_000,
+          resetTimeout: 10_000,
+          volumeThreshold: 1000,
+        },
+        log,
+      ),
+    };
+  }
+
+  const selections = {
+    'quantity { ar }': 'id quantity { ar }',
+    'fee { ar }': 'id fee { ar }',
+    '{ winston } only': 'id quantity { winston } fee { winston }',
+    '{ winston ar } together': 'id quantity { winston ar } fee { winston ar }',
+  };
+  const filters = {
+    ids: { ids: records.map((r) => r.id) },
+    owners: { owners: [OWNER] },
+    recipients: { recipients: [RECIPIENT] },
+  };
+
+  for (const [label, fields] of Object.entries(selections)) {
+    for (const [filter, args] of Object.entries(filters)) {
+      it(`reads ${label} right, by ${filter}`, async () => {
+        const { remote, queries } = upstream();
+        const result = await remote.getGqlTransactions({
+          pageSize: 10,
+          sortOrder: 'HEIGHT_DESC',
+          tags: [],
+          ...args,
+          nodeSelection: nodeSelection(
+            `{ transactions { edges { node { ${fields} } } } }`,
+          ),
+        });
+        const byId = new Map(result.edges.map((e) => [e.node.id, e.node]));
+        const quantity = fields.includes('quantity');
+        const fee = fields.includes('fee');
+        for (const record of records) {
+          const tx = byId.get(record.id);
+          assert.ok(tx !== undefined, `${record.id} returned`);
+          if (quantity) {
+            assert.deepEqual(resolveTxQuantity(tx), {
+              winston: record.quantity,
+              ar: arOf(record.quantity),
+            });
+          }
+          if (fee) {
+            assert.deepEqual(resolveTxFee(tx), {
+              winston: record.fee,
+              ar: arOf(record.fee),
+            });
+          }
+        }
+        // The transfer reads 2.464754868051 AR, never 0.
+        const transfer = byId.get(records[0].id)!;
+        if (quantity) {
+          assert.equal(resolveTxQuantity(transfer).ar, '2.464754868051');
+          assert.match(queries[0], /quantity \{[^}]*winston/);
+        }
+        if (fee) {
+          assert.equal(resolveTxFee(transfer).ar, '0.000042361404');
+          assert.match(queries[0], /fee \{[^}]*winston/);
+        }
+      });
+    }
+  }
+
+  it('reads parent { id } without bundledIn, for lists and transaction(id)', async () => {
+    const { remote } = upstream();
+    const result = await remote.getGqlTransactions({
+      pageSize: 10,
+      sortOrder: 'HEIGHT_DESC',
+      tags: [],
+      ids: records.map((r) => r.id),
+      nodeSelection: nodeSelection(
+        `{ transactions { edges { node { id parent { id } } } } }`,
+      ),
+    });
+    const byId = new Map(result.edges.map((e) => [e.node.id, e.node]));
+    assert.deepEqual(resolveTxParent(byId.get(records[1].id)!), {
+      id: records[1].bundledIn,
+    });
+    assert.equal(resolveTxParent(byId.get(records[0].id)!), null);
+
+    const doc = parse(`{ transaction(id: "x") { id parent { id } } }`);
+    const op = doc.definitions[0] as OperationDefinitionNode;
+    const field = op.selectionSet.selections[0] as {
+      selectionSet: SelectionSetNode;
+    };
+    const tx = await remote.getGqlTransaction({
+      id: records[1].id,
+      nodeSelection: field.selectionSet,
+    });
+    assert.ok(tx !== null);
+    assert.deepEqual(resolveTxParent(tx), { id: records[1].bundledIn });
+    assert.equal(tx.isDataItem, true);
+  });
+
+  it('reads quantity { ar } right for transaction(id) too', async () => {
+    const { remote } = upstream();
+    const doc = parse(
+      `{ transaction(id: "x") { id quantity { ar } fee { ar } } }`,
+    );
+    const op = doc.definitions[0] as OperationDefinitionNode;
+    const field = op.selectionSet.selections[0] as {
+      selectionSet: SelectionSetNode;
+    };
+    const tx = await remote.getGqlTransaction({
+      id: records[0].id,
+      nodeSelection: field.selectionSet,
+    });
+    assert.ok(tx !== null);
+    assert.equal(resolveTxQuantity(tx).ar, '2.464754868051');
+    assert.equal(resolveTxFee(tx).ar, '0.000042361404');
+  });
+
+  it('adds winston to a forwarded amount selection, once', () => {
+    assert.equal(
+      canon(
+        fanoutInternals.renderTransactionNodeSelection(
+          nodeSelection(
+            `{ transactions { edges { node { id quantity { ar } fee { winston ar } } } } }`,
+          ),
+        ),
+      ),
+      'id quantity { ar winston } fee { winston ar }',
+    );
   });
 });

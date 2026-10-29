@@ -5,7 +5,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import { default as axios, AxiosInstance } from 'axios';
-import { FieldNode, SelectionSetNode, print } from 'graphql';
+import { FieldNode, Kind, SelectionSetNode } from 'graphql';
 import CircuitBreaker from 'opossum';
 import winston from 'winston';
 
@@ -124,66 +124,69 @@ const DEFAULT_TRANSACTION_NODE_FIELDS = `
  */
 const REQUIRED_CO_FIELDS_BY_FIELD: Record<string, readonly string[]> = {
   block: ['id', 'timestamp', 'height', 'previous'],
+  // The flat GqlTransaction keeps an amount only in winston
+  // (`mapRemoteTransaction` reads `quantity.winston` / `fee.winston`), and
+  // the local Amount resolver derives `ar` from it. Forwarding a user's
+  // `quantity { ar }` as is left winston unrequested, so it mapped to '0'
+  // and every amount read 0 AR unless `winston` was selected too.
+  quantity: ['winston'],
+  fee: ['winston'],
 };
 
 /**
  * Render a GraphQL selection set as a plain fragment body (no surrounding
- * braces). Aliases are stripped and selections are deduped by canonical name,
- * because the mapper reads canonical keys like `node.anchor`. Non-field
- * selections (fragment spreads, inline fragments) cause a bail-out — the caller
- * falls back to the default field set.
+ * braces). Aliases are stripped, because the mapper reads canonical keys like
+ * `node.anchor`, and every selection of one field is merged into one: a query
+ * may select a field twice under different aliases (`a: tags { name }
+ * b: tags { value }`), and forwarding only the first would leave the other's
+ * sub-fields unrequested. Fragment spreads and inline fragments, at any
+ * depth, cause a bail-out — the caller falls back to the default field set,
+ * which selects every field the mapper reads.
  */
 function renderSelectionSet(
   selectionSet: SelectionSetNode,
 ): string | undefined {
-  const byName = new Map<string, string>();
+  const byName = new Map<string, FieldNode[]>();
   for (const sel of selectionSet.selections) {
     if (sel.kind !== 'Field') return undefined;
-    const field = sel as FieldNode;
-    const name = field.name.value;
-    if (byName.has(name)) continue;
-    if (field.selectionSet !== undefined) {
-      const nested = renderSelectionSet(field.selectionSet);
-      if (nested === undefined) {
-        // Inner selection contains a FragmentSpread or InlineFragment.
-        // For most fields we can preserve the user's intent by printing
-        // the field as-is. But for fields whose flat-mapper invariant
-        // depends on specific co-fields being present
-        // (REQUIRED_CO_FIELDS_BY_FIELD), printing a fragment as-is can
-        // leave those co-fields unselected — reproducing the original
-        // `Transaction.block` nulling bug PR #718 was meant to fix.
-        // Bail to the caller's fallback (`DEFAULT_TRANSACTION_NODE_FIELDS`,
-        // which includes the full co-field set) rather than silently
-        // emitting a fragment-shaped selection that loses correctness.
-        if (REQUIRED_CO_FIELDS_BY_FIELD[name] !== undefined) {
-          return undefined;
-        }
-        byName.set(name, print(field));
-        continue;
-      }
-      const required = REQUIRED_CO_FIELDS_BY_FIELD[name];
-      if (required !== undefined) {
-        // Union the user's sub-selection with the required co-fields.
-        const present = new Set(
-          field.selectionSet.selections
-            .filter((s): s is FieldNode => s.kind === 'Field')
-            .map((s) => s.name.value),
-        );
-        const additions = required.filter((f) => !present.has(f)).join(' ');
-        byName.set(
-          name,
-          additions === ''
-            ? `${name} { ${nested} }`
-            : `${name} { ${nested} ${additions} }`,
-        );
-      } else {
-        byName.set(name, `${name} { ${nested} }`);
-      }
+    const name = sel.name.value;
+    const fields = byName.get(name);
+    if (fields === undefined) {
+      byName.set(name, [sel]);
     } else {
-      byName.set(name, name);
+      fields.push(sel);
     }
   }
-  return Array.from(byName.values()).join(' ');
+  const rendered: string[] = [];
+  for (const [name, fields] of byName) {
+    const subSelections = fields.flatMap(
+      (field) => field.selectionSet?.selections ?? [],
+    );
+    if (subSelections.length === 0) {
+      rendered.push(name);
+      continue;
+    }
+    const nested = renderSelectionSet({
+      kind: Kind.SELECTION_SET,
+      selections: subSelections,
+    });
+    if (nested === undefined) return undefined;
+    // Union the user's sub-selection with the required co-fields.
+    const present = new Set(
+      subSelections
+        .filter((s): s is FieldNode => s.kind === 'Field')
+        .map((s) => s.name.value),
+    );
+    const additions = (REQUIRED_CO_FIELDS_BY_FIELD[name] ?? [])
+      .filter((f) => !present.has(f))
+      .join(' ');
+    rendered.push(
+      additions === ''
+        ? `${name} { ${nested} }`
+        : `${name} { ${nested} ${additions} }`,
+    );
+  }
+  return rendered.join(' ');
 }
 
 /**
@@ -501,6 +504,9 @@ interface RemoteTxNode {
     previous?: string;
   } | null;
   bundledIn?: { id: string } | null;
+  // Deprecated alias of bundledIn; a user's selection is forwarded as is,
+  // so the parent id may arrive under either name.
+  parent?: { id: string } | null;
 }
 
 /**
@@ -515,8 +521,8 @@ function mapRemoteTransaction(
   const decoded = decodeTransactionGqlCursor(cursor);
   // Single-record transaction(id) responses have no cursor. Infer data-item
   // status from bundledIn so the shape matches cursor-derived results.
-  const dataItemId =
-    decoded.dataItemId ?? (node.bundledIn != null ? node.id : 'AA');
+  const parentId = node.bundledIn?.id ?? node.parent?.id ?? null;
+  const dataItemId = decoded.dataItemId ?? (parentId !== null ? node.id : 'AA');
   const isDataItem = dataItemId !== 'AA';
   return {
     id: node.id,
@@ -541,7 +547,7 @@ function mapRemoteTransaction(
     blockTimestamp: node.block?.timestamp ?? null,
     height: node.block?.height ?? null,
     blockPreviousBlock: node.block?.previous ?? null,
-    parentId: node.bundledIn?.id ?? null,
+    parentId,
     blockTransactionIndex: decoded.blockTransactionIndex ?? 0,
     dataItemId,
     tags: node.tags ?? [],
