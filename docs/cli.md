@@ -1525,8 +1525,9 @@ gateway's flush sets `stable_at` when it flushes, after the item was
 indexed). The band must still be in `--bands-dir`, for its `createdAt`.
 A band republished over the same heights can share that `createdAt`, so
 its rows go too; the ledger rows of every SQLite import over those heights
-are removed with the band's (`reset`), and the next run writes their items
-again. Wallets and tag names stay. The result is `{ "imported", "imports":
+are removed with the band's (`reset`), in the transaction that removes the
+first rows, so a forget stopped part way leaves no band held complete, and
+the next run writes their items again. Wallets and tag names stay. The result is `{ "imported", "imports":
 [{ "band", "heightRange", "counts", "conflictExamples" }] }` with the
 summary fields above (no `waiting`, `loaded` or `failed`); `counts` has
 `bandRows`, `otherPlacements`, `aboveCeiling`, `unlocated`, `present`,

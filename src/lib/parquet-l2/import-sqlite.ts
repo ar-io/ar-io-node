@@ -562,7 +562,8 @@ export const SQLITE_FORGET_BATCH = 5_000;
 /**
  * Removes what imports of one band wrote into `bundles.db`: its items and
  * their tags, a batch at a time beside the running gateway, then its ledger
- * row, and those of every other SQLite import over the same heights. A row is the band's when its `indexed_at` and `stable_at` are both
+ * row, and those of every other SQLite import over the same heights when
+ * any row was removed. A row is the band's when its `indexed_at` and `stable_at` are both
  * the band's `createdAt`, as only the importer writes them; the gateway's
  * flush sets `stable_at` when it flushes, after the item was indexed. The
  * wallets and tag names an import added stay: other rows may use them.
@@ -596,8 +597,26 @@ export async function forgetSqliteBand({
     'DELETE FROM stable_data_item_tags WHERE data_item_id = ?',
   );
   const deleteItem = db.prepare('DELETE FROM stable_data_items WHERE id = ?');
+  const forgetOwn = db.prepare(
+    "DELETE FROM parquet_l2_imports WHERE band_id = ? AND target = 'sqlite'",
+  );
+  // Rows are told apart by `indexed_at`, the band's `createdAt`, and a band
+  // republished over the same heights can carry the same one: its rows are
+  // the ones removed here. Its ledger row goes too, so the next run writes
+  // its items again (a run writes only what is missing), rather than
+  // holding it complete over heights that are now empty.
+  const forgetOverlapping = db
+    .prepare(
+      `DELETE FROM parquet_l2_imports
+       WHERE target = 'sqlite' AND band_id != ?
+         AND height_from <= ? AND height_to >= ?
+       RETURNING band_id`,
+    )
+    .pluck();
   let items = 0;
   let tags = 0;
+  let reset: string[] = [];
+  let ledgerForgotten = false;
   for (;;) {
     const ids = select.all(
       indexedAt,
@@ -609,34 +628,33 @@ export async function forgetSqliteBand({
     if (ids.length === 0) break;
     db.exec('BEGIN IMMEDIATE');
     try {
+      // The ledger rows go with the first rows deleted, in one transaction:
+      // a forget stopped part way then leaves no band held complete over
+      // heights it has emptied, and running it again finishes the rows.
+      if (!ledgerForgotten) {
+        forgetOwn.run(bandId);
+        reset = forgetOverlapping.all(
+          bandId,
+          heightRange[1],
+          heightRange[0],
+        ) as string[];
+      }
       for (const id of ids) {
         tags += deleteTags.run(id).changes;
         items += deleteItem.run(id).changes;
       }
       db.exec('COMMIT');
+      ledgerForgotten = true;
     } catch (error) {
       db.exec('ROLLBACK');
       throw error;
     }
     if (yieldMs > 0) await sleep(yieldMs);
   }
-  db.prepare(
-    "DELETE FROM parquet_l2_imports WHERE band_id = ? AND target = 'sqlite'",
-  ).run(bandId);
-  // Rows are told apart by `indexed_at`, the band's `createdAt`, and a band
-  // republished over the same heights can carry the same one: its rows were
-  // the ones just removed. Its ledger row goes too, so the next run writes
-  // its items again (a run writes only what is missing), rather than
-  // holding it complete over heights that are now empty.
-  const reset = db
-    .prepare(
-      `DELETE FROM parquet_l2_imports
-       WHERE target = 'sqlite' AND band_id != ?
-         AND height_from <= ? AND height_to >= ?
-       RETURNING band_id`,
-    )
-    .pluck()
-    .all(bandId, heightRange[1], heightRange[0]) as string[];
+  // Nothing of the band was left: only its own ledger row goes, and the
+  // other imports over its heights, whose rows this removed nothing of,
+  // keep theirs.
+  if (!ledgerForgotten) forgetOwn.run(bandId);
   db.pragma('wal_checkpoint(TRUNCATE)');
   return { items, tags, reset };
 }

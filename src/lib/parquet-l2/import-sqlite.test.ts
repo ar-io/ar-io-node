@@ -486,6 +486,59 @@ describe('importBandIntoSqlite', () => {
     assert.equal(counts.written, 1);
   });
 
+  it('a forget that finds no rows leaves other imports over the heights alone', async () => {
+    db.prepare(
+      `INSERT INTO parquet_l2_imports (band_id, target, index_name, publisher,
+         height_from, height_to, band_digest, started_at, completed_at)
+       VALUES (?, 'sqlite', 'ardrive-l2', 'p', 100, 199, x'00', 1, 2)`,
+    ).run('l2-h100-199-test');
+    db.prepare(
+      `INSERT INTO parquet_l2_imports (band_id, target, index_name, publisher,
+         height_from, height_to, band_digest, started_at, completed_at)
+       VALUES (?, 'sqlite', 'ardrive-l2', 'p', 100, 199, x'01', 1, 2)`,
+    ).run('l2-h100-199-other');
+    const removed = await forgetSqliteBand({
+      db,
+      bandId: 'l2-h100-199-test',
+      heightRange: [100, 199],
+      indexedAt: INDEXED_AT,
+      yieldMs: 0,
+    });
+    assert.deepEqual(removed, { items: 0, tags: 0, reset: [] });
+    assert.deepEqual(
+      [...readLedger(db, 'sqlite').keys()],
+      ['l2-h100-199-other'],
+    );
+  });
+
+  it('a forget stopped after its first batch has already reset the ledger', async () => {
+    await writeBand(duck, dir, [
+      { id: id(1), height: 110, location: { rpo: 0, offset: 0 } },
+      { id: id(2), height: 120, location: { rpo: 0, offset: 0 } },
+    ]);
+    await run();
+    await run({ bandId: 'l2-h100-199-republished' });
+    await assert.rejects(
+      forgetSqliteBand({
+        db,
+        bandId: 'l2-h100-199-test',
+        heightRange: [100, 199],
+        indexedAt: INDEXED_AT,
+        batch: 1,
+        yieldMs: 1,
+        sleep: async () => {
+          throw new Error('stopped');
+        },
+      }),
+      /stopped/,
+    );
+    assert.equal(
+      db.prepare('SELECT COUNT(*) FROM stable_data_items').pluck().get(),
+      1,
+    );
+    assert.equal(readLedger(db, 'sqlite').size, 0);
+  });
+
   it('forgets exactly what the band wrote', async () => {
     await writeBand(duck, dir, [
       { id: id(1), height: 110, location: { rpo: 0, offset: 0 } },
