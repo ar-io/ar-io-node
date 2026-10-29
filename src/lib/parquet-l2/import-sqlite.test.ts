@@ -70,6 +70,7 @@ async function writeBand(
   rows: Row[],
   tagsPerItem = 2,
   tagValue = 'ArDrive',
+  extraTags: Array<{ name: string; value: string }> = [],
 ): Promise<void> {
   await fs.mkdir(dir, { recursive: true });
   const values = rows.map((r) => {
@@ -99,6 +100,11 @@ async function writeBand(
         `(${r.height}::UBIGINT, ${sqlBlob(r.id)}, ${i}::USMALLINT, encode('Tag-${i}'), encode('${tagValue}'))`,
       );
     }
+    extraTags.forEach((t, k) =>
+      tags.push(
+        `(${r.height}::UBIGINT, ${sqlBlob(r.id)}, ${tagsPerItem + k}::USMALLINT, encode('${t.name}'), encode('${t.value}'))`,
+      ),
+    );
   }
   await duck.exec(`
     COPY (SELECT * FROM (VALUES ${tags.join(',')}) AS t(height, id, tag_index, tag_name, tag_value))
@@ -440,6 +446,45 @@ describe('importBandIntoSqlite', () => {
     assert.equal(tagCount(1) + tagCount(2), 4);
   });
 
+  it("takes content type and encoding from the item's own tags, not the band's columns", async () => {
+    // The band's row says text/plain and no encoding; the tags, which the
+    // signature covers, say otherwise.
+    await writeBand(
+      duck,
+      dir,
+      [{ id: id(1), height: 110, location: { rpo: 0, offset: 0 } }],
+      2,
+      'ArDrive',
+      [
+        { name: 'content-type', value: 'image/png' },
+        { name: 'Content-Encoding', value: 'gzip' },
+        { name: 'Content-Type', value: 'text/html' },
+      ],
+    );
+    const { counts } = await run();
+    assert.equal(item(1)!.content_type, 'image/png');
+    assert.equal(item(1)!.content_encoding, 'gzip');
+    assert.equal(counts.typeFromTags, 1);
+  });
+
+  it('writes no content type when the item has no such tag, whatever the band row says', async () => {
+    await writeBand(duck, dir, [
+      { id: id(1), height: 110, location: { rpo: 0, offset: 0 } },
+    ]);
+    const { counts } = await run();
+    assert.equal(item(1)!.content_type, null);
+    assert.equal(counts.typeFromTags, 1);
+  });
+
+  it("restores the connection's busy timeout after its checkpoints", async () => {
+    db.pragma('busy_timeout = 4321');
+    await writeBand(duck, dir, [
+      { id: id(1), height: 110, location: { rpo: 0, offset: 0 } },
+    ]);
+    await run({ checkpointMs: 0 });
+    assert.equal(db.pragma('busy_timeout', { simple: true }), 4321);
+  });
+
   it('counts an item written whose owner key the band lacks', async () => {
     await writeBand(duck, dir, [
       {
@@ -504,7 +549,12 @@ describe('importBandIntoSqlite', () => {
       indexedAt: INDEXED_AT,
       yieldMs: 0,
     });
-    assert.deepEqual(removed, { items: 0, tags: 0, reset: [] });
+    assert.deepEqual(removed, {
+      items: 0,
+      tags: 0,
+      keptIndexed: 0,
+      reset: [],
+    });
     assert.deepEqual(
       [...readLedger(db, 'sqlite').keys()],
       ['l2-h100-199-other'],
@@ -539,6 +589,33 @@ describe('importBandIntoSqlite', () => {
     assert.equal(readLedger(db, 'sqlite').size, 0);
   });
 
+  it('forget keeps an imported item the gateway has since unbundled itself', async () => {
+    await writeBand(duck, dir, [
+      { id: id(1), height: 110, location: { rpo: 0, offset: 0 } },
+      { id: id(2), height: 120, location: { rpo: 0, offset: 0 } },
+    ]);
+    await run();
+    // The gateway unbundled item 1 after the import: its flush left the
+    // imported row, and its bundle is done.
+    db.prepare(
+      `INSERT INTO bundle_data_items (id, parent_id, parent_index, filter_id,
+         root_transaction_id, first_indexed_at, last_indexed_at)
+       VALUES (?, ?, 0, 1, ?, 1, 1)`,
+    ).run(id(1), ROOT, ROOT);
+    const removed = await forgetSqliteBand({
+      db,
+      bandId: 'l2-h100-199-test',
+      heightRange: [100, 199],
+      indexedAt: INDEXED_AT,
+      yieldMs: 0,
+    });
+    assert.equal(removed.items, 1);
+    assert.equal(removed.keptIndexed, 1);
+    assert.ok(item(1) !== undefined);
+    assert.equal(tagCount(1), 2);
+    assert.equal(item(2), undefined);
+  });
+
   it('forgets exactly what the band wrote', async () => {
     await writeBand(duck, dir, [
       { id: id(1), height: 110, location: { rpo: 0, offset: 0 } },
@@ -563,7 +640,12 @@ describe('importBandIntoSqlite', () => {
       batch: 1,
       yieldMs: 0,
     });
-    assert.deepEqual(removed, { items: 1, tags: 2, reset: [] });
+    assert.deepEqual(removed, {
+      items: 1,
+      tags: 2,
+      keptIndexed: 0,
+      reset: [],
+    });
     assert.equal(item(1), undefined);
     assert.ok(item(2) !== undefined);
     assert.ok(item(3) !== undefined);

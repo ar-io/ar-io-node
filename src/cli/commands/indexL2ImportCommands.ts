@@ -957,6 +957,15 @@ async function importBandsSqlite({
     const ledger = readLedger(db, 'sqlite');
     const pending: L2BandOnDisk[] = [];
     const aboveCeiling: string[] = [];
+    const noBlocks: string[] = [];
+    // A gateway that began at START_HEIGHT holds no blocks below it, and an
+    // item there would never show: such a band is not verified (an on-chain
+    // sample) only to be refused.
+    const blocksIn = core
+      .prepare(
+        'SELECT COUNT(*) FROM stable_blocks WHERE height BETWEEN ? AND ?',
+      )
+      .pluck();
     let done = 0;
     for (const b of [...live].sort(
       (x, y) => y.band.heightRange[0] - x.band.heightRange[0],
@@ -976,6 +985,10 @@ async function importBandsSqlite({
         done += 1;
         continue;
       }
+      if (blocksIn.get(b.band.heightRange[0], top) === 0) {
+        noBlocks.push(b.id);
+        continue;
+      }
       pending.push(b);
     }
     const take = pending.slice(0, settings.maxBands ?? pending.length);
@@ -988,6 +1001,7 @@ async function importBandsSqlite({
       done,
       pending: pending.length,
       aboveCeiling,
+      noBlocks,
     };
     if (take.length === 0) {
       log.info('Nothing to import now', summary);

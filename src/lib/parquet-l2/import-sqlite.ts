@@ -75,6 +75,14 @@ export const SQLITE_YIELD_MS = 50;
 export const SQLITE_CHECKPOINT_MS = 10_000;
 
 /**
+ * The longest a checkpoint waits for the gateway's readers. A `TRUNCATE`
+ * checkpoint holds off other writers while it waits, and the gateway's
+ * writers give up after 30 s: one long GraphQL read must not make them fail.
+ * A checkpoint that cannot finish in this time is simply tried again later.
+ */
+export const SQLITE_CHECKPOINT_WAIT_MS = 1_000;
+
+/**
  * The importer's page cache, in KiB (as `cache_size` takes it, negative).
  * Every item lands in indexes keyed by random values (its id, its tags'
  * hashes), so once `bundles.db` outgrows the default 2 MB cache nearly every
@@ -116,6 +124,11 @@ export interface L2SqliteCounts {
   tags: number;
   /** Items written whose owner's key the band lacks: not in GraphQL. */
   noOwnerKey: number;
+  /**
+   * Items written whose band row gave a content type or encoding other than
+   * their own tags give. The tags' is written: the signature covers them.
+   */
+  typeFromTags: number;
 }
 
 /** What {@link importBandIntoSqlite} returns. */
@@ -175,11 +188,42 @@ export const SQLITE_IMPORT_SQL = {
 
 const sqlString = (s: string) => `'${s.replace(/'/g, "''")}'`;
 
+/**
+ * `wal_checkpoint(TRUNCATE)` waiting at most {@link SQLITE_CHECKPOINT_WAIT_MS}
+ * for readers; the connection's own busy timeout is restored after.
+ */
+function checkpoint(db: Sqlite.Database): void {
+  const timeout = db.pragma('busy_timeout', { simple: true }) as number;
+  db.pragma(`busy_timeout = ${SQLITE_CHECKPOINT_WAIT_MS}`);
+  try {
+    db.pragma('wal_checkpoint(TRUNCATE)');
+  } catch (error) {
+    // Readers held on past the wait: the next checkpoint tries again.
+    if ((error as { code?: string }).code !== 'SQLITE_BUSY') throw error;
+  } finally {
+    db.pragma(`busy_timeout = ${timeout}`);
+  }
+}
+
 /** As the gateway hashes a tag's name or value (`hashTagPart`). */
 const hashTagPart = (value: Buffer) =>
   crypto.createHash('sha1').update(value).digest();
 
 const EMPTY = Buffer.alloc(0);
+
+/**
+ * An item's first tag of a name (case-insensitive) in tag order, as the
+ * gateway takes `content_type` and `content_encoding` when it indexes an
+ * item itself (`standalone-sqlite.ts`, `ans-104.ts`).
+ */
+function firstTagValue(tags: TagRow[], lowerName: string): string | null {
+  for (const t of tags) {
+    if (Buffer.from(t.tag_name).toString('utf8').toLowerCase() === lowerName) {
+      return Buffer.from(t.tag_value).toString('utf8');
+    }
+  }
+  return null;
+}
 const asNumber = (v: unknown) =>
   v === null || v === undefined ? null : Number(v as number | bigint);
 const asBuffer = (v: unknown) =>
@@ -366,6 +410,7 @@ export async function importBandIntoSqlite({
       written: 0,
       tags: 0,
       noOwnerKey: 0,
+      typeFromTags: 0,
     };
     const conflictExamples: string[] = [];
     let lastCheckpoint = now();
@@ -406,7 +451,7 @@ export async function importBandIntoSqlite({
         rows: 0,
       };
       if (now() - lastCheckpoint >= checkpointMs) {
-        db.pragma('wal_checkpoint(TRUNCATE)');
+        checkpoint(db);
         lastCheckpoint = now();
       }
       if (yieldMs > 0) await sleep(yieldMs);
@@ -437,6 +482,15 @@ export async function importBandIntoSqlite({
             txStarted = now();
           }
           const itemTags = tagsOf.get(Number(r.rn)) ?? [];
+          // Served as the item's own (Content-Type and Content-Encoding on
+          // its data, ranked as indexed), so taken from the tags its
+          // signature covers, as the gateway takes them when it unbundles,
+          // never from the band's separate columns, which no check binds.
+          const contentType = firstTagValue(itemTags, 'content-type');
+          const contentEncoding = firstTagValue(itemTags, 'content-encoding');
+          const typeDiffers =
+            contentType !== r.content_type ||
+            contentEncoding !== r.content_encoding;
           const height = Number(r.height);
           const id = Buffer.from(r.id);
           const parentId = Buffer.from(r.parent_id);
@@ -453,7 +507,7 @@ export async function importBandIntoSqlite({
             target: asBuffer(r.target) ?? EMPTY,
             data_offset: asNumber(r.data_offset),
             data_size: asNumber(r.data_size),
-            content_type: r.content_type,
+            content_type: contentType,
             tag_count: r.tag_count ?? itemTags.length,
             indexed_at: indexedAt,
             signature_type: r.signature_type,
@@ -463,13 +517,14 @@ export async function importBandIntoSqlite({
             owner_size: asNumber(r.owner_size),
             signature_offset: asNumber(r.signature_offset),
             signature_size: asNumber(r.signature_size),
-            content_encoding: r.content_encoding,
+            content_encoding: contentEncoding,
             root_parent_offset: asNumber(r.root_parent_offset),
           };
           inTx.rows += 1;
           if (stmt.item.run(values).changes === 1) {
             counts.written += 1;
             inTx.written += 1;
+            if (typeDiffers) counts.typeFromTags += 1;
             if (r.public_modulus !== null) {
               stmt.wallet.run(values.owner_address, asBuffer(r.public_modulus));
             } else {
@@ -537,7 +592,7 @@ export async function importBandIntoSqlite({
       throw error;
     }
 
-    db.pragma('wal_checkpoint(TRUNCATE)');
+    checkpoint(db);
     ledger.completed({
       bandId,
       heightTo: top,
@@ -561,7 +616,8 @@ export const SQLITE_FORGET_BATCH = 5_000;
 
 /**
  * Removes what imports of one band wrote into `bundles.db`: its items and
- * their tags, a batch at a time beside the running gateway, then its ledger
+ * their tags (but not items the gateway has since unbundled itself, which
+ * `bundle_data_items` records), a batch at a time beside the running gateway, then its ledger
  * row, and those of every other SQLite import over the same heights when
  * any row was removed. A row is the band's when its `indexed_at` and `stable_at` are both
  * the band's `createdAt`, as only the importer writes them; the gateway's
@@ -585,12 +641,32 @@ export async function forgetSqliteBand({
   batch?: number;
   yieldMs?: number;
   sleep?: (ms: number) => Promise<void>;
-}): Promise<{ items: number; tags: number; reset: string[] }> {
+}): Promise<{
+  items: number;
+  tags: number;
+  keptIndexed: number;
+  reset: string[];
+}> {
   const select = db
     .prepare(
-      `SELECT id FROM stable_data_items
-       WHERE indexed_at = ? AND stable_at = ? AND height BETWEEN ? AND ?
+      `SELECT sdi.id FROM stable_data_items sdi
+       WHERE sdi.indexed_at = ? AND sdi.stable_at = ?
+         AND sdi.height BETWEEN ? AND ?
+         AND NOT EXISTS (
+           SELECT 1 FROM bundle_data_items bdi WHERE bdi.id = sdi.id)
        LIMIT ?`,
+    )
+    .pluck();
+  // The band's rows the gateway has also unbundled itself: its flush found
+  // the row there and left it (first writer wins), so the row is the
+  // gateway's item too, and its bundle is done, so nothing would write it
+  // again. Kept, with its tags.
+  const keptIndexed = db
+    .prepare(
+      `SELECT COUNT(*) FROM stable_data_items sdi
+       WHERE sdi.indexed_at = ? AND sdi.stable_at = ?
+         AND sdi.height BETWEEN ? AND ?
+         AND EXISTS (SELECT 1 FROM bundle_data_items bdi WHERE bdi.id = sdi.id)`,
     )
     .pluck();
   const deleteTags = db.prepare(
@@ -655,6 +731,16 @@ export async function forgetSqliteBand({
   // other imports over its heights, whose rows this removed nothing of,
   // keep theirs.
   if (!ledgerForgotten) forgetOwn.run(bandId);
-  db.pragma('wal_checkpoint(TRUNCATE)');
-  return { items, tags, reset };
+  checkpoint(db);
+  return {
+    items,
+    tags,
+    keptIndexed: keptIndexed.get(
+      indexedAt,
+      indexedAt,
+      heightRange[0],
+      heightRange[1],
+    ) as number,
+    reset,
+  };
 }

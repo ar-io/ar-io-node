@@ -250,6 +250,16 @@ describe('index-l2-import', () => {
       assert.deepEqual(result.aboveCeiling, [id]);
     });
 
+    it('skips, unverified, a band over heights the gateway holds no block at', async () => {
+      // A gateway that began at a later START_HEIGHT.
+      addBlocks(500);
+      const { id } = await installBand(100, 199);
+      const result = (await runSqlite()) as Record<string, unknown>;
+      assert.deepEqual(result.noBlocks, [id]);
+      assert.equal(result.pending, 0);
+      assert.equal(result.imported, 0);
+    });
+
     it('skips a band the ledger has completed up to the tip', async () => {
       addBlocks(150);
       const { id, band: b } = await installBand(100, 199);

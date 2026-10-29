@@ -1490,6 +1490,13 @@ as above (step 2), and its items are then written into `bundles.db`:
 `tag_values`, as the gateway's own flush writes them. Its `new_*` tables,
 `bundles` and `filters` are not touched.
 
+- **Content type and encoding from the item's tags.** `content_type` and
+  `content_encoding` are served as the item's own (its data's
+  `Content-Type` and `Content-Encoding`), so they are taken from its first
+  `Content-Type` and `Content-Encoding` tags, as the gateway takes them when
+  it unbundles, and not from the band's columns of the same name, which no
+  check binds to the item. Items whose band row said otherwise are counted
+  (`typeFromTags`).
 - **Located items only.** An item no band row locates is skipped and
   counted (`unlocated`): `data_offset` is required here, and an invented
   one would point retrieval at the wrong bytes.
@@ -1497,7 +1504,10 @@ as above (step 2), and its items are then written into `bundles.db`:
   `stable_blocks` (`ceiling`). SQLite GraphQL shows an item only beside its
   block, so a band with items at a height `core.db` has no block for is
   refused before anything of it is written; import or fill the L1 index
-  there first. A run refuses outright when `core.db` holds no stable block.
+  there first. A band over heights where `core.db` holds no block at all (a
+  gateway that began at a later `START_HEIGHT`) is not verified and is
+  listed in `noBlocks`. A run refuses outright when `core.db` holds no
+  stable block.
 - **First writer wins.** Every insert is `ON CONFLICT DO NOTHING`, as the
   gateway's flush is: an import never changes a row the gateway holds, and
   the gateway never changes an imported one. An item already held is
@@ -1510,7 +1520,8 @@ as above (step 2), and its items are then written into `bundles.db`:
   and a later run counts the band's own rows as `alreadyImported`.
 - **Beside the running gateway.** Transactions are `BEGIN IMMEDIATE`, at most
   10,000 items or 250 ms long, with a 50 ms pause after each and none open
-  while the band is read; the WAL is checkpointed every 10 s. The run's own
+  while the band is read; the WAL is checkpointed every 10 s, waiting at most
+  1 s for the gateway's readers so its writers are never held long. The run's own
   connection uses a 256 MiB page cache and `synchronous = NORMAL`.
 - **Resumable.** The ledger row's counts move in the same transaction as
   the rows they count, so a run stopped part way leaves the ledger matching
@@ -1522,7 +1533,10 @@ The lock is `.l2-import.lock` beside `bundles.db`. `--forget <band>`
 removes the items a band wrote, and their tags, a batch at a time: those
 whose `indexed_at` and `stable_at` are both the band's `createdAt` (the
 gateway's flush sets `stable_at` when it flushes, after the item was
-indexed). The band must still be in `--bands-dir`, for its `createdAt`.
+indexed). An item the gateway has since unbundled itself
+(`bundle_data_items` records it) is kept (`keptIndexed`): its flush found
+the imported row and left it, and its bundle is done, so nothing would
+write the item again. The band must still be in `--bands-dir`, for its `createdAt`.
 A band republished over the same heights can share that `createdAt`, so
 its rows go too; the ledger rows of every SQLite import over those heights
 are removed with the band's (`reset`), in the transaction that removes the
@@ -1533,8 +1547,25 @@ summary fields above (no `waiting`, `loaded` or `failed`); `counts` has
 `bandRows`, `otherPlacements`, `aboveCeiling`, `unlocated`, `present`,
 `conflicting`, `elsewhere`, `alreadyImported`, `written`, `tags` and
 `noOwnerKey` (items written whose owner's key the band lacks, which SQLite
-GraphQL cannot show). `--forget` prints `{ "forgotten", "target",
-"indexedAt", "heightRange", "items", "tags", "reset" }`.
+GraphQL cannot show) and `typeFromTags`. The summary also lists
+`noBlocks`. `--forget` prints `{ "forgotten", "target",
+"indexedAt", "heightRange", "items", "tags", "keptIndexed", "reset" }`.
+
+What an operator should know:
+
+- The import does not stop the gateway unbundling the same bundles near
+  the tip (or with `BACKFILL_BUNDLE_RECORDS`); where it does, the gateway's
+  row is dropped at flush and only bandwidth is spent.
+- When the gateway later unbundles an imported item at another placement,
+  its flush adds that placement's tags beside the imported ones, as it does
+  for an item in two bundles, and GraphQL lists the item's tags twice.
+- An item whose owner's key the band lacks takes disk but is not shown by
+  SQLite GraphQL, which joins `wallets` (`noOwnerKey`).
+- A running worker imports a forgotten band again if it is still installed;
+  remove it from the bands directory, or stop the worker, first.
+- `--forget` needs the band in `--bands-dir`. A band uninstalled after its
+  replacement arrived is forgotten through the replacement: both carry the
+  same `createdAt` over the same heights.
 
 ### `index-l2-import` result
 
