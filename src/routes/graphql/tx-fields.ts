@@ -11,6 +11,7 @@
 import { winstonToAr } from '../../lib/encoding.js';
 import { GqlTransaction } from '../../types.js';
 
+/** `Transaction.quantity`: the amount transferred, in winston and in AR. */
 export function resolveTxQuantity(tx: GqlTransaction) {
   return {
     ar: winstonToAr(tx.quantity || '0'),
@@ -18,6 +19,7 @@ export function resolveTxQuantity(tx: GqlTransaction) {
   };
 }
 
+/** `Transaction.fee`: the reward paid, in winston and in AR. */
 export function resolveTxFee(tx: GqlTransaction) {
   return {
     ar: winstonToAr(tx.fee || '0'),
@@ -25,6 +27,7 @@ export function resolveTxFee(tx: GqlTransaction) {
   };
 }
 
+/** `Transaction.parent`: the bundle a data item is in, or null for an L1 transaction. */
 export function resolveTxParent(tx: GqlTransaction) {
   if (tx.parentId === null) {
     return null;
