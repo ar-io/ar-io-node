@@ -206,9 +206,90 @@ describe('index-l2-import', () => {
     await fs.access(path.join(staging, 'l2-import', '.l2-import.lock'));
   });
 
-  it('refuses any target but clickhouse', async () => {
-    await assert.rejects(run({ target: 'sqlite' }), /not built yet/);
+  it('refuses any target but clickhouse and sqlite', async () => {
     await assert.rejects(run({ target: 'postgres' }), L2ImportRefused);
+  });
+
+  describe('--target sqlite', () => {
+    const runSqlite = (
+      options: Record<string, unknown> = {},
+      sqliteEnv: Record<string, string> = {},
+    ) =>
+      indexL2ImportCLICommand(
+        { target: 'sqlite', bandsDir, bundlesDb, coreDb, tmpDir, ...options },
+        { log, env: sqliteEnv },
+      );
+    const addBlocks = (...heights: number[]) => {
+      const core = new Sqlite(coreDb);
+      const insert = core.prepare(
+        `INSERT INTO stable_blocks (height, indep_hash, previous_block, nonce, hash,
+           block_timestamp, diff, last_retarget, reward_pool, block_size,
+           weave_size, tx_count, missing_tx_count)
+         VALUES (?, ?, NULL, x'00', x'00', 0, '0', 0, '0', 0, 0, 0, 0)`,
+      );
+      for (const h of heights) insert.run(h, Buffer.alloc(48, h % 256));
+      core.close();
+    };
+
+    it("refuses on a gateway with ClickHouse: that is the gateway's index", async () => {
+      await assert.rejects(runSqlite({}, env), /CLICKHOUSE_URL is set/);
+    });
+
+    it('refuses before the gateway holds any stable block', async () => {
+      await installBand(100, 199);
+      await assert.rejects(runSqlite(), /core.db holds no stable blocks/);
+    });
+
+    it('leaves bands above the stable tip for later, verifying nothing', async () => {
+      addBlocks(50, 99);
+      const { id } = await installBand(100, 199);
+      const result = (await runSqlite()) as Record<string, unknown>;
+      assert.equal(result.target, 'sqlite');
+      assert.equal(result.ceiling, 99);
+      assert.equal(result.imported, 0);
+      assert.deepEqual(result.aboveCeiling, [id]);
+    });
+
+    it('skips, unverified, a band over heights the gateway holds no block at', async () => {
+      // A gateway that began at a later START_HEIGHT.
+      addBlocks(500);
+      const { id } = await installBand(100, 199);
+      const result = (await runSqlite()) as Record<string, unknown>;
+      assert.deepEqual(result.noBlocks, [id]);
+      assert.equal(result.pending, 0);
+      assert.equal(result.imported, 0);
+    });
+
+    it('skips a band the ledger has completed up to the tip', async () => {
+      addBlocks(150);
+      const { id, band: b } = await installBand(100, 199);
+      const db = new Sqlite(bundlesDb);
+      db.prepare(
+        `INSERT INTO parquet_l2_imports (band_id, target, index_name, publisher,
+           height_from, height_to, band_digest, started_at, completed_at)
+         VALUES (?, 'sqlite', 'ardrive-l2', 'p', 100, 150, ?, 1, 2)`,
+      ).run(id, bandTablesDigest(b));
+      db.close();
+      const result = (await runSqlite()) as Record<string, unknown>;
+      assert.equal(result.done, 1);
+      assert.equal(result.pending, 0);
+    });
+
+    it('runs one import at a time per bundles.db', async () => {
+      const lock = await takeL2ImportLock(root);
+      try {
+        await assert.rejects(runSqlite(), /another index-l2-import is running/);
+      } finally {
+        lock.close();
+      }
+    });
+
+    it('forgets only a band still in the bands directory', async () => {
+      await assert.rejects(
+        runSqlite({ forget: 'l2-h1-2-gone' }),
+        /is not in .*forgetting reads its band.json/,
+      );
+    });
   });
 
   it('refuses without CLICKHOUSE_URL', async () => {

@@ -25,7 +25,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `parquet_l2_imports` in `bundles.db` (new migration), records each band;
   `--forget <band>` removes what an import wrote. One 3.2M-item band of
   `ardrive-l2` verifies and queues in about two minutes and loads in about
-  40 seconds.
+  40 seconds. `--target sqlite` (`L2_BAND_IMPORT_TARGET=sqlite`) does the
+  same for a gateway without ClickHouse, writing the items straight into
+  `bundles.db` beside the running gateway, up to its stable L1 tip, in
+  short transactions it can resume from; it is refused where
+  `CLICKHOUSE_URL` is set. All of `ardrive-l2` is about 370 GB in SQLite.
 
 ### Changed
 

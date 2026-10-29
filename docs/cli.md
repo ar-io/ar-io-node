@@ -1361,10 +1361,12 @@ every located item, the rest nested items on top), and how each ended.
 
 Loads verified `parquet-l2` bands, one L2 index such as `ardrive-l2`, into
 this gateway's index, so its GraphQL answers for their data items without
-unbundling them. `--target clickhouse` is the only target so far: it queues
-the rows this gateway's ClickHouse lacks for `clickhouse-auto-import` to
-load. The gateway runs it itself when `L2_BAND_IMPORT_ENABLED=true` (see
-[envs.md](envs.md)); run it by hand to import now, or to undo an import.
+unbundling them. `--target clickhouse` queues the rows this gateway's
+ClickHouse lacks for `clickhouse-auto-import` to load; `--target sqlite`,
+for a gateway without ClickHouse, writes them into `bundles.db` itself
+([SQLite target](#the-sqlite-target)). The gateway runs it itself when
+`L2_BAND_IMPORT_ENABLED=true` (see [envs.md](envs.md)); run it by hand to
+import now, or to undo an import.
 
 ```bash
 # queue the newest bands ClickHouse lacks, each verified first
@@ -1464,20 +1466,110 @@ the bands directory.
 
 | Option | Meaning |
 | --- | --- |
-| `--target clickhouse` | Where to import. Required; `sqlite` is not built yet |
+| `--target clickhouse\|sqlite` | Where to import. Required. `sqlite` is refused where `CLICKHOUSE_URL` is set |
 | `--bands-dir <path>` | The index's installed bands, `data/indexes/installed/<index>`. Its name is the index's name in the ledger. Required |
-| `--bundles-db <path>` | The `bundles.db` holding the ledger, written beside the running gateway (default `data/sqlite/bundles.db`) |
-| `--core-db <path>` | The gateway's `core.db`, read-only: the block of every height an item is written at comes from `stable_blocks` (default `data/sqlite/core.db`). A height it lacks is refused, since `clickhouse-import` would drop its items silently |
+| `--bundles-db <path>` | The `bundles.db` holding the ledger, and for `sqlite` the items too, written beside the running gateway (default `data/sqlite/bundles.db`) |
+| `--core-db <path>` | The gateway's `core.db`, read-only: the block of every height an item is written at comes from `stable_blocks` (default `data/sqlite/core.db`). A height it lacks is refused: `clickhouse-import` would drop its items silently, and SQLite GraphQL would never show them. For `sqlite`, its top stable block is the ceiling |
 | `--jobs-dir <path>` | Where jobs are queued: `l2-import` under `ETL_STAGING_PATH`, where `clickhouse-auto-import` looks (default `$ETL_STAGING_PATH/l2-import`, or `data/etl/staging/l2-import` where it is unset, as in the core container, which mounts it there). `tools/ar-io-node` always uses the node's own and refuses this option |
 | `--tmp-dir <path>` | Where DuckDB spills and scratch files go (default `data/tmp`, the gateway's temp volume rather than the container's own disk). `tools/ar-io-node` always uses the node's `TEMP_DATA_PATH` and refuses this option |
-| `--max-bands <n>` | Write jobs for at most this many bands (default: as many as the queue has room for) |
-| `--max-queued <n>` | Write no job while this many wait in the queue (default 2) |
+| `--max-bands <n>` | Write at most this many bands (default: as many as the queue has room for; for `sqlite`, every pending band) |
+| `--max-queued <n>` | Write no job while this many wait in the queue (default 2; `clickhouse` only) |
 | `--forget <band>` | Remove an import's rows, as above |
 | `--publication`, `--publisher-key`, `--registry-url`, `--index`, `--l1-bands-dir`, `--onchain`, `--seed`, `--arweave-nodes`, `--read-timeout`, `--allow-agreement`, `--allow-unlocated`, `--max-unlocated-share`, `--max-unchecked`, `--allow-expired`, `--band-deadline`, `--spill-max`, `--duckdb-threads` | As for `index-l2-verify`. The allow flags a band was accepted with are recorded in the ledger |
 
 ClickHouse is reached as the gateway reaches it, through `CLICKHOUSE_URL`,
 `CLICKHOUSE_USER` and `CLICKHOUSE_PASSWORD`; every read runs with
 `readonly = 2` and the bounds the census uses.
+
+### The SQLite target
+
+`--target sqlite` is for a gateway that keeps its index in SQLite alone. A
+band is verified exactly as above (step 1), one placement is kept per item
+as above (step 2), and its items are then written into `bundles.db`:
+`stable_data_items`, `stable_data_item_tags`, `wallets`, `tag_names` and
+`tag_values`, as the gateway's own flush writes them. Its `new_*` tables,
+`bundles` and `filters` are not touched.
+
+- **Content type and encoding from the item's tags.** `content_type` and
+  `content_encoding` are served as the item's own (its data's
+  `Content-Type` and `Content-Encoding`), so they are taken from its first
+  `Content-Type` and `Content-Encoding` tags, as the gateway takes them when
+  it unbundles, and not from the band's columns of the same name, which no
+  check binds to the item. Items whose band row said otherwise are counted
+  (`typeFromTags`).
+- **Located items only.** An item no band row locates is skipped and
+  counted (`unlocated`): `data_offset` is required here, and an invented
+  one would point retrieval at the wrong bytes.
+- **Nothing above the stable L1 tip**, the top height of `core.db`'s
+  `stable_blocks` (`ceiling`). SQLite GraphQL shows an item only beside its
+  block, so a band with items at a height `core.db` has no block for is
+  refused before anything of it is written; import or fill the L1 index
+  there first. Two cases are listed without being verified: a band that
+  starts above the tip is in `aboveCeiling`, and is imported once the
+  gateway's own sync reaches it; a band that starts at or below the tip but
+  has no block in `core.db` anywhere in its heights (up to the tip), as on a
+  gateway that began at a later `START_HEIGHT`, is in `noBlocks`, and is
+  imported only once the L1 index is filled there (`index-l1-import`). A
+  run refuses outright when `core.db` holds no stable block.
+- **First writer wins.** Every insert is `ON CONFLICT DO NOTHING`, as the
+  gateway's flush is: an import never changes a row the gateway holds, and
+  the gateway never changes an imported one. An item already held is
+  counted `present` when it is at the same height and block index (and
+  `conflicting` when its root, parent, owner, size or location differ, with
+  up to five example ids in a warning), or `elsewhere`. Its tags are not
+  written.
+- **Marked as the band's.** Every row carries the band's `createdAt` as
+  `indexed_at` and `stable_at`, so writing a band twice writes the same rows,
+  and a later run counts the band's own rows as `alreadyImported`.
+- **Beside the running gateway.** Transactions are `BEGIN IMMEDIATE`, at most
+  10,000 items or 250 ms long, with a 50 ms pause after each and none open
+  while the band is read; the WAL is checkpointed every 10 s, waiting at most
+  1 s for the gateway's readers so its writers are never held long. The run's own
+  connection uses a 256 MiB page cache and `synchronous = NORMAL`.
+- **Resumable.** The ledger row's counts move in the same transaction as
+  the rows they count, so a run stopped part way leaves the ledger matching
+  the database (`completed_at` unset), and the next run writes the rest.
+- **Disk.** A band is refused when the free space beside `bundles.db` is
+  under 4 KiB per item plus 2 GiB. All of `ardrive-l2` takes about 370 GB.
+
+The lock is `.l2-import.lock` beside `bundles.db`. `--forget <band>`
+removes the items a band wrote, and their tags, a batch at a time: those
+whose `indexed_at` and `stable_at` are both the band's `createdAt` (the
+gateway's flush sets `stable_at` when it flushes, after the item was
+indexed). An item the gateway has since unbundled itself
+(`bundle_data_items` records it) is kept (`keptIndexed`): its flush found
+the imported row and left it, and its bundle is done, so nothing would
+write the item again. The band must still be in `--bands-dir`, for its `createdAt`.
+A band republished over the same heights can share that `createdAt`, so
+its rows go too; the ledger rows of every SQLite import over those heights
+are removed with the band's (`reset`), in the transaction that removes the
+first rows, so a forget stopped part way leaves no band held complete, and
+the next run writes their items again. Wallets and tag names stay. The result is `{ "imported", "imports":
+[{ "band", "heightRange", "counts", "conflictExamples" }] }` with the
+summary fields above (no `waiting`, `loaded` or `failed`); `counts` has
+`bandRows`, `otherPlacements`, `aboveCeiling`, `unlocated`, `present`,
+`conflicting`, `elsewhere`, `alreadyImported`, `written`, `tags` and
+`noOwnerKey` (items written whose owner's key the band lacks, shown by
+SQLite GraphQL only where `wallets` already holds the key) and `typeFromTags`. The summary also lists
+`noBlocks`. `--forget` prints `{ "forgotten", "target",
+"indexedAt", "heightRange", "items", "tags", "keptIndexed", "reset" }`.
+
+What an operator should know:
+
+- The import does not stop the gateway unbundling the same bundles near
+  the tip (or with `BACKFILL_BUNDLE_RECORDS`); where it does, the gateway's
+  row is dropped at flush and only bandwidth is spent.
+- When the gateway later unbundles an imported item at another placement,
+  its flush adds that placement's tags beside the imported ones, as it does
+  for an item in two bundles, and GraphQL lists the item's tags twice.
+- An item whose owner's key the band lacks (`noOwnerKey`) takes disk, and
+  SQLite GraphQL, which joins `wallets`, shows it only if the gateway holds
+  that owner's key from elsewhere.
+- A running worker imports a forgotten band again if it is still installed;
+  remove it from the bands directory, or stop the worker, first.
+- `--forget` needs the band in `--bands-dir`. A band uninstalled after its
+  replacement arrived is forgotten through the replacement: both carry the
+  same `createdAt` over the same heights.
 
 ### `index-l2-import` result
 

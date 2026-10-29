@@ -22,6 +22,11 @@ export interface L2ImportSummary {
     job?: string | null;
     counts?: { written?: number; conflicting?: number };
   }>;
+  /** `--target sqlite`: the bands written, each with its counts. */
+  imports?: Array<{
+    band?: string;
+    counts?: { written?: number; conflicting?: number };
+  }>;
   loaded?: string[];
   failed?: Array<{ job: string; reason: string }>;
   refused?: string;
@@ -64,15 +69,16 @@ export const spawnImport: L2ImportRunner = (args, onLog, register) =>
 export const UNREADABLE_MAX_BACKOFF_MS = 2 * 3600 * 1000;
 
 /**
- * Imports installed `parquet-l2` bands into this gateway's ClickHouse by
- * running `ar-io-node index-l2-import --target clickhouse` on a schedule,
+ * Imports installed `parquet-l2` bands into this gateway's index by running
+ * `ar-io-node index-l2-import --target <clickhouse|sqlite>` on a schedule,
  * once per index named in `L2_BAND_IMPORT_INDEXES`.
  *
- * Each run verifies the bands it takes and queues jobs for
- * `clickhouse-auto-import` to load; a run with nothing to do reads the bands
- * directory, the ledger and ClickHouse's top height, and writes nothing. It
- * keeps running so the publisher's next tip band, and heights the gateway's
- * own export reaches later, are imported too.
+ * Each run verifies the bands it takes. For ClickHouse it queues jobs for
+ * `clickhouse-auto-import` to load; for SQLite it writes the items into
+ * `bundles.db` itself. A run with nothing to do reads the bands directory,
+ * the ledger and the target's top height, and writes nothing. It keeps
+ * running so the publisher's next tip band, and heights the gateway reaches
+ * later, are imported too.
  *
  * A child process, as the L1 import is (`L1BandImportWorker`): DuckDB's
  * native code and memory stay out of the gateway. A band refused is not
@@ -105,6 +111,7 @@ export class L2BandImportWorker {
 
   constructor({
     log,
+    target = 'clickhouse',
     indexes,
     indexesDir = 'data/indexes/installed',
     publication,
@@ -126,6 +133,8 @@ export class L2BandImportWorker {
     maxBackoffMs = 24 * 3600 * 1000,
   }: {
     log: winston.Logger;
+    /** `--target`: `clickhouse`, or `sqlite` for a gateway without it. */
+    target?: 'clickhouse' | 'sqlite';
     /** Installed index names, e.g. `ardrive-l2`. */
     indexes: string[];
     indexesDir?: string;
@@ -165,7 +174,7 @@ export class L2BandImportWorker {
           ...invocation,
           'index-l2-import',
           '--target',
-          'clickhouse',
+          target,
           '--bands-dir',
           dir,
           '--publication',
@@ -175,7 +184,8 @@ export class L2BandImportWorker {
           ...(arweaveNodes !== undefined && arweaveNodes.length > 0
             ? ['--arweave-nodes', arweaveNodes.join(',')]
             : []),
-          ...(maxQueued !== undefined
+          // The queue is the ClickHouse target's: SQLite is written in place.
+          ...(maxQueued !== undefined && target === 'clickhouse'
             ? ['--max-queued', String(maxQueued)]
             : []),
           ...(maxUnchecked > 0
@@ -292,8 +302,12 @@ export class L2BandImportWorker {
       );
       this.child = undefined;
       const summary = result.summary;
-      // Jobs a run queued count whether or not it refused another band.
-      for (const job of summary?.jobs ?? []) {
+      // Jobs a run queued, and bands it wrote into SQLite, count whether or
+      // not it refused another band.
+      for (const job of [
+        ...(summary?.jobs ?? []),
+        ...(summary?.imports ?? []),
+      ]) {
         metrics.l2BandImportRowsTotal.inc(job.counts?.written ?? 0);
         metrics.l2BandImportConflictsTotal.inc(job.counts?.conflicting ?? 0);
       }

@@ -320,3 +320,119 @@ const exists = (p: string) =>
     () => true,
     () => false,
   );
+
+/**
+ * The SQLite target's ledger writes. The rows are written by the importer
+ * itself, a batch at a time, so the ledger moves with them: each batch adds
+ * its counts in the same transaction that writes its rows, and a run killed
+ * part way leaves a row whose counts match what is in the database.
+ *
+ * `rows_imported` adds up over every run of a band (a resumed run and one
+ * past a higher ceiling write only rows not yet there). `rows_present`,
+ * `rows_elsewhere` and `rows_conflicting` count rows the gateway wrote itself, so a later run,
+ * which finds this band's own rows, does not count them; they and
+ * `rows_unlocated` describe the band's latest run.
+ */
+export class SqliteImportLedger {
+  private readonly start: Sqlite.Statement;
+  private readonly progress: Sqlite.Statement;
+  private readonly complete: Sqlite.Statement;
+
+  constructor(db: Sqlite.Database) {
+    this.start = db.prepare(
+      `INSERT INTO parquet_l2_imports (
+         band_id, target, index_name, publisher, height_from, height_to,
+         band_digest, job, rows_imported, rows_present, rows_elsewhere,
+         rows_conflicting, rows_unlocated, accepted, started_at, queued_at,
+         completed_at)
+       VALUES (@bandId, 'sqlite', @index, @publisher, @from, @from - 1,
+         @digest, NULL, 0, 0, 0, 0, 0, @accepted, @startedAt, NULL, NULL)
+       ON CONFLICT (band_id, target) DO UPDATE SET
+         index_name = excluded.index_name, publisher = excluded.publisher,
+         rows_imported = CASE WHEN band_digest = excluded.band_digest
+           THEN rows_imported ELSE 0 END,
+         height_to = CASE WHEN band_digest = excluded.band_digest
+           THEN height_to ELSE excluded.height_to END,
+         band_digest = excluded.band_digest,
+         rows_present = 0, rows_elsewhere = 0, rows_conflicting = 0,
+         rows_unlocated = 0, accepted = excluded.accepted,
+         started_at = excluded.started_at, completed_at = NULL`,
+    );
+    this.progress = db.prepare(
+      `UPDATE parquet_l2_imports SET
+         rows_imported = rows_imported + @written,
+         rows_present = rows_present + @present,
+         rows_elsewhere = rows_elsewhere + @elsewhere,
+         rows_conflicting = rows_conflicting + @conflicting
+       WHERE band_id = @bandId AND target = 'sqlite'`,
+    );
+    this.complete = db.prepare(
+      `UPDATE parquet_l2_imports SET
+         height_to = MAX(height_to, @heightTo), rows_unlocated = @unlocated,
+         completed_at = @completedAt
+       WHERE band_id = @bandId AND target = 'sqlite'`,
+    );
+  }
+
+  /** A run begins: the band's row exists, incomplete, from here on. */
+  started({
+    bandId,
+    index,
+    publisher,
+    heightFrom,
+    bandDigest,
+    accepted,
+    startedAt,
+  }: {
+    bandId: string;
+    index: string;
+    publisher: string;
+    heightFrom: number;
+    bandDigest: Buffer;
+    accepted: string[];
+    startedAt: number;
+  }): void {
+    this.start.run({
+      bandId,
+      index,
+      publisher,
+      from: heightFrom,
+      digest: bandDigest,
+      accepted: JSON.stringify(accepted),
+      startedAt,
+    });
+  }
+
+  /** A batch's counts; call inside the batch's own transaction. */
+  addProgress(
+    bandId: string,
+    {
+      written,
+      present,
+      elsewhere,
+      conflicting,
+    }: {
+      written: number;
+      present: number;
+      elsewhere: number;
+      conflicting: number;
+    },
+  ): void {
+    this.progress.run({ bandId, written, present, elsewhere, conflicting });
+  }
+
+  /** The run wrote everything up to `heightTo`. */
+  completed({
+    bandId,
+    heightTo,
+    unlocated,
+    completedAt,
+  }: {
+    bandId: string;
+    heightTo: number;
+    unlocated: number;
+    completedAt: number;
+  }): void {
+    this.complete.run({ bandId, heightTo, unlocated, completedAt });
+  }
+}

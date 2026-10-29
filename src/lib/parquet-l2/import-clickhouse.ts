@@ -207,6 +207,36 @@ export const PLACEMENT_KEY = `struct_pack(
   o := coalesce("offset", 18446744073709551615::UBIGINT))`;
 
 /**
+ * Creates DuckDB temp table `table`: the band's `data_items` with one row
+ * per item, the one {@link PLACEMENT_ORDER} puts first. Picked by a grouped
+ * aggregate over the id, the sort key and each row's place in the file,
+ * then the rows fetched by that place: both spill to disk. A window over
+ * whole rows held every column of the band in memory and ran out on an
+ * 8M-item band at DuckDB's 2 GB.
+ */
+export async function createFirstPlacements(
+  duck: Database,
+  bandDir: string,
+  table: string,
+): Promise<void> {
+  const numbered = `read_parquet(${sqlString(path.join(bandDir, 'data_items.parquet'))}, file_row_number = true)`;
+  const pick = `${table}_pick`;
+  try {
+    await duck.exec(`
+      CREATE OR REPLACE TEMP TABLE ${pick} AS
+      SELECT arg_min(file_row_number, ${PLACEMENT_KEY}) AS row_number
+      FROM ${numbered}
+      GROUP BY id`);
+    await duck.exec(`
+      CREATE OR REPLACE TEMP TABLE ${table} AS
+      SELECT * EXCLUDE (file_row_number) FROM ${numbered}
+      SEMI JOIN ${pick} p ON p.row_number = file_row_number`);
+  } finally {
+    await duck.exec(`DROP TABLE IF EXISTS ${pick}`);
+  }
+}
+
+/**
  * Writes one band's job into `<jobsDir>/queue`. Reads the band through
  * `duck`, ClickHouse through `held`, and blocks through `blocks`. The job is
  * assembled in `<jobsDir>/.partial` and renamed into the queue when whole;
@@ -266,22 +296,8 @@ export async function writeClickHouseJob({
     Number(Object.values((await duck.all(sql))[0])[0]);
 
   try {
-    // One placement per item, then the ceiling. Picked by a grouped
-    // aggregate over the id, the sort key and each row's place in the file,
-    // then the rows fetched by that place: both spill to disk. A window over
-    // whole rows held every column of the band in memory and ran out on an
-    // 8M-item band at DuckDB's 2 GB.
-    const numbered = `read_parquet(${sqlString(path.join(bandDir, 'data_items.parquet'))}, file_row_number = true)`;
-    await duck.exec(`
-      CREATE OR REPLACE TEMP TABLE l2i_pick AS
-      SELECT arg_min(file_row_number, ${PLACEMENT_KEY}) AS row_number
-      FROM ${numbered}
-      GROUP BY id`);
-    await duck.exec(`
-      CREATE OR REPLACE TEMP TABLE l2i_first AS
-      SELECT * EXCLUDE (file_row_number) FROM ${numbered}
-      SEMI JOIN l2i_pick p ON p.row_number = file_row_number`);
-    await duck.exec('DROP TABLE l2i_pick');
+    // One placement per item, then the ceiling.
+    await createFirstPlacements(duck, bandDir, 'l2i_first');
     await duck.exec(`
       CREATE OR REPLACE TEMP TABLE l2i_chosen AS
       SELECT * FROM l2i_first WHERE height <= ${ceiling}`);
@@ -539,7 +555,6 @@ export async function writeClickHouseJob({
     };
   } finally {
     for (const t of [
-      'l2i_pick',
       'l2i_first',
       'l2i_chosen',
       'l2i_held',
