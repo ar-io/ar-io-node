@@ -3105,6 +3105,18 @@ export const CONTIGUOUS_DATA_CACHE_INDEX_MAX_BATCHES_PER_SWEEP =
     50,
   );
 
+// The most bytes (index sizes) one sweep evicts; 0 (the default) bounds a sweep
+// only by MAX_BATCHES_PER_SWEEP. With EVICTION_INTERVAL_MS it paces eviction by
+// bytes: on a copy-on-write filesystem such as btrfs, freeing a few hundred GB
+// of large blobs in one sweep is a burst the disk pays for at the next commit.
+// Ignored while free space is below CONTIGUOUS_DATA_CACHE_MIN_FREE_BYTES, so an
+// emergency still evicts at full speed.
+export const CONTIGUOUS_DATA_CACHE_INDEX_MAX_BYTES_PER_SWEEP =
+  env.nonNegativeIntOrDefault(
+    'CONTIGUOUS_DATA_CACHE_INDEX_MAX_BYTES_PER_SWEEP',
+    0,
+  );
+
 // Whether to refresh a cache entry's last_access (and promote its tier on a
 // preferred-ArNS read) on cache HITS. On => LRU eviction; off => FIFO by
 // cache-write time. Operators without an edge cache see every read at the core,
