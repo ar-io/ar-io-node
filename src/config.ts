@@ -1798,7 +1798,10 @@ export const L2_BAND_IMPORT_INDEXES = env
   .map((s) => s.trim())
   .filter((s) => s.length > 0);
 
-/** Where to import: only `clickhouse` so far. */
+/**
+ * Where to import: `clickhouse` (a gateway with ClickHouse) or `sqlite`
+ * (one without: the items are written into `bundles.db`).
+ */
 export const L2_BAND_IMPORT_TARGET = env.varOrDefault(
   'L2_BAND_IMPORT_TARGET',
   'clickhouse',

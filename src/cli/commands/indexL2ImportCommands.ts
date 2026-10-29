@@ -41,6 +41,7 @@ import {
   httpClickHouseHeld,
 } from '../../lib/parquet-l2/clickhouse-held.js';
 import {
+  bandIndexedAt,
   type L2ImportBlock,
   type L2ImportBlockSource,
   type L2ImportJob,
@@ -65,6 +66,10 @@ import {
   bandTablesDigest,
   idHeightRange,
 } from '../../lib/parquet-l2/layout.js';
+import {
+  forgetSqliteBand,
+  importBandIntoSqlite,
+} from '../../lib/parquet-l2/import-sqlite.js';
 import {
   liveL2Bands,
   readL2BandsDir,
@@ -185,16 +190,20 @@ export async function indexL2ImportCLICommand(
   const env = deps.env ?? process.env;
   const now = deps.now ?? (() => new Date());
   const target = options.target;
-  if (target === 'sqlite') {
-    throw new L2ImportRefused(
-      '--target sqlite is not built yet: this release imports into ClickHouse only',
-    );
-  }
-  if (target !== 'clickhouse') {
-    throw new L2ImportRefused('--target must be clickhouse');
+  if (target !== 'clickhouse' && target !== 'sqlite') {
+    throw new L2ImportRefused('--target must be clickhouse or sqlite');
   }
   const bandsDir = requiredStringFromOptions(options, 'bandsDir');
   const bundlesDbPath = options.bundlesDb ?? 'data/sqlite/bundles.db';
+  if (target === 'sqlite') {
+    return importIntoSqlite({
+      options,
+      deps,
+      bandsDir,
+      bundlesDbPath,
+      env,
+    });
+  }
   // Where clickhouse-auto-import looks: ETL_STAGING_PATH/l2-import. Unset
   // in the core container (both containers mount the host path at
   // data/etl/staging), set by .env under `yarn start`.
@@ -259,6 +268,61 @@ export async function indexL2ImportCLICommand(
 }
 
 /**
+ * `--target sqlite`, with `--forget`: one run at a time per `bundles.db`,
+ * holding the lock file beside it.
+ */
+async function importIntoSqlite({
+  options,
+  deps,
+  bandsDir,
+  bundlesDbPath,
+  env,
+}: {
+  options: IndexL2ImportCLIOptions;
+  deps: IndexL2ImportDeps;
+  bandsDir: string;
+  bundlesDbPath: string;
+  env: Record<string, string | undefined>;
+}): Promise<JsonSerializable> {
+  if (nonEmpty(env.CLICKHOUSE_URL) !== undefined) {
+    // clickhouse-auto-import moves stable data items out of SQLite and
+    // prunes them, and never exports heights below its own: rows imported
+    // here would be neither shown from ClickHouse nor kept.
+    throw new L2ImportRefused(
+      'CLICKHOUSE_URL is set: this gateway keeps its stable data items in ClickHouse, so import with --target clickhouse',
+    );
+  }
+  const index = path.basename(path.resolve(bandsDir));
+  const db = new Sqlite(bundlesDbPath, { fileMustExist: true });
+  let lock: Sqlite.Database | undefined;
+  try {
+    db.pragma('busy_timeout = 60000');
+    assertL2LedgerMigrated(db);
+    lock = await takeL2ImportLock(path.dirname(path.resolve(bundlesDbPath)));
+    if (options.forget !== undefined) {
+      return await forgetBandSqlite({
+        db,
+        bandId: options.forget,
+        bandsDir,
+        log: deps.log,
+      });
+    }
+    return await importBandsSqlite({
+      options,
+      deps,
+      db,
+      bundlesDbPath,
+      bandsDir,
+      index,
+      env,
+    });
+  } finally {
+    lock?.close();
+    db.close();
+  }
+}
+
+/**
  * Refuses an import or forget while another runs on the same jobs
  * directory: two would queue the same band, and one could remove the
  * other's half-written job. As `takeImportLock` does for the L1 import, the
@@ -310,33 +374,19 @@ export async function sweepLeftovers(
   return removed;
 }
 
-async function importBands({
-  options,
-  deps,
-  db,
-  bandsDir,
-  index,
-  jobsDir,
-  held,
-  env,
-  now,
-}: {
-  options: IndexL2ImportCLIOptions;
-  deps: IndexL2ImportDeps;
-  db: Sqlite.Database;
-  bandsDir: string;
-  index: string;
-  jobsDir: string;
-  held: ClickHouseHeld;
-  env: Record<string, string | undefined>;
-  now: () => Date;
-}): Promise<JsonSerializable> {
-  const { log } = deps;
-  const started = Date.now();
-  const coreDbPath = options.coreDb ?? 'data/sqlite/core.db';
-  const tmpDir = options.tmpDir ?? DEFAULT_TMP_DIR;
-  const maxQueued =
-    whole(options.maxQueued, '--max-queued') ?? DEFAULT_MAX_QUEUED;
+/** A run's limits and verification settings, parsed once for either target. */
+interface RunSettings {
+  maxBands: number | undefined;
+  perBand: number;
+  timeoutMs: number;
+  seed: number | undefined;
+  maxUnchecked: number | undefined;
+  maxUnlocatedShare: number | undefined;
+  deadlineSeconds: number;
+  threads: number;
+}
+
+function parseRunSettings(options: IndexL2ImportCLIOptions): RunSettings {
   const maxBands = whole(options.maxBands, '--max-bands');
   const perBand =
     whole(options.onchain, '--onchain') ?? DEFAULT_ONCHAIN_PER_BAND;
@@ -369,6 +419,269 @@ async function importBands({
   } catch (error) {
     throw new L2ImportRefused((error as Error).message);
   }
+  return {
+    maxBands,
+    perBand,
+    timeoutMs,
+    seed,
+    maxUnchecked,
+    maxUnlocatedShare,
+    deadlineSeconds,
+    threads,
+  };
+}
+
+/** The bands live in `bandsDir`, refusing a directory with anything else. */
+async function liveBandsIn(bandsDir: string): Promise<L2BandOnDisk[]> {
+  const listing = await readL2BandsDir(bandsDir);
+  if (listing.problems.length > 0) {
+    throw new L2ImportRefused(
+      `the bands directory holds entries that are not bands: ${listing.problems
+        .slice(0, 3)
+        .map((p) => `${p.entry} (${p.problem})`)
+        .join('; ')}`,
+    );
+  }
+  return liveL2Bands(listing.bands).live;
+}
+
+/** A band refused before anything of it was written. */
+interface BandRefusal {
+  band: string;
+  reason: string;
+  kind: 'refused' | 'unreadable';
+  checks: Array<{ name: string; detail: string }>;
+  onchain?: unknown;
+}
+
+/** What a run verifies bands with; {@link openVerifier} makes one. */
+interface BandVerifier {
+  duck: Database;
+  /**
+   * Verifies one band: its publisher when it passes, or why it is refused.
+   * Logs either way.
+   */
+  verify(
+    b: L2BandOnDisk,
+  ): Promise<{ publisher: string } | { refusal: BandRefusal }>;
+  /** Where the on-chain sample was read, for a refused run's result. */
+  describeSource(): Record<string, unknown>;
+  close(): Promise<void>;
+}
+
+/**
+ * Everything a run needs to verify bands: the publication, the L1 index,
+ * the on-chain sample's source and a DuckDB session. Verification is the
+ * same for every target, so a band either target writes has passed the
+ * same checks.
+ */
+async function openVerifier({
+  options,
+  deps,
+  bandsDir,
+  settings,
+  tmpDir,
+  env,
+}: {
+  options: IndexL2ImportCLIOptions;
+  deps: IndexL2ImportDeps;
+  bandsDir: string;
+  settings: RunSettings;
+  tmpDir: string;
+  env: Record<string, string | undefined>;
+}): Promise<BandVerifier> {
+  const { log } = deps;
+  const publication = await resolvePublication(
+    options,
+    { log, timeoutMs: settings.timeoutMs, registry: deps.registry },
+    L2ImportRefused,
+  );
+  if (publication === undefined) {
+    throw new L2ImportRefused(
+      '--publication is required: an import writes only bands bound to a signed publication',
+    );
+  }
+  const l1 = await l1Index(bandsDir, options.l1BandsDir);
+  if (l1 === undefined) {
+    throw new L2ImportRefused(
+      "no L1 index to find the bands' roots in (--l1-bands-dir, or data/indexes/installed/parquet-l1): an import writes only bands whose roots are mined",
+    );
+  }
+  let openRoot = deps.openRoot;
+  let closeSource = () => undefined as void;
+  let describeSource = () => ({}) as Record<string, unknown>;
+  if (openRoot === undefined) {
+    const urls = urlList(options.arweaveNodes) ?? DEFAULT_ARWEAVE_NODE_URLS;
+    const pool = new ArweaveNodePool({ urls, timeoutMs: settings.timeoutMs });
+    const onchain = onChainRootSource({
+      pool,
+      allowAgreement: options.allowAgreement === true,
+    });
+    openRoot = onchain.openRoot;
+    describeSource = () => ({
+      from: 'arweave-nodes',
+      ...onchain.stats(),
+      nodeFaultCount: onchain.nodeFaultCount(),
+    });
+    closeSource = () => {
+      for (const fault of onchain.nodeFaults()) {
+        log.warn('An Arweave node gave an answer that did not hold up', {
+          ...fault,
+        });
+      }
+    };
+  }
+  await fsp.mkdir(tmpDir, { recursive: true });
+  const session = await openBandsDuck({
+    prefix: 'ar-io-node-l2-import-',
+    tmpRoot: tmpDir,
+    threads: settings.threads,
+    ...(deps.freeBytes !== undefined ? { freeBytes: deps.freeBytes } : {}),
+    ...(options.spillMax !== undefined ? { spillMax: options.spillMax } : {}),
+  });
+  const ownWallet = nonEmpty(env.AR_IO_WALLET);
+  const verifyOpenRoot = openRoot;
+  return {
+    duck: session.duck as Database,
+    describeSource: () => describeSource(),
+    close: async () => {
+      closeSource();
+      await session.close();
+    },
+    verify: async (b) => {
+      const [from, to] = b.band.heightRange;
+      log.info('Verifying a band before importing it', { band: b.id });
+      const out = await verifyL2Bands(session.duck, bandsDir, {
+        from,
+        to,
+        lookups: false,
+        publication: {
+          document: publication.document,
+          publisherKey: publication.publisherKey,
+          ...(publication.index !== undefined
+            ? { index: publication.index }
+            : {}),
+          ...(publication.keyFrom !== undefined
+            ? { keyFrom: publication.keyFrom }
+            : {}),
+          allowExpired: options.allowExpired === true,
+        },
+        l1: { bandsDir: l1.bandsDir, required: true },
+        allowUnlocated: options.allowUnlocated === true,
+        ...(settings.maxUnlocatedShare !== undefined
+          ? { maxUnlocatedShare: settings.maxUnlocatedShare }
+          : {}),
+        onchain: {
+          perBand: settings.perBand,
+          openRoot: verifyOpenRoot,
+          deadlineMs: settings.deadlineSeconds * 1000,
+          ...(settings.maxUnchecked !== undefined
+            ? { maxUnchecked: settings.maxUnchecked }
+            : {}),
+          ...(settings.seed !== undefined ? { seed: settings.seed } : {}),
+        },
+      });
+      const unchecked = out.skipped.filter((s) => s !== 'lookups');
+      const reason = !out.ok
+        ? 'a check failed'
+        : !out.publisherBound
+          ? 'not bound to the publication'
+          : unchecked.length > 0
+            ? `not checked: ${unchecked.join(', ')}`
+            : out.bands !== 1 ||
+                out.located.length !== 1 ||
+                out.located[0].id !== b.id
+              ? `the bands checked (${out.located.map((l) => l.id).join(', ')}) are not this band alone; its directory may have changed`
+              : ownWallet !== undefined &&
+                  out.publication?.publisher === ownWallet
+                ? "signed by this gateway's own wallet: a publisher does not import its own export"
+                : undefined;
+      if (reason !== undefined) {
+        const failed = out.checks
+          .filter((c) => !c.ok)
+          .map((c) => ({ name: c.name, detail: c.detail }));
+        log.error('Import refused before writing', {
+          band: b.id,
+          reason,
+          failed,
+        });
+        return {
+          refusal: {
+            band: b.id,
+            reason,
+            kind:
+              out.onchain !== undefined &&
+              out.onchain.inconclusiveBands.length > 0 &&
+              out.onchain.failedBands.length === 0 &&
+              out.checks.every((c) => c.ok || c.name === 'onchain')
+                ? 'unreadable'
+                : 'refused',
+            checks: failed,
+            onchain: out.onchain?.bands,
+          },
+        };
+      }
+      log.info('Verified a band before importing it', {
+        band: b.id,
+        items: out.items,
+        assurance: out.assurance,
+      });
+      return { publisher: out.publication?.publisher ?? '' };
+    },
+  };
+}
+
+/**
+ * A run's result, thrown (exit 1) when any band was refused. `unreadable`
+ * only when every refusal is a sample that could not be read (an outage).
+ */
+function finishRun(
+  result: Record<string, unknown>,
+  refusals: BandRefusal[],
+  verifier: BandVerifier,
+): JsonSerializable {
+  if (refusals.length > 0) {
+    throw {
+      ...result,
+      refused: refusals.map((r) => `${r.band}: ${r.reason}`).join('; '),
+      refusal: refusals.every((r) => r.kind === 'unreadable')
+        ? 'unreadable'
+        : 'refused',
+      refusals,
+      roots: verifier.describeSource(),
+    };
+  }
+  return result as unknown as JsonSerializable;
+}
+
+async function importBands({
+  options,
+  deps,
+  db,
+  bandsDir,
+  index,
+  jobsDir,
+  held,
+  env,
+  now,
+}: {
+  options: IndexL2ImportCLIOptions;
+  deps: IndexL2ImportDeps;
+  db: Sqlite.Database;
+  bandsDir: string;
+  index: string;
+  jobsDir: string;
+  held: ClickHouseHeld;
+  env: Record<string, string | undefined>;
+  now: () => Date;
+}): Promise<JsonSerializable> {
+  const { log } = deps;
+  const started = Date.now();
+  const coreDbPath = options.coreDb ?? 'data/sqlite/core.db';
+  const tmpDir = options.tmpDir ?? DEFAULT_TMP_DIR;
+  const maxQueued =
+    whole(options.maxQueued, '--max-queued') ?? DEFAULT_MAX_QUEUED;
+  const settings = parseRunSettings(options);
 
   // What auto-import did with the jobs written before.
   const reconciled = await reconcileJobs(db, jobsDir);
@@ -401,16 +714,7 @@ async function importBands({
   }
   const room = Math.max(0, maxQueued - reconciled.waiting.length);
 
-  const listing = await readL2BandsDir(bandsDir);
-  if (listing.problems.length > 0) {
-    throw new L2ImportRefused(
-      `the bands directory holds entries that are not bands: ${listing.problems
-        .slice(0, 3)
-        .map((p) => `${p.entry} (${p.problem})`)
-        .join('; ')}`,
-    );
-  }
-  const live = liveL2Bands(listing.bands).live;
+  const live = await liveBandsIn(bandsDir);
   const ceiling = await held.topHeight();
   if (ceiling === undefined) {
     throw new L2ImportRefused(
@@ -465,7 +769,7 @@ async function importBands({
     }
     pending.push(b);
   }
-  const take = pending.slice(0, Math.min(room, maxBands ?? room));
+  const take = pending.slice(0, Math.min(room, settings.maxBands ?? room));
   const summary = {
     bandsDir,
     index,
@@ -493,151 +797,36 @@ async function importBands({
     } as unknown as JsonSerializable;
   }
 
-  const publication = await resolvePublication(
+  const verifier = await openVerifier({
     options,
-    { log, timeoutMs, registry: deps.registry },
-    L2ImportRefused,
-  );
-  if (publication === undefined) {
-    throw new L2ImportRefused(
-      '--publication is required: an import writes only bands bound to a signed publication',
-    );
-  }
-  const l1 = await l1Index(bandsDir, options.l1BandsDir);
-  if (l1 === undefined) {
-    throw new L2ImportRefused(
-      "no L1 index to find the bands' roots in (--l1-bands-dir, or data/indexes/installed/parquet-l1): an import writes only bands whose roots are mined",
-    );
-  }
-  let openRoot = deps.openRoot;
-  let closeSource = () => undefined as void;
-  let describeSource = () => ({}) as Record<string, unknown>;
-  if (openRoot === undefined) {
-    const urls = urlList(options.arweaveNodes) ?? DEFAULT_ARWEAVE_NODE_URLS;
-    const pool = new ArweaveNodePool({ urls, timeoutMs });
-    const onchain = onChainRootSource({
-      pool,
-      allowAgreement: options.allowAgreement === true,
-    });
-    openRoot = onchain.openRoot;
-    describeSource = () => ({
-      from: 'arweave-nodes',
-      ...onchain.stats(),
-      nodeFaultCount: onchain.nodeFaultCount(),
-    });
-    closeSource = () => {
-      for (const fault of onchain.nodeFaults()) {
-        log.warn('An Arweave node gave an answer that did not hold up', {
-          ...fault,
-        });
-      }
-    };
-  }
-
-  await fsp.mkdir(tmpDir, { recursive: true });
-  const session = await openBandsDuck({
-    prefix: 'ar-io-node-l2-import-',
-    tmpRoot: tmpDir,
-    threads,
-    ...(deps.freeBytes !== undefined ? { freeBytes: deps.freeBytes } : {}),
-    ...(options.spillMax !== undefined ? { spillMax: options.spillMax } : {}),
+    deps,
+    bandsDir,
+    settings,
+    tmpDir,
+    env,
   });
   const core = new Sqlite(coreDbPath, { readonly: true, fileMustExist: true });
-  const ownWallet = nonEmpty(env.AR_IO_WALLET);
   const accepted = acceptedFlags(options);
   const jobs: Array<Record<string, unknown>> = [];
-  const refusals: Array<{
-    band: string;
-    reason: string;
-    kind: 'refused' | 'unreadable';
-    checks: Array<{ name: string; detail: string }>;
-    onchain?: unknown;
-  }> = [];
+  const refusals: BandRefusal[] = [];
   try {
     const blocks = coreDbBlocks(core);
     for (const b of take) {
-      const [from, to] = b.band.heightRange;
       const startedAt = Math.floor(Date.now() / 1000);
-      log.info('Verifying a band before importing it', { band: b.id });
-      const out = await verifyL2Bands(session.duck, bandsDir, {
-        from,
-        to,
-        lookups: false,
-        publication: {
-          document: publication.document,
-          publisherKey: publication.publisherKey,
-          ...(publication.index !== undefined
-            ? { index: publication.index }
-            : {}),
-          ...(publication.keyFrom !== undefined
-            ? { keyFrom: publication.keyFrom }
-            : {}),
-          allowExpired: options.allowExpired === true,
-        },
-        l1: { bandsDir: l1.bandsDir, required: true },
-        allowUnlocated: options.allowUnlocated === true,
-        ...(maxUnlocatedShare !== undefined ? { maxUnlocatedShare } : {}),
-        onchain: {
-          perBand,
-          openRoot,
-          deadlineMs: deadlineSeconds * 1000,
-          ...(maxUnchecked !== undefined ? { maxUnchecked } : {}),
-          ...(seed !== undefined ? { seed } : {}),
-        },
-      });
-      const unchecked = out.skipped.filter((s) => s !== 'lookups');
-      const refusal = !out.ok
-        ? 'a check failed'
-        : !out.publisherBound
-          ? 'not bound to the publication'
-          : unchecked.length > 0
-            ? `not checked: ${unchecked.join(', ')}`
-            : out.bands !== 1 ||
-                out.located.length !== 1 ||
-                out.located[0].id !== b.id
-              ? `the bands checked (${out.located.map((l) => l.id).join(', ')}) are not this band alone; its directory may have changed`
-              : ownWallet !== undefined &&
-                  out.publication?.publisher === ownWallet
-                ? "signed by this gateway's own wallet: a publisher does not import its own export"
-                : undefined;
-      if (refusal !== undefined) {
-        const failed = out.checks
-          .filter((c) => !c.ok)
-          .map((c) => ({ name: c.name, detail: c.detail }));
-        log.error('Import refused before writing', {
-          band: b.id,
-          reason: refusal,
-          failed,
-        });
+      const verified = await verifier.verify(b);
+      if ('refusal' in verified) {
         // Nothing of this band is written. The others are still tried: one
         // band whose sample cannot be read must not hold back the rest.
-        refusals.push({
-          band: b.id,
-          reason: refusal,
-          kind:
-            out.onchain !== undefined &&
-            out.onchain.inconclusiveBands.length > 0 &&
-            out.onchain.failedBands.length === 0 &&
-            out.checks.every((c) => c.ok || c.name === 'onchain')
-              ? 'unreadable'
-              : 'refused',
-          checks: failed,
-          onchain: out.onchain?.bands,
-        });
+        refusals.push(verified.refusal);
         continue;
       }
-      log.info('Verified a band before importing it', {
-        band: b.id,
-        items: out.items,
-        assurance: out.assurance,
-      });
       const outcome = await writeClickHouseJob({
-        duck: session.duck as Database,
+        duck: verifier.duck,
         band: b.band,
         bandDir: b.dir,
         bandId: b.id,
         index,
-        publisher: out.publication?.publisher ?? '',
+        publisher: verified.publisher,
         held,
         blocks,
         ceiling,
@@ -662,7 +851,7 @@ async function importBands({
           target: 'clickhouse',
           bandId: b.id,
           index,
-          publisher: out.publication?.publisher ?? '',
+          publisher: verified.publisher,
           heightRange: outcome.heightRange,
           bandDigest: bandTablesDigest(b.band),
           counts: outcome.counts,
@@ -693,30 +882,263 @@ async function importBands({
       jobs.push({ band: b.id, ...job });
     }
   } finally {
-    closeSource();
     core.close();
-    await session.close();
+    await verifier.close();
   }
-  const result = {
-    ...summary,
-    imported: jobs.length,
-    jobs,
-    seconds: Math.round((Date.now() - started) / 100) / 10,
-  };
-  if (refusals.length > 0) {
-    // Exit 1, with what was queued and what was refused. `unreadable` only
-    // when every refusal is a sample that could not be read (an outage).
-    throw {
-      ...result,
-      refused: refusals.map((r) => `${r.band}: ${r.reason}`).join('; '),
-      refusal: refusals.every((r) => r.kind === 'unreadable')
-        ? 'unreadable'
-        : 'refused',
-      refusals,
-      roots: describeSource(),
+  return finishRun(
+    {
+      ...summary,
+      imported: jobs.length,
+      jobs,
+      seconds: Math.round((Date.now() - started) / 100) / 10,
+    },
+    refusals,
+    verifier,
+  );
+}
+
+/**
+ * Bytes a written item takes in `bundles.db`, tags and indexes included,
+ * for the room check: M1 measured about 2.9 KB (9.3 GB for 3.18M items and
+ * their 23.3M tags), and this leaves a margin.
+ */
+export const SQLITE_BYTES_PER_ITEM = 4096;
+
+/** Room kept free beyond a band's estimate: the WAL between checkpoints. */
+export const SQLITE_HEADROOM_BYTES = 2 * 1024 ** 3;
+
+const statfsFree = async (dir: string) => {
+  const s = await fsp.statfs(dir);
+  return s.bavail * s.bsize;
+};
+
+/**
+ * `--target sqlite`: verifies each band, then writes its items straight
+ * into `bundles.db` (`import-sqlite.ts`), newest band first, up to the
+ * gateway's stable L1 tip.
+ */
+async function importBandsSqlite({
+  options,
+  deps,
+  db,
+  bundlesDbPath,
+  bandsDir,
+  index,
+  env,
+}: {
+  options: IndexL2ImportCLIOptions;
+  deps: IndexL2ImportDeps;
+  db: Sqlite.Database;
+  bundlesDbPath: string;
+  bandsDir: string;
+  index: string;
+  env: Record<string, string | undefined>;
+}): Promise<JsonSerializable> {
+  const { log } = deps;
+  const started = Date.now();
+  const coreDbPath = options.coreDb ?? 'data/sqlite/core.db';
+  const tmpDir = options.tmpDir ?? DEFAULT_TMP_DIR;
+  const settings = parseRunSettings(options);
+  const live = await liveBandsIn(bandsDir);
+
+  const core = new Sqlite(coreDbPath, { readonly: true, fileMustExist: true });
+  let verifier: BandVerifier | undefined;
+  try {
+    const ceiling = core
+      .prepare('SELECT MAX(height) FROM stable_blocks')
+      .pluck()
+      .get() as number | null;
+    if (ceiling === null) {
+      throw new L2ImportRefused(
+        "core.db holds no stable blocks: SQLite GraphQL shows an item only beside its block, so the L1 index comes first (index-l1-import, or the gateway's own sync)",
+      );
+    }
+
+    const ledger = readLedger(db, 'sqlite');
+    const pending: L2BandOnDisk[] = [];
+    const aboveCeiling: string[] = [];
+    let done = 0;
+    for (const b of [...live].sort(
+      (x, y) => y.band.heightRange[0] - x.band.heightRange[0],
+    )) {
+      if (b.band.heightRange[0] > ceiling) {
+        aboveCeiling.push(b.id);
+        continue;
+      }
+      const top = Math.min(b.band.heightRange[1], ceiling);
+      const row = ledger.get(b.id);
+      if (
+        row !== undefined &&
+        row.bandDigest.equals(bandTablesDigest(b.band)) &&
+        row.completedAt !== null &&
+        row.heightTo >= top
+      ) {
+        done += 1;
+        continue;
+      }
+      pending.push(b);
+    }
+    const take = pending.slice(0, settings.maxBands ?? pending.length);
+    const summary = {
+      bandsDir,
+      index,
+      target: 'sqlite',
+      ceiling,
+      bands: live.length,
+      done,
+      pending: pending.length,
+      aboveCeiling,
     };
+    if (take.length === 0) {
+      log.info('Nothing to import now', summary);
+      return {
+        ...summary,
+        imported: 0,
+        imports: [],
+        seconds: Math.round((Date.now() - started) / 100) / 10,
+      } as unknown as JsonSerializable;
+    }
+
+    verifier = await openVerifier({
+      options,
+      deps,
+      bandsDir,
+      settings,
+      tmpDir,
+      env,
+    });
+    const freeBytes = deps.freeBytes ?? statfsFree;
+    const dbDir = path.dirname(path.resolve(bundlesDbPath));
+    const hasBlock = core
+      .prepare('SELECT 1 FROM stable_blocks WHERE height = ?')
+      .pluck();
+    const accepted = acceptedFlags(options);
+    const imports: Array<Record<string, unknown>> = [];
+    const refusals: BandRefusal[] = [];
+    for (const b of take) {
+      const verified = await verifier.verify(b);
+      if ('refusal' in verified) {
+        refusals.push(verified.refusal);
+        continue;
+      }
+      try {
+        const outcome = await importBandIntoSqlite({
+          duck: verifier.duck,
+          db,
+          band: b.band,
+          bandDir: b.dir,
+          bandId: b.id,
+          index,
+          publisher: verified.publisher,
+          ceiling,
+          hasBlock: (height) => hasBlock.get(height) !== undefined,
+          accepted,
+          checkRoom: async (items) => {
+            const need = items * SQLITE_BYTES_PER_ITEM + SQLITE_HEADROOM_BYTES;
+            const free = await freeBytes(dbDir);
+            if (free < need) {
+              throw new L2ImportRefused(
+                `too little disk beside bundles.db for ${items} items: ${Math.floor(free / 1024 ** 2)} MiB free, about ${Math.ceil(need / 1024 ** 2)} MiB needed`,
+              );
+            }
+          },
+          log,
+        });
+        if (outcome.counts.conflicting > 0) {
+          log.warn(
+            'The band places items differently from the rows SQLite holds; the held rows are kept',
+            {
+              band: b.id,
+              conflicting: outcome.counts.conflicting,
+              examples: outcome.conflictExamples,
+            },
+          );
+        }
+        log.info('Imported a band into SQLite', {
+          band: b.id,
+          heightRange: outcome.heightRange,
+          ...outcome.counts,
+        });
+        imports.push({ band: b.id, ...outcome });
+      } catch (error) {
+        if (!(error instanceof L2ImportRefused)) throw error;
+        // Refused before its first write (missing blocks, no room): the
+        // other bands are still tried.
+        log.error('Import refused before writing', {
+          band: b.id,
+          reason: error.message,
+        });
+        refusals.push({
+          band: b.id,
+          reason: error.message,
+          kind: 'refused',
+          checks: [],
+        });
+      }
+    }
+    return finishRun(
+      {
+        ...summary,
+        imported: imports.length,
+        imports,
+        seconds: Math.round((Date.now() - started) / 100) / 10,
+      },
+      refusals,
+      verifier,
+    );
+  } finally {
+    core.close();
+    await verifier?.close();
   }
-  return result as unknown as JsonSerializable;
+}
+
+/**
+ * `--forget <band> --target sqlite`: removes the rows imports of the band
+ * wrote (`forgetSqliteBand`). The band must still be in `--bands-dir`: its
+ * `createdAt` is what marks its rows.
+ */
+async function forgetBandSqlite({
+  db,
+  bandId,
+  bandsDir,
+  log,
+}: {
+  db: Sqlite.Database;
+  bandId: string;
+  bandsDir: string;
+  log: Logger;
+}): Promise<JsonSerializable> {
+  const listing = await readL2BandsDir(bandsDir);
+  const entry = listing.bands.find((b) => b.id === bandId);
+  if (entry === undefined) {
+    throw new L2ImportRefused(
+      `${bandId} is not in ${bandsDir}: forgetting reads its band.json for the indexed_at its rows carry`,
+    );
+  }
+  const indexedAt = bandIndexedAt(entry.band);
+  const row = readLedger(db, 'sqlite').get(bandId);
+  const heightRange: [number, number] = [
+    entry.band.heightRange[0],
+    Math.max(entry.band.heightRange[1], row?.heightTo ?? 0),
+  ];
+  log.info('Forgetting imported rows from SQLite', {
+    band: bandId,
+    heightRange,
+    indexedAt,
+  });
+  const removed = await forgetSqliteBand({
+    db,
+    bandId,
+    heightRange,
+    indexedAt,
+  });
+  return {
+    forgotten: bandId,
+    target: 'sqlite',
+    indexedAt,
+    heightRange,
+    ...removed,
+  } as unknown as JsonSerializable;
 }
 
 /**

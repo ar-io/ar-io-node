@@ -591,22 +591,26 @@ export const l1BandImportWorker = config.L1_BAND_IMPORT_ENABLED
  */
 function makeL2BandImportWorker(): L2BandImportWorker | undefined {
   if (!config.L2_BAND_IMPORT_ENABLED) return undefined;
+  const target = config.L2_BAND_IMPORT_TARGET;
   const reason =
-    config.L2_BAND_IMPORT_TARGET !== 'clickhouse'
-      ? `L2_BAND_IMPORT_TARGET=${config.L2_BAND_IMPORT_TARGET} is not supported (only clickhouse)`
-      : config.CLICKHOUSE_URL === undefined
-        ? 'CLICKHOUSE_URL is not set'
-        : config.L2_BAND_IMPORT_PUBLICATION === undefined
-          ? 'L2_BAND_IMPORT_PUBLICATION is not set'
-          : config.L2_BAND_IMPORT_INDEXES.length === 0
-            ? 'L2_BAND_IMPORT_INDEXES names no index'
-            : undefined;
+    target !== 'clickhouse' && target !== 'sqlite'
+      ? `L2_BAND_IMPORT_TARGET=${target} is not supported (clickhouse or sqlite)`
+      : target === 'clickhouse' && config.CLICKHOUSE_URL === undefined
+        ? 'L2_BAND_IMPORT_TARGET=clickhouse needs CLICKHOUSE_URL'
+        : target === 'sqlite' && config.CLICKHOUSE_URL !== undefined
+          ? 'L2_BAND_IMPORT_TARGET=sqlite on a gateway with CLICKHOUSE_URL: its stable data items live in ClickHouse, so import with clickhouse'
+          : config.L2_BAND_IMPORT_PUBLICATION === undefined
+            ? 'L2_BAND_IMPORT_PUBLICATION is not set'
+            : config.L2_BAND_IMPORT_INDEXES.length === 0
+              ? 'L2_BAND_IMPORT_INDEXES names no index'
+              : undefined;
   if (reason !== undefined) {
     log.warn(`L2 band import is enabled but cannot run: ${reason}`);
     return undefined;
   }
   return new L2BandImportWorker({
     log,
+    target: target as 'clickhouse' | 'sqlite',
     indexes: config.L2_BAND_IMPORT_INDEXES,
     publication: config.L2_BAND_IMPORT_PUBLICATION as string,
     // The publication's key, as this gateway sees the registry.
