@@ -277,9 +277,11 @@ case "${COMMAND}" in
     done
     # Bands and the L1 index are only read. The import writes its ledger in
     # bundles.db (core.db is only read), queues jobs under the ETL staging
-    # directory, where clickhouse-auto-import loads them, and spills to the
-    # gateway's temp volume: the paths core and auto-import use, so a run
-    # from here and the gateway's own worker share one queue and one lock.
+    # directory, where clickhouse-auto-import loads them (--target sqlite
+    # writes the items into bundles.db instead, locking beside it), and
+    # spills to the gateway's temp volume: the paths core and auto-import
+    # use, so a run from here and the gateway's own worker share one queue
+    # and one lock.
     DATA_PATH="$(setting INDEX_SWARM_DATA_PATH)"
     DATA_PATH="$(realpath -m "${DATA_PATH:-./data/indexes}")"
     if [[ -d "${DATA_PATH}" ]]; then
