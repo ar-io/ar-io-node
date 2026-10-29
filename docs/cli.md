@@ -1504,10 +1504,13 @@ as above (step 2), and its items are then written into `bundles.db`:
   `stable_blocks` (`ceiling`). SQLite GraphQL shows an item only beside its
   block, so a band with items at a height `core.db` has no block for is
   refused before anything of it is written; import or fill the L1 index
-  there first. A band over heights where `core.db` holds no block at all (a
-  gateway that began at a later `START_HEIGHT`) is not verified and is
-  listed in `noBlocks`. A run refuses outright when `core.db` holds no
-  stable block.
+  there first. Two cases are listed without being verified: a band that
+  starts above the tip is in `aboveCeiling`, and is imported once the
+  gateway's own sync reaches it; a band that starts at or below the tip but
+  has no block in `core.db` anywhere in its heights (up to the tip), as on a
+  gateway that began at a later `START_HEIGHT`, is in `noBlocks`, and is
+  imported only once the L1 index is filled there (`index-l1-import`). A
+  run refuses outright when `core.db` holds no stable block.
 - **First writer wins.** Every insert is `ON CONFLICT DO NOTHING`, as the
   gateway's flush is: an import never changes a row the gateway holds, and
   the gateway never changes an imported one. An item already held is
@@ -1546,8 +1549,8 @@ the next run writes their items again. Wallets and tag names stay. The result is
 summary fields above (no `waiting`, `loaded` or `failed`); `counts` has
 `bandRows`, `otherPlacements`, `aboveCeiling`, `unlocated`, `present`,
 `conflicting`, `elsewhere`, `alreadyImported`, `written`, `tags` and
-`noOwnerKey` (items written whose owner's key the band lacks, which SQLite
-GraphQL cannot show) and `typeFromTags`. The summary also lists
+`noOwnerKey` (items written whose owner's key the band lacks, shown by
+SQLite GraphQL only where `wallets` already holds the key) and `typeFromTags`. The summary also lists
 `noBlocks`. `--forget` prints `{ "forgotten", "target",
 "indexedAt", "heightRange", "items", "tags", "keptIndexed", "reset" }`.
 
@@ -1559,8 +1562,9 @@ What an operator should know:
 - When the gateway later unbundles an imported item at another placement,
   its flush adds that placement's tags beside the imported ones, as it does
   for an item in two bundles, and GraphQL lists the item's tags twice.
-- An item whose owner's key the band lacks takes disk but is not shown by
-  SQLite GraphQL, which joins `wallets` (`noOwnerKey`).
+- An item whose owner's key the band lacks (`noOwnerKey`) takes disk, and
+  SQLite GraphQL, which joins `wallets`, shows it only if the gateway holds
+  that owner's key from elsewhere.
 - A running worker imports a forgotten band again if it is still installed;
   remove it from the bands directory, or stop the worker, first.
 - `--forget` needs the band in `--bands-dir`. A band uninstalled after its
