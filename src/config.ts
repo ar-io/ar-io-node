@@ -477,11 +477,16 @@ export const DATA_IMPORTER_DOWNLOAD_TIMEOUT_MS = env.positiveIntOrDefault(
   1000 * 60 * 20, // 20 minutes
 );
 
-// GraphQL root TX lookup gateways (separate from data retrieval gateways)
+// GraphQL root TX lookup gateways (separate from data retrieval gateways).
+// arweave.net, named directly: the previous default,
+// arweave-search.goldsky.com, now answers every request with a 307 to
+// https://arweave.net/graphql, so nodes on the default were already querying
+// arweave.net through an extra hop. arweave.net rate-limits some addresses on
+// its gateway endpoints (429, retry-after 299); `{}` turns this source off.
 export const GRAPHQL_ROOT_TX_GATEWAYS_URLS = JSON.parse(
   env.varOrDefault(
     'GRAPHQL_ROOT_TX_GATEWAYS_URLS',
-    '{ "https://arweave-search.goldsky.com": 1 }',
+    '{ "https://arweave.net": 1 }',
   ),
 ) as Record<string, number>;
 

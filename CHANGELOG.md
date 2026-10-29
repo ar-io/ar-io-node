@@ -29,6 +29,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- The default `GRAPHQL_ROOT_TX_GATEWAYS_URLS` is now
+  `{ "https://arweave.net": 1 }`, replacing
+  `https://arweave-search.goldsky.com`, which now answers every request with
+  a 307 to `https://arweave.net/graphql`: nodes on the default were already
+  querying arweave.net, through an extra hop. Behaviour is otherwise
+  unchanged. arweave.net rate-limits some addresses on its gateway endpoints
+  (429, `retry-after: 299`); `{}` turns the source off, and a gateway with its
+  own indexer can list that instead. The variable is now documented in
+  `docs/envs.md`.
 ### Fixed
 
 - GraphQL no longer serves, or caches, a data item's signature or owner key
