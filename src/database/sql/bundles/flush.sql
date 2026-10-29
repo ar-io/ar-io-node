@@ -26,6 +26,11 @@ WHERE ndi.height < @end_height
 ON CONFLICT DO NOTHING;
 
 -- insertOrIgnoreStableDataItemTags
+-- Only for an item stored at this placement. stable_data_items keeps one
+-- row per id, and the insert above never replaces it, but tag rows are keyed
+-- by placement: an item already stored elsewhere (flushed earlier from
+-- another bundle, or written first by an L2 import) would otherwise gain a
+-- second tag set here, and GraphQL, which reads tags by id, would list both.
 INSERT INTO stable_data_item_tags (
   tag_name_hash, tag_value_hash,
   height, block_transaction_index,
@@ -41,6 +46,10 @@ JOIN new_data_items ndi
   ON ndit.data_item_id = ndi.id
 JOIN core.stable_block_transactions sbt
   ON ndit.root_transaction_id = sbt.transaction_id
+JOIN stable_data_items sdi
+  ON sdi.id = ndit.data_item_id
+  AND sdi.height = ndit.height
+  AND sdi.block_transaction_index = sbt.block_transaction_index
 WHERE ndit.height < @end_height
   AND ndi.parent_id           IS NOT NULL
   AND ndi.root_transaction_id IS NOT NULL

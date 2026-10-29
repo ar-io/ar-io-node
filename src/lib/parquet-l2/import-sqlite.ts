@@ -27,6 +27,8 @@
  *   held already is compared (`present`, `conflicting`, `elsewhere`), and its
  *   tags are not written: they are keyed by height as well as id, so they
  *   would add a second tag set where the gateway placed the item elsewhere.
+ *   The gateway's flush keeps to the same rule the other way round
+ *   (`flush.sql`: tags only where it stores the item).
  *
  * Every row carries the band's `createdAt` as `indexed_at`, so importing the
  * same band twice writes the same rows, and the rows a band wrote can be

@@ -1560,8 +1560,8 @@ What an operator should know:
   the tip (or with `BACKFILL_BUNDLE_RECORDS`); where it does, the gateway's
   row is dropped at flush and only bandwidth is spent.
 - When the gateway later unbundles an imported item at another placement,
-  its flush adds that placement's tags beside the imported ones, as it does
-  for an item in two bundles, and GraphQL lists the item's tags twice.
+  the imported row and its tags are kept, and its flush adds no tags of its
+  own: it writes an item's tags only where it stores the item.
 - An item whose owner's key the band lacks (`noOwnerKey`) takes disk, and
   SQLite GraphQL, which joins `wallets`, shows it only if the gateway holds
   that owner's key from elsewhere.
