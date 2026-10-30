@@ -1352,6 +1352,12 @@ export const requestChunkTotal = new promClient.Counter({
   ] as const,
 });
 
+export const chunkFetchOrphanedTotal = new promClient.Counter({
+  name: 'arweave_chunk_fetch_orphaned_total',
+  help: 'Shared Arweave peer chunk fetches that finished after every caller waiting on them had gone, by outcome. A success still fills the chunk cache; compare with get_chunk_total to see how much fetch work outlives its callers',
+  labelNames: ['result'] as const,
+});
+
 export const getChunkTotal = new promClient.Counter({
   name: 'get_chunk_total',
   help: 'Higher level count of chunk discovery, counts when the caller request for chunk ends, stores the status of the request',

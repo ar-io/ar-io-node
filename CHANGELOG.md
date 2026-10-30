@@ -8,6 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- `arweave_chunk_fetch_orphaned_total{result}` counts shared Arweave peer
+  chunk fetches that finished after every caller waiting on them had gone
+  (#885). They are left running on purpose, so their result still fills the
+  chunk cache; on one gateway 99.3% of peer-origin chunk requests were
+  cancelled by the caller, so this measures how much fetch work outlives
+  its callers and whether that cache warming pays off. The bound on that
+  work is now documented where it arises (`getChunkByAny`).
+
 - `CONTIGUOUS_DATA_CACHE_INDEX_MAX_BYTES_PER_SWEEP` (default 0, off) caps
   the bytes one contiguous-cache eviction sweep frees, so eviction is paced
   by bytes per interval instead of arriving in bursts. On turbo-gateway.com's
