@@ -5,9 +5,11 @@ on: [push, workflow_dispatch]
 # A newer push to the same branch makes an older run pointless, so cancel it.
 # develop and main are exempt: each of their commits publishes its own image,
 # so each run gets a group of its own. (A shared group, even without
-# cancel-in-progress, keeps only one pending run and drops the others.)
+# cancel-in-progress, keeps only one pending run and drops the others.) A
+# re-run gets its own group too: it carries its original commit, and must not
+# cancel the run of a newer one on the same branch.
 concurrency:
-  group: ${{ github.workflow }}-${{ (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') && github.run_id || github.ref }}
+  group: ${{ github.workflow }}-${{ ((github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') && github.run_id) || (github.run_attempt != '1' && format('{0}-{1}', github.run_id, github.run_attempt)) || github.ref }}
   cancel-in-progress: true
 
 jobs:
