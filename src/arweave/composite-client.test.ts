@@ -309,6 +309,92 @@ describe('ArweaveCompositeClient', () => {
       assert.equal(peerGetChunkCalls, 1);
     });
 
+    describe('orphaned shared chunk fetches (#885)', () => {
+      const params = {
+        txSize: 1000,
+        absoluteOffset: 7,
+        dataRoot: 'orphan-root',
+        relativeOffset: 0,
+      };
+      const chunk = {
+        tx_path: Buffer.from(''),
+        data_root: Buffer.from(''),
+        data_size: 1000,
+        data_path: Buffer.from(''),
+        offset: 0,
+        hash: Buffer.from(''),
+        chunk: Buffer.from('payload'),
+      };
+      const orphaned = async (result: string) =>
+        (await metrics.chunkFetchOrphanedTotal.get()).values.find(
+          (v) => v.labels.result === result,
+        )?.value ?? 0;
+
+      /** A client whose peer fetch settles only when told to. */
+      const gatedClient = () => {
+        const client = createTestClient();
+        const gate: { settle?: (ok: boolean) => void } = {};
+        (client as any).peerGetChunk = mock.fn(
+          () =>
+            new Promise((resolve, reject) => {
+              gate.settle = (ok) =>
+                ok ? resolve(chunk) : reject(new Error('no peer had it'));
+            }),
+        );
+        return { client, gate };
+      };
+
+      it('counts a fetch that succeeds after every caller has gone', async () => {
+        const { client, gate } = gatedClient();
+        const before = await orphaned('success');
+        const a = new AbortController();
+        const b = new AbortController();
+        const pa = client.getChunkByAny(params, a.signal);
+        const pb = client.getChunkByAny(params, b.signal);
+        await new Promise((resolve) => setImmediate(resolve));
+        a.abort();
+        b.abort();
+        await assert.rejects(pa);
+        await assert.rejects(pb);
+        gate.settle!(true);
+        await new Promise((resolve) => setImmediate(resolve));
+        assert.equal(await orphaned('success'), before + 1);
+      });
+
+      it('counts a failing orphaned fetch as an error', async () => {
+        const { client, gate } = gatedClient();
+        const before = await orphaned('error');
+        const a = new AbortController();
+        const pa = client.getChunkByAny(
+          { ...params, absoluteOffset: 8 },
+          a.signal,
+        );
+        await new Promise((resolve) => setImmediate(resolve));
+        a.abort();
+        await assert.rejects(pa);
+        gate.settle!(false);
+        await new Promise((resolve) => setImmediate(resolve));
+        assert.equal(await orphaned('error'), before + 1);
+      });
+
+      it('does not count a fetch someone is still waiting for', async () => {
+        const { client, gate } = gatedClient();
+        const before = await orphaned('success');
+        const a = new AbortController();
+        const pa = client.getChunkByAny(
+          { ...params, absoluteOffset: 9 },
+          a.signal,
+        );
+        const pb = client.getChunkByAny({ ...params, absoluteOffset: 9 });
+        await new Promise((resolve) => setImmediate(resolve));
+        a.abort();
+        await assert.rejects(pa);
+        gate.settle!(true);
+        assert.equal((await pb).chunk.toString(), 'payload');
+        assert.equal(await orphaned('success'), before);
+      });
+    });
+
     it('honors abort during the bucket-wait loop even after the bucket later refills', async () => {
       const client = createTestClient();
       const axiosMock = mock.fn(() => Promise.resolve({ data: 'unused' }));

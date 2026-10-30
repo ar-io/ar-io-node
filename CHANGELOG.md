@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- `arweave_chunk_fetch_orphaned_total{result}` counts shared Arweave peer
+  chunk fetches that finished after every caller waiting on them had gone
+  (#885). They are left running on purpose, as cache warming, which helps a
+  later caller only if the result lands within the chunk promise cache's
+  TTL. On one gateway 99.3% of peer-origin chunk requests were cancelled by
+  the caller, so this measures how much fetch work outlives its callers.
+  That work is bounded by the number of peer attempts, not by time (the
+  per-attempt timeout stops once headers arrive); this is now documented
+  where it arises (`getChunkByAny`).
+
 - `POST /ar-io/admin/invalidate-data` (`{"id": "<id>"}`) forgets what the
   gateway recorded for one ID: cached hash, stored location, trust and
   verification, in the index and in memory, so the next request resolves
