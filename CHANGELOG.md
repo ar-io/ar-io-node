@@ -9,10 +9,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Added
 
 - An operator can capture the trace of one request: sent with
-  `X-AR-IO-Trace: 1` and the admin bearer key, its trace is kept by the
-  bundled OTEL collector whatever the sampling rates (new
-  `force-sample-policy`), and the response carries `X-AR-IO-Trace-Id` to
-  find it by. The trace already records every retrieval source tried, so
+  `X-AR-IO-Trace: 1` and the admin bearer key, the request runs in its own
+  root span, which the head sampler always samples (whatever
+  `OTEL_TRACING_SAMPLING_RATE_DENOMINATOR` is) and the bundled OTEL
+  collector always keeps (new `force-sample-policy`), and the response
+  carries `X-AR-IO-Trace-Id` to find it by. Unforced requests are sampled
+  exactly as before. The trace already records every retrieval source tried, so
   one curl answers "where did this come from, and what failed first"
   (#626). Ignored without the admin key.
 

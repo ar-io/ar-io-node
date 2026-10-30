@@ -510,10 +510,13 @@ needs no `SOLANA_RPC_URL`.
 
 To keep the trace of one request regardless of these rates, send it with
 `X-AR-IO-Trace: 1` and the admin key (`Authorization: Bearer <ADMIN_API_KEY>`).
-The response then carries `X-AR-IO-Trace-Id`, and the collector's
-`force-sample-policy` keeps that trace. The trace records each retrieval
-source the gateway tried, in order, with its outcome and timing. Without the
-admin key the header is ignored.
+The request then runs in its own root span, which the gateway's head sampler
+always samples whatever `OTEL_TRACING_SAMPLING_RATE_DENOMINATOR` is, the
+response carries `X-AR-IO-Trace-Id`, and the collector's `force-sample-policy`
+keeps that trace. The trace records each retrieval source the gateway tried,
+in order, with its outcome and timing. Without the admin key the header is
+ignored, and with tracing off (no OTLP endpoint or file export) there is no
+trace to keep, so no `X-AR-IO-Trace-Id` is returned.
 
 **Security Note:** Variables marked as **SENSITIVE SECRET** (such as `CDP_API_KEY_ID`, `CDP_API_KEY_SECRET`, and `CDP_API_KEY_SECRET_FILE`) contain confidential credentials that must never be printed to logs, exposed in error messages, or included in any diagnostic output. Always mask or omit these values in logs, store them in a secure secrets manager, and restrict access using the principle of least privilege.
 

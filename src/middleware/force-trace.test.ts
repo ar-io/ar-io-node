@@ -6,6 +6,7 @@
  */
 import { strict as assert } from 'node:assert';
 import { before, beforeEach, describe, it } from 'node:test';
+import { trace } from '@opentelemetry/api';
 import express from 'express';
 import request from 'supertest';
 import {
@@ -14,6 +15,7 @@ import {
   SimpleSpanProcessor,
 } from '@opentelemetry/sdk-trace-node';
 
+import { createGatewaySampler } from '../lib/force-sample.js';
 import {
   createForceTraceMiddleware,
   FORCE_SAMPLE_ATTRIBUTE,
@@ -24,38 +26,50 @@ describe('force-trace middleware (#626)', () => {
   let app: express.Express;
 
   before(() => {
+    // As in production: no HTTP instrumentation, so nothing creates a request
+    // span before this middleware, and head sampling keeps (almost) nothing.
     const provider = new NodeTracerProvider({
+      sampler: createGatewaySampler(1e12),
       spanProcessors: [new SimpleSpanProcessor(exporter)],
     });
     provider.register();
-    const tracer = provider.getTracer('test');
     app = express();
-    // Stands in for the HTTP instrumentation's server span.
-    app.use((_req, res, next) =>
-      tracer.startActiveSpan('GET /', (span) => {
-        res.on('finish', () => span.end());
-        next();
-      }),
-    );
     app.use(createForceTraceMiddleware({ adminApiKey: () => 'secret' }));
-    app.get('/', (_req, res) => {
+    // Stands in for a data handler: starts its span under whatever is active.
+    app.get('/', async (_req, res) => {
+      const span = trace.getTracer('handler').startSpan('DataHandler.handle');
+      await new Promise((resolve) => setImmediate(resolve));
+      span.end();
       res.send('ok');
     });
   });
 
   beforeEach(() => exporter.reset());
 
-  const finished = () => exporter.getFinishedSpans();
+  const finished = async () => {
+    // The root span ends on the response's 'close', just after supertest
+    // has the response.
+    await new Promise((resolve) => setImmediate(resolve));
+    return exporter.getFinishedSpans();
+  };
 
-  it('marks the trace and returns its ID for the admin', async () => {
+  it('keeps the request, with the handler span under it, despite sampling', async () => {
     const res = await request(app)
       .get('/')
       .set('X-AR-IO-Trace', '1')
       .set('Authorization', 'Bearer secret')
       .expect(200);
-    const [span] = finished();
-    assert.equal(span.attributes[FORCE_SAMPLE_ATTRIBUTE], true);
-    assert.equal(res.headers['x-ar-io-trace-id'], span.spanContext().traceId);
+    const spans = await finished();
+    const root = spans.find(
+      (s) => s.attributes[FORCE_SAMPLE_ATTRIBUTE] === true,
+    );
+    const child = spans.find((s) => s.name === 'DataHandler.handle');
+    assert.ok(root, 'the forced root span is exported');
+    assert.ok(child, 'the handler span is exported too');
+    assert.equal(res.headers['x-ar-io-trace-id'], root.spanContext().traceId);
+    assert.equal(child.spanContext().traceId, root.spanContext().traceId);
+    assert.equal(child.parentSpanContext?.spanId, root.spanContext().spanId);
+    assert.equal(root.attributes['http.status_code'], 200);
   });
 
   for (const [label, auth] of [
@@ -68,7 +82,8 @@ describe('force-trace middleware (#626)', () => {
       if (auth !== undefined) req.set('Authorization', auth);
       const res = await req.expect(200);
       assert.equal(res.headers['x-ar-io-trace-id'], undefined);
-      assert.equal(finished()[0].attributes[FORCE_SAMPLE_ATTRIBUTE], undefined);
+      // Sampled as any request: at this rate, not at all.
+      assert.deepEqual(await finished(), []);
     });
   }
 
@@ -78,5 +93,6 @@ describe('force-trace middleware (#626)', () => {
       .set('Authorization', 'Bearer secret')
       .expect(200);
     assert.equal(res.headers['x-ar-io-trace-id'], undefined);
+    assert.deepEqual(await finished(), []);
   });
 });
