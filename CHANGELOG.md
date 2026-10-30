@@ -52,6 +52,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `docs/envs.md`.
 ### Fixed
 
+- A gateway that started while the AR.IO gateway registry was unreachable
+  had no peers until the next hourly refresh, so every peer retrieval failed
+  for up to an hour. The peer list is now saved after each successful
+  registry read (`AR_IO_PEER_LIST_CACHE_PATH`, default
+  `data/peers/ar-io-peers.json`; Docker Compose mounts it from
+  `PEERS_DATA_PATH`, default `./data/peers`) and loaded at startup, and
+  while the list is empty a failed read is retried after 10 s, backing off
+  to 5 min. A registry read that returns no gateways at all is treated as a
+  failure rather than applied as an empty list.
 - `X-AR-IO-Stable` was `false` on every response, and stable data never got
   `CACHE_STABLE_MAX_AGE` (30 days, `immutable`): since 2023 the gateway
   compared SQLite's `1` with `true`, which never matched. A transaction at
@@ -64,8 +73,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   A data item the bundles flush has not yet promoted is also stable once
   its root L1 transaction is, rather than waiting for the flush (an item
   whose bundle has no `stable_block_transactions` row was never promoted).
-  Its root is the one the gateway's own unbundling recorded; locations
-  learned from peers do not count. With no local record of the data,
+  This is the same test the flush applies before promoting it, so no
+  placement is trusted more than before. With no local record of the data,
   `X-AR-IO-Stable` and `X-AR-IO-Verified` are now sent as `false` instead
   of being left out.
 
