@@ -8,6 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- `CONTIGUOUS_DATA_CACHE_INDEX_MAX_BYTES_PER_SWEEP` (default 0, off) caps
+  the bytes one contiguous-cache eviction sweep frees, so eviction is paced
+  by bytes per interval instead of arriving in bursts. On turbo-gateway.com's
+  btrfs cache HDD one 10,000-file sweep freed 258 GB over 30 minutes and
+  stalled the disk (p99 latency 232 s for two minutes). The budget is ignored
+  while free space is below `CONTIGUOUS_DATA_CACHE_MIN_FREE_BYTES`. Docker
+  Compose now also passes `CONTIGUOUS_DATA_CACHE_INDEX_UNLINK_CONCURRENCY`
+  and `CONTIGUOUS_DATA_CACHE_INDEX_MAX_BATCHES_PER_SWEEP`, which it did not.
 - `ar-io-node index-l2-import --target clickhouse` and its worker
   (`L2_BAND_IMPORT_ENABLED`, off by default) load installed `parquet-l2`
   bands, such as `ardrive-l2`, into a gateway's ClickHouse, so its GraphQL
