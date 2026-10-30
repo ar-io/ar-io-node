@@ -52,6 +52,7 @@ import {
   hasTxId,
 } from '../../data/chunk-retrieval-service.js';
 import { setCommonChunkHeaders, setChunkETag } from './response-utils.js';
+import { TxBoundaryUnavailableError } from '../../data/composite-tx-boundary-source.js';
 
 // Retry-After on a 503: the chunk could not be fetched within the deadline,
 // which under load clears in seconds.
@@ -199,6 +200,11 @@ export function classifyChunkRetrievalError(
   }
   if (error instanceof ChunkNotFoundError) {
     return { statusCode: 404, errorType: error.errorType };
+  }
+  // The boundary lookup that could have found the chunk was skipped under
+  // load: not an answer about the chunk.
+  if (error instanceof TxBoundaryUnavailableError) {
+    return { statusCode: 503, errorType: 'boundary_unavailable' };
   }
   // Our own wall-clock cap on the whole serve fired: not found *in time*,
   // which says nothing about whether the chunk exists.

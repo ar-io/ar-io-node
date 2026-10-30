@@ -8,6 +8,7 @@ import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
 
 import { ChunkNotFoundError } from '../../data/chunk-retrieval-service.js';
+import { TxBoundaryUnavailableError } from '../../data/composite-tx-boundary-source.js';
 import {
   ChunkServeTimeoutError,
   classifyChunkRetrievalError,
@@ -76,5 +77,14 @@ describe('classifyChunkRetrievalError - cancellation', () => {
 
     assert.strictEqual(verdict.statusCode, 404);
     assert.strictEqual(verdict.errorType, 'boundary_not_found');
+  });
+
+  it('maps a boundary lookup skipped under load to 503, not 404', () => {
+    const verdict = classifyChunkRetrievalError(
+      new TxBoundaryUnavailableError(1n),
+      false,
+    );
+    assert.strictEqual(verdict.statusCode, 503);
+    assert.strictEqual(verdict.errorType, 'boundary_unavailable');
   });
 });

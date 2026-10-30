@@ -49,10 +49,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   and peers cached it, peer weighting took it for "lacks the data", and the
   observer's reference-gateway client stopped at it instead of trying the
   network. Under load nearly every failure was this kind: 99% of requests
-  at 500 concurrent, with a working gateway. A 404 still means every source
-  said no. Dashboards will show these as 5xx; they are counted, as before,
-  by `chunk_serve_deadline_exceeded_total`, and logged at debug rather than
-  warn so a busy gateway does not flood its logs.
+  at 500 concurrent, with a working gateway. A boundary lookup skipped
+  because the chain fallback was at its concurrency limit is also a 503
+  (`boundary_unavailable`), not a 404. A 404 now means no source found the
+  chunk; one case is still ambiguous: when every peer fetch timed out, the
+  peer cascade does not report why, and that ends in a 404 (`fetch_failed`).
+  Dashboards will show these 503s as 5xx. Serve-deadline 503s are counted,
+  as before, by `chunk_serve_deadline_exceeded_total`; all of them carry
+  their reason in the `chunk.retrieval.error` span attribute; they are
+  logged at debug rather than warn so a busy gateway does not flood its
+  logs.
 
 - The default `GRAPHQL_ROOT_TX_GATEWAYS_URLS` is now
   `{ "https://arweave.net": 1 }`, replacing
