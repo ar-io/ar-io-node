@@ -1643,12 +1643,15 @@ export class ArweaveCompositeClient
       // Instead, race this caller's await against the abort signal so only
       // the abandoned caller bails out while the shared fetch continues.
       //
-      // So a fetch can outlive every caller: up to the peer-attempt count
+      // So a fetch can outlive every caller, for up to the peer-attempt count
       // (ARWEAVE_PEER_CHUNK_GET_MAX_PEER_ATTEMPT_COUNT, or the selection count
-      // if larger) times PEER_CHUNK_REQUEST_TIMEOUT_MS of detached work. That
-      // is deliberate cache warming: the result still fills the chunk cache
-      // for a later request. Such fetches are counted by
-      // arweave_chunk_fetch_orphaned_total.
+      // if larger) of sequential attempts. That is not a time bound:
+      // PEER_CHUNK_REQUEST_TIMEOUT_MS is axios's timeout, which stops once a
+      // peer's headers arrive, so a peer still sending the body can hold an
+      // attempt longer. The intent is cache warming, which pays off only when
+      // the result lands within the promise cache's TTL
+      // (CHUNK_CACHE_TTL_SECONDS) and the entry is not evicted first. Such
+      // fetches are counted by arweave_chunk_fetch_orphaned_total.
       // Counted before the fetch can start, so it cannot settle uncounted.
       this.chunkWaiters.set(
         cacheKey,
