@@ -134,5 +134,27 @@ describe('Ans104Unbundler', () => {
         },
       );
     });
+
+    it('counts a nested bundle unbundled without a known root offset (#907)', async () => {
+      mock.method(mockAns104Parser, 'parseBundle');
+      const before =
+        (await metrics.bundlesUnbundleUnknownParentOffsetTotal.get()).values[0]
+          ?.value ?? 0;
+      await ans104Unbundler.queueItem(
+        { id: 'nested', root_tx_id: 'l1-root' } as UnbundleableItem,
+        false,
+        true,
+      );
+      // An L1 bundle is its own root: nothing is unknown, nothing counted.
+      await ans104Unbundler.queueItem(
+        { id: 'l1', root_tx_id: 'l1' } as UnbundleableItem,
+        false,
+        true,
+      );
+      const after =
+        (await metrics.bundlesUnbundleUnknownParentOffsetTotal.get()).values[0]
+          ?.value ?? 0;
+      assert.equal(after, before + 1);
+    });
   });
 });

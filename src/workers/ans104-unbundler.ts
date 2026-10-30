@@ -173,6 +173,17 @@ export class Ans104Unbundler {
           item.data_offset !== null
         ) {
           rootParentOffset = item.root_parent_offset + item.data_offset;
+        } else if (rootTxId !== item.id) {
+          // A nested bundle whose place in its root is unknown: its items
+          // are recorded at root_parent_offset 0, which is wrong for them
+          // (#907). Not written as NULL, because the index treats an item's
+          // location fields as all present or all absent. Counted so the
+          // producers of such bundles can be found; readers that export or
+          // serve these rows re-check the location.
+          metrics.bundlesUnbundleUnknownParentOffsetTotal.inc();
+          log.warn('Unbundling a nested bundle with no known root offset', {
+            rootTxId,
+          });
         }
 
         await this.ans104Parser.parseBundle({
