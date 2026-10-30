@@ -53,8 +53,10 @@ FROM (
   -- depth. The bundles flush promotes items only once both its own pass and
   -- the core flush have run, and an item whose bundle has no
   -- stable_block_transactions row is never promoted, so the table alone
-  -- under-reports stability. The root here is the one our own unbundling
-  -- recorded, never a location learned from a peer.
+  -- under-reports stability. This asks of a row exactly what that flush asks
+  -- before promoting it (its recorded root is in a stable block), so it
+  -- trusts the row's placement no more than stable_data_items already does;
+  -- it only removes the wait.
   SELECT
     null AS data_root,
     ndi.data_size,
@@ -72,6 +74,10 @@ FROM (
   FROM bundles.new_data_items ndi
   WHERE ndi.id = @id
 )
+-- An ID can have both a stable and a new row (stored in two bundles); the
+-- stable one answers. UNION alone sorted the rows and took whichever came
+-- first.
+ORDER BY stable DESC
 LIMIT 1;
 
 -- selectRootTxId

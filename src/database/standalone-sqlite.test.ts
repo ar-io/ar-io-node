@@ -1212,6 +1212,13 @@ describe('StandaloneSqliteDatabase', () => {
       assert.equal(dbWorker.getDataAttributes(toB64Url(id))?.stable, false);
     });
 
+    it('is true when an item has both a stable and an unstable placement', () => {
+      const id = Buffer.alloc(32, 0xd5);
+      insertItem('stable_data_items', id, stableRoot);
+      insertItem('new_data_items', id, newRoot);
+      assert.equal(dbWorker.getDataAttributes(toB64Url(id))?.stable, true);
+    });
+
     it('is false for an unflushed data item whose root is unknown', () => {
       const id = Buffer.alloc(32, 0xd4);
       insertItem('new_data_items', id, Buffer.alloc(32, 0xc9));
