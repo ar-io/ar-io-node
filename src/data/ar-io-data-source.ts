@@ -8,7 +8,9 @@ import { default as axios, AxiosResponse } from 'axios';
 import winston from 'winston';
 import {
   ArIOPeerManager,
+  PeerFailureKind,
   PeerSuccessMetrics,
+  peerFailureKindForStatus,
 } from '../peers/ar-io-peer-manager.js';
 
 import {
@@ -113,14 +115,18 @@ export class ArIODataSource implements ContiguousDataSource {
     this.peerManager.reportSuccess(DATA_CATEGORY, peer, successMetrics);
   }
 
-  handlePeerFailure(peer: string, requestType: string): void {
+  handlePeerFailure(
+    peer: string,
+    requestType: string,
+    kind: PeerFailureKind = 'failed',
+  ): void {
     metrics.getDataStreamErrorsTotal.inc({
       class: this.constructor.name,
       source: peer,
       request_type: requestType,
     });
 
-    this.peerManager.reportFailure(DATA_CATEGORY, peer);
+    this.peerManager.reportFailure(DATA_CATEGORY, peer, kind);
   }
 
   private async request({
@@ -203,10 +209,15 @@ export class ArIODataSource implements ContiguousDataSource {
         (region === undefined && response.status !== 200)
       ) {
         response.data.destroy();
-        throw new Error(
-          `Unexpected status code from peer: ${response.status}. Expected ${
-            region !== undefined ? '206' : '200'
-          }.`,
+        // The status rides on the error so the caller can tell a busy peer
+        // (429, 503) from one that failed.
+        throw Object.assign(
+          new Error(
+            `Unexpected status code from peer: ${response.status}. Expected ${
+              region !== undefined ? '206' : '200'
+            }.`,
+          ),
+          { status: response.status },
         );
       }
 
@@ -456,7 +467,11 @@ export class ArIODataSource implements ContiguousDataSource {
                 message: error.message,
                 stack: error.stack,
               });
-              this.handlePeerFailure(peer, region ? 'range' : 'full');
+              this.handlePeerFailure(
+                peer,
+                region ? 'range' : 'full',
+                peerFailureKindForStatus(error.status),
+              );
             }
             throw error;
           }

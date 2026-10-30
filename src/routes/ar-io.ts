@@ -257,6 +257,9 @@ export const arIoInfoHandler = async (_req: Request, res: Response) => {
             solanaAddress: config.HTTPSIG_SIGNER.solanaAddress,
           }
         : undefined,
+    graphqlOperationCostBytes: config.ENABLE_GRAPHQL_METERING
+      ? config.GRAPHQL_OPERATION_COST_BYTES
+      : undefined,
     indexNames: advertised?.names,
     // A feed is served only with a public origin to build its URLs from,
     // and lists only bands offered as torrents.
