@@ -596,7 +596,14 @@ The on-chain `Observation.report_tx_id` field stores the **raw 32-byte hash** (l
 `CACHE_UNSTABLE_MAX_AGE` govern the `Cache-Control: max-age` returned for
 data responses. `CACHE_STABLE_MAX_AGE` additionally emits the `immutable`
 directive, which tells browsers and upstream proxies (e.g., nginx) **not**
-to revalidate before the max-age expires.
+to revalidate before the max-age expires. It applies only to data that is
+stable (its root L1 transaction is past the fork depth), verified against its
+data root, and served from the gateway's own cache; other stable data gets
+the unstable tiers, so bytes the gateway has not verified are never pinned
+for that long. Before release 88 a bug kept every response off this tier, so
+upgrading is the first time stable data is cached for `CACHE_STABLE_MAX_AGE`;
+content blocked after it is served stays in browser and CDN caches until it
+expires.
 
 URL → data-id bindings served via ArNS are **mutable**: ArNS records can be
 updated, manifests can be republished, and a previously-fallback path may
