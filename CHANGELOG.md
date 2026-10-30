@@ -52,6 +52,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `docs/envs.md`.
 ### Fixed
 
+- A data item stored in two bundles could be given a location made of one
+  copy's root and the other copy's offsets: data attributes took the root
+  from the location recorded at fetch time and filled missing offsets from
+  the bundles index, even when the two named different roots (#959). The
+  index now fills in only when it names the same root. Separately, an ID
+  found only through its data root (an L1 transaction whose bytes are also
+  a data item's) borrowed that other item's root and offsets; it no longer
+  gets any location that way, and the ID's own row now always wins over one
+  found through the data root.
+
 - GraphQL no longer lists a data item's tags twice when the item was
   indexed from two bundles (or imported from an L2 band and later
   unbundled). The stable flush keeps the first stored row of an item, but

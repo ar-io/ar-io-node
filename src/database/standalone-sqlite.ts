@@ -1755,28 +1755,44 @@ export class StandaloneSqliteDatabaseWorker {
     const hash = dataRow?.hash;
     const dataRoot = txOrItemRow?.data_root;
 
-    // Prefer root_transaction_id from data.db if available
-    const rootTransactionId =
-      dataRow?.root_transaction_id !== null &&
-      dataRow?.root_transaction_id !== undefined
-        ? toB64Url(dataRow.root_transaction_id)
-        : txOrItemRow?.root_transaction_id !== null &&
-            txOrItemRow?.root_transaction_id !== undefined
-          ? toB64Url(txOrItemRow.root_transaction_id)
-          : undefined;
+    // A location is a root plus offsets into it, and must come from one
+    // record. data.db's row (a location recorded when the data was fetched)
+    // is preferred; the bundles index row (from our own unbundling) may fill
+    // in fields it lacks, but only when both name the same root. An item
+    // stored in two bundles otherwise paired one copy's root with the other
+    // copy's offsets and served bytes from the wrong place (#959 item 3).
+    const dataRowRoot: Buffer | null | undefined =
+      dataRow?.root_transaction_id;
+    const indexRoot: Buffer | null | undefined =
+      txOrItemRow?.root_transaction_id;
+    const hasDataRowRoot = dataRowRoot !== null && dataRowRoot !== undefined;
+    const hasIndexRoot = indexRoot !== null && indexRoot !== undefined;
+    const indexAgrees =
+      !hasDataRowRoot || (hasIndexRoot && dataRowRoot.equals(indexRoot));
+    const indexRow = indexAgrees ? txOrItemRow : undefined;
 
+    const rootTransactionId = hasDataRowRoot
+      ? toB64Url(dataRowRoot)
+      : hasIndexRoot
+        ? toB64Url(indexRoot)
+        : undefined;
+
+    // The bundles row for this item (signature, owner and its offset in its
+    // parent). Its own offset and size belong to the index's location, so
+    // they are only used where that location is.
     let dataItemAttributes;
     if (rootTransactionId !== undefined) {
       dataItemAttributes = this.stmts.bundles.selectDataItemAttributes.get({
         id: fromB64Url(id),
       });
     }
+    const indexItem = indexAgrees ? dataItemAttributes : undefined;
 
     // Calculate resolved offset values for reuse
     const rootParentOffset =
-      dataRow?.root_parent_offset ?? txOrItemRow?.root_parent_offset;
-    const dataOffset = dataRow?.data_offset ?? txOrItemRow?.data_offset;
-    const offset = dataRow?.data_item_offset ?? dataItemAttributes?.offset;
+      dataRow?.root_parent_offset ?? indexRow?.root_parent_offset;
+    const dataOffset = dataRow?.data_offset ?? indexRow?.data_offset;
+    const offset = dataRow?.data_item_offset ?? indexItem?.offset;
 
     // Immediate parent bundle for data items, undefined for L1 txs.
     // Surfaced so route handlers can detect the single-level case
@@ -1807,7 +1823,7 @@ export class StandaloneSqliteDatabaseWorker {
       rootParentOffset,
       dataOffset,
       offset,
-      itemSize: dataRow?.data_item_size ?? dataItemAttributes?.size,
+      itemSize: dataRow?.data_item_size ?? indexItem?.size,
       formatId: dataRow?.format_id,
       signatureOffset: dataItemAttributes?.signature_offset,
       signatureSize: dataItemAttributes?.signature_size,
