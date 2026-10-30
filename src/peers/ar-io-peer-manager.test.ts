@@ -875,7 +875,10 @@ describe('ArIOPeerManager', () => {
         } as unknown as ARIORead,
         { emptyListRetryInitialMs: 10 },
       );
-      m.shutdown();
+      // The stop system.ts makes. Not shutdown(): that also closes the
+      // breaker, which would refuse a retry's call before it reached the
+      // registry and hide one being scheduled.
+      m.stopUpdatingPeers();
       fail(new Error('registry unreachable'));
       await new Promise((resolve) => setTimeout(resolve, 60));
       assert.equal(calls, 1);
