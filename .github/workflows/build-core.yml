@@ -3,10 +3,12 @@ name: build-core
 on: [push, workflow_dispatch]
 
 # A newer push to the same branch makes an older run pointless, so cancel it.
-# develop and main are exempt: each of their commits publishes its own image.
+# develop and main are exempt: each of their commits publishes its own image,
+# so each run gets a group of its own. (A shared group, even without
+# cancel-in-progress, keeps only one pending run and drops the others.)
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/develop' && github.ref != 'refs/heads/main' }}
+  group: ${{ github.workflow }}-${{ (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') && github.run_id || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
