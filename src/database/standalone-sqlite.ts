@@ -1824,7 +1824,10 @@ export class StandaloneSqliteDatabaseWorker {
           ? rootParentOffset + dataOffset
           : undefined),
       isManifest: contentType === MANIFEST_CONTENT_TYPE,
-      stable: txOrItemRow?.stable === true,
+      // SQLite has no boolean type: `true AS stable` reads back as 1. Until
+      // this compared with 1 it compared with `true`, never matched, and every
+      // response said X-AR-IO-Stable: false.
+      stable: txOrItemRow?.stable === 1,
       // Block height of the root tx/item, or undefined when not yet mined
       // (an optimistically-indexed tx sits in new_transactions with NULL
       // height until its block is imported). Used by the verification serving

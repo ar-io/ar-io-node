@@ -48,8 +48,10 @@ info:
       against its Arweave data root and is serving it from its own cache.
     - `X-AR-IO-Trusted`: whether the data came from a source the gateway
       trusts.
-    - `X-AR-IO-Stable`: whether the data's block is past the maximum fork
-      depth. Absent when the gateway has no local record of the data.
+    - `X-AR-IO-Stable`: whether the data's root L1 transaction is past the
+      maximum fork depth, so the bytes can no longer be reorganised away.
+      `false` when the gateway has no local record of the data (as is
+      `X-AR-IO-Verified`).
     - **HTTP message signatures** (RFC 9421, `Signature` and
       `Signature-Input`): when enabled, the gateway signs these headers and,
       through `Content-Digest`, the body, so a client can prove which
@@ -2883,6 +2885,13 @@ paths:
           description: Invalid offset parameter
         '404':
           description: Chunk not found
+        '503':
+          description: 'The chunk could not be fetched in time (the serve deadline or an upstream timeout). Says nothing about whether it exists; retry after `Retry-After` seconds. Sent with `Cache-Control: no-store`.'
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+              description: Seconds to wait before retrying
     head:
       tags: [Chunks]
       summary: Get chunk metadata without body.
@@ -2943,6 +2952,13 @@ paths:
           description: Invalid offset parameter
         '404':
           description: Chunk not found
+        '503':
+          description: 'The chunk could not be fetched in time (the serve deadline or an upstream timeout). Says nothing about whether it exists; retry after `Retry-After` seconds. Sent with `Cache-Control: no-store`.'
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+              description: Seconds to wait before retrying
 
   '/chunk/{offset}/data':
     get:
@@ -3120,6 +3136,13 @@ paths:
           description: Invalid offset parameter
         '404':
           description: Chunk not found
+        '503':
+          description: 'The chunk could not be fetched in time (the serve deadline or an upstream timeout). Says nothing about whether it exists; retry after `Retry-After` seconds. Sent with `Cache-Control: no-store`.'
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+              description: Seconds to wait before retrying
         '500':
           description: Internal server error (e.g., merkle path parsing failed)
     head:
@@ -3266,6 +3289,13 @@ paths:
           description: Invalid offset parameter
         '404':
           description: Chunk not found
+        '503':
+          description: 'The chunk could not be fetched in time (the serve deadline or an upstream timeout). Says nothing about whether it exists; retry after `Retry-After` seconds. Sent with `Cache-Control: no-store`.'
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+              description: Seconds to wait before retrying
         '500':
           description: Internal server error (e.g., merkle path parsing failed)
 

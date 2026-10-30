@@ -41,6 +41,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- `/chunk/<offset>` and `/chunk/<offset>/data` now answer **503** with
+  `Retry-After: 5` and `Cache-Control: no-store`, not 404, when a chunk
+  could not be fetched in time: the serve deadline
+  (`CHUNK_SERVE_DEADLINE_MS`), an upstream timeout, or an internal
+  cancellation (#917). A 404 for an offset reads as permanent, so clients
+  and peers cached it, peer weighting took it for "lacks the data", and the
+  observer's reference-gateway client stopped at it instead of trying the
+  network. Under load nearly every failure was this kind: 99% of requests
+  at 500 concurrent, with a working gateway. A boundary lookup skipped
+  because the chain fallback was at its concurrency limit is also a 503
+  (`boundary_unavailable`), not a 404. A 404 now means no source found the
+  chunk; one case is still ambiguous: when every peer fetch timed out, the
+  peer cascade does not report why, and that ends in a 404 (`fetch_failed`).
+  Dashboards will show these 503s as 5xx. Serve-deadline 503s are counted,
+  as before, by `chunk_serve_deadline_exceeded_total`; all of them carry
+  their reason in the `chunk.retrieval.error` span attribute; they are
+  logged at debug rather than warn so a busy gateway does not flood its
+  logs.
+
 - The default `GRAPHQL_ROOT_TX_GATEWAYS_URLS` is now
   `{ "https://arweave.net": 1 }`, replacing
   `https://arweave-search.goldsky.com`, which now answers every request with
@@ -62,6 +81,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   first `TRUSTED_GATEWAYS_URLS` entry), and has its own setting,
   `CHUNK_METADATA_ANCHOR_PEER_URLS`, so anchoring can be pointed elsewhere
   or turned off (`{}`) without changing root-TX lookups.
+- A gateway that started while the AR.IO gateway registry was unreachable
+  had no peers until the next hourly refresh, so every peer retrieval failed
+  for up to an hour. The peer list is now saved after each successful
+  registry read (`AR_IO_PEER_LIST_CACHE_PATH`, default
+  `data/peers/ar-io-peers.json`; Docker Compose mounts it from
+  `PEERS_DATA_PATH`, default `./data/peers`) and loaded at startup, and
+  while the list is empty a failed read is retried after 10 s, backing off
+  to 5 min. A registry read that returns no gateways at all is treated as a
+  failure rather than applied as an empty list.
+- `X-AR-IO-Stable` was `false` on every response, and stable data never got
+  `CACHE_STABLE_MAX_AGE` (30 days, `immutable`): since 2023 the gateway
+  compared SQLite's `1` with `true`, which never matched. A transaction at
+  height 1,500,000 on vilenarios.com, long past the fork depth, was served
+  `X-AR-IO-Stable: false` with a two-hour `max-age`. Stable data is now
+  reported stable, and directly addressed stable data (`/<id>`, `/raw/<id>`)
+  that is also verified and served from the gateway's own cache gets
+  `CACHE_STABLE_MAX_AGE`, `immutable`, for the first time; other stable data
+  keeps the unstable tiers, and ArNS responses keep their own TTL.
+  A data item the bundles flush has not yet promoted is also stable once
+  its root L1 transaction is, rather than waiting for the flush (an item
+  whose bundle has no `stable_block_transactions` row was never promoted).
+  This is the same test the flush applies before promoting it, so no
+  placement is trusted more than before. With no local record of the data,
+  `X-AR-IO-Stable` and `X-AR-IO-Verified` are now sent as `false` instead
+  of being left out.
 
 - GraphQL no longer lists a data item's tags twice when the item was
   indexed from two bundles (or imported from an L2 band and later
