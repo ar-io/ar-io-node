@@ -9,7 +9,6 @@ import { GraphQLResolveInfo, SelectionSetNode } from 'graphql';
 
 import * as config from '../../config.js';
 import { isSelectionAwareGqlQueryable } from '../../database/gateways-gql-queryable.js';
-import { winstonToAr } from '../../lib/encoding.js';
 import { Semaphore } from '../../lib/semaphore.js';
 import log from '../../log.js';
 import * as metrics from '../../metrics.js';
@@ -17,6 +16,13 @@ import { ownerFetcher, signatureFetcher } from '../../system.js';
 import { GqlTransaction, GqlWarning } from '../../types.js';
 import { isEmptyString } from '../../lib/string.js';
 import { resolveTransactionQuery } from './transaction-resolver.js';
+import {
+  resolveTxFee,
+  resolveTxParent,
+  resolveTxQuantity,
+} from './tx-fields.js';
+
+export { resolveTxFee, resolveTxParent, resolveTxQuantity };
 
 /**
  * Wrap a top-level Query resolver to record `graphql_queries_total` and the
@@ -137,20 +143,6 @@ export function resolveTxData(tx: GqlTransaction) {
   };
 }
 
-export function resolveTxQuantity(tx: GqlTransaction) {
-  return {
-    ar: winstonToAr(tx.quantity || '0'),
-    winston: tx.quantity || '0',
-  };
-}
-
-export function resolveTxFee(tx: GqlTransaction) {
-  return {
-    ar: winstonToAr(tx.fee || '0'),
-    winston: tx.fee || '0',
-  };
-}
-
 export type OwnerParent = {
   tx: GqlTransaction;
   keyPromise?: Promise<string | undefined>;
@@ -207,15 +199,6 @@ async function fetchTxOwnerKey(
     signal,
   });
   return ownerKey !== undefined ? ownerKey : NOT_FOUND;
-}
-
-export function resolveTxParent(tx: GqlTransaction) {
-  if (tx.parentId === null) {
-    return null;
-  }
-  return {
-    id: tx.parentId,
-  };
 }
 
 export function resolveTxBundledIn(tx: GqlTransaction) {

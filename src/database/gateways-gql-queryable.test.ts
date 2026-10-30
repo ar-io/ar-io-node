@@ -14,7 +14,7 @@ import {
   resolveTxFee,
   resolveTxParent,
   resolveTxQuantity,
-} from '../routes/graphql/resolvers.js';
+} from '../routes/graphql/tx-fields.js';
 import {
   GqlBlock,
   GqlBlocksResult,
