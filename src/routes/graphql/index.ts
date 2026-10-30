@@ -24,6 +24,7 @@ import * as metrics from '../../metrics.js';
 import { GqlQueryable, GqlWarning } from '../../types.js';
 import { resolvers, TxOwnerFetcher, TxSignatureFetcher } from './resolvers.js';
 import { recordGraphqlBatchSize } from './batch-size.js';
+import { recordGqlHops } from '../../lib/gql-hops.js';
 import { graphqlBodyParseError } from './body-parse-error.js';
 import { buildResolverSignal, ResolverSignalState } from './resolver-signal.js';
 
@@ -221,6 +222,11 @@ export const makeApolloServerMiddleware = async ({
     recordGraphqlBatchSize,
     // After the body parser, so a batch is charged per operation.
     ...(meter !== undefined ? [meter] : []),
+    // Last before Apollo, after the body parser: the parser finishes in the
+    // socket's stream callbacks, which would not carry the hop count, while
+    // everything from here on is promise-based and does. Read by the
+    // GraphQL fan-out to stop at GATEWAYS_GQL_MAX_HOPS (#680).
+    recordGqlHops,
     expressMiddleware(server, {
       context: async ({ res }: { res: Response }): Promise<GraphQLContext> => {
         // The signal builder closes over `signalState` directly; the plugin

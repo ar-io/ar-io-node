@@ -5,11 +5,13 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import { strict as assert } from 'node:assert';
+import { setTimeout as delay } from 'node:timers/promises';
 import { describe, it } from 'node:test';
 import axios from 'axios';
 import { OperationDefinitionNode, SelectionSetNode, parse } from 'graphql';
 
 import { createTestLogger } from '../../test/test-logger.js';
+import { runWithGqlHops } from '../lib/gql-hops.js';
 import {
   resolveTxFee,
   resolveTxParent,
@@ -1442,5 +1444,90 @@ describe('amounts from an upstream gateway, whatever subfields are asked for', (
       ),
       'id quantity { ar winston } fee { winston ar }',
     );
+  });
+});
+
+describe('GatewaysGqlQueryable hop limit (#680)', () => {
+  const localTx = txAt({ id: 'local', height: 10 });
+  const remoteTx = txAt({ id: 'remote', height: 20 });
+
+  const merger = (withLocal: boolean) =>
+    GatewaysGqlQueryable.forTesting({
+      log,
+      sources: withLocal
+        ? [
+            new FakeQueryable({ transactions: [localTx] }),
+            new FakeQueryable({ transactions: [remoteTx] }),
+          ]
+        : [new FakeQueryable({ transactions: [remoteTx] })],
+      labels: withLocal
+        ? ['<local>', 'http://up.example']
+        : ['http://up.example'],
+      maxHops: 2,
+    });
+
+  it('fans out below the limit', async () => {
+    const result = await runWithGqlHops(1, () =>
+      merger(true).getGqlTransactions({ pageSize: 10, tags: [] }),
+    );
+    assert.deepEqual(result.edges.map((e) => e.node.id).sort(), [
+      'local',
+      'remote',
+    ]);
+    assert.equal(result.warnings, undefined);
+  });
+
+  it('answers from the local index alone at the limit', async () => {
+    const result = await runWithGqlHops(2, () =>
+      merger(true).getGqlTransactions({ pageSize: 10, tags: [] }),
+    );
+    assert.deepEqual(
+      result.edges.map((e) => e.node.id),
+      ['local'],
+    );
+    assert.equal(result.warnings?.[0].code, 'FANOUT_HOP_LIMIT');
+  });
+
+  it('answers with nothing, and says why, at the limit without a local index', async () => {
+    const result = await runWithGqlHops(3, () =>
+      merger(false).getGqlTransactions({ pageSize: 10, tags: [] }),
+    );
+    assert.deepEqual(result.edges, []);
+    assert.equal(result.warnings?.[0].code, 'FANOUT_HOP_LIMIT');
+    const tx = await runWithGqlHops(3, () =>
+      merger(false).getGqlTransaction({ id: 'remote' }),
+    );
+    assert.equal(tx, null);
+    // A block lookup with no sources answers too, rather than hanging.
+    const block = await Promise.race([
+      runWithGqlHops(3, () => merger(false).getGqlBlock({ id: 'b' })),
+      delay(1000).then(() => 'hung'),
+    ]);
+    assert.equal(block, undefined);
+  });
+
+  it('sends upstreams one hop more than the request it serves', async () => {
+    const sent: unknown[] = [];
+    const instance = axios.create({
+      adapter: async (cfg) => {
+        sent.push(cfg.headers?.['X-AR-IO-Hops']);
+        return {
+          data: { data: { block: null } },
+          status: 200,
+          statusText: 'OK',
+          headers: {},
+          config: cfg,
+        } as any;
+      },
+    });
+    const fanout = new GatewaysGqlQueryable({
+      log,
+      urls: ['http://up.example'],
+      axiosInstance: instance,
+      maxHops: 2,
+    });
+    await fanout.getGqlBlock({ id: 'b' });
+    await runWithGqlHops(1, () => fanout.getGqlBlock({ id: 'b' }));
+    assert.deepEqual(sent, ['1', '2']);
   });
 });

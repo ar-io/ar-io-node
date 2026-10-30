@@ -588,6 +588,16 @@ export const GATEWAYS_GQL_CIRCUIT_BREAKER_RESET_TIMEOUT_MS =
 // preserving the prior behavior.
 export const GATEWAYS_GQL_SOFT_DEADLINE_ENABLED =
   env.varOrDefault('GATEWAYS_GQL_SOFT_DEADLINE_ENABLED', 'false') === 'true';
+// A GraphQL request that has already passed through this many gateways
+// (X-AR-IO-Hops) is answered from the local index only, never fanned out
+// again, so two gateways listing each other in GATEWAYS_GQL_URLS cannot call
+// each other without end. 2 lets a gateway that fans out to another that
+// fans out to its own indexers (turbo-gateway.com) still reach them.
+export const GATEWAYS_GQL_MAX_HOPS = env.positiveIntOrDefault(
+  'GATEWAYS_GQL_MAX_HOPS',
+  2,
+);
+
 export const GATEWAYS_GQL_SOFT_DEADLINE_MS = env.positiveIntOrDefault(
   'GATEWAYS_GQL_SOFT_DEADLINE_MS',
   2_000,
@@ -992,6 +1002,16 @@ export const ROOT_TX_INDEX_CIRCUIT_BREAKER_SUCCESS_THRESHOLD =
 export const WEIGHTED_PEERS_TEMPERATURE_DELTA = +env.varOrDefault(
   'WEIGHTED_PEERS_TEMPERATURE_DELTA',
   '2',
+);
+
+// How fast an AR.IO peer's selection weight returns to its category default
+// when nothing reports on it: half the distance every this many ms. Without
+// it a peer that failed during an outage keeps its low weight until it is
+// picked and succeeds, which its low weight makes unlikely. 0 turns decay
+// off.
+export const PEER_WEIGHT_DECAY_HALF_LIFE_MS = env.nonNegativeIntOrDefault(
+  'PEER_WEIGHT_DECAY_HALF_LIFE_MS',
+  15 * 60 * 1000,
 );
 
 // Per-peer concurrency limiter
