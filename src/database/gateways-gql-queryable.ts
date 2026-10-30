@@ -10,6 +10,8 @@ import CircuitBreaker from 'opossum';
 import winston from 'winston';
 
 import * as config from '../config.js';
+import { headerNames } from '../constants.js';
+import { currentGqlHops } from '../lib/gql-hops.js';
 import { fromB64Url } from '../lib/encoding.js';
 import { createAgentPair } from '../lib/http-agent.js';
 import * as metrics from '../metrics.js';
@@ -330,10 +332,13 @@ class RemoteGqlQueryable implements GqlQueryable {
     query: string,
     variables: Record<string, unknown>,
   ): Promise<{ data: T; warnings: GqlWarning[] }> {
-    const response = await this.axiosInstance.post(`${this.url}/graphql`, {
-      query,
-      variables,
-    });
+    // One hop on from the request being served, so the upstream can tell
+    // a fanned-out query from a client's and stop at the hop limit.
+    const response = await this.axiosInstance.post(
+      `${this.url}/graphql`,
+      { query, variables },
+      { headers: { [headerNames.hops]: String(currentGqlHops() + 1) } },
+    );
     const body = response.data;
     if (body?.errors && Array.isArray(body.errors) && body.errors.length > 0) {
       throw new Error(
@@ -756,6 +761,7 @@ export class GatewaysGqlQueryable
   private readonly sourceLabels: string[];
   private readonly softDeadlineEnabled: boolean;
   private readonly softDeadlineMs: number;
+  private readonly maxHops: number;
 
   constructor({
     log,
@@ -772,6 +778,7 @@ export class GatewaysGqlQueryable
     },
     softDeadlineEnabled = config.GATEWAYS_GQL_SOFT_DEADLINE_ENABLED,
     softDeadlineMs = config.GATEWAYS_GQL_SOFT_DEADLINE_MS,
+    maxHops = config.GATEWAYS_GQL_MAX_HOPS,
     axiosInstance,
   }: {
     log: winston.Logger;
@@ -781,11 +788,14 @@ export class GatewaysGqlQueryable
     circuitBreakerOptions?: CircuitBreaker.Options;
     softDeadlineEnabled?: boolean;
     softDeadlineMs?: number;
+    /** Inbound hop count at which only the local index is asked. */
+    maxHops?: number;
     axiosInstance?: AxiosInstance;
   }) {
     this.log = log.child({ class: 'GatewaysGqlQueryable' });
     this.softDeadlineEnabled = softDeadlineEnabled;
     this.softDeadlineMs = softDeadlineMs;
+    this.maxHops = maxHops;
 
     if (urls.length === 0 && localGqlQueryable === undefined) {
       throw new Error(
@@ -820,6 +830,7 @@ export class GatewaysGqlQueryable
     labels?: string[];
     softDeadlineEnabled?: boolean;
     softDeadlineMs?: number;
+    maxHops?: number;
   }): GatewaysGqlQueryable {
     if (params.sources.length === 0) {
       throw new Error('forTesting requires at least one source');
@@ -830,6 +841,7 @@ export class GatewaysGqlQueryable
       localGqlQueryable: params.sources[0],
       softDeadlineEnabled: params.softDeadlineEnabled,
       softDeadlineMs: params.softDeadlineMs,
+      maxHops: params.maxHops,
     });
 
     (merger as any).sources = params.sources;
@@ -870,6 +882,43 @@ export class GatewaysGqlQueryable
     );
   }
 
+  /**
+   * The sources to ask for the request being served. A request that has
+   * already passed through `maxHops` gateways is answered from the local
+   * index alone (none when it is not included), never fanned out again: two
+   * gateways listing each other would otherwise call each other until every
+   * hop timed out (#680).
+   */
+  private activeSources(): {
+    sources: GqlQueryable[];
+    labels: string[];
+    hopLimited: boolean;
+  } {
+    if (currentGqlHops() < this.maxHops) {
+      return {
+        sources: this.sources,
+        labels: this.sourceLabels,
+        hopLimited: false,
+      };
+    }
+    const local = this.sourceLabels.indexOf('<local>');
+    return local === -1
+      ? { sources: [], labels: [], hopLimited: true }
+      : {
+          sources: [this.sources[local]],
+          labels: ['<local>'],
+          hopLimited: true,
+        };
+  }
+
+  /** The warning a hop-limited fan-out adds when it asked no upstream. */
+  private hopLimitWarning(): GqlWarning {
+    return {
+      code: 'FANOUT_HOP_LIMIT',
+      message: `Request had passed through ${currentGqlHops()} gateways (GATEWAYS_GQL_MAX_HOPS ${this.maxHops}); upstream gateways were not asked`,
+    };
+  }
+
   async getGqlTransaction({
     id,
     warnings,
@@ -889,7 +938,9 @@ export class GatewaysGqlQueryable
     // optimistic copy can beat a peer that has the same transaction
     // properly indexed with its block height, and the resolved row's
     // data is silently dropped (PE-9092).
-    const promises = this.sources.map((source) =>
+    const { sources, hopLimited } = this.activeSources();
+    if (hopLimited) warnings?.push(this.hopLimitWarning());
+    const promises = sources.map((source) =>
       source.getGqlTransaction({ id, warnings }),
     );
 
@@ -904,7 +955,9 @@ export class GatewaysGqlQueryable
   }
 
   async getGqlBlock({ id }: { id: string }): Promise<GqlBlock | undefined> {
-    const promises = this.sources.map((source) => source.getGqlBlock({ id }));
+    const promises = this.activeSources().sources.map((source) =>
+      source.getGqlBlock({ id }),
+    );
 
     return this.raceFirstNonNull(promises, 'getGqlBlock', { id });
   }
@@ -913,18 +966,23 @@ export class GatewaysGqlQueryable
     args: TransactionQueryArgs,
   ): Promise<GqlTransactionsResult> {
     const sortOrder = args.sortOrder ?? 'HEIGHT_DESC';
+    const { sources, labels, hopLimited } = this.activeSources();
     const results = await this.settleWithSoftDeadline(
-      this.sources.map((source) => source.getGqlTransactions(args)),
+      sources.map((source) => source.getGqlTransactions(args)),
       (result) => result.edges.length > 0,
     );
     const failureWarnings = this.handleSourceFailures(
       results,
       'getGqlTransactions',
       args,
+      labels,
     );
 
     const streams: GqlTransactionEdge[][] = [];
-    const warnings: GqlWarning[] = [...failureWarnings];
+    const warnings: GqlWarning[] = [
+      ...(hopLimited ? [this.hopLimitWarning()] : []),
+      ...failureWarnings,
+    ];
     let anyUpstreamHasMore = false;
     for (let i = 0; i < results.length; i++) {
       const r = results[i];
@@ -933,7 +991,7 @@ export class GatewaysGqlQueryable
         if (r.value.pageInfo.hasNextPage) anyUpstreamHasMore = true;
         if (r.value.warnings !== undefined && r.value.warnings.length > 0) {
           for (const w of r.value.warnings) {
-            warnings.push({ ...w, source: w.source ?? this.sourceLabels[i] });
+            warnings.push({ ...w, source: w.source ?? labels[i] });
           }
         }
       }
@@ -956,18 +1014,23 @@ export class GatewaysGqlQueryable
 
   async getGqlBlocks(args: BlockQueryArgs): Promise<GqlBlocksResult> {
     const sortOrder = args.sortOrder ?? 'HEIGHT_DESC';
+    const { sources, labels, hopLimited } = this.activeSources();
     const results = await this.settleWithSoftDeadline(
-      this.sources.map((source) => source.getGqlBlocks(args)),
+      sources.map((source) => source.getGqlBlocks(args)),
       (result) => result.edges.length > 0,
     );
     const failureWarnings = this.handleSourceFailures(
       results,
       'getGqlBlocks',
       args,
+      labels,
     );
 
     const streams: { cursor: string; node: GqlBlock }[][] = [];
-    const warnings: GqlWarning[] = [...failureWarnings];
+    const warnings: GqlWarning[] = [
+      ...(hopLimited ? [this.hopLimitWarning()] : []),
+      ...failureWarnings,
+    ];
     let anyUpstreamHasMore = false;
     for (let i = 0; i < results.length; i++) {
       const r = results[i];
@@ -978,7 +1041,7 @@ export class GatewaysGqlQueryable
         if (r.value.pageInfo.hasNextPage) anyUpstreamHasMore = true;
         if (r.value.warnings !== undefined && r.value.warnings.length > 0) {
           for (const w of r.value.warnings) {
-            warnings.push({ ...w, source: w.source ?? this.sourceLabels[i] });
+            warnings.push({ ...w, source: w.source ?? labels[i] });
           }
         }
       }
@@ -1111,6 +1174,9 @@ export class GatewaysGqlQueryable
     method: string,
     args: unknown,
   ): Promise<T | undefined> {
+    // No sources (the hop limit reached with no local index): nothing would
+    // ever settle the promise below.
+    if (promises.length === 0) return Promise.resolve(undefined);
     return new Promise((resolve, reject) => {
       let remaining = promises.length;
       let rejectedCount = 0;
@@ -1242,9 +1308,10 @@ export class GatewaysGqlQueryable
     results: PromiseSettledResult<unknown>[],
     method: string,
     args: unknown,
+    labels: string[] = this.sourceLabels,
   ): GqlWarning[] {
     const failures = results
-      .map((r, i) => ({ r, label: this.sourceLabels[i] }))
+      .map((r, i) => ({ r, label: labels[i] }))
       .filter((x) => x.r.status === 'rejected') as {
       r: PromiseRejectedResult;
       label: string;
