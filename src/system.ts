@@ -39,7 +39,10 @@ import { TxMetadataResolver } from './data/tx-metadata-resolver.js';
 import { CompositeTxBoundarySource } from './data/composite-tx-boundary-source.js';
 import { DatabaseTxBoundarySource } from './data/database-tx-boundary-source.js';
 import { ChainTxBoundarySource } from './data/chain-tx-boundary-source.js';
-import { ChunkMetadataAnchorSource } from './data/chunk-metadata-anchor-source.js';
+import {
+  ChunkMetadataAnchorSource,
+  resolveAnchorPeerUrls,
+} from './data/chunk-metadata-anchor-source.js';
 import { TxPathValidationSource } from './data/tx-path-validation-source.js';
 import { DataImporter } from './workers/data-importer.js';
 import { CompositeClickHouseDatabase } from './database/composite-clickhouse.js';
@@ -1075,6 +1078,7 @@ export const arIOPeerManager = new ArIOPeerManager({
   log,
   networkProcess,
   nodeWallet: config.AR_IO_WALLET,
+  peerListCachePath: config.AR_IO_PEER_LIST_CACHE_PATH,
 });
 
 const baseArIODataSource = new ArIODataSource({
@@ -1188,23 +1192,13 @@ const chainBoundarySource = config.CHUNK_OFFSET_CHAIN_FALLBACK_ENABLED
   ? new ChainTxBoundarySource({ log, arweaveClient })
   : undefined;
 
-// Resolve the reference-peer pool used for chunk-metadata anchoring,
-// in priority order: GATEWAYS_ROOT_TX_URLS (already populated for the
-// peer-emitted-hint-source pattern) → highest-priority TRUSTED_GATEWAYS_URLS
-// entry (the architect's original fallback). One pool key controls
-// both consumers; operators don't have to keep two lists in sync.
-//
-// TRUSTED_GATEWAYS_URLS carries a per-entry `priority` (lower number =
-// higher priority); object insertion order from JSON isn't authoritative,
-// so sort explicitly before picking the single fallback.
-const chunkAnchorPeerUrls: string[] = (() => {
-  const fromRootTx = Object.keys(config.GATEWAYS_ROOT_TX_URLS);
-  if (fromRootTx.length > 0) return fromRootTx;
-  const fromTrusted = Object.entries(config.TRUSTED_GATEWAYS_URLS).sort(
-    ([, a], [, b]) => a.priority - b.priority,
-  );
-  return fromTrusted.length > 0 ? [fromTrusted[0][0]] : [];
-})();
+// Reference peers for chunk-metadata anchoring: its own setting when given,
+// else the root-TX pool, else the trusted gateways, all in priority order.
+const chunkAnchorPeerUrls = resolveAnchorPeerUrls({
+  explicit: config.CHUNK_METADATA_ANCHOR_PEER_URLS,
+  rootTx: config.GATEWAYS_ROOT_TX_URLS,
+  trusted: config.TRUSTED_GATEWAYS_URLS,
+});
 
 const chunkMetadataAnchorSource =
   config.CHUNK_METADATA_ANCHOR_ENABLED && chunkAnchorPeerUrls.length > 0
@@ -1237,7 +1231,7 @@ const chunkMetadataAnchorSource =
 
 if (config.CHUNK_METADATA_ANCHOR_ENABLED && chunkAnchorPeerUrls.length === 0) {
   log.warn(
-    'CHUNK_METADATA_ANCHOR_ENABLED=true but no peers in GATEWAYS_ROOT_TX_URLS or TRUSTED_GATEWAYS_URLS; anchor source disabled',
+    'CHUNK_METADATA_ANCHOR_ENABLED=true but no anchor peers (CHUNK_METADATA_ANCHOR_PEER_URLS, GATEWAYS_ROOT_TX_URLS, TRUSTED_GATEWAYS_URLS); anchor source disabled',
   );
 }
 
