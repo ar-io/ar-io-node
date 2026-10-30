@@ -1011,7 +1011,6 @@ export const PEER_MAX_HEDGED_REQUESTS = env.positiveIntOrDefault(
   3,
 );
 
-// Consistent hash ring configuration
 // File the AR.IO peer list is saved to after each successful registry read
 // and loaded from at startup, so a restart while the registry is unreachable
 // keeps the previous peers.
@@ -1020,6 +1019,7 @@ export const AR_IO_PEER_LIST_CACHE_PATH = env.varOrDefault(
   'data/peers/ar-io-peers.json',
 );
 
+// Consistent hash ring configuration
 export const PEER_HASH_RING_VIRTUAL_NODES = env.positiveIntOrDefault(
   'PEER_HASH_RING_VIRTUAL_NODES',
   150,

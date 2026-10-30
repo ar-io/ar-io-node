@@ -721,7 +721,8 @@ describe('ArIOPeerManager', () => {
         second.getFormattedPeers(['data'])['one.com:443'].status,
         'joined',
       );
-      await waitFor(() => down.state.calls > 0);
+      await second.refreshPeers();
+      assert.ok(down.state.calls > 0);
       assert.equal(
         second.getPeerUrls().length,
         2,
@@ -783,7 +784,7 @@ describe('ArIOPeerManager', () => {
       );
     });
 
-    it('does not overwrite a saved list with an empty read', async () => {
+    it('treats a registry read with no gateways like a failure', async () => {
       await writePeerListSnapshot(cachePath, {
         writtenAt: 1,
         peers: { w1: 'https://one.com' },
@@ -792,10 +793,74 @@ describe('ArIOPeerManager', () => {
       const before = fs.readFileSync(cachePath, 'utf8');
       const r = registry([]);
       r.state.up = true;
+      const m = manager(r.networkProcess, { emptyListRetryInitialMs: 10 });
+      await m.refreshPeers();
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      assert.deepEqual(m.getPeerUrls(), ['https://one.com'], 'list kept');
+      assert.equal(fs.readFileSync(cachePath, 'utf8'), before, 'file kept');
+      // refreshPeers joined the constructor's read, and nothing retried it.
+      assert.equal(r.state.calls, 1, 'no retry while a list is in place');
+    });
+
+    it('retries an empty registry read when it has no list', async () => {
+      const r = registry([]);
+      r.state.up = true;
+      manager(r.networkProcess, {
+        emptyListRetryInitialMs: 10,
+        emptyListRetryMaxMs: 10,
+      });
+      await waitFor(() => r.state.calls >= 3);
+    });
+
+    it('applies a read whose gateways were all filtered out', async () => {
+      const r = registry([
+        gateway('gone', 'gone.com', 'leaving'),
+        gateway('localNode', 'me.com'),
+      ]);
+      r.state.up = true;
+      await writePeerListSnapshot(cachePath, {
+        writtenAt: 1,
+        peers: { gone: 'https://gone.com' },
+        records: {},
+      });
       const m = manager(r.networkProcess);
       await m.refreshPeers();
-      await new Promise((resolve) => setTimeout(resolve, 20));
-      assert.equal(fs.readFileSync(cachePath, 'utf8'), before);
+      assert.deepEqual(m.getPeerUrls(), []);
+      assert.equal(m.getSelfRecord()?.url, 'https://me.com');
+    });
+
+    it('shares one registry read between overlapping callers', async () => {
+      let release: () => void = () => undefined;
+      let calls = 0;
+      const m = manager({
+        getGateways: async () => {
+          calls++;
+          await new Promise<void>((resolve) => (release = resolve));
+          return {
+            items: [gateway('w1', 'one.com')],
+            hasMore: false,
+            nextCursor: undefined,
+          };
+        },
+      } as unknown as ARIORead);
+      // The constructor's read is in flight; these join it.
+      const a = m.refreshPeers();
+      const b = m.refreshPeers();
+      release();
+      await Promise.all([a, b]);
+      assert.equal(calls, 1);
+      assert.deepEqual(m.getPeerUrls(), ['https://one.com']);
+    });
+
+    it('removes temporary files a crash left behind', async () => {
+      fs.mkdirSync(path.dirname(cachePath), { recursive: true });
+      const leftover = `${cachePath}.123.456.tmp`;
+      const unrelated = path.join(path.dirname(cachePath), 'other.tmp');
+      fs.writeFileSync(leftover, '{');
+      fs.writeFileSync(unrelated, 'x');
+      manager(registry([]).networkProcess);
+      assert.equal(fs.existsSync(leftover), false);
+      assert.equal(fs.existsSync(unrelated), true);
     });
 
     it('stops a pending retry on shutdown', async () => {

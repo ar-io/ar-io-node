@@ -56,8 +56,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   had no peers until the next hourly refresh, so every peer retrieval failed
   for up to an hour. The peer list is now saved after each successful
   registry read (`AR_IO_PEER_LIST_CACHE_PATH`, default
-  `data/peers/ar-io-peers.json`) and loaded at startup, and while the list
-  is empty a failed read is retried after 10 s, backing off to 5 min.
+  `data/peers/ar-io-peers.json`; Docker Compose mounts it from
+  `PEERS_DATA_PATH`, default `./data/peers`) and loaded at startup, and
+  while the list is empty a failed read is retried after 10 s, backing off
+  to 5 min. A registry read that returns no gateways at all is treated as a
+  failure rather than applied as an empty list.
 
 - GraphQL no longer lists a data item's tags twice when the item was
   indexed from two bundles (or imported from an L2 band and later

@@ -72,6 +72,7 @@ services:
       # only: core serves published/ and loads installed/, and never writes.
       - ${INDEX_SWARM_DATA_PATH:-./data/indexes}:/app/data/indexes:ro
       - ${KEYS_DATA_PATH:-./data/keys}:/app/data/keys
+      - ${PEERS_DATA_PATH:-./data/peers}:/app/data/peers
       - ${WALLETS_PATH:-./wallets}:/app/wallets:ro
       - ${SECRETS_PATH:-./secrets}:/app/secrets:ro
       - envoy-eds-data:/app/data/envoy-eds

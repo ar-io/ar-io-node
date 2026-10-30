@@ -21,6 +21,7 @@ import {
   PeerListSnapshot,
   PeerRegistryRecord,
   readPeerListSnapshot,
+  removeStalePeerListTempFiles,
   writePeerListSnapshot,
 } from './peer-list-cache.js';
 
@@ -83,6 +84,7 @@ export class ArIOPeerManager implements WithFormattedPeers {
   private emptyListRetryMaxMs: number;
   private nextEmptyListRetryMs: number;
   private emptyListRetryTimeout?: NodeJS.Timeout;
+  private inFlightRead?: Promise<void>;
 
   // Weight management per category
   private peerWeights: Map<WeightCategory, Map<string, number>> = new Map();
@@ -145,7 +147,8 @@ export class ArIOPeerManager implements WithFormattedPeers {
     /**
      * File the peer list is saved to after each successful registry read and
      * loaded from at startup, so a restart while the registry is unreachable
-     * keeps the previous peers. Undefined or empty disables it.
+     * keeps the previous peers. Undefined or empty disables it (the
+     * AR_IO_PEER_LIST_CACHE_PATH setting always supplies a path).
      */
     peerListCachePath?: string;
     emptyListRetryInitialMs?: number;
@@ -553,6 +556,21 @@ export class ArIOPeerManager implements WithFormattedPeers {
   }
 
   /**
+   * Read the registry, sharing a read already in flight. The circuit breaker
+   * admits one read at a time and counts a rejected second one as a failure,
+   * so overlapping callers (the interval, the empty-list retry, refreshPeers)
+   * wait for the same read instead.
+   */
+  private updatePeerList(): Promise<void> {
+    if (this.inFlightRead === undefined) {
+      this.inFlightRead = this.readPeerList().finally(() => {
+        this.inFlightRead = undefined;
+      });
+    }
+    return this.inFlightRead;
+  }
+
+  /**
    * Refresh the peer pool from the AR.IO gateway registry.
    *
    * Pages through the registry, rebuilds the hash ring, and reconciles the
@@ -572,7 +590,7 @@ export class ArIOPeerManager implements WithFormattedPeers {
    * saved one), the read is retried with backoff instead of waiting for the
    * next hourly refresh. A successful read is saved to the peer list cache.
    */
-  private async updatePeerList(): Promise<void> {
+  private async readPeerList(): Promise<void> {
     const log = this.log.child({ method: 'updatePeerList' });
     log.info('Fetching AR.IO network peer list');
 
@@ -581,6 +599,7 @@ export class ArIOPeerManager implements WithFormattedPeers {
     let self: (PeerRegistryRecord & { url: string }) | undefined;
     const skipLeaving = config.SKIP_LEAVING_GATEWAYS;
     let skippedLeaving = 0;
+    let registryCount = 0;
     let cursor: string | undefined;
     let failed = false;
     do {
@@ -591,6 +610,7 @@ export class ArIOPeerManager implements WithFormattedPeers {
             limit: 1000,
           });
 
+        registryCount += items.length;
         for (const gateway of items) {
           // Our own node is never a peer, but its entry is kept apart.
           if (
@@ -670,6 +690,24 @@ export class ArIOPeerManager implements WithFormattedPeers {
     // is nothing at all, and every peer-first retrieval would fail until the
     // next successful refresh.
     if (failed) {
+      if (Object.keys(this.peers).length === 0) {
+        this.scheduleEmptyListRetry();
+      }
+      return;
+    }
+
+    // A registry read that succeeds with no gateways at all is far more
+    // likely a registry or SDK fault than an empty network, so it is treated
+    // like a failure: keep what we have, and retry while that is nothing. (A
+    // read whose gateways were all filtered out, ourselves or leaving, is
+    // applied: that list really is empty.)
+    if (registryCount === 0) {
+      log.warn(
+        'Gateway registry returned no gateways; keeping the current list',
+        {
+          currentCount: Object.keys(this.peers).length,
+        },
+      );
       if (Object.keys(this.peers).length === 0) {
         this.scheduleEmptyListRetry();
       }
@@ -767,6 +805,7 @@ export class ArIOPeerManager implements WithFormattedPeers {
       method: 'loadPeerListCache',
       path: this.peerListCachePath,
     });
+    removeStalePeerListTempFiles(this.peerListCachePath);
     const snapshot = readPeerListSnapshot(this.peerListCachePath);
     if (snapshot === undefined) {
       log.info('No usable saved AR.IO peer list');
@@ -808,8 +847,6 @@ export class ArIOPeerManager implements WithFormattedPeers {
   /** Save a fetched peer list. Failure is logged, never thrown. */
   private savePeerListCache(snapshot: PeerListSnapshot): void {
     if (this.peerListCachePath === undefined) return;
-    // An empty read must not replace a saved list that has peers in it.
-    if (Object.keys(snapshot.peers).length === 0) return;
     const filePath = this.peerListCachePath;
     writePeerListSnapshot(filePath, snapshot).catch((error: any) => {
       this.log.warn('Failed to save AR.IO peer list', {

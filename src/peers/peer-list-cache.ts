@@ -160,3 +160,28 @@ export async function writePeerListSnapshot(
     throw error;
   }
 }
+
+/**
+ * Remove temporary files a crash left between writing and renaming. Each
+ * write uses a unique name, so without this they would accumulate. Errors are
+ * ignored: this is housekeeping.
+ */
+export function removeStalePeerListTempFiles(filePath: string): void {
+  const dir = path.dirname(filePath);
+  const prefix = `${path.basename(filePath)}.`;
+  let names: string[];
+  try {
+    names = fs.readdirSync(dir);
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    if (name.startsWith(prefix) && name.endsWith('.tmp')) {
+      try {
+        fs.rmSync(path.join(dir, name), { force: true });
+      } catch {
+        // Ignored, see above.
+      }
+    }
+  }
+}
