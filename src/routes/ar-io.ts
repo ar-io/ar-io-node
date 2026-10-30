@@ -15,11 +15,14 @@ import { release } from '../version.js';
 import { db, signatureStore, ownerStore } from '../system.js';
 import log from '../log.js';
 import { ParquetExporter } from '../workers/parquet-exporter.js';
-import { NormalizedDataItem, PartialJsonTransaction } from '../types.js';
 import { DATA_PATH_REGEX } from '../constants.js';
 import { isEmptyString } from '../lib/string.js';
 import { isValidDataId, sanityCheckTx } from '../lib/validation.js';
 import { fromB64Url, toB64Url } from '../lib/encoding.js';
+import {
+  queuedBundleItem,
+  resolveQueuedBundleRoot,
+} from '../lib/queue-bundle-root.js';
 import {
   resolveRootTxOffsets,
   sendRootTxOffsets,
@@ -561,8 +564,19 @@ arIoRouter.post(
         return;
       }
 
+      // A bundle that is itself a data item is unbundled against its real
+      // root and offset, or its items are recorded one level too shallow.
+      const placed = await resolveQueuedBundleRoot(id, system.rootTxIndex);
+      if (placed.kind === 'unresolved') {
+        res
+          .status(409)
+          .send(
+            `'${id}' is a data item in ${placed.rootTxId}, but its offset there is unknown; queue the enclosing bundle instead`,
+          );
+        return;
+      }
       const queuedBundle = await system.queueBundle(
-        { id, root_tx_id: id } as NormalizedDataItem | PartialJsonTransaction,
+        queuedBundleItem(id, placed),
         true,
         bypassFilter,
       );

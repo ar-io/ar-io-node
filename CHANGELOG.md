@@ -87,6 +87,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `docs/envs.md`.
 ### Fixed
 
+- `POST /ar-io/admin/queue-bundle` queued every ID as its own root, so for a
+  bundle that is itself a data item each of its items was recorded with the
+  bundle as root and offsets relative to the bundle (#959 item 5, whose
+  writer was unknown). Serving then rejected those locations, since the
+  "root" is not an L1 transaction, and items failed intermittently. The
+  route now looks up a nested bundle's root and payload offset first, and
+  answers 409 when the root is known but the offset is not. Rows written
+  this way before can be cleared with `POST /ar-io/admin/invalidate-data`.
 - A data item stored in two bundles could be given a location made of one
   copy's root and the other copy's offsets: data attributes took the root
   from the location recorded at fetch time and filled missing offsets from

@@ -3530,7 +3530,13 @@ paths:
     post:
       tags: [Admin]
       summary: Queue a bundle for indexing, bypassing any filter settings by default.
-      description: Queue a bundle for indexing, bypassing any filter settings by default.
+      description: |-
+        Queue a bundle for indexing, bypassing any filter settings by default.
+        The ID may be an L1 transaction or a bundle that is itself a data item.
+        For a nested bundle the gateway first looks up its root transaction and
+        offset (`ROOT_TX_LOOKUP_ORDER`) so its items are recorded at their real
+        location; when the root is known but the offset is not, it answers 409
+        rather than record locations relative to the bundle.
       operationId: adminQueueBundle
       requestBody:
         $ref: '#/components/requestBodies/QueueTxRequest'
@@ -3541,6 +3547,8 @@ paths:
           $ref: '#/components/responses/MissingIdOrBypassFilter'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '409':
+          description: The ID is a data item whose offset in its root is unknown; queue the enclosing bundle instead.
         '500':
           $ref: '#/components/responses/ServerError'
       security:

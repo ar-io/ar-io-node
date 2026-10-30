@@ -134,5 +134,28 @@ describe('Ans104Unbundler', () => {
         },
       );
     });
+
+    it('places the items of a nested bundle queued with its root at that root (#959)', async () => {
+      mock.method(mockAns104Parser, 'parseBundle');
+      // The shape queue-bundle now sends for a bundle that is a data item.
+      const mockItem = {
+        id: 'nested-bundle',
+        root_tx_id: 'l1-root',
+        root_parent_offset: 1260,
+        data_offset: 0,
+      } as unknown as UnbundleableItem;
+
+      await ans104Unbundler.queueItem(mockItem, false, true);
+
+      assert.deepEqual(
+        (mockAns104Parser.parseBundle as any).mock.calls[0].arguments[0],
+        {
+          parentId: 'nested-bundle',
+          parentIndex: undefined,
+          rootParentOffset: 1260,
+          rootTxId: 'l1-root',
+        },
+      );
+    });
   });
 });
