@@ -11,7 +11,10 @@ import { afterEach, describe, it } from 'node:test';
 import type { AxiosInstance } from 'axios';
 
 import { createTestLogger } from '../../test/test-logger.js';
-import { ChunkMetadataAnchorSource } from './chunk-metadata-anchor-source.js';
+import {
+  ChunkMetadataAnchorSource,
+  resolveAnchorPeerUrls,
+} from './chunk-metadata-anchor-source.js';
 
 const log = createTestLogger({ suite: 'ChunkMetadataAnchorSource' });
 
@@ -110,6 +113,7 @@ function makeSource({
   peerUrls = ['https://ref.example'],
   cacheTtlMs = 60_000,
   missCacheTtlMs = 0,
+  peerBackoffBaseMs,
 }: {
   axiosInstance: AxiosInstance;
   fetchTxOffset?: (
@@ -123,6 +127,7 @@ function makeSource({
   peerUrls?: string[];
   cacheTtlMs?: number;
   missCacheTtlMs?: number;
+  peerBackoffBaseMs?: number;
 }): ChunkMetadataAnchorSource {
   return new ChunkMetadataAnchorSource({
     log,
@@ -134,6 +139,7 @@ function makeSource({
     fetchTxOffset,
     fetchTransaction,
     axiosInstance,
+    peerBackoffBaseMs,
   });
 }
 
@@ -734,6 +740,9 @@ describe('ChunkMetadataAnchorSource', () => {
       const source = makeSource({
         axiosInstance: stub.axios,
         missCacheTtlMs: 60_000,
+        // The mismatch backs the only peer off; this test is about the miss
+        // cache, so the backoff is zero.
+        peerBackoffBaseMs: 0,
         fetchTransaction: async () => {
           entered();
           await gate;
@@ -1004,6 +1013,232 @@ describe('ChunkMetadataAnchorSource', () => {
       } finally {
         await peer.close();
       }
+    });
+  });
+
+  describe('reference peer failover and backoff', () => {
+    type Answer = 'ok' | 'throw' | number | 'lie';
+    /**
+     * An axios stub answering per peer: 'ok' with good headers, 'throw' as an
+     * unreachable host, a status with no headers, or 'lie' with headers the
+     * chain will contradict.
+     */
+    function perPeerAxios(answers: Record<string, Answer>) {
+      const asked: string[] = [];
+      const respond = (url: string) => {
+        const peer = new URL(url).origin;
+        asked.push(peer);
+        const answer = answers[peer];
+        if (answer === 'throw') throw new Error('connect ECONNREFUSED');
+        if (answer === 'ok') return { status: 200, headers: chunkHeaders() };
+        if (answer === 'lie') {
+          return {
+            status: 200,
+            headers: chunkHeaders({ 'x-arweave-chunk-data-root': txId }),
+          };
+        }
+        return { status: answer, headers: {} };
+      };
+      const axios = {
+        head: async (url: string) => respond(url),
+        get: async (url: string) => respond(url),
+      } as unknown as AxiosInstance;
+      return { axios, asked };
+    }
+
+    function sourceWith(
+      axiosInstance: AxiosInstance,
+      clock: { now: number },
+    ): ChunkMetadataAnchorSource {
+      return new ChunkMetadataAnchorSource({
+        log,
+        peerUrls: ['https://a.example', 'https://b.example'],
+        requestTimeoutMs: 1000,
+        cacheSize: 32,
+        cacheTtlMs: 0,
+        missCacheTtlMs: 0,
+        fetchTxOffset: async () => matchingChainOffset,
+        fetchTransaction: async () => ({ data_root: dataRoot }),
+        axiosInstance,
+        peerBackoffBaseMs: 1000,
+        peerBackoffMaxMs: 4000,
+        now: () => clock.now,
+      });
+    }
+
+    it('fails over to the next peer while the first is backed off, then returns to it', async () => {
+      const answers: Record<string, Answer> = {
+        'https://a.example': 'throw',
+        'https://b.example': 'ok',
+      };
+      const { axios, asked } = perPeerAxios(answers);
+      const clock = { now: 0 };
+      const source = sourceWith(axios, clock);
+
+      // a fails (HEAD and the GET fallback both reach it), and is backed off.
+      assert.equal(await source.getTxBoundary(inRangeOffset), null);
+      assert.deepEqual([...new Set(asked)], ['https://a.example']);
+
+      asked.length = 0;
+      const result = await source.getTxBoundary(inRangeOffset);
+      assert.equal(result?.id, txId);
+      assert.deepEqual(asked, ['https://b.example']);
+
+      // Once the backoff has passed, a is asked again, and is healthy now.
+      answers['https://a.example'] = 'ok';
+      clock.now = 1000;
+      asked.length = 0;
+      await source.getTxBoundary(inRangeOffset);
+      assert.deepEqual(asked, ['https://a.example']);
+    });
+
+    it('doubles the backoff with each consecutive failure, up to the maximum', async () => {
+      const { axios, asked } = perPeerAxios({
+        'https://a.example': 503,
+        'https://b.example': 'ok',
+      });
+      const clock = { now: 0 };
+      const source = sourceWith(axios, clock);
+      const askedA = async () => {
+        asked.length = 0;
+        await source.getTxBoundary(inRangeOffset);
+        return asked.includes('https://a.example');
+      };
+
+      assert.equal(await askedA(), true); // fails: backed off 1 s
+      clock.now = 999;
+      assert.equal(await askedA(), false);
+      clock.now = 1000;
+      assert.equal(await askedA(), true); // fails again: 2 s
+      clock.now = 2999;
+      assert.equal(await askedA(), false);
+      clock.now = 3000;
+      assert.equal(await askedA(), true); // 4 s
+      clock.now = 7000;
+      assert.equal(await askedA(), true); // capped at 4 s
+      clock.now = 11000;
+      assert.equal(await askedA(), true);
+    });
+
+    it('counts concurrent failures from one outage once', async () => {
+      const { axios, asked } = perPeerAxios({
+        'https://a.example': 503,
+        'https://b.example': 'ok',
+      });
+      const clock = { now: 0 };
+      const source = sourceWith(axios, clock);
+      await Promise.all(
+        [0n, 1n, 2n, 3n].map((d) => source.getTxBoundary(inRangeOffset + d)),
+      );
+      // One failure, so the base backoff: a is asked again after 1 s.
+      clock.now = 1000;
+      asked.length = 0;
+      await source.getTxBoundary(inRangeOffset);
+      assert.ok(asked.includes('https://a.example'));
+    });
+
+    it('does not back off a peer that answers 404 (it simply lacks the chunk)', async () => {
+      const { axios, asked } = perPeerAxios({
+        'https://a.example': 404,
+        'https://b.example': 'ok',
+      });
+      const source = sourceWith(axios, { now: 0 });
+      await source.getTxBoundary(inRangeOffset);
+      await source.getTxBoundary(inRangeOffset);
+      assert.deepEqual(asked, ['https://a.example', 'https://a.example']);
+    });
+
+    it('backs off a peer whose headers the chain contradicts', async () => {
+      const { axios, asked } = perPeerAxios({
+        'https://a.example': 'lie',
+        'https://b.example': 'ok',
+      });
+      const source = sourceWith(axios, { now: 0 });
+      assert.equal(await source.getTxBoundary(inRangeOffset), null);
+      asked.length = 0;
+      const result = await source.getTxBoundary(inRangeOffset);
+      assert.equal(result?.id, txId);
+      assert.deepEqual(asked, ['https://b.example']);
+    });
+
+    it('asks nobody, and remembers no miss, while every peer is backed off', async () => {
+      const { axios, asked } = perPeerAxios({
+        'https://a.example': 'throw',
+        'https://b.example': 'throw',
+      });
+      const clock = { now: 0 };
+      const source = new ChunkMetadataAnchorSource({
+        log,
+        peerUrls: ['https://a.example', 'https://b.example'],
+        requestTimeoutMs: 1000,
+        cacheSize: 32,
+        cacheTtlMs: 0,
+        missCacheTtlMs: 60_000,
+        fetchTxOffset: async () => matchingChainOffset,
+        fetchTransaction: async () => ({ data_root: dataRoot }),
+        axiosInstance: axios,
+        peerBackoffBaseMs: 1000,
+        now: () => clock.now,
+      });
+      // Distinct offsets so the miss cache does not mask the backoff.
+      await source.getTxBoundary(inRangeOffset);
+      await source.getTxBoundary(inRangeOffset + 1n);
+      asked.length = 0;
+      assert.equal(await source.getTxBoundary(inRangeOffset + 2n), null);
+      assert.deepEqual(asked, []);
+
+      // The skipped offset was not remembered as a miss: once a peer is
+      // back, it is probed.
+      clock.now = 1000;
+      await source.getTxBoundary(inRangeOffset + 2n);
+      assert.ok(asked.length > 0);
+    });
+  });
+
+  describe('resolveAnchorPeerUrls', () => {
+    const trusted = {
+      'https://t2.example': { priority: 2 },
+      'https://t1.example': { priority: 1 },
+    };
+
+    it('uses its own setting first, in priority order', () => {
+      assert.deepEqual(
+        resolveAnchorPeerUrls({
+          explicit: { 'https://e2.example': 2, 'https://e1.example': 1 },
+          rootTx: { 'https://r.example': 1 },
+          trusted,
+        }),
+        ['https://e1.example', 'https://e2.example'],
+      );
+    });
+
+    it('gives no peers for an explicit empty map', () => {
+      assert.deepEqual(
+        resolveAnchorPeerUrls({
+          explicit: {},
+          rootTx: { 'https://r.example': 1 },
+          trusted,
+        }),
+        [],
+      );
+    });
+
+    it('falls back to the root-TX pool, sorted', () => {
+      assert.deepEqual(
+        resolveAnchorPeerUrls({
+          explicit: undefined,
+          rootTx: { 'https://r2.example': 5, 'https://r1.example': 1 },
+          trusted,
+        }),
+        ['https://r1.example', 'https://r2.example'],
+      );
+    });
+
+    it('then to every trusted gateway, not only the first', () => {
+      assert.deepEqual(
+        resolveAnchorPeerUrls({ explicit: undefined, rootTx: {}, trusted }),
+        ['https://t1.example', 'https://t2.example'],
+      );
     });
   });
 });
