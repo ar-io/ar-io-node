@@ -588,6 +588,16 @@ export const GATEWAYS_GQL_CIRCUIT_BREAKER_RESET_TIMEOUT_MS =
 // preserving the prior behavior.
 export const GATEWAYS_GQL_SOFT_DEADLINE_ENABLED =
   env.varOrDefault('GATEWAYS_GQL_SOFT_DEADLINE_ENABLED', 'false') === 'true';
+// A GraphQL request that has already passed through this many gateways
+// (X-AR-IO-Hops) is answered from the local index only, never fanned out
+// again, so two gateways listing each other in GATEWAYS_GQL_URLS cannot call
+// each other without end. 2 lets a gateway that fans out to another that
+// fans out to its own indexers (turbo-gateway.com) still reach them.
+export const GATEWAYS_GQL_MAX_HOPS = env.positiveIntOrDefault(
+  'GATEWAYS_GQL_MAX_HOPS',
+  2,
+);
+
 export const GATEWAYS_GQL_SOFT_DEADLINE_MS = env.positiveIntOrDefault(
   'GATEWAYS_GQL_SOFT_DEADLINE_MS',
   2_000,

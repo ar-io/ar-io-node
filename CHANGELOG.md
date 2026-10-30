@@ -107,6 +107,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `docs/envs.md`.
 ### Fixed
 
+- Two gateways that listed each other in `GATEWAYS_GQL_URLS` called each
+  other's `/graphql` without end, until every hop timed out (#680). Fanned
+  out queries now carry `X-AR-IO-Hops`, and a request that has already
+  passed through `GATEWAYS_GQL_MAX_HOPS` gateways (default 2) is answered
+  from the local index only.
 - The Iceberg metadata scripts declared `root_parent_offset` as `int`; it
   is a byte offset into a root bundle and passes 2^31 in bundles over
   2 GiB, so it is now `long`, like the other offsets (#907). A nested
