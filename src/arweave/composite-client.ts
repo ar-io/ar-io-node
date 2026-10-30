@@ -191,6 +191,11 @@ export class ArweaveCompositeClient
   private txStore: PartialJsonTransactionStore;
   private blockStore: PartialJsonBlockStore;
   private chunkPromiseCache: ReadThroughPromiseCache<string, Chunk>;
+  /**
+   * Callers currently waiting on each shared chunk fetch, by cache key. A
+   * fetch that settles with none left is counted as orphaned (#885).
+   */
+  private chunkWaiters = new Map<string, number>();
   private skipCache: boolean;
 
   // Trusted node
@@ -380,6 +385,7 @@ export class ArweaveCompositeClient
             method: 'getChunkByAny',
             class: this.constructor.name,
           });
+          this.recordIfOrphaned(cacheKey, 'success');
 
           return chunk;
         } catch (error: any) {
@@ -388,6 +394,7 @@ export class ArweaveCompositeClient
             method: 'getChunkByAny',
             class: this.constructor.name,
           });
+          this.recordIfOrphaned(cacheKey, 'error');
           this.log.warn('Unable to fetch chunk from peers', {
             message: error.message,
             stack: error.stack,
@@ -1583,6 +1590,16 @@ export class ArweaveCompositeClient
     }
   }
 
+  /**
+   * Counts a shared chunk fetch that settled after every caller waiting on
+   * it had gone (see getChunkByAny).
+   */
+  private recordIfOrphaned(cacheKey: string, result: 'success' | 'error') {
+    if ((this.chunkWaiters.get(cacheKey) ?? 0) === 0) {
+      metrics.chunkFetchOrphanedTotal.inc({ result });
+    }
+  }
+
   async getChunkByAny(
     params: ChunkDataByAnySourceParams,
     signal?: AbortSignal,
@@ -1625,10 +1642,35 @@ export class ArweaveCompositeClient
       // signal aborts, because other callers may still want the result.
       // Instead, race this caller's await against the abort signal so only
       // the abandoned caller bails out while the shared fetch continues.
+      //
+      // So a fetch can outlive every caller, for up to the peer-attempt count
+      // (ARWEAVE_PEER_CHUNK_GET_MAX_PEER_ATTEMPT_COUNT, or the selection count
+      // if larger) of sequential attempts. That is not a time bound:
+      // PEER_CHUNK_REQUEST_TIMEOUT_MS is axios's timeout, which stops once a
+      // peer's headers arrive, so a peer still sending the body can hold an
+      // attempt longer. The intent is cache warming, which pays off only when
+      // the result lands within the promise cache's TTL
+      // (CHUNK_CACHE_TTL_SECONDS) and the entry is not evicted first. Such
+      // fetches are counted by arweave_chunk_fetch_orphaned_total.
+      // Counted before the fetch can start, so it cannot settle uncounted.
+      this.chunkWaiters.set(
+        cacheKey,
+        (this.chunkWaiters.get(cacheKey) ?? 0) + 1,
+      );
       const cachedPromise = this.chunkPromiseCache.get(cacheKey);
-      const result = signal
-        ? await abortablePromiseRace(cachedPromise, signal)
-        : await cachedPromise;
+      let result: Chunk;
+      try {
+        result = signal
+          ? await abortablePromiseRace(cachedPromise, signal)
+          : await cachedPromise;
+      } finally {
+        const waiters = (this.chunkWaiters.get(cacheKey) ?? 1) - 1;
+        if (waiters > 0) {
+          this.chunkWaiters.set(cacheKey, waiters);
+        } else {
+          this.chunkWaiters.delete(cacheKey);
+        }
+      }
 
       span.setAttributes({
         'chunk.source': result.source ?? 'unknown',
