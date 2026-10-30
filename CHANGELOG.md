@@ -8,6 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- `POST /ar-io/admin/invalidate-data` (`{"id": "<id>"}`) forgets what the
+  gateway recorded for one ID: cached hash, stored location, trust and
+  verification, in the index and in memory, so the next request resolves
+  it afresh (#959 item 6). It is the way to correct a wrong record that
+  later writes cannot replace, such as one already marked verified, without
+  editing SQLite by hand. The cached bytes are kept (they are stored by hash
+  and may belong to other IDs); caches in front of the gateway still need
+  their own purge.
+
 - `CONTIGUOUS_DATA_CACHE_INDEX_MAX_BYTES_PER_SWEEP` (default 0, off) caps
   the bytes one contiguous-cache eviction sweep frees, so eviction is paced
   by bytes per interval instead of arriving in bursts. On turbo-gateway.com's

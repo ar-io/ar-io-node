@@ -2871,6 +2871,47 @@ describe('StandaloneSqliteDatabase', () => {
       assert.equal(corrected?.rootDataOffset, 2999200);
     });
 
+    it('forgets an ID with deleteDataId, so a verified wrong location can be replaced', async () => {
+      const WRONG = 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee0';
+      const attrs = {
+        id: WRONG,
+        hash: 'deleteDataIdRegression',
+        dataSize: 94,
+        rootTransactionId: INTERMEDIATE,
+        rootDataItemOffset: 160,
+        rootDataOffset: 1268,
+      };
+      await db.saveDataContentAttributes(attrs);
+      // Marked verified: later saves no longer overwrite the row (#959 item 4).
+      await db.saveVerificationStatus(INTERMEDIATE);
+      await db.saveDataContentAttributes({
+        ...attrs,
+        rootTransactionId: L1_ROOT,
+        rootDataItemOffset: 2997951,
+        rootDataOffset: 2999200,
+      });
+      assert.equal(
+        (await db.getDataAttributes(WRONG))?.rootTransactionId,
+        INTERMEDIATE,
+        'the verified row resists a correcting save',
+      );
+
+      assert.equal(await db.deleteDataId(WRONG), true);
+      assert.equal(await db.deleteDataId(WRONG), false, 'nothing left');
+      assert.equal((await db.getDataAttributes(WRONG))?.hash, undefined);
+
+      // The identical correcting save now lands (its dedupe entry is gone).
+      await db.saveDataContentAttributes({
+        ...attrs,
+        rootTransactionId: L1_ROOT,
+        rootDataItemOffset: 2997951,
+        rootDataOffset: 2999200,
+      });
+      const corrected = await db.getDataAttributes(WRONG);
+      assert.equal(corrected?.rootTransactionId, L1_ROOT);
+      assert.equal(corrected?.rootDataItemOffset, 2997951);
+    });
+
     it('lets an identical re-save through after clearDataHash', async () => {
       const EVICTED = 'dddddddddddddddddddddddddddddddddddddddddd0';
       const attrs = {

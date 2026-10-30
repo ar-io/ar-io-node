@@ -258,6 +258,13 @@ LEFT JOIN contiguous_data cd ON cd.hash = cdi.contiguous_data_hash
 WHERE cdip.id = :id
 LIMIT 1
 
+-- deleteDataId
+-- Forgets everything recorded for one ID: its cached hash, location, trust
+-- and verification. The bytes, stored by hash and possibly shared with other
+-- IDs, are left alone.
+DELETE FROM contiguous_data_ids
+WHERE id = :id
+
 -- clearDataHash
 UPDATE contiguous_data_ids
 SET contiguous_data_hash = NULL, trusted = NULL, verified = 0, verified_at = NULL

@@ -426,6 +426,32 @@ arIoRouter.put(
   },
 );
 
+// Forget what this gateway recorded for one ID: its cached hash, stored
+// location, trust and verification. The next request for it resolves the ID
+// afresh, as if never seen. For a record that is wrong (a location that does
+// not hold the item, bytes cached under the wrong ID) and that later writes
+// cannot replace. The cached bytes are kept: they are stored by hash, may
+// belong to other IDs, and are correct for whatever hash they have. Edge and
+// browser caches in front of the gateway are not reached.
+arIoRouter.post(
+  '/ar-io/admin/invalidate-data',
+  express.json(),
+  async (req, res) => {
+    try {
+      const { id } = req.body ?? {};
+      if (typeof id !== 'string' || !isValidDataId(id)) {
+        res.status(400).send("'id' must be a valid data ID");
+        return;
+      }
+      const removed = await system.contiguousDataIndex.deleteDataId(id);
+      system.compositeDataAttributesStore.invalidate(id);
+      res.json({ id, removed });
+    } catch (error: any) {
+      res.status(500).send(error?.message);
+    }
+  },
+);
+
 // Block resolution of ArNS name
 arIoRouter.put('/ar-io/admin/block-name', express.json(), async (req, res) => {
   try {

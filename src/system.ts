@@ -376,7 +376,7 @@ export const db = new StandaloneSqliteDatabase({
 // client. See ArweaveCompositeClient.binarySearchBlocks.
 arweaveClient.blockByOffsetIndex = db;
 
-const compositeDataAttributesStore = new CompositeDataAttributesSource({
+export const compositeDataAttributesStore = new CompositeDataAttributesSource({
   log,
   source: db,
 });
