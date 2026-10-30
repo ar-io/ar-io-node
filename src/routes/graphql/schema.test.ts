@@ -167,6 +167,7 @@ describe('GraphQL over SQLite', () => {
           edges { node { block { height } } } } }`)
       ).transactions.edges.map((e: any) => e.node.block.height);
     const asc = await heights('HEIGHT_ASC');
+    assert.ok(new Set(asc).size > 1, 'need several heights to test order');
     assert.deepEqual(
       asc,
       [...asc].sort((a, b) => a - b),
