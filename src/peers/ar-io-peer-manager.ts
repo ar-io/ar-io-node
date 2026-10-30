@@ -30,6 +30,8 @@ const DEFAULT_WEIGHT = 50; // Neutral starting weight
 const MIN_WEIGHT = 1;
 const MAX_WEIGHT = 100;
 const DEFAULT_SELECTION_CACHE_TTL_MS = 5000; // 5 seconds
+// How often weights decay toward their category default.
+const DECAY_INTERVAL_MS = 60_000;
 // A busy peer (429, 503) loses this fraction of a full failure's weight: it
 // has the data, or may, and will again have the capacity, unlike a peer that
 // lacks it or is broken.
@@ -96,6 +98,7 @@ export class ArIOPeerManager implements WithFormattedPeers {
    */
   private self: (PeerRegistryRecord & { url: string }) | undefined;
   private intervalId?: NodeJS.Timeout;
+  private decayIntervalId?: NodeJS.Timeout;
   /** Where the last fetched peer list is kept; undefined disables it. */
   private peerListCachePath: string | undefined;
   private emptyListRetryInitialMs: number;
@@ -143,6 +146,7 @@ export class ArIOPeerManager implements WithFormattedPeers {
     hashRingVirtualNodes = config.PEER_HASH_RING_VIRTUAL_NODES,
     hashRingHomeSetSize = config.PEER_HASH_RING_HOME_SET_SIZE,
     updatePeersRefreshIntervalMs = DEFAULT_UPDATE_PEERS_REFRESH_INTERVAL_MS,
+    weightDecayHalfLifeMs = config.PEER_WEIGHT_DECAY_HALF_LIFE_MS,
     peerListCachePath,
     emptyListRetryInitialMs = DEFAULT_EMPTY_LIST_RETRY_INITIAL_MS,
     emptyListRetryMaxMs = DEFAULT_EMPTY_LIST_RETRY_MAX_MS,
@@ -164,6 +168,8 @@ export class ArIOPeerManager implements WithFormattedPeers {
     hashRingVirtualNodes?: number;
     hashRingHomeSetSize?: number;
     updatePeersRefreshIntervalMs?: number;
+    /** Half-life of a weight's distance from its default; 0 disables. */
+    weightDecayHalfLifeMs?: number;
     /**
      * File the peer list is saved to after each successful registry read and
      * loaded from at startup, so a restart while the registry is unreachable
@@ -233,6 +239,15 @@ export class ArIOPeerManager implements WithFormattedPeers {
         this.updatePeerList.bind(this),
         this.updatePeersRefreshIntervalMs,
       );
+    }
+
+    if (weightDecayHalfLifeMs > 0) {
+      const factor = 0.5 ** (DECAY_INTERVAL_MS / weightDecayHalfLifeMs);
+      this.decayIntervalId = setInterval(
+        () => this.decayWeights(factor),
+        DECAY_INTERVAL_MS,
+      );
+      this.decayIntervalId.unref();
     }
 
     // TODO: Remove deprecated circuit breaker metrics setup
@@ -339,12 +354,24 @@ export class ArIOPeerManager implements WithFormattedPeers {
     // Get home set from hash ring
     const homeSet = this.hashRing.getHomeSet(key, this.hashRingHomeSetSize);
 
-    // Sort home set by weight (highest first)
-    const rankedHomeSet = homeSet.sort((a, b) => {
-      const weightA = categoryWeights?.get(a) ?? DEFAULT_WEIGHT;
-      const weightB = categoryWeights?.get(b) ?? DEFAULT_WEIGHT;
-      return weightB - weightA;
-    });
+    // Order the home set by a weighted draw without replacement
+    // (Efraimidis-Spirakis: sort by random^(1/weight)), not strictly by
+    // weight. Decay keeps weights in order as it pulls them to the default,
+    // so under a strict sort a peer cooled during an outage stays behind its
+    // healthy neighbours, and callers that try only the first few peers
+    // (the chunk source) would never give it a first attempt. A drawn order
+    // still favours heavier peers, rarely puts a peer near MIN_WEIGHT first,
+    // and lets a peer that has decayed back toward the default win its share.
+    const rankedHomeSet = homeSet
+      .map((peer) => ({
+        peer,
+        key:
+          Math.random() **
+          (1 /
+            Math.max(categoryWeights?.get(peer) ?? DEFAULT_WEIGHT, MIN_WEIGHT)),
+      }))
+      .sort((a, b) => b.key - a.key)
+      .map(({ peer }) => peer);
 
     // Fill remaining slots with general weighted selection (exclude home set)
     const homeSetUrls = new Set(rankedHomeSet);
@@ -495,6 +522,23 @@ export class ArIOPeerManager implements WithFormattedPeers {
   }
 
   /**
+   * Keeps `factor` of each weight's distance from its category default, so
+   * weights drift back to the default with a half-life. A peer cooled during an outage regains its share of traffic
+   * without first having to be picked and succeed, which its low weight made
+   * unlikely; a good run fades the same way, so the weights track recent
+   * behaviour rather than all of it.
+   */
+  decayWeights(factor: number): void {
+    for (const [category, categoryWeights] of this.peerWeights) {
+      const target =
+        this.categoryConfigs.get(category)?.defaultWeight ?? DEFAULT_WEIGHT;
+      for (const [peerId, weight] of categoryWeights) {
+        categoryWeights.set(peerId, target + (weight - target) * factor);
+      }
+    }
+  }
+
+  /**
    * Get weights for a specific category
    */
   getWeights(category: WeightCategory): Map<string, number> | undefined {
@@ -567,6 +611,10 @@ export class ArIOPeerManager implements WithFormattedPeers {
     if (this.intervalId) {
       clearInterval(this.intervalId);
       this.intervalId = undefined;
+    }
+    if (this.decayIntervalId) {
+      clearInterval(this.decayIntervalId);
+      this.decayIntervalId = undefined;
     }
     if (this.emptyListRetryTimeout) {
       clearTimeout(this.emptyListRetryTimeout);

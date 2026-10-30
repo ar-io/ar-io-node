@@ -67,6 +67,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- AR.IO peer selection weights now drift back to their category default
+  when nothing reports on a peer, halfway every
+  `PEER_WEIGHT_DECAY_HALF_LIFE_MS` (default 15 min; `0` turns it off)
+  (#1119). A peer marked down during an outage used to keep its low weight
+  until it was picked and succeeded, which its low weight made unlikely.
+  For that to reach the peers tried first, a key's home set (the hash-ring
+  peers asked before any others) is now ordered by a weighted draw rather
+  than strictly by weight: decay keeps weights in order, so a strict sort
+  left a recovering peer behind its neighbours for good. Heavier peers still
+  usually go first, and a peer near the minimum weight rarely does.
 - `/chunk/<offset>` and `/chunk/<offset>/data` now answer **503** with
   `Retry-After: 5` and `Cache-Control: no-store`, not 404, when a chunk
   could not be fetched in time: the serve deadline
