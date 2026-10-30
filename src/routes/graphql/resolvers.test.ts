@@ -4,14 +4,8 @@
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
-// Must stay the first import: it moves the process into a temporary
-// directory with migrated SQLite databases before system.ts (loaded by the
-// resolvers) opens `data/sqlite/*.db`. See test/system-test-env.ts.
-import { systemTestDir } from '../../../test/system-test-env.js';
-
 import { strict as assert } from 'node:assert';
-import fs from 'node:fs';
-import { after, describe, it, mock } from 'node:test';
+import { describe, it } from 'node:test';
 import { GraphQLResolveInfo, OperationDefinitionNode, parse } from 'graphql';
 
 import {
@@ -28,20 +22,21 @@ import {
   resolveTxRecipient,
   resolveTxSignature,
   resolvers,
+  TxOwnerFetcher,
+  TxSignatureFetcher,
 } from './resolvers.js';
 import { GqlTransaction } from '../../types.js';
-import { db, ownerFetcher } from '../../system.js';
 
-// Importing the resolvers boots system.ts, which starts the SQLite worker
-// threads. Stop them before the file ends: `test:ci` runs with
-// --test-force-exit, and a worker killed while still preparing its
-// statements aborts the process under Node 22 ("FATAL ERROR:
-// v8::ToLocalChecked Empty MaybeLocal"). better-sqlite3 9.x and 12.x both do
-// this, so the wait is needed whichever is installed.
-after(async () => {
-  await db.stop();
-  fs.rmSync(systemTestDir, { recursive: true, force: true });
-});
+// The fetchers come from the GraphQL context, so the resolvers are tested
+// without booting the node. These answer nothing unless a test says so.
+const ownerFetcher: TxOwnerFetcher = {
+  getDataItemOwner: async () => undefined,
+  getTransactionOwner: async () => undefined,
+};
+const signatureFetcher: TxSignatureFetcher = {
+  getDataItemSignature: async () => undefined,
+  getTransactionSignature: async () => undefined,
+};
 
 const GQL_TX = {
   id: 'LXCrfCRLHB7YyLGAeQoio00qb7LwT3UO3a-2TSDli8Q',
@@ -143,6 +138,7 @@ describe('resolveTxOwnerAddress', () => {
   it('should return the owner address from the parent tx', () => {
     const address = resolveTxOwnerAddress({
       tx: GQL_TX as unknown as GqlTransaction,
+      ownerFetcher,
     });
     assert.equal(address, 'k3hNqeW_8_WDBz6hwUAsu6DQ47sGXZUP5Q8MJP8BdsE');
   });
@@ -152,6 +148,7 @@ describe('resolveTxOwnerKey', () => {
   it('should return the inline owner key when present', async () => {
     const key = await resolveTxOwnerKey({
       tx: GQL_TX as unknown as GqlTransaction,
+      ownerFetcher,
     });
     assert.equal(
       key,
@@ -160,7 +157,7 @@ describe('resolveTxOwnerKey', () => {
   });
 
   it('should memoize the key promise on the parent across repeated calls', async () => {
-    const parent = { tx: GQL_TX as unknown as GqlTransaction };
+    const parent = { tx: GQL_TX as unknown as GqlTransaction, ownerFetcher };
     const first = resolveTxOwnerKey(parent);
     const second = resolveTxOwnerKey(parent);
     assert.strictEqual(
@@ -176,23 +173,25 @@ describe('resolveTxOwnerKey', () => {
     // undefined on a miss/abort/error; without the sentinel coercion this
     // throws "Cannot return null for non-nullable field Owner.key" and nulls
     // the whole node (and the entire list for plural `transactions`).
-    mock.method(ownerFetcher, 'getDataItemOwner', () =>
-      Promise.resolve(undefined),
-    );
-    try {
-      const key = await resolveTxOwnerKey({
-        tx: {
-          id: 'data-item-id',
-          ownerKey: null,
-          parentId: 'parent-bundle-id',
-          ownerSize: '512',
-          ownerOffset: '100',
-        } as unknown as GqlTransaction,
-      });
-      assert.equal(key, '<not-found>');
-    } finally {
-      mock.restoreAll();
-    }
+    let asked = 0;
+    const key = await resolveTxOwnerKey({
+      tx: {
+        id: 'data-item-id',
+        ownerKey: null,
+        parentId: 'parent-bundle-id',
+        ownerSize: '512',
+        ownerOffset: '100',
+      } as unknown as GqlTransaction,
+      ownerFetcher: {
+        ...ownerFetcher,
+        getDataItemOwner: async () => {
+          asked++;
+          return undefined;
+        },
+      },
+    });
+    assert.equal(key, '<not-found>');
+    assert.equal(asked, 1);
   });
 });
 
@@ -318,7 +317,7 @@ describe('resolveTxSignature', () => {
     const signature = await resolveTxSignature(
       GQL_TX as unknown as GqlTransaction,
       {},
-      {},
+      { signatureFetcher },
     );
     assert.equal(
       signature,

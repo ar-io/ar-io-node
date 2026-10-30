@@ -201,6 +201,8 @@ const { middleware: apolloMiddleware, stop: stopApolloServer } =
           operationCostBytes: config.GRAPHQL_OPERATION_COST_BYTES,
         })
       : undefined,
+    ownerFetcher: system.ownerFetcher,
+    signatureFetcher: system.signatureFetcher,
   });
 app.use('/graphql', apolloMiddleware);
 
