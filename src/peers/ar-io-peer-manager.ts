@@ -306,12 +306,24 @@ export class ArIOPeerManager implements WithFormattedPeers {
     // Get home set from hash ring
     const homeSet = this.hashRing.getHomeSet(key, this.hashRingHomeSetSize);
 
-    // Sort home set by weight (highest first)
-    const rankedHomeSet = homeSet.sort((a, b) => {
-      const weightA = categoryWeights?.get(a) ?? DEFAULT_WEIGHT;
-      const weightB = categoryWeights?.get(b) ?? DEFAULT_WEIGHT;
-      return weightB - weightA;
-    });
+    // Order the home set by a weighted draw without replacement
+    // (Efraimidis-Spirakis: sort by random^(1/weight)), not strictly by
+    // weight. Decay keeps weights in order as it pulls them to the default,
+    // so under a strict sort a peer cooled during an outage stays behind its
+    // healthy neighbours, and callers that try only the first few peers
+    // (the chunk source) would never give it a first attempt. A drawn order
+    // still favours heavier peers, rarely puts a peer near MIN_WEIGHT first,
+    // and lets a peer that has decayed back toward the default win its share.
+    const rankedHomeSet = homeSet
+      .map((peer) => ({
+        peer,
+        key:
+          Math.random() **
+          (1 /
+            Math.max(categoryWeights?.get(peer) ?? DEFAULT_WEIGHT, MIN_WEIGHT)),
+      }))
+      .sort((a, b) => b.key - a.key)
+      .map(({ peer }) => peer);
 
     // Fill remaining slots with general weighted selection (exclude home set)
     const homeSetUrls = new Set(rankedHomeSet);
