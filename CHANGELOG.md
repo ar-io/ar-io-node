@@ -97,6 +97,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `docs/envs.md`.
 ### Fixed
 
+- The Iceberg metadata scripts declared `root_parent_offset` as `int`; it
+  is a byte offset into a root bundle and passes 2^31 in bundles over
+  2 GiB, so it is now `long`, like the other offsets (#907). A nested
+  bundle unbundled without a known offset in its root, whose items are
+  recorded at `root_parent_offset` 0, is now logged and counted
+  (`bundles_unbundle_unknown_parent_offset_total`) so its producers can be
+  found.
 - `POST /ar-io/admin/queue-bundle` queued every ID as its own root, so for a
   bundle that is itself a data item each of its items was recorded with the
   bundle as root and offsets relative to the bundle (#959 item 5, whose

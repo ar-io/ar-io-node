@@ -433,6 +433,13 @@ export const bundlesUnbundleStartedCounter = new promClient.Counter({
   help: 'Count of Ans104Unbundler.unbundle invocations (fastq job starts).',
 });
 
+export const bundlesUnbundleUnknownParentOffsetTotal = new promClient.Counter(
+  {
+    name: 'bundles_unbundle_unknown_parent_offset_total',
+    help: 'Nested bundles unbundled without a known offset in their root, so their items were recorded with root_parent_offset 0, which is wrong for them (#907)',
+  },
+);
+
 export const bundlesUnbundleInFlightGauge = new promClient.Gauge({
   name: 'bundles_unbundle_in_flight',
   help: 'Ans104Unbundler.unbundle invocations currently in progress. Pinned at the worker count with no completions indicates the unbundler is hung.',
