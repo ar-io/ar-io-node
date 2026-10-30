@@ -42,6 +42,10 @@ const DEFAULT_PEER_BACKOFF_MAX_MS = 600_000;
 // the offset must not be remembered as a miss.
 const NOT_PROBED = Symbol('not probed');
 
+// Returned by `probePeer` when the peer itself failed (unreachable,
+// refusing, contradicting the chain), so the next peer is asked.
+const PEER_FAILED = Symbol('peer failed');
+
 /**
  * Outcome label for {@link metrics.chunkMetadataAnchorTotal}. Mirrors
  * the observer's `observer_chunk_metadata_anchor_total` so dashboards
@@ -78,16 +82,13 @@ type AnchorResult =
  * `peer_refused` rather than `error`, which is what tells an operator the peer
  * is answering and declining as opposed to being unreachable.
  */
-class PeerRefusedHeadError extends Error {
+class PeerRefusedProbeError extends Error {
   constructor(readonly status: number) {
-    super(
-      `Peer refused HEAD with status ${status}; a ranged GET would return the same result`,
-    );
-    this.name = 'PeerRefusedHeadError';
+    super(`Peer refused the chunk-header probe with status ${status}`);
+    this.name = 'PeerRefusedProbeError';
   }
 }
 
-/** A probe of one offset that concurrent lookups share. */
 /** A reference peer's recent failures, for backoff. */
 interface PeerHealth {
   failures: number;
@@ -95,6 +96,7 @@ interface PeerHealth {
   until: number;
 }
 
+/** A probe of one offset that concurrent lookups share. */
 interface SharedProbe {
   /** Settles with the probe's result; rejects with AbortError if aborted. */
   promise: Promise<TxBoundary | null>;
@@ -394,11 +396,12 @@ export class ChunkMetadataAnchorSource implements TxBoundarySource {
     }
   }
 
-  /** The first reference peer not backed off, in priority order. */
-  private selectPeer(): string | undefined {
+  /** The first reference peer not backed off or excluded, in priority order. */
+  private selectPeer(exclude: Set<string> = new Set()): string | undefined {
     const now = this.now();
     return this.peerUrls.find(
-      (peer) => (this.peerHealth.get(peer)?.until ?? 0) <= now,
+      (peer) =>
+        !exclude.has(peer) && (this.peerHealth.get(peer)?.until ?? 0) <= now,
     );
   }
 
@@ -423,18 +426,54 @@ export class ChunkMetadataAnchorSource implements TxBoundarySource {
     this.peerHealth.delete(peer);
   }
 
-  /** One probe of a reference peer; null on any miss. */
+  /**
+   * Probes the reference peers in priority order, skipping those backed off.
+   * A peer that fails (unreachable, refusing, contradicting the chain) hands
+   * the probe to the next one, so one bad peer does not turn into a miss
+   * the miss cache then remembers; only a peer's real answer, or every
+   * eligible peer failing, ends it.
+   */
   private async probe(
     offsetNum: number,
     absoluteOffset: bigint,
     signal: AbortSignal | undefined,
     log: winston.Logger,
   ): Promise<TxBoundary | null | typeof NOT_PROBED> {
-    const peer = this.selectPeer();
-    if (peer === undefined) {
-      this.recordResult('peer_backoff');
-      return NOT_PROBED;
+    const tried = new Set<string>();
+    for (;;) {
+      const peer = this.selectPeer(tried);
+      if (peer === undefined) {
+        if (tried.size === 0) {
+          this.recordResult('peer_backoff');
+          return NOT_PROBED;
+        }
+        return null;
+      }
+      tried.add(peer);
+      const result = await this.probePeer(
+        peer,
+        offsetNum,
+        absoluteOffset,
+        signal,
+        log,
+      );
+      if (result !== PEER_FAILED) return result;
     }
+  }
+
+  /**
+   * One probe of one reference peer: the boundary, null on a miss (the peer
+   * answered and does not have it, or the chain cross-check could not run),
+   * or PEER_FAILED when the peer itself failed and the next one should be
+   * asked.
+   */
+  private async probePeer(
+    peer: string,
+    offsetNum: number,
+    absoluteOffset: bigint,
+    signal: AbortSignal | undefined,
+    log: winston.Logger,
+  ): Promise<TxBoundary | null | typeof PEER_FAILED> {
     const url = `${peer}/chunk/${absoluteOffset}/data`;
     // Only the hop count, one on: the peer then keeps its one-hop limit
     // and makes no network request for this probe. Only reached at hop 0
@@ -455,7 +494,7 @@ export class ChunkMetadataAnchorSource implements TxBoundarySource {
       // being silently demoted to `'error'` and falling through.
       const normalized = normalizeAbortError(err);
       if (normalized?.name === 'AbortError') throw normalized;
-      if (err instanceof PeerRefusedHeadError) {
+      if (err instanceof PeerRefusedProbeError) {
         // 404 is a healthy peer without this chunk. Anything else it refuses
         // with (429, 402, 401, a server fault) will be refused again, so the
         // next peer takes the probes for a while.
@@ -465,11 +504,11 @@ export class ChunkMetadataAnchorSource implements TxBoundarySource {
           this.markPeerFailed(peer, log);
         }
         this.recordResult('peer_refused');
-        log.debug('Peer declined chunk-header probe; not escalating to GET', {
+        log.debug('Peer declined chunk-header probe', {
           url,
           status: err.status,
         });
-        return null;
+        return err.status === 404 ? null : PEER_FAILED;
       }
       this.markPeerFailed(peer, log);
       this.recordResult('error');
@@ -477,7 +516,7 @@ export class ChunkMetadataAnchorSource implements TxBoundarySource {
         url,
         message: err?.message,
       });
-      return null;
+      return PEER_FAILED;
     }
     // A peer that answers is healthy again, unless what it says contradicts
     // the chain: only then do its failures keep adding up.
@@ -504,7 +543,7 @@ export class ChunkMetadataAnchorSource implements TxBoundarySource {
           txStartOffset: cached.txStartOffset,
           txEndOffset: cached.txEndOffset,
         });
-        return null;
+        return PEER_FAILED;
       }
       this.markPeerHealthy(peer);
       this.recordResult('cache_hit');
@@ -531,7 +570,7 @@ export class ChunkMetadataAnchorSource implements TxBoundarySource {
           chainValue: err.chainValue,
           txId: headerMetadata.txId,
         });
-        return null;
+        return PEER_FAILED;
       }
       this.recordResult('error');
       log.debug('Chain anchor cross-check failed', {
@@ -568,7 +607,7 @@ export class ChunkMetadataAnchorSource implements TxBoundarySource {
    * 5xx (other than 501) mean the peer answered about the thing being asked
    * for rather than about how it was asked, so a GET to the same URL repeats
    * the same answer and only doubles the request rate against a peer that is
-   * already refusing or failing. Those throw PeerRefusedHeadError, which the
+   * already refusing or failing. Those throw PeerRefusedProbeError, which the
    * caller counts as `peer_refused`.
    *
    * 404 specifically was checked against live peers rather than assumed:
@@ -632,7 +671,7 @@ export class ChunkMetadataAnchorSource implements TxBoundarySource {
       !(headStatus >= 200 && headStatus < 300) &&
       !METHOD_PROBLEM_STATUSES.has(headStatus)
     ) {
-      throw new PeerRefusedHeadError(headStatus);
+      throw new PeerRefusedProbeError(headStatus);
     }
 
     // `bytes=0-0` is the smallest legal range; the server returns a 1-
@@ -651,6 +690,15 @@ export class ChunkMetadataAnchorSource implements TxBoundarySource {
     // A buffered read rejected when aborted mid-body; keep that behaviour now
     // that the body is discarded separately.
     signal?.throwIfAborted();
+    // The GET is judged as the HEAD is: a refusal without chunk headers (a
+    // 404, or a 429 or 5xx that backs the peer off) is not a peer that
+    // answered without headers. validateStatus lets every status through.
+    if (
+      !(getResponse.status >= 200 && getResponse.status < 300) &&
+      !hasAnyChunkHeader(getResponse.headers)
+    ) {
+      throw new PeerRefusedProbeError(getResponse.status);
+    }
     return getResponse.headers as Record<string, string | string[] | undefined>;
   }
 

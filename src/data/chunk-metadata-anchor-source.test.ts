@@ -7,6 +7,7 @@
 import { strict as assert } from 'node:assert';
 import * as http from 'node:http';
 import { AddressInfo } from 'node:net';
+import { Readable } from 'node:stream';
 import { afterEach, describe, it } from 'node:test';
 import type { AxiosInstance } from 'axios';
 
@@ -1075,10 +1076,15 @@ describe('ChunkMetadataAnchorSource', () => {
       const clock = { now: 0 };
       const source = sourceWith(axios, clock);
 
-      // a fails (HEAD and the GET fallback both reach it), and is backed off.
-      assert.equal(await source.getTxBoundary(inRangeOffset), null);
-      assert.deepEqual([...new Set(asked)], ['https://a.example']);
+      // a fails (HEAD and the GET fallback both reach it) and is backed off;
+      // b answers within the same lookup.
+      assert.equal((await source.getTxBoundary(inRangeOffset))?.id, txId);
+      assert.deepEqual(
+        [...new Set(asked)],
+        ['https://a.example', 'https://b.example'],
+      );
 
+      // While a is backed off, b is asked first.
       asked.length = 0;
       const result = await source.getTxBoundary(inRangeOffset);
       assert.equal(result?.id, txId);
@@ -1090,6 +1096,64 @@ describe('ChunkMetadataAnchorSource', () => {
       asked.length = 0;
       await source.getTxBoundary(inRangeOffset);
       assert.deepEqual(asked, ['https://a.example']);
+    });
+
+    it('asks the next peer within the same probe when the first fails', async () => {
+      const { axios, asked } = perPeerAxios({
+        'https://a.example': 'throw',
+        'https://b.example': 'ok',
+      });
+      const source = sourceWith(axios, { now: 0 });
+      const result = await source.getTxBoundary(inRangeOffset);
+      assert.equal(result?.id, txId, 'the failure did not become a miss');
+      assert.deepEqual(
+        [...new Set(asked)],
+        ['https://a.example', 'https://b.example'],
+      );
+    });
+
+    it('does not ask the next peer when the first answers 404', async () => {
+      const { axios, asked } = perPeerAxios({
+        'https://a.example': 404,
+        'https://b.example': 'ok',
+      });
+      const source = sourceWith(axios, { now: 0 });
+      assert.equal(await source.getTxBoundary(inRangeOffset), null);
+      assert.deepEqual(asked, ['https://a.example']);
+    });
+
+    it('backs off a peer whose GET fallback refuses, after a HEAD it rejected', async () => {
+      // A CDN that refuses HEAD (403, so the GET fallback runs) and then
+      // answers the GET with 503 is refusing, not answering without headers.
+      const asked: string[] = [];
+      const axios = {
+        head: async (url: string) => {
+          asked.push(`HEAD ${new URL(url).origin}`);
+          return new URL(url).origin === 'https://a.example'
+            ? { status: 403, headers: {} }
+            : { status: 200, headers: chunkHeaders() };
+        },
+        get: async (url: string) => {
+          asked.push(`GET ${new URL(url).origin}`);
+          return {
+            status: 503,
+            headers: {},
+            data: Readable.from([]),
+          };
+        },
+      } as unknown as AxiosInstance;
+      const source = sourceWith(axios, { now: 0 });
+      const result = await source.getTxBoundary(inRangeOffset);
+      assert.equal(result?.id, txId);
+      assert.deepEqual(asked, [
+        'HEAD https://a.example',
+        'GET https://a.example',
+        'HEAD https://b.example',
+      ]);
+      // Backed off: the next lookup goes straight to b.
+      asked.length = 0;
+      await source.getTxBoundary(inRangeOffset);
+      assert.deepEqual(asked, ['HEAD https://b.example']);
     });
 
     it('doubles the backoff with each consecutive failure, up to the maximum', async () => {
@@ -1154,11 +1218,12 @@ describe('ChunkMetadataAnchorSource', () => {
         'https://b.example': 'ok',
       });
       const source = sourceWith(axios, { now: 0 });
-      assert.equal(await source.getTxBoundary(inRangeOffset), null);
+      // a's headers fail the chain check; b answers in the same lookup.
+      assert.equal((await source.getTxBoundary(inRangeOffset))?.id, txId);
       asked.length = 0;
       const result = await source.getTxBoundary(inRangeOffset);
       assert.equal(result?.id, txId);
-      assert.deepEqual(asked, ['https://b.example']);
+      assert.deepEqual(asked, ['https://b.example'], 'a stays backed off');
     });
 
     it('asks nobody, and remembers no miss, while every peer is backed off', async () => {
