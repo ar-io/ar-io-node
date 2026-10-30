@@ -136,6 +136,39 @@ describe('GraphQL metering', () => {
       .expect(429);
   });
 
+  it('charges a GET query that padding hides from Express but not from Apollo', async () => {
+    // Express stops parsing the query string after 1,000 parameters; Apollo
+    // reads all of it. Padding must not make a query free.
+    const { server } = app({ ipCapacity: 10 });
+    const padding = Array.from({ length: 1000 }, (_, i) => `p${i}=1`).join('&');
+    const url = `/graphql?${padding}&query=${encodeURIComponent(query.query)}`;
+    await request(server).get(url).expect(200);
+    await request(server).get(url).expect(429);
+  });
+
+  it('does not charge a browser GET that Apollo answers with the Sandbox page', async () => {
+    const { server } = app({ ipCapacity: 10 });
+    const html = 'text/html,application/xhtml+xml,*/*;q=0.8';
+    for (let i = 0; i < 3; i++) {
+      await request(server)
+        .get('/graphql')
+        .query({ query: query.query })
+        .set('Accept', html)
+        .expect(200);
+    }
+    // A client asking for JSON gets the query run, and pays for it.
+    await request(server)
+      .get('/graphql')
+      .query({ query: query.query })
+      .set('Accept', 'application/json')
+      .expect(200);
+    await request(server)
+      .get('/graphql')
+      .query({ query: query.query })
+      .set('Accept', 'application/json')
+      .expect(429);
+  });
+
   it('lets an allowlisted client through without charge', async () => {
     const { server } = app({ ipCapacity: 10, ipAllowlist: ['203.0.113.9'] });
     for (let i = 0; i < 5; i++) {

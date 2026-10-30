@@ -119,8 +119,11 @@ not reconciled with the response size. The Apollo Sandbox page (`GET /graphql`
 with no query) and CORS preflights are free. The allowlists apply as for
 other routes, and `/ar-io/info` reports the cost under `rateLimiter.graphql`
 and the price under `x402.graphql`. At the defaults (an IP bucket of 100,000
-tokens refilling at 20 per second) a client can run 10,000 operations in a
-burst and 2 per second after that.
+tokens refilling at 20 per second) a client that fetches no data can run
+10,000 operations in a burst and 2 per second after that: GraphQL draws on
+the same per-IP bucket as data egress. One x402 payment for an operation
+buys `X_402_RATE_LIMIT_CAPACITY_MULTIPLIER` times its cost in paid tokens
+(10 operations at the defaults), as it does for data.
 
 **Note on Chunk Browser Payments:** For browser paywall requests, chunks use a
 direct payment flow (payment sent to original URL) rather than the redirect

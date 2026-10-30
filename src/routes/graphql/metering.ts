@@ -14,18 +14,47 @@ import type { PaymentProcessor } from '../../payments/types.js';
 /**
  * How many GraphQL operations a request asks the gateway to run: one for a
  * query in the body or the query string, the array's length for a batch, and
- * none for anything else (the Apollo Sandbox page a browser loads with a
- * plain `GET /graphql`, a CORS preflight).
+ * none for anything Apollo answers without running a query (the Sandbox page,
+ * a CORS preflight).
+ *
+ * A GET is judged the way Apollo judges it, not with Express's parse:
+ * - Apollo serves the Sandbox page, not the query, to any GET whose Accept
+ *   header prefers HTML (`prefersHTML` in `ApolloServer.js`), with or without
+ *   `?query=`.
+ * - Apollo reads the query string with `URLSearchParams`, which has no
+ *   parameter limit. Express's `req.query` stops after 1,000 parameters, so
+ *   padding the URL would hide `query` from a meter that used it while Apollo
+ *   still ran it. Any `query` parameter is therefore charged.
  */
 export function graphqlOperationCount(req: Request): number {
   if (req.method === 'POST') {
     return Array.isArray(req.body) ? Math.max(1, req.body.length) : 1;
   }
   if (req.method === 'GET') {
-    const query = req.query.query;
-    return typeof query === 'string' && query !== '' ? 1 : 0;
+    if (prefersHtml(req)) return 0;
+    const search = req.originalUrl.split('?').slice(1).join('?');
+    return new URLSearchParams(search).has('query') ? 1 : 0;
   }
   return 0;
+}
+
+/**
+ * Whether Apollo would answer this GET with its landing page: the Accept
+ * header ranks HTML above every type a GraphQL response can take. No Accept
+ * header means JSON, as in Apollo.
+ */
+function prefersHtml(req: Request): boolean {
+  if (req.headers.accept === undefined || req.headers.accept === '') {
+    return false;
+  }
+  return (
+    req.accepts([
+      'application/json',
+      'application/graphql-response+json',
+      'multipart/mixed',
+      'text/html',
+    ]) === 'text/html'
+  );
 }
 
 /**
