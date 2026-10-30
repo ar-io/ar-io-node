@@ -18,6 +18,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   per-attempt timeout stops once headers arrive); this is now documented
   where it arises (`getChunkByAny`).
 
+- `POST /ar-io/admin/invalidate-data` (`{"id": "<id>"}`) forgets what the
+  gateway recorded for one ID: cached hash, stored location, trust and
+  verification, in the index and in memory, so the next request resolves
+  it afresh (#959 item 6). It is the way to correct a wrong record that
+  later writes cannot replace, such as one already marked verified, without
+  editing SQLite by hand. The cached bytes are kept (they are stored by hash
+  and may belong to other IDs); caches in front of the gateway still need
+  their own purge.
+
+- `ENABLE_GRAPHQL_METERING` (default off) puts `/graphql` under the rate
+  limiter and x402, at a flat `GRAPHQL_OPERATION_COST_BYTES` per operation
+  (default 10 KiB, 10 tokens; a batch pays per operation), charged before
+  the query runs. Until now the most expensive route a gateway serves was
+  the one it could not meter. Only the client's IP bucket is charged: the
+  per-path resource bucket would be a single allowance shared by every
+  GraphQL client. `/ar-io/info` reports the cost and the price.
 - `CONTIGUOUS_DATA_CACHE_INDEX_MAX_BYTES_PER_SWEEP` (default 0, off) caps
   the bytes one contiguous-cache eviction sweep frees, so eviction is paced
   by bytes per interval instead of arriving in bursts. On turbo-gateway.com's
@@ -51,6 +67,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- `/chunk/<offset>` and `/chunk/<offset>/data` now answer **503** with
+  `Retry-After: 5` and `Cache-Control: no-store`, not 404, when a chunk
+  could not be fetched in time: the serve deadline
+  (`CHUNK_SERVE_DEADLINE_MS`), an upstream timeout, or an internal
+  cancellation (#917). A 404 for an offset reads as permanent, so clients
+  and peers cached it, peer weighting took it for "lacks the data", and the
+  observer's reference-gateway client stopped at it instead of trying the
+  network. Under load nearly every failure was this kind: 99% of requests
+  at 500 concurrent, with a working gateway. A boundary lookup skipped
+  because the chain fallback was at its concurrency limit is also a 503
+  (`boundary_unavailable`), not a 404. A 404 now means no source found the
+  chunk; one case is still ambiguous: when every peer fetch timed out, the
+  peer cascade does not report why, and that ends in a 404 (`fetch_failed`).
+  Dashboards will show these 503s as 5xx. Serve-deadline 503s are counted,
+  as before, by `chunk_serve_deadline_exceeded_total`; all of them carry
+  their reason in the `chunk.retrieval.error` span attribute; they are
+  logged at debug rather than warn so a busy gateway does not flood its
+  logs.
+
 - The default `GRAPHQL_ROOT_TX_GATEWAYS_URLS` is now
   `{ "https://arweave.net": 1 }`, replacing
   `https://arweave-search.goldsky.com`, which now answers every request with
@@ -61,6 +96,64 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   own indexer can list that instead. The variable is now documented in
   `docs/envs.md`.
 ### Fixed
+
+- `POST /ar-io/admin/queue-bundle` queued every ID as its own root, so for a
+  bundle that is itself a data item each of its items was recorded with the
+  bundle as root and offsets relative to the bundle (#959 item 5, whose
+  writer was unknown). Serving then rejected those locations, since the
+  "root" is not an L1 transaction, and items failed intermittently. The
+  route now looks up a nested bundle's root and payload offset first, and
+  answers 409 when the root is known but the offset is not. Rows written
+  this way before can be cleared with `POST /ar-io/admin/invalidate-data`.
+- A data item stored in two bundles could be given a location made of one
+  copy's root and the other copy's offsets: data attributes took the root
+  from the location recorded at fetch time and filled missing offsets from
+  the bundles index, even when the two named different roots (#959). The
+  index now fills in only when it names the same root. Separately, an ID
+  found only through its data root (an L1 transaction whose bytes are also
+  a data item's) borrowed that other item's root and offsets; it no longer
+  gets any location that way, and the ID's own row now always wins over one
+  found through the data root.
+- AR.IO peer weighting no longer treats a busy peer like one without the
+  data: a 429 or 503 from a peer costs it a fifth of a failure's weight
+  (#1118). Chunk peers were also penalised twice for every refusal (once
+  where it was detected and again in the request's catch); each now counts
+  once.
+- Chunk-metadata anchoring asked only the first peer of its pool, so when
+  that peer failed every lookup fell through to the slower chain search.
+  It now asks the first peer not backed off: a peer that is unreachable,
+  refuses (429, 402, 401, 5xx; a 404 is a healthy peer without the chunk)
+  or contradicts the chain is skipped for 30 s, doubling to 10 min, and the
+  next peer takes its probes. The pool now keeps every entry in priority
+  order (previously `GATEWAYS_ROOT_TX_URLS` in object order, or only the
+  first `TRUSTED_GATEWAYS_URLS` entry), and has its own setting,
+  `CHUNK_METADATA_ANCHOR_PEER_URLS`, so anchoring can be pointed elsewhere
+  or turned off (`{}`) without changing root-TX lookups.
+- A gateway that started while the AR.IO gateway registry was unreachable
+  had no peers until the next hourly refresh, so every peer retrieval failed
+  for up to an hour. The peer list is now saved after each successful
+  registry read (`AR_IO_PEER_LIST_CACHE_PATH`, default
+  `data/peers/ar-io-peers.json`; Docker Compose mounts it from
+  `PEERS_DATA_PATH`, default `./data/peers`) and loaded at startup, and
+  while the list is empty a failed read is retried after 10 s, backing off
+  to 5 min. A registry read that returns no gateways at all is treated as a
+  failure rather than applied as an empty list.
+- `X-AR-IO-Stable` was `false` on every response, and stable data never got
+  `CACHE_STABLE_MAX_AGE` (30 days, `immutable`): since 2023 the gateway
+  compared SQLite's `1` with `true`, which never matched. A transaction at
+  height 1,500,000 on vilenarios.com, long past the fork depth, was served
+  `X-AR-IO-Stable: false` with a two-hour `max-age`. Stable data is now
+  reported stable, and directly addressed stable data (`/<id>`, `/raw/<id>`)
+  that is also verified and served from the gateway's own cache gets
+  `CACHE_STABLE_MAX_AGE`, `immutable`, for the first time; other stable data
+  keeps the unstable tiers, and ArNS responses keep their own TTL.
+  A data item the bundles flush has not yet promoted is also stable once
+  its root L1 transaction is, rather than waiting for the flush (an item
+  whose bundle has no `stable_block_transactions` row was never promoted).
+  This is the same test the flush applies before promoting it, so no
+  placement is trusted more than before. With no local record of the data,
+  `X-AR-IO-Stable` and `X-AR-IO-Verified` are now sent as `false` instead
+  of being left out.
 
 - GraphQL no longer lists a data item's tags twice when the item was
   indexed from two bundles (or imported from an L2 band and later

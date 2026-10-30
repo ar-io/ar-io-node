@@ -1133,6 +1133,222 @@ describe('StandaloneSqliteDatabase', () => {
     });
   });
 
+  describe('getDataAttributes — one location, from one record (#959)', () => {
+    const OWNER = Buffer.alloc(32, 0x07);
+    const ANCHOR = Buffer.alloc(32);
+    const item = Buffer.alloc(32, 0xe1);
+    const rootA = Buffer.alloc(32, 0xa1);
+    const rootB = Buffer.alloc(32, 0xb2);
+    let hashSeed = 0x40;
+
+    /** The bundles index row: item at offset 100 in its parent, rootA. */
+    const indexItemInRootA = () =>
+      bundlesDb
+        .prepare(
+          `INSERT INTO stable_data_items (
+             id, parent_id, root_transaction_id, height,
+             block_transaction_index, anchor, owner_address, offset, size,
+             data_offset, data_size, tag_count, indexed_at,
+             root_parent_offset
+           ) VALUES (@id, @root, @root, 7, 0, @anchor, @owner, 100, 300,
+             160, 140, 0, 1, 50)`,
+        )
+        .run({ id: item, root: rootA, anchor: ANCHOR, owner: OWNER });
+
+    /** data.db's row for an ID: a cached hash and the given location. */
+    const recordLocation = (
+      id: Buffer,
+      location: Record<string, Buffer | number | null>,
+    ) => {
+      const hash = Buffer.alloc(32, hashSeed++);
+      dataDb
+        .prepare(
+          `INSERT INTO contiguous_data (hash, data_size, indexed_at)
+           VALUES (@hash, 140, 1)`,
+        )
+        .run({ hash });
+      dataDb
+        .prepare(
+          `INSERT INTO contiguous_data_ids (
+             id, contiguous_data_hash, verified, indexed_at,
+             root_transaction_id, root_parent_offset, data_item_offset,
+             root_data_item_offset, root_data_offset
+           ) VALUES (@id, @hash, 0, 1, @root, @rpo, @dio, @rdio, @rdo)`,
+        )
+        .run({
+          id,
+          hash,
+          root: null,
+          rpo: null,
+          dio: null,
+          rdio: null,
+          rdo: null,
+          ...location,
+        });
+      return hash;
+    };
+
+    it("does not pair one copy's root with the other copy's offsets", () => {
+      indexItemInRootA();
+      // data.db knows the item in rootB, with only its parent's offset.
+      recordLocation(item, { root: rootB, rpo: 1000 });
+
+      const attrs = dbWorker.getDataAttributes(toB64Url(item));
+      assert.equal(attrs?.rootTransactionId, toB64Url(rootB));
+      // Before: 1000 (rootB's parent) + 100 (the item's offset in rootA's
+      // copy) = 1100, a location in rootB that the item is not at.
+      assert.equal(attrs?.rootDataItemOffset, undefined);
+      assert.equal(attrs?.itemSize, undefined);
+    });
+
+    it('fills in from the index when both records name the same root', () => {
+      indexItemInRootA();
+      recordLocation(item, { root: rootA, rpo: 50 });
+
+      const attrs = dbWorker.getDataAttributes(toB64Url(item));
+      assert.equal(attrs?.rootTransactionId, toB64Url(rootA));
+      assert.equal(attrs?.rootDataItemOffset, 150);
+      assert.equal(attrs?.itemSize, 300);
+    });
+
+    it('uses the index alone when data.db has no root', () => {
+      indexItemInRootA();
+      recordLocation(item, {});
+
+      const attrs = dbWorker.getDataAttributes(toB64Url(item));
+      assert.equal(attrs?.rootTransactionId, toB64Url(rootA));
+      assert.equal(attrs?.rootDataItemOffset, 150);
+    });
+
+    it("never takes another item's location through a shared data root", () => {
+      // An L1 transaction whose bytes are also a data item's: the item's row
+      // is found through the data root, but its location is the item's.
+      const tx = Buffer.alloc(32, 0xf1);
+      const dataRoot = Buffer.alloc(32, 0xd7);
+      coreDb
+        .prepare(
+          `INSERT INTO stable_transactions
+            (id, height, block_transaction_index, format, last_tx,
+             owner_address, quantity, reward, tag_count, data_size,
+             data_root, content_type)
+           VALUES (@id, 7, 0, 2, @zero, @zero, '0', '0', 0, 140,
+             @data_root, 'text/plain')`,
+        )
+        .run({ id: tx, zero: Buffer.alloc(32), data_root: dataRoot });
+      const otherItem = Buffer.alloc(32, 0xe9);
+      const hash = recordLocation(otherItem, {
+        root: rootB,
+        rpo: 10,
+        dio: 20,
+        rdio: 30,
+        rdo: 40,
+      });
+      dataDb
+        .prepare(
+          `INSERT INTO data_roots (data_root, contiguous_data_hash, verified, indexed_at)
+           VALUES (@data_root, @hash, 0, 1)`,
+        )
+        .run({ data_root: dataRoot, hash });
+
+      const attrs = dbWorker.getDataAttributes(toB64Url(tx));
+      assert.equal(attrs?.hash, toB64Url(hash), 'found through the data root');
+      assert.equal(attrs?.rootTransactionId, undefined);
+      assert.equal(attrs?.rootDataItemOffset, undefined);
+      assert.equal(attrs?.rootDataOffset, undefined);
+    });
+  });
+
+  describe('getDataAttributes — stable', () => {
+    const OWNER = Buffer.alloc(32, 0x07);
+    const ANCHOR = Buffer.alloc(32);
+    const stableRoot = Buffer.alloc(32, 0xc1);
+    const newRoot = Buffer.alloc(32, 0xc2);
+
+    const insertTx = (table: string, id: Buffer) =>
+      coreDb
+        .prepare(
+          table === 'stable_transactions'
+            ? `INSERT INTO stable_transactions
+                (id, height, block_transaction_index, format, last_tx,
+                 owner_address, quantity, reward, tag_count, data_size,
+                 data_root, content_type)
+               VALUES (@id, 7, 0, 2, @zero, @zero, '0', '0', 0, 1,
+                 @zero, 'text/plain')`
+            : `INSERT INTO new_transactions
+                (id, height, format, last_tx, owner_address, quantity, reward,
+                 tag_count, data_size, data_root, content_type, indexed_at)
+               VALUES (@id, 7, 2, @zero, @zero, '0', '0', 0, 1,
+                 @zero, 'text/plain', 1)`,
+        )
+        .run({ id, zero: Buffer.alloc(32) });
+
+    const insertItem = (table: string, id: Buffer, root: Buffer) =>
+      bundlesDb
+        .prepare(
+          table === 'stable_data_items'
+            ? `INSERT INTO stable_data_items (
+                 id, parent_id, root_transaction_id, height,
+                 block_transaction_index, anchor, owner_address, data_offset,
+                 data_size, tag_count, indexed_at
+               ) VALUES (@id, @root, @root, 7, 0, @anchor, @owner, 0, 1, 0, 1)`
+            : `INSERT INTO new_data_items (
+                 id, parent_id, root_transaction_id, height, anchor,
+                 owner_address, data_size, tag_count, indexed_at
+               ) VALUES (@id, @root, @root, 7, @anchor, @owner, 1, 0, 1)`,
+        )
+        .run({ id, root, anchor: ANCHOR, owner: OWNER });
+
+    beforeEach(() => {
+      insertTx('stable_transactions', stableRoot);
+      insertTx('new_transactions', newRoot);
+    });
+
+    it('is true for an L1 transaction in stable_transactions', () => {
+      assert.equal(
+        dbWorker.getDataAttributes(toB64Url(stableRoot))?.stable,
+        true,
+      );
+    });
+
+    it('is false for an L1 transaction not yet past the fork depth', () => {
+      assert.equal(
+        dbWorker.getDataAttributes(toB64Url(newRoot))?.stable,
+        false,
+      );
+    });
+
+    it('is true for a data item in stable_data_items', () => {
+      const id = Buffer.alloc(32, 0xd1);
+      insertItem('stable_data_items', id, stableRoot);
+      assert.equal(dbWorker.getDataAttributes(toB64Url(id))?.stable, true);
+    });
+
+    it('is true for an unflushed data item whose root transaction is stable', () => {
+      const id = Buffer.alloc(32, 0xd2);
+      insertItem('new_data_items', id, stableRoot);
+      assert.equal(dbWorker.getDataAttributes(toB64Url(id))?.stable, true);
+    });
+
+    it('is false for an unflushed data item whose root is not yet stable', () => {
+      const id = Buffer.alloc(32, 0xd3);
+      insertItem('new_data_items', id, newRoot);
+      assert.equal(dbWorker.getDataAttributes(toB64Url(id))?.stable, false);
+    });
+
+    it('is true when an item has both a stable and an unstable placement', () => {
+      const id = Buffer.alloc(32, 0xd5);
+      insertItem('stable_data_items', id, stableRoot);
+      insertItem('new_data_items', id, newRoot);
+      assert.equal(dbWorker.getDataAttributes(toB64Url(id))?.stable, true);
+    });
+
+    it('is false for an unflushed data item whose root is unknown', () => {
+      const id = Buffer.alloc(32, 0xd4);
+      insertItem('new_data_items', id, Buffer.alloc(32, 0xc9));
+      assert.equal(dbWorker.getDataAttributes(toB64Url(id))?.stable, false);
+    });
+  });
+
   // An item's Content-Encoding learned when its data was cached (from its signed
   // tags or a trusted upstream), for items whose tags are not indexed here.
   describe('recorded content encoding', () => {
@@ -2869,6 +3085,102 @@ describe('StandaloneSqliteDatabase', () => {
       assert.equal(corrected?.rootTransactionId, L1_ROOT);
       assert.equal(corrected?.rootDataItemOffset, 2997951);
       assert.equal(corrected?.rootDataOffset, 2999200);
+    });
+
+    it('forgets an ID with deleteDataId, so a verified wrong location can be replaced', async () => {
+      const WRONG = 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee0';
+      const attrs = {
+        id: WRONG,
+        hash: 'deleteDataIdRegression',
+        dataSize: 94,
+        rootTransactionId: INTERMEDIATE,
+        rootDataItemOffset: 160,
+        rootDataOffset: 1268,
+      };
+      await db.saveDataContentAttributes(attrs);
+      // Marked verified: later saves no longer overwrite the row (#959 item 4).
+      await db.saveVerificationStatus(INTERMEDIATE);
+      await db.saveDataContentAttributes({
+        ...attrs,
+        rootTransactionId: L1_ROOT,
+        rootDataItemOffset: 2997951,
+        rootDataOffset: 2999200,
+      });
+      assert.equal(
+        (await db.getDataAttributes(WRONG))?.rootTransactionId,
+        INTERMEDIATE,
+        'the verified row resists a correcting save',
+      );
+
+      assert.equal(await db.deleteDataId(WRONG), true);
+      assert.equal(await db.deleteDataId(WRONG), false, 'nothing left');
+      assert.equal((await db.getDataAttributes(WRONG))?.hash, undefined);
+
+      // The identical correcting save now lands (its dedupe entry is gone).
+      await db.saveDataContentAttributes({
+        ...attrs,
+        rootTransactionId: L1_ROOT,
+        rootDataItemOffset: 2997951,
+        rootDataOffset: 2999200,
+      });
+      const corrected = await db.getDataAttributes(WRONG);
+      assert.equal(corrected?.rootTransactionId, L1_ROOT);
+      assert.equal(corrected?.rootDataItemOffset, 2997951);
+    });
+
+    it('also forgets the nested-parent mapping and the L1 data-root mapping', async () => {
+      const NESTED = 'ffffffffffffffffffffffffffffffffffffffffff0';
+      const PARENT = 'gggggggggggggggggggggggggggggggggggggggggg0';
+      dataDb
+        .prepare(
+          `INSERT INTO contiguous_data_id_parents
+             (id, parent_id, data_offset, data_size, indexed_at)
+           VALUES (@id, @parent, 10, 20, 1)`,
+        )
+        .run({ id: fromB64Url(NESTED), parent: fromB64Url(PARENT) });
+
+      // An L1 transaction whose bytes are cached through its data root.
+      const TX = Buffer.alloc(32, 0x7a);
+      const dataRoot = Buffer.alloc(32, 0x7b);
+      coreDb
+        .prepare(
+          `INSERT INTO stable_transactions
+            (id, height, block_transaction_index, format, last_tx,
+             owner_address, quantity, reward, tag_count, data_size,
+             data_root, content_type)
+           VALUES (@id, 7, 0, 2, @zero, @zero, '0', '0', 0, 94,
+             @data_root, 'text/plain')`,
+        )
+        .run({ id: TX, zero: Buffer.alloc(32), data_root: dataRoot });
+      await db.saveDataContentAttributes({
+        id: toB64Url(TX),
+        dataRoot: toB64Url(dataRoot),
+        hash: 'deleteDataIdDataRoot',
+        dataSize: 94,
+      });
+      assert.ok(
+        dataDb
+          .prepare('SELECT 1 FROM data_roots WHERE data_root = ?')
+          .get(dataRoot),
+        'the data-root mapping exists before',
+      );
+
+      assert.equal(await db.deleteDataId(NESTED), true);
+      assert.equal(
+        dataDb
+          .prepare('SELECT 1 FROM contiguous_data_id_parents WHERE id = ?')
+          .get(fromB64Url(NESTED)),
+        undefined,
+      );
+
+      assert.equal(await db.deleteDataId(toB64Url(TX)), true);
+      assert.equal(
+        dataDb
+          .prepare('SELECT 1 FROM data_roots WHERE data_root = ?')
+          .get(dataRoot),
+        undefined,
+      );
+      assert.equal((await db.getDataAttributes(toB64Url(TX)))?.hash, undefined);
     });
 
     it('lets an identical re-save through after clearDataHash', async () => {

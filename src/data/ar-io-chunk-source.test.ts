@@ -257,4 +257,21 @@ describe('ArIOChunkSource', () => {
       }
     });
   });
+
+  describe('failure kinds', () => {
+    for (const [status, kind] of [
+      [503, 'busy'],
+      [429, 'busy'],
+      [404, 'failed'],
+    ] as const) {
+      it(`reports a peer answering ${status} as ${kind}`, async () => {
+        global.fetch = async () => new Response('', { status });
+        await assert.rejects(arIOChunkSource.getChunkByAny(testChunkParams));
+        // Once per refusal: it used to be counted twice.
+        const calls = mockPeerManager.reportFailure.mock.calls;
+        assert.equal(calls.length, 1);
+        assert.equal(calls[0].arguments[2], kind);
+      });
+    }
+  });
 });
