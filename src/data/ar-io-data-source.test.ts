@@ -311,6 +311,33 @@ describe('ArIODataSource', () => {
       });
     });
 
+    for (const [status, kind] of [
+      [503, 'busy'],
+      [404, 'failed'],
+    ] as const) {
+      it(`reports a peer answering ${status} as ${kind}`, async () => {
+        mock.method(axios, 'get', async () => ({
+          status,
+          data: axiosStreamData,
+          headers: {},
+        }));
+        const reported: unknown[] = [];
+        mock.method(
+          peerManager,
+          'reportFailure',
+          (_category: string, _peer: string, k?: string) => {
+            reported.push(k);
+          },
+        );
+        await assert.rejects(dataSource.getData({ id: 'dataId' }));
+        assert.ok(reported.length > 0);
+        assert.ok(
+          reported.every((k) => k === kind),
+          String(reported),
+        );
+      });
+    }
+
     it('should throw an error if all peers fail', async () => {
       mock.method(axios, 'get', () => {
         throw new Error('All peers failed');

@@ -433,6 +433,13 @@ export const bundlesUnbundleStartedCounter = new promClient.Counter({
   help: 'Count of Ans104Unbundler.unbundle invocations (fastq job starts).',
 });
 
+export const bundlesUnbundleUnknownParentOffsetTotal = new promClient.Counter(
+  {
+    name: 'bundles_unbundle_unknown_parent_offset_total',
+    help: 'Nested bundles unbundled without a known offset in their root, so their items were recorded with root_parent_offset 0, which is wrong for them (#907)',
+  },
+);
+
 export const bundlesUnbundleInFlightGauge = new promClient.Gauge({
   name: 'bundles_unbundle_in_flight',
   help: 'Ans104Unbundler.unbundle invocations currently in progress. Pinned at the worker count with no completions indicates the unbundler is hung.',
@@ -1350,6 +1357,12 @@ export const requestChunkTotal = new promClient.Counter({
     'source_type',
     'peer_type',
   ] as const,
+});
+
+export const chunkFetchOrphanedTotal = new promClient.Counter({
+  name: 'arweave_chunk_fetch_orphaned_total',
+  help: 'Shared Arweave peer chunk fetches that finished after every caller waiting on them had gone, by outcome. A success serves a later caller only if it lands within the chunk promise cache TTL and is not evicted first; compare with get_chunk_total to see how much fetch work outlives its callers',
+  labelNames: ['result'] as const,
 });
 
 export const getChunkTotal = new promClient.Counter({

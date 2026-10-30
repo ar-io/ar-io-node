@@ -134,5 +134,66 @@ describe('Ans104Unbundler', () => {
         },
       );
     });
+
+    it('counts a nested bundle unbundled without a known root offset (#907)', async () => {
+      mock.method(mockAns104Parser, 'parseBundle');
+      const before =
+        (await metrics.bundlesUnbundleUnknownParentOffsetTotal.get()).values[0]
+          ?.value ?? 0;
+      await ans104Unbundler.queueItem(
+        { id: 'nested', root_tx_id: 'l1-root' } as UnbundleableItem,
+        false,
+        true,
+      );
+      // An L1 bundle is its own root: nothing is unknown, nothing counted.
+      await ans104Unbundler.queueItem(
+        { id: 'l1', root_tx_id: 'l1' } as UnbundleableItem,
+        false,
+        true,
+      );
+      const after =
+        (await metrics.bundlesUnbundleUnknownParentOffsetTotal.get()).values[0]
+          ?.value ?? 0;
+      assert.equal(after, before + 1);
+    });
+
+    it('does not count a nested bundle whose unbundling failed', async () => {
+      mock.method(mockAns104Parser, 'parseBundle', () =>
+        Promise.reject(new Error('fetch failed')),
+      );
+      const value = async () =>
+        (await metrics.bundlesUnbundleUnknownParentOffsetTotal.get()).values[0]
+          ?.value ?? 0;
+      const before = await value();
+      await ans104Unbundler.queueItem(
+        { id: 'nested-failing', root_tx_id: 'l1-root' } as UnbundleableItem,
+        false,
+        true,
+      );
+      assert.equal(await value(), before);
+    });
+
+    it('places the items of a nested bundle queued with its root at that root (#959)', async () => {
+      mock.method(mockAns104Parser, 'parseBundle');
+      // The shape queue-bundle now sends for a bundle that is a data item.
+      const mockItem = {
+        id: 'nested-bundle',
+        root_tx_id: 'l1-root',
+        root_parent_offset: 1260,
+        data_offset: 0,
+      } as unknown as UnbundleableItem;
+
+      await ans104Unbundler.queueItem(mockItem, false, true);
+
+      assert.deepEqual(
+        (mockAns104Parser.parseBundle as any).mock.calls[0].arguments[0],
+        {
+          parentId: 'nested-bundle',
+          parentIndex: undefined,
+          rootParentOffset: 1260,
+          rootTxId: 'l1-root',
+        },
+      );
+    });
   });
 });

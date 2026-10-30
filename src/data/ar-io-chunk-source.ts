@@ -12,7 +12,9 @@ import { release } from '../version.js';
 import { tracer } from '../tracing.js';
 import {
   ArIOPeerManager,
+  PeerFailureKind,
   PeerSuccessMetrics,
+  peerFailureKindForStatus,
 } from '../peers/ar-io-peer-manager.js';
 import {
   generateRequestAttributes,
@@ -140,14 +142,17 @@ export class ArIOChunkSource
     this.peerManager.reportSuccess(CHUNK_CATEGORY, peer, successMetrics);
   }
 
-  private handleChunkPeerFailure(peer: string): void {
+  private handleChunkPeerFailure(
+    peer: string,
+    kind: PeerFailureKind = 'failed',
+  ): void {
     metrics.getChunkTotal.inc({
       status: 'error',
       method: 'ar-io-network',
       class: this.constructor.name,
     });
 
-    this.peerManager.reportFailure(CHUNK_CATEGORY, peer);
+    this.peerManager.reportFailure(CHUNK_CATEGORY, peer, kind);
   }
 
   private getCacheKey(params: ChunkWithValidationParams): string {
@@ -516,8 +521,13 @@ export class ArIOChunkSource
           status: response.status,
           statusText: response.statusText,
         });
-        this.handleChunkPeerFailure(peer);
-        throw new Error(`Peer ${peerHost} returned status ${response.status}`);
+        // Reported once, by the catch below, which reads the status to tell
+        // a busy peer (429, 503) from one without the chunk. Reporting here
+        // as well counted every refusal twice.
+        throw Object.assign(
+          new Error(`Peer ${peerHost} returned status ${response.status}`),
+          { status: response.status },
+        );
       }
 
       const chunkResponse = await response.json();
@@ -525,7 +535,6 @@ export class ArIOChunkSource
       // Validate response format
       if (!chunkResponse.chunk || !chunkResponse.data_path) {
         log.debug('Peer returned invalid chunk response format', { peer });
-        this.handleChunkPeerFailure(peer);
         throw new Error(`Peer ${peerHost} returned invalid chunk format`);
       }
 
@@ -607,7 +616,10 @@ export class ArIOChunkSource
       );
       // Only report failure for actual errors, not aborted requests
       if (error.name !== 'AbortError') {
-        this.handleChunkPeerFailure(peer);
+        this.handleChunkPeerFailure(
+          peer,
+          peerFailureKindForStatus(error.status),
+        );
       }
       throw error;
     }
