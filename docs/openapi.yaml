@@ -48,8 +48,10 @@ info:
       against its Arweave data root and is serving it from its own cache.
     - `X-AR-IO-Trusted`: whether the data came from a source the gateway
       trusts.
-    - `X-AR-IO-Stable`: whether the data's block is past the maximum fork
-      depth. Absent when the gateway has no local record of the data.
+    - `X-AR-IO-Stable`: whether the data's root L1 transaction is past the
+      maximum fork depth, so the bytes can no longer be reorganised away.
+      `false` when the gateway has no local record of the data (as is
+      `X-AR-IO-Verified`).
     - **HTTP message signatures** (RFC 9421, `Signature` and
       `Signature-Input`): when enabled, the gateway signs these headers and,
       through `Content-Digest`, the body, so a client can prove which
