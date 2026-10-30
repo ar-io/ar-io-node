@@ -1135,6 +1135,97 @@ describe('StandaloneSqliteDatabase', () => {
 
   // An item's Content-Encoding learned when its data was cached (from its signed
   // tags or a trusted upstream), for items whose tags are not indexed here.
+  describe('getDataAttributes — stable', () => {
+    const OWNER = Buffer.alloc(32, 0x07);
+    const ANCHOR = Buffer.alloc(32);
+    const stableRoot = Buffer.alloc(32, 0xc1);
+    const newRoot = Buffer.alloc(32, 0xc2);
+
+    const insertTx = (table: string, id: Buffer) =>
+      coreDb
+        .prepare(
+          table === 'stable_transactions'
+            ? `INSERT INTO stable_transactions
+                (id, height, block_transaction_index, format, last_tx,
+                 owner_address, quantity, reward, tag_count, data_size,
+                 data_root, content_type)
+               VALUES (@id, 7, 0, 2, @zero, @zero, '0', '0', 0, 1,
+                 @zero, 'text/plain')`
+            : `INSERT INTO new_transactions
+                (id, height, format, last_tx, owner_address, quantity, reward,
+                 tag_count, data_size, data_root, content_type, indexed_at)
+               VALUES (@id, 7, 2, @zero, @zero, '0', '0', 0, 1,
+                 @zero, 'text/plain', 1)`,
+        )
+        .run({ id, zero: Buffer.alloc(32) });
+
+    const insertItem = (table: string, id: Buffer, root: Buffer) =>
+      bundlesDb
+        .prepare(
+          table === 'stable_data_items'
+            ? `INSERT INTO stable_data_items (
+                 id, parent_id, root_transaction_id, height,
+                 block_transaction_index, anchor, owner_address, data_offset,
+                 data_size, tag_count, indexed_at
+               ) VALUES (@id, @root, @root, 7, 0, @anchor, @owner, 0, 1, 0, 1)`
+            : `INSERT INTO new_data_items (
+                 id, parent_id, root_transaction_id, height, anchor,
+                 owner_address, data_size, tag_count, indexed_at
+               ) VALUES (@id, @root, @root, 7, @anchor, @owner, 1, 0, 1)`,
+        )
+        .run({ id, root, anchor: ANCHOR, owner: OWNER });
+
+    beforeEach(() => {
+      insertTx('stable_transactions', stableRoot);
+      insertTx('new_transactions', newRoot);
+    });
+
+    it('is true for an L1 transaction in stable_transactions', () => {
+      assert.equal(
+        dbWorker.getDataAttributes(toB64Url(stableRoot))?.stable,
+        true,
+      );
+    });
+
+    it('is false for an L1 transaction not yet past the fork depth', () => {
+      assert.equal(
+        dbWorker.getDataAttributes(toB64Url(newRoot))?.stable,
+        false,
+      );
+    });
+
+    it('is true for a data item in stable_data_items', () => {
+      const id = Buffer.alloc(32, 0xd1);
+      insertItem('stable_data_items', id, stableRoot);
+      assert.equal(dbWorker.getDataAttributes(toB64Url(id))?.stable, true);
+    });
+
+    it('is true for an unflushed data item whose root transaction is stable', () => {
+      const id = Buffer.alloc(32, 0xd2);
+      insertItem('new_data_items', id, stableRoot);
+      assert.equal(dbWorker.getDataAttributes(toB64Url(id))?.stable, true);
+    });
+
+    it('is false for an unflushed data item whose root is not yet stable', () => {
+      const id = Buffer.alloc(32, 0xd3);
+      insertItem('new_data_items', id, newRoot);
+      assert.equal(dbWorker.getDataAttributes(toB64Url(id))?.stable, false);
+    });
+
+    it('is true when an item has both a stable and an unstable placement', () => {
+      const id = Buffer.alloc(32, 0xd5);
+      insertItem('stable_data_items', id, stableRoot);
+      insertItem('new_data_items', id, newRoot);
+      assert.equal(dbWorker.getDataAttributes(toB64Url(id))?.stable, true);
+    });
+
+    it('is false for an unflushed data item whose root is unknown', () => {
+      const id = Buffer.alloc(32, 0xd4);
+      insertItem('new_data_items', id, Buffer.alloc(32, 0xc9));
+      assert.equal(dbWorker.getDataAttributes(toB64Url(id))?.stable, false);
+    });
+  });
+
   describe('recorded content encoding', () => {
     const itemId = toB64Url(Buffer.alloc(32, 0x31));
     const otherItemId = toB64Url(Buffer.alloc(32, 0x32));
