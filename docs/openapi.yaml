@@ -1043,6 +1043,28 @@ paths:
                               - ip
                         required:
                           - buckets
+                      graphql:
+                        type: object
+                        description: GraphQL metering (only present when ENABLE_GRAPHQL_METERING is on). A flat cost per operation, charged before the query runs to the IP bucket only; a batch costs it per operation.
+                        properties:
+                          operationCostTokens:
+                            type: integer
+                            description: Tokens one operation costs (1 token = 1 KiB)
+                            example: 10
+                          operationCostBytes:
+                            type: integer
+                            description: Cost of one operation in bytes
+                            example: 10240
+                          buckets:
+                            type: array
+                            description: The buckets charged
+                            items:
+                              type: string
+                              enum: ['ip']
+                        required:
+                          - operationCostTokens
+                          - operationCostBytes
+                          - buckets
                     required:
                       - enabled
                       - dataEgress
@@ -1126,6 +1148,16 @@ paths:
                         required:
                           - pricing
                           - rateLimiterCapacityMultiplier
+                      graphql:
+                        type: object
+                        description: GraphQL metering price (only present when ENABLE_GRAPHQL_METERING is on)
+                        properties:
+                          pricePerOperation:
+                            type: number
+                            description: Price of one GraphQL operation in USDC
+                            example: 0.001
+                        required:
+                          - pricePerOperation
                     required:
                       - enabled
                       - network

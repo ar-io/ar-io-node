@@ -8,6 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- `ENABLE_GRAPHQL_METERING` (default off) puts `/graphql` under the rate
+  limiter and x402, at a flat `GRAPHQL_OPERATION_COST_BYTES` per operation
+  (default 10 KiB, 10 tokens; a batch pays per operation), charged before
+  the query runs. Until now the most expensive route a gateway serves was
+  the one it could not meter. Only the client's IP bucket is charged: the
+  per-path resource bucket would be a single allowance shared by every
+  GraphQL client. `/ar-io/info` reports the cost and the price.
 - `CONTIGUOUS_DATA_CACHE_INDEX_MAX_BYTES_PER_SWEEP` (default 0, off) caps
   the bytes one contiguous-cache eviction sweep frees, so eviction is paced
   by bytes per interval instead of arriving in bursts. On turbo-gateway.com's
