@@ -2,11 +2,17 @@ name: build-core
 
 on: [push, workflow_dispatch]
 
+# A newer push to the same branch makes an older run pointless, so cancel it.
+# develop and main are exempt: each of their commits publishes its own image.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/develop' && github.ref != 'refs/heads/main' }}
+
 jobs:
   test:
     strategy:
       # Linux only on every push. macOS runs in `test-macos` below, on
-      # develop and main only: as a leg of this matrix it cost 10x the
+      # main only: as a leg of this matrix it cost 10x the
       # minutes on every branch push, ran twice as long, failed on its own
       # flaky tests (FSEvents timing, S3DataStore) on unrelated PRs, and held
       # up `images`, which needs this job.
@@ -127,15 +133,17 @@ jobs:
           SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
         uses: rtCamp/action-slack-notify@v2
 
-  # macOS coverage at merge time, off the critical path. Gateways run in
+  # macOS coverage at release time, off the critical path. Gateways run in
   # Linux containers, so this only guards against breaking local development
-  # on macOS: it runs after merges to develop and main, nothing depends on it
+  # on macOS: it runs on pushes to main (a release) and nothing depends on it
   # (in particular not `images`), and a failure reports to Slack instead of
-  # blocking anything. Dispatching the workflow by hand runs it on any branch
+  # blocking anything. It no longer runs on every merge to develop, where it
+  # cost about 10x the Linux job's minutes per merge. Dispatching the
+  # workflow by hand runs it on any branch
   # (`gh workflow run build-core.yml --ref <branch>`), to check a macOS fix
   # before it merges.
   test-macos:
-    if: github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
     runs-on: macos-latest
     timeout-minutes: 40
     permissions:
