@@ -23,6 +23,8 @@ const DEFAULT_WEIGHT = 50; // Neutral starting weight
 const MIN_WEIGHT = 1;
 const MAX_WEIGHT = 100;
 const DEFAULT_SELECTION_CACHE_TTL_MS = 5000; // 5 seconds
+// How often weights decay toward their category default.
+const DECAY_INTERVAL_MS = 60_000;
 
 export interface ArIOPeer {
   address: string;
@@ -79,6 +81,7 @@ export class ArIOPeerManager implements WithFormattedPeers {
    */
   private self: (PeerRegistryRecord & { url: string }) | undefined;
   private intervalId?: NodeJS.Timeout;
+  private decayIntervalId?: NodeJS.Timeout;
 
   // Weight management per category
   private peerWeights: Map<WeightCategory, Map<string, number>> = new Map();
@@ -117,6 +120,7 @@ export class ArIOPeerManager implements WithFormattedPeers {
     hashRingVirtualNodes = config.PEER_HASH_RING_VIRTUAL_NODES,
     hashRingHomeSetSize = config.PEER_HASH_RING_HOME_SET_SIZE,
     updatePeersRefreshIntervalMs = DEFAULT_UPDATE_PEERS_REFRESH_INTERVAL_MS,
+    weightDecayHalfLifeMs = config.PEER_WEIGHT_DECAY_HALF_LIFE_MS,
     circuitBreakerOptions = {
       timeout: config.ARIO_PROCESS_DEFAULT_CIRCUIT_BREAKER_TIMEOUT_MS,
       errorThresholdPercentage:
@@ -135,6 +139,8 @@ export class ArIOPeerManager implements WithFormattedPeers {
     hashRingVirtualNodes?: number;
     hashRingHomeSetSize?: number;
     updatePeersRefreshIntervalMs?: number;
+    /** Half-life of a weight's distance from its default; 0 disables. */
+    weightDecayHalfLifeMs?: number;
     circuitBreakerOptions?: CircuitBreaker.Options;
   }) {
     this.log = log.child({ class: this.constructor.name });
@@ -185,6 +191,15 @@ export class ArIOPeerManager implements WithFormattedPeers {
         this.updatePeerList.bind(this),
         this.updatePeersRefreshIntervalMs,
       );
+    }
+
+    if (weightDecayHalfLifeMs > 0) {
+      const factor = 0.5 ** (DECAY_INTERVAL_MS / weightDecayHalfLifeMs);
+      this.decayIntervalId = setInterval(
+        () => this.decayWeights(factor),
+        DECAY_INTERVAL_MS,
+      );
+      this.decayIntervalId.unref();
     }
 
     // TODO: Remove deprecated circuit breaker metrics setup
@@ -433,6 +448,23 @@ export class ArIOPeerManager implements WithFormattedPeers {
   }
 
   /**
+   * Keeps `factor` of each weight's distance from its category default, so
+   * weights drift back to the default with a half-life. A peer cooled during an outage regains its share of traffic
+   * without first having to be picked and succeed, which its low weight made
+   * unlikely; a good run fades the same way, so the weights track recent
+   * behaviour rather than all of it.
+   */
+  decayWeights(factor: number): void {
+    for (const [category, categoryWeights] of this.peerWeights) {
+      const target =
+        this.categoryConfigs.get(category)?.defaultWeight ?? DEFAULT_WEIGHT;
+      for (const [peerId, weight] of categoryWeights) {
+        categoryWeights.set(peerId, target + (weight - target) * factor);
+      }
+    }
+  }
+
+  /**
    * Get weights for a specific category
    */
   getWeights(category: WeightCategory): Map<string, number> | undefined {
@@ -504,6 +536,10 @@ export class ArIOPeerManager implements WithFormattedPeers {
     if (this.intervalId) {
       clearInterval(this.intervalId);
       this.intervalId = undefined;
+    }
+    if (this.decayIntervalId) {
+      clearInterval(this.decayIntervalId);
+      this.decayIntervalId = undefined;
     }
   }
 

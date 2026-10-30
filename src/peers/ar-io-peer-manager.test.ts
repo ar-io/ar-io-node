@@ -238,6 +238,54 @@ describe('ArIOPeerManager', () => {
       assert.ok(updatedWeight < initialWeight);
     });
 
+    it('decays weights halfway back to the default per half-life (#1119)', () => {
+      const [low, high, other] = Object.values(INITIAL_PEERS);
+      const weights = peerManager.getWeights('test')!;
+      weights.set(low, 10);
+      weights.set(high, 90);
+      weights.set(other, 50);
+
+      peerManager.decayWeights(0.5);
+
+      assert.equal(weights.get(low), 30);
+      assert.equal(weights.get(high), 70);
+      assert.equal(weights.get(other), 50, 'a peer at the default stays');
+    });
+
+    it('decays by itself on a timer, and stops on shutdown', async (t) => {
+      t.mock.timers.enable({ apis: ['setInterval'] });
+      const m = new ArIOPeerManager({
+        log,
+        networkProcess: mockedArIOInstance,
+        initialPeers: INITIAL_PEERS,
+        initialCategories: ['test'],
+        weightDecayHalfLifeMs: 60_000,
+      });
+      const peer = Object.values(INITIAL_PEERS)[0];
+      m.getWeights('test')!.set(peer, 10);
+      t.mock.timers.tick(60_000);
+      assert.equal(m.getWeights('test')!.get(peer), 30);
+      m.shutdown();
+      t.mock.timers.tick(60_000);
+      assert.equal(m.getWeights('test')!.get(peer), 30);
+    });
+
+    it('does not decay with a half-life of 0', (t) => {
+      t.mock.timers.enable({ apis: ['setInterval'] });
+      const m = new ArIOPeerManager({
+        log,
+        networkProcess: mockedArIOInstance,
+        initialPeers: INITIAL_PEERS,
+        initialCategories: ['test'],
+        weightDecayHalfLifeMs: 0,
+      });
+      const peer = Object.values(INITIAL_PEERS)[0];
+      m.getWeights('test')!.set(peer, 10);
+      t.mock.timers.tick(10 * 60_000);
+      assert.equal(m.getWeights('test')!.get(peer), 10);
+      m.shutdown();
+    });
+
     it('should handle success reporting for new peer', () => {
       const newPeer = 'http://newpeer.com';
 

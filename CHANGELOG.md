@@ -41,6 +41,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- AR.IO peer selection weights now drift back to their category default
+  when nothing reports on a peer, halfway every
+  `PEER_WEIGHT_DECAY_HALF_LIFE_MS` (default 15 min; `0` turns it off)
+  (#1119). A peer marked down during an outage used to keep its low weight
+  until it was picked and succeeded, which its low weight made unlikely.
+
 - The default `GRAPHQL_ROOT_TX_GATEWAYS_URLS` is now
   `{ "https://arweave.net": 1 }`, replacing
   `https://arweave-search.goldsky.com`, which now answers every request with

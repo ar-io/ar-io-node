@@ -969,6 +969,16 @@ export const WEIGHTED_PEERS_TEMPERATURE_DELTA = +env.varOrDefault(
   '2',
 );
 
+// How fast an AR.IO peer's selection weight returns to its category default
+// when nothing reports on it: half the distance every this many ms. Without
+// it a peer that failed during an outage keeps its low weight until it is
+// picked and succeeds, which its low weight makes unlikely. 0 turns decay
+// off.
+export const PEER_WEIGHT_DECAY_HALF_LIFE_MS = env.nonNegativeIntOrDefault(
+  'PEER_WEIGHT_DECAY_HALF_LIFE_MS',
+  15 * 60 * 1000,
+);
+
 // Per-peer concurrency limiter
 export const PEER_MAX_CONCURRENT_OUTBOUND = env.positiveIntOrDefault(
   'PEER_MAX_CONCURRENT_OUTBOUND',
