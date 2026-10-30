@@ -156,5 +156,21 @@ describe('Ans104Unbundler', () => {
           ?.value ?? 0;
       assert.equal(after, before + 1);
     });
+
+    it('does not count a nested bundle whose unbundling failed', async () => {
+      mock.method(mockAns104Parser, 'parseBundle', () =>
+        Promise.reject(new Error('fetch failed')),
+      );
+      const value = async () =>
+        (await metrics.bundlesUnbundleUnknownParentOffsetTotal.get()).values[0]
+          ?.value ?? 0;
+      const before = await value();
+      await ans104Unbundler.queueItem(
+        { id: 'nested-failing', root_tx_id: 'l1-root' } as UnbundleableItem,
+        false,
+        true,
+      );
+      assert.equal(await value(), before);
+    });
   });
 });
