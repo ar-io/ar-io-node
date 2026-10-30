@@ -71,6 +71,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `docs/envs.md`.
 ### Fixed
 
+- Chunk-metadata anchoring asked only the first peer of its pool, so when
+  that peer failed every lookup fell through to the slower chain search.
+  It now asks the first peer not backed off: a peer that is unreachable,
+  refuses (429, 402, 401, 5xx; a 404 is a healthy peer without the chunk)
+  or contradicts the chain is skipped for 30 s, doubling to 10 min, and the
+  next peer takes its probes. The pool now keeps every entry in priority
+  order (previously `GATEWAYS_ROOT_TX_URLS` in object order, or only the
+  first `TRUSTED_GATEWAYS_URLS` entry), and has its own setting,
+  `CHUNK_METADATA_ANCHOR_PEER_URLS`, so anchoring can be pointed elsewhere
+  or turned off (`{}`) without changing root-TX lookups.
 - A gateway that started while the AR.IO gateway registry was unreachable
   had no peers until the next hourly refresh, so every peer retrieval failed
   for up to an hour. The peer list is now saved after each successful

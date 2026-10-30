@@ -766,6 +766,31 @@ export const PEERS_ROOT_TX_RATE_LIMIT_INTERVAL = env.varOrDefault(
 export const CHUNK_METADATA_ANCHOR_ENABLED =
   env.varOrDefault('CHUNK_METADATA_ANCHOR_ENABLED', 'true') === 'true';
 
+// Reference peers for chunk-metadata anchoring, as a JSON map of URL to
+// priority (lower first). Unset: the GATEWAYS_ROOT_TX_URLS pool, else every
+// TRUSTED_GATEWAYS_URLS entry. `{}` leaves anchoring with no peers, which
+// turns it off. Each probe asks the first peer not backed off after a
+// failure. Its own setting so anchoring can be pointed elsewhere, or
+// stopped, without changing root-TX lookups.
+export const CHUNK_METADATA_ANCHOR_PEER_URLS = (() => {
+  const raw = env.varOrUndefined('CHUNK_METADATA_ANCHOR_PEER_URLS');
+  if (raw === undefined || raw.trim() === '') return undefined;
+  const parsed = JSON.parse(raw) as Record<string, number>;
+  for (const [url, priority] of Object.entries(parsed)) {
+    try {
+      new URL(url);
+    } catch {
+      throw new Error(`Invalid URL in CHUNK_METADATA_ANCHOR_PEER_URLS: ${url}`);
+    }
+    if (typeof priority !== 'number' || priority <= 0) {
+      throw new Error(
+        `Invalid priority in CHUNK_METADATA_ANCHOR_PEER_URLS for ${url}: ${priority}`,
+      );
+    }
+  }
+  return parsed;
+})();
+
 // HTTP timeout (ms) for the peer HEAD/GET against `/chunk/{offset}/data`.
 // Kept tight: a slow reference peer should fail fast and let the
 // composite fall through to the existing tx-path / chain-search source.
