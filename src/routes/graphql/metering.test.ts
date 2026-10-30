@@ -179,4 +179,81 @@ describe('GraphQL metering', () => {
         .expect(200);
     }
   });
+
+  // The meter decides from the request alone whether Apollo will run the
+  // query or show its Sandbox page. If the two ever disagree, a query runs
+  // free. So ask Apollo itself, for a spread of Accept headers.
+  it('charges a GET exactly when Apollo runs the query (Accept negotiation)', async () => {
+    const { ApolloServer } = await import('@apollo/server');
+    const { expressMiddleware } = await import('@as-integrations/express4');
+    const { ApolloServerPluginLandingPageLocalDefault } = await import(
+      '@apollo/server/plugin/landingPage/default'
+    );
+    const apollo = new ApolloServer({
+      typeDefs: 'type Query { ok: Int }',
+      resolvers: { Query: { ok: () => 1 } },
+      plugins: [ApolloServerPluginLandingPageLocalDefault({ embed: true })],
+    });
+    await apollo.start();
+    try {
+      for (const accept of [
+        'application/json',
+        'application/json; charset=utf-8, text/html;q=0.9',
+        'text/html,application/xhtml+xml,*/*;q=0.8',
+        'text/html',
+        'application/graphql-response+json',
+        'text/html;q=0.5, application/json;q=0.6',
+        'text/html, application/json',
+        '*/*',
+        'multipart/mixed',
+      ]) {
+        let charged = 0;
+        const limiter = new MemoryRateLimiter({
+          resourceCapacity: 1_000_000,
+          resourceRefillRate: 0,
+          ipCapacity: 1_000_000,
+          ipRefillRate: 0,
+          limitsEnabled: true,
+          ipAllowlist: [],
+          capacityMultiplier: 10,
+          maxBuckets: 1000,
+        });
+        const counting = new Proxy(limiter, {
+          get(target, prop, receiver) {
+            if (prop === 'checkLimit') {
+              return (...args: unknown[]) => {
+                charged++;
+                return (target as any).checkLimit(...args);
+              };
+            }
+            return Reflect.get(target, prop, receiver);
+          },
+        });
+        const server = express();
+        server.use(
+          '/graphql',
+          express.json(),
+          createGraphqlMeter({
+            rateLimiter: counting,
+            operationCostBytes: 10240,
+          }),
+          expressMiddleware(apollo),
+        );
+        const res = await request(server)
+          .get('/graphql')
+          .query({ query: '{ ok }' })
+          .set('Accept', accept)
+          // Apollo refuses a GET without this, as CSRF prevention.
+          .set('apollo-require-preflight', 'true');
+        const ran = /json/.test(res.headers['content-type'] ?? '');
+        assert.equal(
+          charged > 0,
+          ran,
+          `Accept: ${accept} -> ${res.headers['content-type']}, charged ${charged}`,
+        );
+      }
+    } finally {
+      await apollo.stop();
+    }
+  });
 });

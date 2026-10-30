@@ -6,7 +6,12 @@
  */
 
 import { INDEX_FEED_PATH } from '../lib/index-publication.js';
-import { calculateX402Price } from '../payments/x402-pricing.js';
+import {
+  calculateX402Price,
+  x402PriceToAtomicUnits,
+} from '../payments/x402-pricing.js';
+
+const USDC_DECIMALS = 6;
 
 /**
  * ANS-104 bundle filter configuration.
@@ -356,13 +361,21 @@ export function buildArIoInfo(config: ArIoInfoConfig): ArIoInfoResponse {
       ...(config.graphqlOperationCostBytes !== undefined
         ? {
             graphql: {
-              pricePerOperation: Number(
-                calculateX402Price(config.graphqlOperationCostBytes, {
-                  perBytePrice,
-                  minPrice,
-                  maxPrice,
-                }).toFixed(6),
-              ),
+              // What a payment for one operation actually is: the price in
+              // USDC's atomic units (6 decimals), rounded up as the payment
+              // requirement rounds it, so a sub-unit price is not shown as 0.
+              pricePerOperation:
+                Number(
+                  x402PriceToAtomicUnits(
+                    calculateX402Price(config.graphqlOperationCostBytes, {
+                      perBytePrice,
+                      minPrice,
+                      maxPrice,
+                    }),
+                    USDC_DECIMALS,
+                  ),
+                ) /
+                10 ** USDC_DECIMALS,
             },
           }
         : {}),

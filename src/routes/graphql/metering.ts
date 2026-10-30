@@ -38,6 +38,16 @@ export function graphqlOperationCount(req: Request): number {
   return 0;
 }
 
+/** The media types Apollo negotiates a GET against, in its order. */
+const APOLLO_RESPONSE_TYPES = [
+  'application/json; charset=utf-8',
+  'application/graphql-response+json; charset=utf-8',
+  'multipart/mixed; deferSpec=20220824',
+  'multipart/mixed; incrementalSpec=v0.2',
+  'multipart/mixed',
+  'text/html',
+];
+
 /**
  * Whether Apollo would answer this GET with its landing page: the Accept
  * header ranks HTML above every type a GraphQL response can take. No Accept
@@ -47,14 +57,11 @@ function prefersHtml(req: Request): boolean {
   if (req.headers.accept === undefined || req.headers.accept === '') {
     return false;
   }
-  return (
-    req.accepts([
-      'application/json',
-      'application/graphql-response+json',
-      'multipart/mixed',
-      'text/html',
-    ]) === 'text/html'
-  );
+  // Apollo's own offer list (`prefersHTML` in ApolloServer.js), parameters
+  // included: negotiation weighs a requested charset or spec against them,
+  // so `application/json; charset=utf-8, text/html;q=0.9` picks JSON in
+  // Apollo but would pick HTML against a bare `application/json`.
+  return req.accepts(APOLLO_RESPONSE_TYPES) === 'text/html';
 }
 
 /**

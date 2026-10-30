@@ -1046,11 +1046,11 @@ paths:
                         description: GraphQL metering (only present when ENABLE_GRAPHQL_METERING is on). A flat cost per operation, charged before the query runs to the IP bucket only; a batch costs it per operation.
                         properties:
                           operationCostTokens:
-                            type: number
+                            type: integer
                             description: Tokens one operation costs (1 token = 1 KiB)
                             example: 10
                           operationCostBytes:
-                            type: number
+                            type: integer
                             description: Cost of one operation in bytes
                             example: 10240
                           buckets:
