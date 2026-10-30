@@ -78,6 +78,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `docs/envs.md`.
 ### Fixed
 
+- AR.IO peer weighting no longer treats a busy peer like one without the
+  data: a 429 or 503 from a peer costs it a fifth of a failure's weight
+  (#1118). Chunk peers were also penalised twice for every refusal (once
+  where it was detected and again in the request's catch); each now counts
+  once.
 - Chunk-metadata anchoring asked only the first peer of its pool, so when
   that peer failed every lookup fell through to the slower chain search.
   It now asks the first peer not backed off: a peer that is unreachable,
