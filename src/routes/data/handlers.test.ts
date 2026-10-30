@@ -2074,6 +2074,25 @@ st
           'rH97YzYj4XAQhOYHRljfHw1lLl1XTQP5--TfXcNws7Q';
         const EXPECTED_TESTING_CONTENT_DIGEST = `sha-256=:rH97YzYj4XAQhOYHRljfHw1lLl1XTQP5++TfXcNws7Q=:`;
 
+        it('sends X-AR-IO-Stable and X-AR-IO-Verified as false when there is no local row', async () => {
+          // dataAttributesSource returns undefined: nothing to assert either
+          // from, so both are sent as false rather than left out.
+          app.get(
+            '/:id',
+            createDataHandler({
+              log,
+              dataAttributesSource,
+              dataSource,
+              dataBlockListValidator,
+              manifestPathResolver,
+            }),
+          );
+
+          const res = await request(app).get('/not-a-real-id').expect(200);
+          assert.equal(res.headers['x-ar-io-stable'], 'false');
+          assert.equal(res.headers['x-ar-io-verified'], 'false');
+        });
+
         it('computes digest/etag from the buffered body when no stored hash is available', async () => {
           // dataAttributesSource returns undefined (no stored hash).
           // dataSource returns 10 bytes ('testing...') with size=10, under

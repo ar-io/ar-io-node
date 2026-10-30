@@ -239,7 +239,14 @@ const setDigestStableVerifiedHeaders = ({
   dataAttributes: ContiguousDataAttributes | undefined;
   data: ContiguousData;
 }) => {
-  if (dataAttributes !== undefined) {
+  // Without a local row there is nothing to assert stability or verification
+  // from, so both are sent as false rather than left out: a missing header
+  // made a client guess, and differed from X-AR-IO-Trusted, which is always
+  // sent.
+  if (dataAttributes === undefined) {
+    res.setHeader(headerNames.stable, 'false');
+    res.setHeader(headerNames.verified, 'false');
+  } else {
     res.setHeader(headerNames.stable, dataAttributes.stable ? 'true' : 'false');
     res.setHeader(
       headerNames.verified,
