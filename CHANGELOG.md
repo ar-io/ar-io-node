@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- An operator can capture the trace of one request: sent with
+  `X-AR-IO-Trace: 1` and the admin bearer key, the request runs in its own
+  root span, which the head sampler always samples (whatever
+  `OTEL_TRACING_SAMPLING_RATE_DENOMINATOR` is) and the bundled OTEL
+  collector always keeps (new `force-sample-policy`), and the response
+  carries `X-AR-IO-Trace-Id` to find it by. Unforced requests are sampled
+  exactly as before. The trace already records every retrieval source tried, so
+  one curl answers "where did this come from, and what failed first"
+  (#626). Ignored without the admin key.
+
 - `arweave_chunk_fetch_orphaned_total{result}` counts shared Arweave peer
   chunk fetches that finished after every caller waiting on them had gone
   (#885). They are left running on purpose, as cache warming, which helps a

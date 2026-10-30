@@ -12,6 +12,7 @@ import log from './log.js';
 import * as metrics from './metrics.js';
 import { createAbortSignalMiddleware } from './middleware/abort-signal.js';
 import { createRequestIdMiddleware } from './middleware/request-id.js';
+import { createForceTraceMiddleware } from './middleware/force-trace.js';
 import { createDefaultCacheControlMiddleware } from './middleware/cache-control.js';
 import { createErrorHandlerMiddleware } from './middleware/error-handler.js';
 import { createHttpSigMiddleware } from './middleware/httpsig.js';
@@ -122,6 +123,11 @@ app.use(createRequestIdMiddleware());
 
 // Attach AbortSignal to all requests for client disconnect handling
 app.use(createAbortSignalMiddleware());
+
+// X-AR-IO-Trace (admin only): keep this request's trace and return its ID
+app.use(
+  createForceTraceMiddleware({ adminApiKey: () => config.ADMIN_API_KEY }),
+);
 
 // HTTPSIG response signing — must be before cache-control so the writeHead
 // LIFO order ensures signing runs AFTER cache-control has set default headers.
