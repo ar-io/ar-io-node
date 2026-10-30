@@ -52,6 +52,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `docs/envs.md`.
 ### Fixed
 
+- Two gateways that listed each other in `GATEWAYS_GQL_URLS` called each
+  other's `/graphql` without end, until every hop timed out (#680). Fanned
+  out queries now carry `X-AR-IO-Hops`, and a request that has already
+  passed through `GATEWAYS_GQL_MAX_HOPS` gateways (default 2) is answered
+  from the local index only.
+
 - GraphQL no longer lists a data item's tags twice when the item was
   indexed from two bundles (or imported from an L2 band and later
   unbundled). The stable flush keeps the first stored row of an item, but
