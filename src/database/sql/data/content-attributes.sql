@@ -264,6 +264,26 @@ LEFT JOIN contiguous_data cd ON cd.hash = cdi.contiguous_data_hash
 WHERE cdip.id = :id
 LIMIT 1
 
+-- deleteDataId
+-- Forgets everything recorded for one ID: its cached hash, location, trust
+-- and verification. The bytes, stored by hash and possibly shared with other
+-- IDs, are left alone.
+DELETE FROM contiguous_data_ids
+WHERE id = :id
+
+-- deleteDataIdParents
+-- The ID's nested-parent mappings (selectDataParent), so a later lookup
+-- cannot rebuild a location from them.
+DELETE FROM contiguous_data_id_parents
+WHERE id = :id
+
+-- deleteDataRoot
+-- A data root's cached blob, found by content rather than by ID. A wrong
+-- mapping is wrong for every ID with that data root; a right one is learned
+-- again on the next fetch.
+DELETE FROM data_roots
+WHERE data_root = :data_root
+
 -- clearDataHash
 UPDATE contiguous_data_ids
 SET contiguous_data_hash = NULL, trusted = NULL, verified = 0, verified_at = NULL

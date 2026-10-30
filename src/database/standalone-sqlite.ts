@@ -3669,6 +3669,29 @@ export class StandaloneSqliteDatabaseWorker {
     });
   }
 
+  /**
+   * Forgets what data.db records for an ID: its contiguous_data_ids row, its
+   * nested-parent mappings, and, for an L1 transaction, the data-root
+   * mapping that selectDataAttributes would otherwise still find its cached
+   * blob through. True when anything was removed.
+   */
+  deleteDataId(id: string): boolean {
+    const idBuffer = fromB64Url(id);
+    const dataRoot: Buffer | null | undefined =
+      this.stmts.core.selectDataAttributes.get({ id: idBuffer })?.data_root;
+    return this.dbs.data.transaction(() => {
+      let removed =
+        this.stmts.data.deleteDataId.run({ id: idBuffer }).changes +
+        this.stmts.data.deleteDataIdParents.run({ id: idBuffer }).changes;
+      if (dataRoot !== null && dataRoot !== undefined && dataRoot.length > 0) {
+        removed += this.stmts.data.deleteDataRoot.run({
+          data_root: dataRoot,
+        }).changes;
+      }
+      return removed > 0;
+    })();
+  }
+
   async saveVerificationStatus(id: string) {
     this.stmts.data.updateDataItemVerificationStatus.run({
       id: fromB64Url(id),
@@ -5057,6 +5080,21 @@ export class StandaloneSqliteDatabase
     return this.queueWrite('data', 'clearDataHash', [id]);
   }
 
+  /**
+   * Forgets what is recorded for one ID (see the worker method). The
+   * attribute-save dedupe cache is cleared first, as in clearDataHash, so
+   * the next save for the ID is written rather than skipped as a repeat.
+   */
+  async deleteDataId(id: string): Promise<boolean> {
+    const prefix = `${id}|`;
+    for (const key of [...this.saveDataContentAttributesCache.keys()]) {
+      if (key === id || key.startsWith(prefix)) {
+        this.saveDataContentAttributesCache.delete(key);
+      }
+    }
+    return this.queueWrite('data', 'deleteDataId', [id]);
+  }
+
   async saveVerificationStatus(id: string) {
     return this.queueWrite('data', 'saveVerificationStatus', [id]);
   }
@@ -5431,6 +5469,9 @@ if (!isMainThread) {
         case 'clearDataHash':
           worker.clearDataHash(args[0]);
           parentPort?.postMessage(null);
+          break;
+        case 'deleteDataId':
+          parentPort?.postMessage(worker.deleteDataId(args[0]));
           break;
         case 'saveVerificationStatus':
           worker.saveVerificationStatus(args[0]);

@@ -3915,6 +3915,45 @@ paths:
           description: Unauthorized, API key likely incorrect.
       security:
         - bearerAuth: []
+  '/ar-io/admin/invalidate-data':
+    post:
+      tags: [Admin]
+      summary: Forget what the gateway recorded for one ID.
+      description: |-
+        Deletes the ID's record of cached hash, stored location (root
+        transaction and offsets), trust and verification, its nested-parent
+        mappings and, for an L1 transaction, its data root's cached-blob
+        mapping, and drops it from memory, so the next request resolves the
+        ID afresh. The ID must be canonical base64url. Use it for a
+        record that is wrong (a location that does not hold the item, bytes
+        cached under the wrong ID) and that later writes cannot replace, such
+        as one already marked verified. The cached bytes are kept: they are
+        stored by hash, may belong to other IDs, and are correct for their
+        hash. Caches in front of the gateway (an edge cache, a CDN, browsers)
+        are not reached and must be purged separately.
+      operationId: adminInvalidateData
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id]
+              properties:
+                id:
+                  type: string
+                  description: The transaction or data item ID.
+            example:
+              id: '3lyxgbgEvqNSvJrTX2J7CfRychUD5KClFhhVLyTPNCQ'
+      responses:
+        '200':
+          description: 'Done. `removed` is false when there was no record. Example: `{"id":"3lyx…","removed":true}`.'
+        '400':
+          description: '`id` is missing or not a valid data ID.'
+        '401':
+          description: Unauthorized, API key likely incorrect.
+      security:
+        - bearerAuth: []
   '/ar-io/admin/unblock-name':
     put:
       tags: [Admin]

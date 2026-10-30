@@ -8,6 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- `POST /ar-io/admin/invalidate-data` (`{"id": "<id>"}`) forgets what the
+  gateway recorded for one ID: cached hash, stored location, trust and
+  verification, in the index and in memory, so the next request resolves
+  it afresh (#959 item 6). It is the way to correct a wrong record that
+  later writes cannot replace, such as one already marked verified, without
+  editing SQLite by hand. The cached bytes are kept (they are stored by hash
+  and may belong to other IDs); caches in front of the gateway still need
+  their own purge.
+
 - `ENABLE_GRAPHQL_METERING` (default off) puts `/graphql` under the rate
   limiter and x402, at a flat `GRAPHQL_OPERATION_COST_BYTES` per operation
   (default 10 KiB, 10 tokens; a batch pays per operation), charged before

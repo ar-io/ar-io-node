@@ -1348,6 +1348,8 @@ export interface ContiguousDataIndex {
     trusted?: boolean;
   }): Promise<void>;
   clearDataHash(id: string): Promise<void>;
+  /** Forgets what is recorded for one ID; true when there was a record. */
+  deleteDataId(id: string): Promise<boolean>;
   getVerifiableDataIds(options?: {
     minVerificationPriority?: number;
   }): Promise<string[]>;

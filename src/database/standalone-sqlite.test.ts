@@ -3087,6 +3087,102 @@ describe('StandaloneSqliteDatabase', () => {
       assert.equal(corrected?.rootDataOffset, 2999200);
     });
 
+    it('forgets an ID with deleteDataId, so a verified wrong location can be replaced', async () => {
+      const WRONG = 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee0';
+      const attrs = {
+        id: WRONG,
+        hash: 'deleteDataIdRegression',
+        dataSize: 94,
+        rootTransactionId: INTERMEDIATE,
+        rootDataItemOffset: 160,
+        rootDataOffset: 1268,
+      };
+      await db.saveDataContentAttributes(attrs);
+      // Marked verified: later saves no longer overwrite the row (#959 item 4).
+      await db.saveVerificationStatus(INTERMEDIATE);
+      await db.saveDataContentAttributes({
+        ...attrs,
+        rootTransactionId: L1_ROOT,
+        rootDataItemOffset: 2997951,
+        rootDataOffset: 2999200,
+      });
+      assert.equal(
+        (await db.getDataAttributes(WRONG))?.rootTransactionId,
+        INTERMEDIATE,
+        'the verified row resists a correcting save',
+      );
+
+      assert.equal(await db.deleteDataId(WRONG), true);
+      assert.equal(await db.deleteDataId(WRONG), false, 'nothing left');
+      assert.equal((await db.getDataAttributes(WRONG))?.hash, undefined);
+
+      // The identical correcting save now lands (its dedupe entry is gone).
+      await db.saveDataContentAttributes({
+        ...attrs,
+        rootTransactionId: L1_ROOT,
+        rootDataItemOffset: 2997951,
+        rootDataOffset: 2999200,
+      });
+      const corrected = await db.getDataAttributes(WRONG);
+      assert.equal(corrected?.rootTransactionId, L1_ROOT);
+      assert.equal(corrected?.rootDataItemOffset, 2997951);
+    });
+
+    it('also forgets the nested-parent mapping and the L1 data-root mapping', async () => {
+      const NESTED = 'ffffffffffffffffffffffffffffffffffffffffff0';
+      const PARENT = 'gggggggggggggggggggggggggggggggggggggggggg0';
+      dataDb
+        .prepare(
+          `INSERT INTO contiguous_data_id_parents
+             (id, parent_id, data_offset, data_size, indexed_at)
+           VALUES (@id, @parent, 10, 20, 1)`,
+        )
+        .run({ id: fromB64Url(NESTED), parent: fromB64Url(PARENT) });
+
+      // An L1 transaction whose bytes are cached through its data root.
+      const TX = Buffer.alloc(32, 0x7a);
+      const dataRoot = Buffer.alloc(32, 0x7b);
+      coreDb
+        .prepare(
+          `INSERT INTO stable_transactions
+            (id, height, block_transaction_index, format, last_tx,
+             owner_address, quantity, reward, tag_count, data_size,
+             data_root, content_type)
+           VALUES (@id, 7, 0, 2, @zero, @zero, '0', '0', 0, 94,
+             @data_root, 'text/plain')`,
+        )
+        .run({ id: TX, zero: Buffer.alloc(32), data_root: dataRoot });
+      await db.saveDataContentAttributes({
+        id: toB64Url(TX),
+        dataRoot: toB64Url(dataRoot),
+        hash: 'deleteDataIdDataRoot',
+        dataSize: 94,
+      });
+      assert.ok(
+        dataDb
+          .prepare('SELECT 1 FROM data_roots WHERE data_root = ?')
+          .get(dataRoot),
+        'the data-root mapping exists before',
+      );
+
+      assert.equal(await db.deleteDataId(NESTED), true);
+      assert.equal(
+        dataDb
+          .prepare('SELECT 1 FROM contiguous_data_id_parents WHERE id = ?')
+          .get(fromB64Url(NESTED)),
+        undefined,
+      );
+
+      assert.equal(await db.deleteDataId(toB64Url(TX)), true);
+      assert.equal(
+        dataDb
+          .prepare('SELECT 1 FROM data_roots WHERE data_root = ?')
+          .get(dataRoot),
+        undefined,
+      );
+      assert.equal((await db.getDataAttributes(toB64Url(TX)))?.hash, undefined);
+    });
+
     it('lets an identical re-save through after clearDataHash', async () => {
       const EVICTED = 'dddddddddddddddddddddddddddddddddddddddddd0';
       const attrs = {
