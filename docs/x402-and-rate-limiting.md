@@ -85,12 +85,14 @@ The rate limiter and x402 payment system apply to data egress endpoints:
 - **Chunk requests**:
   - `GET /chunk/:offset` (base64url-encoded JSON, uses fixed size pricing - see note below)
   - `GET /chunk/:offset/data` (raw binary, uses fixed size pricing - see note below)
+- **GraphQL** (`/graphql`), only with `ENABLE_GRAPHQL_METERING=true` - see
+  the note below
 
 #### Not Rate Limited
 
 Currently, the following endpoints are not rate limited:
 
-- GraphQL queries (`/graphql`)
+- GraphQL queries (`/graphql`), unless `ENABLE_GRAPHQL_METERING=true`
 - Chunk POST requests (`POST /chunk`)
 - Administrative and informational endpoints under `/ar-io/*`, except the index artifact byte routes above
 
@@ -104,6 +106,21 @@ calculate pricing based on actual content size.
 - `/chunk/:offset/data` (raw binary): 256 KiB per request (hardcoded as
   `MAX_CHUNK_SIZE`), providing ~40% bandwidth savings and lower per-chunk fees
   compared to the base64url endpoint
+
+**Note on GraphQL Metering:** With `ENABLE_GRAPHQL_METERING=true`, each
+GraphQL operation costs a flat `GRAPHQL_OPERATION_COST_BYTES` (default 10240,
+so 10 tokens), charged before the query runs. A batched request costs that
+per operation. A GraphQL response is a few kilobytes whatever the query costs
+the database, so pricing it by bytes would make it almost free; a flat cost is
+crude but bounds what one client can ask for. Only the client's IP bucket is
+charged: the resource bucket is keyed by path, and every GraphQL request has
+the same path, so it would be one allowance all clients share. The charge is
+not reconciled with the response size. The Apollo Sandbox page (`GET /graphql`
+with no query) and CORS preflights are free. The allowlists apply as for
+other routes, and `/ar-io/info` reports the cost under `rateLimiter.graphql`
+and the price under `x402.graphql`. At the defaults (an IP bucket of 100,000
+tokens refilling at 20 per second) a client can run 10,000 operations in a
+burst and 2 per second after that.
 
 **Note on Chunk Browser Payments:** For browser paywall requests, chunks use a
 direct payment flow (payment sent to original URL) rather than the redirect

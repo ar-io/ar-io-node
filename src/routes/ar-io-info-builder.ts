@@ -75,6 +75,18 @@ export interface RateLimiterInfo {
       ip: RateLimiterBucketInfo;
     };
   };
+  /** Present when GraphQL is metered: what one operation costs. */
+  graphql?: GraphqlMeteringInfo;
+}
+
+/**
+ * GraphQL metering exposed in the info endpoint: a flat cost per operation
+ * (a batch costs it per operation), charged to the client's IP bucket only.
+ */
+export interface GraphqlMeteringInfo {
+  operationCostTokens: number;
+  operationCostBytes: number;
+  buckets: ['ip'];
 }
 
 /**
@@ -107,6 +119,8 @@ export interface X402Info {
     pricing: X402PricingInfo;
     rateLimiterCapacityMultiplier: number;
   };
+  /** Present when GraphQL is metered: the price of one operation, in USDC. */
+  graphql?: { pricePerOperation: number };
 }
 
 /**
@@ -193,6 +207,8 @@ export interface ArIoInfoConfig {
     algorithm: string;
     solanaAddress: string;
   };
+  /** Cost of one GraphQL operation in bytes, when GraphQL is metered. */
+  graphqlOperationCostBytes?: number;
   /** Names of the indexes currently published; omitted when none. */
   indexNames?: string[];
   /**
@@ -265,6 +281,19 @@ export function buildArIoInfo(config: ArIoInfoConfig): ArIoInfoResponse {
           },
         },
       },
+      ...(config.graphqlOperationCostBytes !== undefined
+        ? {
+            graphql: {
+              // The limiter's own rounding: 1 token per KiB, at least one.
+              operationCostTokens: Math.max(
+                1,
+                Math.ceil(config.graphqlOperationCostBytes / 1024),
+              ),
+              operationCostBytes: config.graphqlOperationCostBytes,
+              buckets: ['ip'],
+            },
+          }
+        : {}),
     };
   }
 
@@ -324,6 +353,19 @@ export function buildArIoInfo(config: ArIoInfoConfig): ArIoInfoResponse {
         },
         rateLimiterCapacityMultiplier: capacityMultiplier,
       },
+      ...(config.graphqlOperationCostBytes !== undefined
+        ? {
+            graphql: {
+              pricePerOperation: Number(
+                calculateX402Price(config.graphqlOperationCostBytes, {
+                  perBytePrice,
+                  minPrice,
+                  maxPrice,
+                }).toFixed(6),
+              ),
+            },
+          }
+        : {}),
     };
   }
 

@@ -3817,6 +3817,19 @@ export const TRUSTED_PROXIES =
         .map((entry) => entry.trim())
         .filter((entry) => entry.length > 0);
 
+// Meter /graphql with the rate limiter (ENABLE_RATE_LIMITER) and x402
+// (ENABLE_X_402_USDC_DATA_EGRESS) at a flat cost per operation, charged to the
+// client's IP bucket only. Off by default: GraphQL is then free, as before.
+export const ENABLE_GRAPHQL_METERING =
+  env.varOrDefault('ENABLE_GRAPHQL_METERING', 'false') === 'true';
+
+// What one GraphQL operation costs, in the bytes the limiter and x402 price
+// (1 token = 1 KiB). A batch costs this per operation.
+export const GRAPHQL_OPERATION_COST_BYTES = env.positiveIntOrDefault(
+  'GRAPHQL_OPERATION_COST_BYTES',
+  10240,
+);
+
 export const RATE_LIMITER_IPS_AND_CIDRS_ALLOWLIST =
   env
     .varOrUndefined('RATE_LIMITER_IPS_AND_CIDRS_ALLOWLIST')
