@@ -8,6 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- `POST /ar-io/admin/invalidate-data` (`{"id": "<id>"}`) forgets what the
+  gateway recorded for one ID: cached hash, stored location, trust and
+  verification, in the index and in memory, so the next request resolves
+  it afresh (#959 item 6). It is the way to correct a wrong record that
+  later writes cannot replace, such as one already marked verified, without
+  editing SQLite by hand. The cached bytes are kept (they are stored by hash
+  and may belong to other IDs); caches in front of the gateway still need
+  their own purge.
+
 - `ENABLE_GRAPHQL_METERING` (default off) puts `/graphql` under the rate
   limiter and x402, at a flat `GRAPHQL_OPERATION_COST_BYTES` per operation
   (default 10 KiB, 10 tokens; a batch pays per operation), charged before
@@ -86,6 +95,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   route now looks up a nested bundle's root and payload offset first, and
   answers 409 when the root is known but the offset is not. Rows written
   this way before can be cleared with `POST /ar-io/admin/invalidate-data`.
+- A data item stored in two bundles could be given a location made of one
+  copy's root and the other copy's offsets: data attributes took the root
+  from the location recorded at fetch time and filled missing offsets from
+  the bundles index, even when the two named different roots (#959). The
+  index now fills in only when it names the same root. Separately, an ID
+  found only through its data root (an L1 transaction whose bytes are also
+  a data item's) borrowed that other item's root and offsets; it no longer
+  gets any location that way, and the ID's own row now always wins over one
+  found through the data root.
 - AR.IO peer weighting no longer treats a busy peer like one without the
   data: a 429 or 503 from a peer costs it a fifth of a failure's weight
   (#1118). Chunk peers were also penalised twice for every refusal (once

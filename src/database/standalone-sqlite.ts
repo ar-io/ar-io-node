@@ -1755,28 +1755,44 @@ export class StandaloneSqliteDatabaseWorker {
     const hash = dataRow?.hash;
     const dataRoot = txOrItemRow?.data_root;
 
-    // Prefer root_transaction_id from data.db if available
-    const rootTransactionId =
-      dataRow?.root_transaction_id !== null &&
-      dataRow?.root_transaction_id !== undefined
-        ? toB64Url(dataRow.root_transaction_id)
-        : txOrItemRow?.root_transaction_id !== null &&
-            txOrItemRow?.root_transaction_id !== undefined
-          ? toB64Url(txOrItemRow.root_transaction_id)
-          : undefined;
+    // A location is a root plus offsets into it, and must come from one
+    // record. data.db's row (a location recorded when the data was fetched)
+    // is preferred; the bundles index row (from our own unbundling) may fill
+    // in fields it lacks, but only when both name the same root. An item
+    // stored in two bundles otherwise paired one copy's root with the other
+    // copy's offsets and served bytes from the wrong place (#959 item 3).
+    const dataRowRoot: Buffer | null | undefined =
+      dataRow?.root_transaction_id;
+    const indexRoot: Buffer | null | undefined =
+      txOrItemRow?.root_transaction_id;
+    const hasDataRowRoot = dataRowRoot !== null && dataRowRoot !== undefined;
+    const hasIndexRoot = indexRoot !== null && indexRoot !== undefined;
+    const indexAgrees =
+      !hasDataRowRoot || (hasIndexRoot && dataRowRoot.equals(indexRoot));
+    const indexRow = indexAgrees ? txOrItemRow : undefined;
 
+    const rootTransactionId = hasDataRowRoot
+      ? toB64Url(dataRowRoot)
+      : hasIndexRoot
+        ? toB64Url(indexRoot)
+        : undefined;
+
+    // The bundles row for this item (signature, owner and its offset in its
+    // parent). Its own offset and size belong to the index's location, so
+    // they are only used where that location is.
     let dataItemAttributes;
     if (rootTransactionId !== undefined) {
       dataItemAttributes = this.stmts.bundles.selectDataItemAttributes.get({
         id: fromB64Url(id),
       });
     }
+    const indexItem = indexAgrees ? dataItemAttributes : undefined;
 
     // Calculate resolved offset values for reuse
     const rootParentOffset =
-      dataRow?.root_parent_offset ?? txOrItemRow?.root_parent_offset;
-    const dataOffset = dataRow?.data_offset ?? txOrItemRow?.data_offset;
-    const offset = dataRow?.data_item_offset ?? dataItemAttributes?.offset;
+      dataRow?.root_parent_offset ?? indexRow?.root_parent_offset;
+    const dataOffset = dataRow?.data_offset ?? indexRow?.data_offset;
+    const offset = dataRow?.data_item_offset ?? indexItem?.offset;
 
     // Immediate parent bundle for data items, undefined for L1 txs.
     // Surfaced so route handlers can detect the single-level case
@@ -1807,7 +1823,7 @@ export class StandaloneSqliteDatabaseWorker {
       rootParentOffset,
       dataOffset,
       offset,
-      itemSize: dataRow?.data_item_size ?? dataItemAttributes?.size,
+      itemSize: dataRow?.data_item_size ?? indexItem?.size,
       formatId: dataRow?.format_id,
       signatureOffset: dataItemAttributes?.signature_offset,
       signatureSize: dataItemAttributes?.signature_size,
@@ -3653,6 +3669,29 @@ export class StandaloneSqliteDatabaseWorker {
     });
   }
 
+  /**
+   * Forgets what data.db records for an ID: its contiguous_data_ids row, its
+   * nested-parent mappings, and, for an L1 transaction, the data-root
+   * mapping that selectDataAttributes would otherwise still find its cached
+   * blob through. True when anything was removed.
+   */
+  deleteDataId(id: string): boolean {
+    const idBuffer = fromB64Url(id);
+    const dataRoot: Buffer | null | undefined =
+      this.stmts.core.selectDataAttributes.get({ id: idBuffer })?.data_root;
+    return this.dbs.data.transaction(() => {
+      let removed =
+        this.stmts.data.deleteDataId.run({ id: idBuffer }).changes +
+        this.stmts.data.deleteDataIdParents.run({ id: idBuffer }).changes;
+      if (dataRoot !== null && dataRoot !== undefined && dataRoot.length > 0) {
+        removed += this.stmts.data.deleteDataRoot.run({
+          data_root: dataRoot,
+        }).changes;
+      }
+      return removed > 0;
+    })();
+  }
+
   async saveVerificationStatus(id: string) {
     this.stmts.data.updateDataItemVerificationStatus.run({
       id: fromB64Url(id),
@@ -5041,6 +5080,21 @@ export class StandaloneSqliteDatabase
     return this.queueWrite('data', 'clearDataHash', [id]);
   }
 
+  /**
+   * Forgets what is recorded for one ID (see the worker method). The
+   * attribute-save dedupe cache is cleared first, as in clearDataHash, so
+   * the next save for the ID is written rather than skipped as a repeat.
+   */
+  async deleteDataId(id: string): Promise<boolean> {
+    const prefix = `${id}|`;
+    for (const key of [...this.saveDataContentAttributesCache.keys()]) {
+      if (key === id || key.startsWith(prefix)) {
+        this.saveDataContentAttributesCache.delete(key);
+      }
+    }
+    return this.queueWrite('data', 'deleteDataId', [id]);
+  }
+
   async saveVerificationStatus(id: string) {
     return this.queueWrite('data', 'saveVerificationStatus', [id]);
   }
@@ -5415,6 +5469,9 @@ if (!isMainThread) {
         case 'clearDataHash':
           worker.clearDataHash(args[0]);
           parentPort?.postMessage(null);
+          break;
+        case 'deleteDataId':
+          parentPort?.postMessage(worker.deleteDataId(args[0]));
           break;
         case 'saveVerificationStatus':
           worker.saveVerificationStatus(args[0]);
