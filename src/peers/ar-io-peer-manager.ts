@@ -23,6 +23,24 @@ const DEFAULT_WEIGHT = 50; // Neutral starting weight
 const MIN_WEIGHT = 1;
 const MAX_WEIGHT = 100;
 const DEFAULT_SELECTION_CACHE_TTL_MS = 5000; // 5 seconds
+// A busy peer (429, 503) loses this fraction of a full failure's weight: it
+// has the data, or may, and will again have the capacity, unlike a peer that
+// lacks it or is broken.
+const BUSY_PENALTY_FRACTION = 0.2;
+
+/**
+ * Why a peer request failed, for weighting. `busy`: the peer said it is out
+ * of capacity (429, 503), which passes. `failed`: anything else, including
+ * not having the data.
+ */
+export type PeerFailureKind = 'failed' | 'busy';
+
+/** The failure kind an HTTP status from a peer stands for. */
+export function peerFailureKindForStatus(
+  status: number | undefined,
+): PeerFailureKind {
+  return status === 429 || status === 503 ? 'busy' : 'failed';
+}
 
 export interface ArIOPeer {
   address: string;
@@ -406,30 +424,44 @@ export class ArIOPeerManager implements WithFormattedPeers {
   /**
    * Report failed peer interaction
    */
-  reportFailure(category: WeightCategory, peerId: string): void {
+  reportFailure(
+    category: WeightCategory,
+    peerId: string,
+    kind: PeerFailureKind = 'failed',
+  ): void {
     const categoryWeights = this.peerWeights.get(category);
     if (!categoryWeights) {
       this.registerCategory(category);
-      return this.reportFailure(category, peerId);
-    }
-
-    const currentWeight = categoryWeights.get(peerId);
-    if (currentWeight === undefined) {
-      // Peer not in this category yet, initialize it with low weight
-      categoryWeights.set(peerId, MIN_WEIGHT);
-      return;
+      return this.reportFailure(category, peerId, kind);
     }
 
     const categoryConfig = this.categoryConfigs.get(category) ?? {};
-    const temperatureDelta =
+    const fullDelta =
       categoryConfig.temperatureDelta ??
       config.WEIGHTED_PEERS_TEMPERATURE_DELTA;
+    // A busy peer is cooled by a fraction of a failure: one that is out of
+    // capacity for a moment should not rank with one that lacks the data.
+    const delta =
+      kind === 'busy' ? fullDelta * BUSY_PENALTY_FRACTION : fullDelta;
+
+    const currentWeight = categoryWeights.get(peerId);
+    if (currentWeight === undefined) {
+      // Peer not in this category yet: a failure starts it low, a busy
+      // answer only a little below the category default.
+      categoryWeights.set(
+        peerId,
+        kind === 'busy'
+          ? Math.max(
+              (categoryConfig.defaultWeight ?? DEFAULT_WEIGHT) - delta,
+              MIN_WEIGHT,
+            )
+          : MIN_WEIGHT,
+      );
+      return;
+    }
 
     // Cool down the failing peer
-    categoryWeights.set(
-      peerId,
-      Math.max(currentWeight - temperatureDelta, MIN_WEIGHT),
-    );
+    categoryWeights.set(peerId, Math.max(currentWeight - delta, MIN_WEIGHT));
   }
 
   /**

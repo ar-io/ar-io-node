@@ -52,6 +52,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `docs/envs.md`.
 ### Fixed
 
+- AR.IO peer weighting no longer treats a busy peer like one without the
+  data: a 429 or 503 from a peer costs it a fifth of a failure's weight
+  (#1118). Chunk peers were also penalised twice for every refusal (once
+  where it was detected and again in the request's catch); each now counts
+  once.
+
 - GraphQL no longer lists a data item's tags twice when the item was
   indexed from two bundles (or imported from an L2 band and later
   unbundled). The stable flush keeps the first stored row of an item, but

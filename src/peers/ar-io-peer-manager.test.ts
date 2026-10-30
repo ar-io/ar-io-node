@@ -7,7 +7,10 @@
 import { strict as assert } from 'node:assert';
 import { afterEach, before, beforeEach, describe, it, mock } from 'node:test';
 import { ARIORead } from '@ar.io/sdk';
-import { ArIOPeerManager } from './ar-io-peer-manager.js';
+import {
+  ArIOPeerManager,
+  peerFailureKindForStatus,
+} from './ar-io-peer-manager.js';
 import { createTestLogger } from '../../test/test-logger.js';
 
 let log: ReturnType<typeof createTestLogger>;
@@ -236,6 +239,40 @@ describe('ArIOPeerManager', () => {
       const updatedWeight = updatedWeights?.get(testPeer) ?? 0;
 
       assert.ok(updatedWeight < initialWeight);
+    });
+
+    it('cools a busy peer by a fifth of a failure', () => {
+      const [failing, busy] = Object.values(INITIAL_PEERS);
+      const before = peerManager.getWeights('test')!;
+      const failingBefore = before.get(failing)!;
+      const busyBefore = before.get(busy)!;
+
+      peerManager.reportFailure('test', failing);
+      peerManager.reportFailure('test', busy, 'busy');
+
+      const after = peerManager.getWeights('test')!;
+      const failedBy = failingBefore - after.get(failing)!;
+      const busiedBy = busyBefore - after.get(busy)!;
+      assert.ok(busiedBy > 0, 'a busy peer still loses some weight');
+      assert.ok(
+        Math.abs(busiedBy - failedBy * 0.2) < 1e-9,
+        `${busiedBy} is a fifth of ${failedBy}`,
+      );
+    });
+
+    it('starts a new busy peer just below the default, not at the minimum', () => {
+      const newPeer = 'http://busy-newpeer.com';
+      peerManager.reportFailure('test', newPeer, 'busy');
+      const weight = peerManager.getWeights('test')!.get(newPeer)!;
+      assert.ok(weight > 1 && weight < 50, `${weight}`);
+    });
+
+    it('maps 429 and 503 to busy and everything else to failed', () => {
+      assert.equal(peerFailureKindForStatus(429), 'busy');
+      assert.equal(peerFailureKindForStatus(503), 'busy');
+      for (const status of [404, 500, 502, 504, 401, undefined]) {
+        assert.equal(peerFailureKindForStatus(status), 'failed');
+      }
     });
 
     it('should handle success reporting for new peer', () => {
