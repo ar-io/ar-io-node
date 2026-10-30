@@ -187,6 +187,8 @@ const { middleware: apolloMiddleware, stop: stopApolloServer } =
   await makeApolloServerMiddleware({
     db: system.gqlQueryable,
     txMetadataResolver: system.dataItemMetaResolver,
+    ownerFetcher: system.ownerFetcher,
+    signatureFetcher: system.signatureFetcher,
   });
 app.use('/graphql', apolloMiddleware);
 

@@ -22,7 +22,7 @@ import { readFileSync } from 'node:fs';
 import { TxMetadataResolver } from '../../data/tx-metadata-resolver.js';
 import * as metrics from '../../metrics.js';
 import { GqlQueryable, GqlWarning } from '../../types.js';
-import { resolvers } from './resolvers.js';
+import { resolvers, TxOwnerFetcher, TxSignatureFetcher } from './resolvers.js';
 import { recordGraphqlBatchSize } from './batch-size.js';
 import { graphqlBodyParseError } from './body-parse-error.js';
 import { buildResolverSignal, ResolverSignalState } from './resolver-signal.js';
@@ -50,13 +50,15 @@ import { buildResolverSignal, ResolverSignalState } from './resolver-signal.js';
 export type GraphQLContext = {
   db: GqlQueryable;
   txMetadataResolver?: TxMetadataResolver;
+  ownerFetcher: TxOwnerFetcher;
+  signatureFetcher: TxSignatureFetcher;
   warnings: GqlWarning[];
   signal: AbortSignal;
   signalState: ResolverSignalState;
 };
 
 const typeDefsUrl = new URL('./schema/types.graphql', import.meta.url);
-const typeDefs = gql(readFileSync(typeDefsUrl, 'utf8'));
+export const typeDefs = gql(readFileSync(typeDefsUrl, 'utf8'));
 
 // Emits `extensions.warnings` on GraphQL responses when resolvers push onto
 // `context.warnings`. Partial-result signals (SQLite unavailable in the
@@ -156,9 +158,13 @@ const responseSentPlugin: ApolloServerPlugin<GraphQLContext> = {
 export const makeApolloServerMiddleware = async ({
   db,
   txMetadataResolver,
+  ownerFetcher,
+  signatureFetcher,
 }: {
   db: GqlQueryable;
   txMetadataResolver?: TxMetadataResolver;
+  ownerFetcher: TxOwnerFetcher;
+  signatureFetcher: TxSignatureFetcher;
 }): Promise<{
   middleware: (RequestHandler | ErrorRequestHandler)[];
   stop: () => Promise<void>;
@@ -219,6 +225,8 @@ export const makeApolloServerMiddleware = async ({
         return {
           db,
           txMetadataResolver,
+          ownerFetcher,
+          signatureFetcher,
           warnings: [],
           signalState,
           signal: buildResolverSignal(res, signalState),
