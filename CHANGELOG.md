@@ -58,7 +58,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   height 1,500,000 on vilenarios.com, long past the fork depth, was served
   `X-AR-IO-Stable: false` with a two-hour `max-age`. Stable data is now
   reported stable, and directly addressed stable data (`/<id>`, `/raw/<id>`)
-  is cached for `CACHE_STABLE_MAX_AGE`; ArNS responses keep their own TTL.
+  that is also verified and served from the gateway's own cache gets
+  `CACHE_STABLE_MAX_AGE`, `immutable`, for the first time; other stable data
+  keeps the unstable tiers, and ArNS responses keep their own TTL.
   A data item the bundles flush has not yet promoted is also stable once
   its root L1 transaction is, rather than waiting for the flush (an item
   whose bundle has no `stable_block_transactions` row was never promoted).

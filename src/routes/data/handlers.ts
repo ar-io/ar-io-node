@@ -791,8 +791,17 @@ const setDataHeaders = ({
     // Determine cache directive (public or private)
     const cacheDirective = usePrivate ? 'private' : 'public';
 
-    // Aggressively cache data before max fork depth
-    if (dataAttributes?.stable) {
+    // Cache for CACHE_STABLE_MAX_AGE, immutable, only bytes we can stand
+    // behind for that long: data past the fork depth, verified against its
+    // data root, and served from our own cache (what X-AR-IO-Verified: true
+    // means). Anything else, stable or not, keeps the shorter tiers: a stable
+    // id served with unverified bytes from a peer would otherwise be pinned in
+    // browsers and edge caches for a month, where no purge reaches it.
+    if (
+      dataAttributes?.stable === true &&
+      dataAttributes.verified &&
+      data.cached
+    ) {
       res.header(
         'Cache-Control',
         `${cacheDirective}, max-age=${config.CACHE_STABLE_MAX_AGE}, immutable`,
