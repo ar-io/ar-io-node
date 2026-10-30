@@ -212,7 +212,10 @@ FROM (
   WHERE cdi.id = :id
   LIMIT 1
 )
-UNION
+-- UNION ALL keeps the branches in order, so the item's own row wins over a
+-- row found through the data root. (UNION sorted them to remove duplicates,
+-- and LIMIT 1 then took whichever sorted first.)
+UNION ALL
 SELECT *
 FROM (
   SELECT
@@ -221,15 +224,18 @@ FROM (
     cd.original_source_content_type,
     cdi.verified,
     cdi.trusted,
-    cdi.root_transaction_id,
-    cdi.root_parent_offset,
-    cdi.data_offset,
+    -- The row joined here can belong to another item with the same bytes, so
+    -- its location (where *that* item sits in *its* root) is not this one's:
+    -- borrowing it paired this ID with another item's root and offsets.
+    NULL AS root_transaction_id,
+    NULL AS root_parent_offset,
+    NULL AS data_offset,
     cdi.data_size,
-    cdi.data_item_offset,
-    cdi.data_item_size,
-    cdi.format_id,
-    cdi.root_data_item_offset,
-    cdi.root_data_offset,
+    NULL AS data_item_offset,
+    NULL AS data_item_size,
+    NULL AS format_id,
+    NULL AS root_data_item_offset,
+    NULL AS root_data_offset,
     -- The row joined here can belong to another item with the same bytes; an
     -- encoding is a property of the item's own tags, so never borrow one.
     NULL AS content_encoding,

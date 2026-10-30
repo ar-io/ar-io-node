@@ -1133,8 +1133,131 @@ describe('StandaloneSqliteDatabase', () => {
     });
   });
 
-  // An item's Content-Encoding learned when its data was cached (from its signed
-  // tags or a trusted upstream), for items whose tags are not indexed here.
+  describe('getDataAttributes — one location, from one record (#959)', () => {
+    const OWNER = Buffer.alloc(32, 0x07);
+    const ANCHOR = Buffer.alloc(32);
+    const item = Buffer.alloc(32, 0xe1);
+    const rootA = Buffer.alloc(32, 0xa1);
+    const rootB = Buffer.alloc(32, 0xb2);
+    let hashSeed = 0x40;
+
+    /** The bundles index row: item at offset 100 in its parent, rootA. */
+    const indexItemInRootA = () =>
+      bundlesDb
+        .prepare(
+          `INSERT INTO stable_data_items (
+             id, parent_id, root_transaction_id, height,
+             block_transaction_index, anchor, owner_address, offset, size,
+             data_offset, data_size, tag_count, indexed_at,
+             root_parent_offset
+           ) VALUES (@id, @root, @root, 7, 0, @anchor, @owner, 100, 300,
+             160, 140, 0, 1, 50)`,
+        )
+        .run({ id: item, root: rootA, anchor: ANCHOR, owner: OWNER });
+
+    /** data.db's row for an ID: a cached hash and the given location. */
+    const recordLocation = (
+      id: Buffer,
+      location: Record<string, Buffer | number | null>,
+    ) => {
+      const hash = Buffer.alloc(32, hashSeed++);
+      dataDb
+        .prepare(
+          `INSERT INTO contiguous_data (hash, data_size, indexed_at)
+           VALUES (@hash, 140, 1)`,
+        )
+        .run({ hash });
+      dataDb
+        .prepare(
+          `INSERT INTO contiguous_data_ids (
+             id, contiguous_data_hash, verified, indexed_at,
+             root_transaction_id, root_parent_offset, data_item_offset,
+             root_data_item_offset, root_data_offset
+           ) VALUES (@id, @hash, 0, 1, @root, @rpo, @dio, @rdio, @rdo)`,
+        )
+        .run({
+          id,
+          hash,
+          root: null,
+          rpo: null,
+          dio: null,
+          rdio: null,
+          rdo: null,
+          ...location,
+        });
+      return hash;
+    };
+
+    it("does not pair one copy's root with the other copy's offsets", () => {
+      indexItemInRootA();
+      // data.db knows the item in rootB, with only its parent's offset.
+      recordLocation(item, { root: rootB, rpo: 1000 });
+
+      const attrs = dbWorker.getDataAttributes(toB64Url(item));
+      assert.equal(attrs?.rootTransactionId, toB64Url(rootB));
+      // Before: 1000 (rootB's parent) + 100 (the item's offset in rootA's
+      // copy) = 1100, a location in rootB that the item is not at.
+      assert.equal(attrs?.rootDataItemOffset, undefined);
+      assert.equal(attrs?.itemSize, undefined);
+    });
+
+    it('fills in from the index when both records name the same root', () => {
+      indexItemInRootA();
+      recordLocation(item, { root: rootA, rpo: 50 });
+
+      const attrs = dbWorker.getDataAttributes(toB64Url(item));
+      assert.equal(attrs?.rootTransactionId, toB64Url(rootA));
+      assert.equal(attrs?.rootDataItemOffset, 150);
+      assert.equal(attrs?.itemSize, 300);
+    });
+
+    it('uses the index alone when data.db has no root', () => {
+      indexItemInRootA();
+      recordLocation(item, {});
+
+      const attrs = dbWorker.getDataAttributes(toB64Url(item));
+      assert.equal(attrs?.rootTransactionId, toB64Url(rootA));
+      assert.equal(attrs?.rootDataItemOffset, 150);
+    });
+
+    it("never takes another item's location through a shared data root", () => {
+      // An L1 transaction whose bytes are also a data item's: the item's row
+      // is found through the data root, but its location is the item's.
+      const tx = Buffer.alloc(32, 0xf1);
+      const dataRoot = Buffer.alloc(32, 0xd7);
+      coreDb
+        .prepare(
+          `INSERT INTO stable_transactions
+            (id, height, block_transaction_index, format, last_tx,
+             owner_address, quantity, reward, tag_count, data_size,
+             data_root, content_type)
+           VALUES (@id, 7, 0, 2, @zero, @zero, '0', '0', 0, 140,
+             @data_root, 'text/plain')`,
+        )
+        .run({ id: tx, zero: Buffer.alloc(32), data_root: dataRoot });
+      const otherItem = Buffer.alloc(32, 0xe9);
+      const hash = recordLocation(otherItem, {
+        root: rootB,
+        rpo: 10,
+        dio: 20,
+        rdio: 30,
+        rdo: 40,
+      });
+      dataDb
+        .prepare(
+          `INSERT INTO data_roots (data_root, contiguous_data_hash, verified, indexed_at)
+           VALUES (@data_root, @hash, 0, 1)`,
+        )
+        .run({ data_root: dataRoot, hash });
+
+      const attrs = dbWorker.getDataAttributes(toB64Url(tx));
+      assert.equal(attrs?.hash, toB64Url(hash), 'found through the data root');
+      assert.equal(attrs?.rootTransactionId, undefined);
+      assert.equal(attrs?.rootDataItemOffset, undefined);
+      assert.equal(attrs?.rootDataOffset, undefined);
+    });
+  });
+
   describe('getDataAttributes — stable', () => {
     const OWNER = Buffer.alloc(32, 0x07);
     const ANCHOR = Buffer.alloc(32);
@@ -1226,6 +1349,8 @@ describe('StandaloneSqliteDatabase', () => {
     });
   });
 
+  // An item's Content-Encoding learned when its data was cached (from its signed
+  // tags or a trusted upstream), for items whose tags are not indexed here.
   describe('recorded content encoding', () => {
     const itemId = toB64Url(Buffer.alloc(32, 0x31));
     const otherItemId = toB64Url(Buffer.alloc(32, 0x32));
