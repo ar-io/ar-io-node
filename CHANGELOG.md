@@ -73,8 +73,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   A data item the bundles flush has not yet promoted is also stable once
   its root L1 transaction is, rather than waiting for the flush (an item
   whose bundle has no `stable_block_transactions` row was never promoted).
-  Its root is the one the gateway's own unbundling recorded; locations
-  learned from peers do not count. With no local record of the data,
+  This is the same test the flush applies before promoting it, so no
+  placement is trusted more than before. With no local record of the data,
   `X-AR-IO-Stable` and `X-AR-IO-Verified` are now sent as `false` instead
   of being left out.
 
