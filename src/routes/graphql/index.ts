@@ -158,11 +158,14 @@ const responseSentPlugin: ApolloServerPlugin<GraphQLContext> = {
 export const makeApolloServerMiddleware = async ({
   db,
   txMetadataResolver,
+  meter,
   ownerFetcher,
   signatureFetcher,
 }: {
   db: GqlQueryable;
   txMetadataResolver?: TxMetadataResolver;
+  /** Rate limit / payment check run before Apollo (see `metering.ts`). */
+  meter?: RequestHandler;
   ownerFetcher: TxOwnerFetcher;
   signatureFetcher: TxSignatureFetcher;
 }): Promise<{
@@ -216,6 +219,8 @@ export const makeApolloServerMiddleware = async ({
     // Records operations-per-request so we can decide whether to cap batching
     // or disable it outright. See the module for why it sits here.
     recordGraphqlBatchSize,
+    // After the body parser, so a batch is charged per operation.
+    ...(meter !== undefined ? [meter] : []),
     expressMiddleware(server, {
       context: async ({ res }: { res: Response }): Promise<GraphQLContext> => {
         // The signal builder closes over `signalState` directly; the plugin

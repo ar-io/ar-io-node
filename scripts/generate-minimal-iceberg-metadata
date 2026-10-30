@@ -54,7 +54,7 @@ def get_transactions_schema_fields():
         {"id": 23, "name": "signature_size", "required": False, "type": "int"},
         {"id": 24, "name": "signature_type", "required": False, "type": "int"},
         {"id": 25, "name": "root_transaction_id", "required": False, "type": "binary"},
-        {"id": 26, "name": "root_parent_offset", "required": False, "type": "int"},
+        {"id": 26, "name": "root_parent_offset", "required": False, "type": "long"},
     ]
 
 
