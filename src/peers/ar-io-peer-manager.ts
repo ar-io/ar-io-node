@@ -85,6 +85,8 @@ export class ArIOPeerManager implements WithFormattedPeers {
   private nextEmptyListRetryMs: number;
   private emptyListRetryTimeout?: NodeJS.Timeout;
   private inFlightRead?: Promise<void>;
+  /** Set by stopUpdatingPeers: a read still in flight must not reschedule. */
+  private updatesStopped = false;
 
   // Weight management per category
   private peerWeights: Map<WeightCategory, Map<string, number>> = new Map();
@@ -529,6 +531,7 @@ export class ArIOPeerManager implements WithFormattedPeers {
    * Stop updating the peer list
    */
   stopUpdatingPeers(): void {
+    this.updatesStopped = true;
     if (this.intervalId) {
       clearInterval(this.intervalId);
       this.intervalId = undefined;
@@ -781,7 +784,9 @@ export class ArIOPeerManager implements WithFormattedPeers {
    * next successful read.
    */
   private scheduleEmptyListRetry(): void {
-    if (this.emptyListRetryTimeout !== undefined) return;
+    if (this.updatesStopped || this.emptyListRetryTimeout !== undefined) {
+      return;
+    }
     const delayMs = this.nextEmptyListRetryMs;
     this.nextEmptyListRetryMs = Math.min(delayMs * 2, this.emptyListRetryMaxMs);
     this.log.warn('No AR.IO peers; retrying the registry read', { delayMs });

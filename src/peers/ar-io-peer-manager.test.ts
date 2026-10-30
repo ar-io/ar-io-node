@@ -863,6 +863,24 @@ describe('ArIOPeerManager', () => {
       assert.equal(fs.existsSync(unrelated), true);
     });
 
+    it('does not schedule a retry when a read in flight at shutdown fails', async () => {
+      let fail: (error: Error) => void = () => undefined;
+      let calls = 0;
+      const m = manager(
+        {
+          getGateways: () => {
+            calls++;
+            return new Promise((_resolve, reject) => (fail = reject));
+          },
+        } as unknown as ARIORead,
+        { emptyListRetryInitialMs: 10 },
+      );
+      m.shutdown();
+      fail(new Error('registry unreachable'));
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      assert.equal(calls, 1);
+    });
+
     it('stops a pending retry on shutdown', async () => {
       const r = registry([]);
       const m = manager(r.networkProcess, { emptyListRetryInitialMs: 30 });
