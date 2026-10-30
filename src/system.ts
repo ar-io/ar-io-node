@@ -1075,6 +1075,7 @@ export const arIOPeerManager = new ArIOPeerManager({
   log,
   networkProcess,
   nodeWallet: config.AR_IO_WALLET,
+  peerListCachePath: config.AR_IO_PEER_LIST_CACHE_PATH,
 });
 
 const baseArIODataSource = new ArIODataSource({

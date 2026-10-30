@@ -5,10 +5,14 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import { strict as assert } from 'node:assert';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { afterEach, before, beforeEach, describe, it, mock } from 'node:test';
 import { ARIORead } from '@ar.io/sdk';
 import { ArIOPeerManager } from './ar-io-peer-manager.js';
 import { createTestLogger } from '../../test/test-logger.js';
+import { writePeerListSnapshot } from './peer-list-cache.js';
 
 let log: ReturnType<typeof createTestLogger>;
 let peerManager: ArIOPeerManager;
@@ -629,6 +633,178 @@ describe('ArIOPeerManager', () => {
       assert.equal(peers['b.com:443'].wallet, 'wallet-b');
       assert.equal(peers['b.com:443'].observerAddress, undefined);
       m.stopUpdatingPeers?.();
+    });
+  });
+
+  describe('peer list cache and empty-list retry', () => {
+    let dir: string;
+    let cachePath: string;
+    const managers: ArIOPeerManager[] = [];
+
+    beforeEach(() => {
+      dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ar-io-peer-manager-'));
+      cachePath = path.join(dir, 'peers', 'ar-io-peers.json');
+    });
+
+    afterEach(() => {
+      for (const m of managers.splice(0)) m.shutdown();
+      fs.rmSync(dir, { recursive: true, force: true });
+    });
+
+    const gateway = (wallet: string, fqdn: string, status?: string) => ({
+      gatewayAddress: wallet,
+      ...(status !== undefined ? { status } : {}),
+      settings: { protocol: 'https', fqdn },
+    });
+
+    /** A registry whose reads fail until `up` is set, then return `items`. */
+    function registry(items: any[]) {
+      const state = { up: false, calls: 0 };
+      const networkProcess = {
+        getGateways: async () => {
+          state.calls++;
+          if (!state.up) throw new Error('registry unreachable');
+          return { items, hasMore: false, nextCursor: undefined };
+        },
+      } as unknown as ARIORead;
+      return { state, networkProcess };
+    }
+
+    function manager(
+      networkProcess: ARIORead,
+      extra: Record<string, unknown> = {},
+    ) {
+      const m = new ArIOPeerManager({
+        log,
+        networkProcess,
+        nodeWallet: 'localNode',
+        peerListCachePath: cachePath,
+        updatePeersRefreshIntervalMs: 3600000,
+        // Keep the breaker out of the way: these tests are about the list.
+        circuitBreakerOptions: {
+          timeout: false,
+          errorThresholdPercentage: 100,
+        },
+        ...extra,
+      });
+      managers.push(m);
+      return m;
+    }
+
+    async function waitFor(condition: () => boolean, ms = 2000) {
+      const deadline = Date.now() + ms;
+      while (!condition()) {
+        if (Date.now() > deadline) throw new Error('timed out');
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+    }
+
+    it('saves a successful read and restores it when the registry is down at the next start', async () => {
+      const up = registry([
+        gateway('w1', 'one.com', 'joined'),
+        gateway('w2', 'two.com'),
+        gateway('localNode', 'me.com', 'joined'),
+      ]);
+      up.state.up = true;
+      const first = manager(up.networkProcess);
+      await first.refreshPeers();
+      await waitFor(() => fs.existsSync(cachePath));
+
+      const down = registry([]);
+      const second = manager(down.networkProcess);
+      assert.deepEqual(second.getPeerUrls().sort(), [
+        'https://one.com',
+        'https://two.com',
+      ]);
+      assert.equal(second.getSelfRecord()?.url, 'https://me.com');
+      assert.equal(
+        second.getFormattedPeers(['data'])['one.com:443'].status,
+        'joined',
+      );
+      await waitFor(() => down.state.calls > 0);
+      assert.equal(
+        second.getPeerUrls().length,
+        2,
+        'the failed read keeps the restored list',
+      );
+    });
+
+    it('re-filters a saved list: own wallet, a self for another wallet, leaving gateways', async () => {
+      await writePeerListSnapshot(cachePath, {
+        writtenAt: Date.now(),
+        peers: {
+          w1: 'https://one.com',
+          localNode: 'https://me.com',
+          gone: 'https://gone.com',
+        },
+        records: {
+          w1: { wallet: 'w1' },
+          gone: { wallet: 'gone', status: 'leaving' },
+        },
+        self: { wallet: 'previousWallet', url: 'https://old-me.com' },
+      });
+      const m = manager(registry([]).networkProcess);
+      assert.deepEqual(m.getPeerUrls(), ['https://one.com']);
+      assert.equal(m.getSelfRecord(), undefined);
+    });
+
+    it('retries quickly while the list is empty, then stops once a read succeeds', async () => {
+      const r = registry([gateway('w1', 'one.com')]);
+      const m = manager(r.networkProcess, {
+        emptyListRetryInitialMs: 10,
+        emptyListRetryMaxMs: 40,
+      });
+      await waitFor(() => r.state.calls >= 3);
+      assert.equal(m.getPeerUrls().length, 0);
+
+      r.state.up = true;
+      await waitFor(() => m.getPeerUrls().length === 1);
+      const calls = r.state.calls;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      assert.equal(r.state.calls, calls, 'no retries once peers are known');
+      await waitFor(() => fs.existsSync(cachePath));
+    });
+
+    it('does not retry when a failed read leaves a restored list in place', async () => {
+      await writePeerListSnapshot(cachePath, {
+        writtenAt: Date.now() - 48 * 60 * 60 * 1000,
+        peers: { w1: 'https://one.com' },
+        records: {},
+      });
+      const r = registry([]);
+      const m = manager(r.networkProcess, { emptyListRetryInitialMs: 10 });
+      await waitFor(() => r.state.calls > 0);
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      assert.equal(r.state.calls, 1);
+      assert.deepEqual(
+        m.getPeerUrls(),
+        ['https://one.com'],
+        'a stale list is still used',
+      );
+    });
+
+    it('does not overwrite a saved list with an empty read', async () => {
+      await writePeerListSnapshot(cachePath, {
+        writtenAt: 1,
+        peers: { w1: 'https://one.com' },
+        records: {},
+      });
+      const before = fs.readFileSync(cachePath, 'utf8');
+      const r = registry([]);
+      r.state.up = true;
+      const m = manager(r.networkProcess);
+      await m.refreshPeers();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      assert.equal(fs.readFileSync(cachePath, 'utf8'), before);
+    });
+
+    it('stops a pending retry on shutdown', async () => {
+      const r = registry([]);
+      const m = manager(r.networkProcess, { emptyListRetryInitialMs: 30 });
+      await waitFor(() => r.state.calls === 1);
+      m.shutdown();
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      assert.equal(r.state.calls, 1);
     });
   });
 });
