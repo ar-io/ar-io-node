@@ -15,11 +15,13 @@ import { release } from '../version.js';
 import { db, signatureStore, ownerStore } from '../system.js';
 import log from '../log.js';
 import { ParquetExporter } from '../workers/parquet-exporter.js';
-import { NormalizedDataItem, PartialJsonTransaction } from '../types.js';
 import { DATA_PATH_REGEX } from '../constants.js';
 import { isEmptyString } from '../lib/string.js';
 import { isValidDataId, sanityCheckTx } from '../lib/validation.js';
-import { resolveQueuedBundleRoot } from '../lib/queue-bundle-root.js';
+import {
+  queuedBundleItem,
+  resolveQueuedBundleRoot,
+} from '../lib/queue-bundle-root.js';
 import {
   resolveRootTxOffsets,
   sendRootTxOffsets,
@@ -538,18 +540,7 @@ arIoRouter.post(
         return;
       }
       const queuedBundle = await system.queueBundle(
-        (placed.kind === 'nested'
-          ? {
-              id,
-              root_tx_id: placed.rootTxId,
-              // The unbundler adds these to place each item: the bundle's
-              // payload starts at root_parent_offset + data_offset.
-              root_parent_offset: placed.rootParentOffset,
-              data_offset: 0,
-            }
-          : { id, root_tx_id: id }) as
-          | NormalizedDataItem
-          | PartialJsonTransaction,
+        queuedBundleItem(id, placed),
         true,
         bypassFilter,
       );

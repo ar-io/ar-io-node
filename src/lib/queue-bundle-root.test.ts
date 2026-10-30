@@ -8,7 +8,10 @@ import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
 
 import type { DataItemRootIndex, RootTxLookupResult } from '../types.js';
-import { resolveQueuedBundleRoot } from './queue-bundle-root.js';
+import {
+  queuedBundleItem,
+  resolveQueuedBundleRoot,
+} from './queue-bundle-root.js';
 
 const index = (
   answer: RootTxLookupResult | undefined | Error,
@@ -17,6 +20,15 @@ const index = (
     if (answer instanceof Error) throw answer;
     return answer;
   },
+});
+
+/**
+ * A composite-like index over sources in order: the first result the
+ * caller's accept predicate takes wins, else the first result as fallback.
+ */
+const sources = (...answers: RootTxLookupResult[]): DataItemRootIndex => ({
+  getRootTx: async (_id, opts) =>
+    answers.find((a) => opts?.accept?.(a) ?? true) ?? answers[0],
 });
 
 describe('resolveQueuedBundleRoot', () => {
@@ -54,5 +66,43 @@ describe('resolveQueuedBundleRoot', () => {
       await resolveQueuedBundleRoot(id, index({ rootTxId: 'l1-root' })),
       { kind: 'unresolved', rootTxId: 'l1-root' },
     );
+  });
+
+  it('keeps looking past a root without an offset (GraphQL, deeply nested)', async () => {
+    assert.deepEqual(
+      await resolveQueuedBundleRoot(
+        id,
+        sources(
+          { rootTxId: 'l1-root', path: ['l1-root', 'outer', id] },
+          { rootTxId: 'l1-root', rootOffset: 900, rootDataOffset: 1100 },
+        ),
+      ),
+      { kind: 'nested', rootTxId: 'l1-root', rootParentOffset: 1100 },
+    );
+  });
+
+  describe('queuedBundleItem', () => {
+    it('queues a nested bundle at its L1 root and payload offset', () => {
+      assert.deepEqual(
+        queuedBundleItem(id, {
+          kind: 'nested',
+          rootTxId: 'l1-root',
+          rootParentOffset: 1260,
+        }),
+        {
+          id,
+          root_tx_id: 'l1-root',
+          root_parent_offset: 1260,
+          data_offset: 0,
+        },
+      );
+    });
+
+    it('queues an L1 bundle as its own root', () => {
+      assert.deepEqual(queuedBundleItem(id, { kind: 'l1' }), {
+        id,
+        root_tx_id: id,
+      });
+    });
   });
 });

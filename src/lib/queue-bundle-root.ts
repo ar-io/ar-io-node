@@ -4,7 +4,11 @@
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
-import type { DataItemRootIndex } from '../types.js';
+import type {
+  DataItemRootIndex,
+  NormalizedDataItem,
+  PartialJsonTransaction,
+} from '../types.js';
 
 /**
  * Where a bundle queued by ID sits, for the unbundler to record its items'
@@ -36,7 +40,13 @@ export async function resolveQueuedBundleRoot(
 ): Promise<QueuedBundleRoot> {
   let result;
   try {
-    result = await rootTxIndex.getRootTx(id);
+    // A source that knows the root but not the offset (GraphQL, for a bundle
+    // two or more levels deep, answers with a path and no offsets) must not
+    // end the lookup: a later one (HyperBEAM, CDB64) may have the offset.
+    // Such a result is kept as the fallback if none does.
+    result = await rootTxIndex.getRootTx(id, {
+      accept: (r) => r.rootTxId === id || r.rootDataOffset !== undefined,
+    });
   } catch {
     result = undefined;
   }
@@ -49,4 +59,26 @@ export async function resolveQueuedBundleRoot(
     };
   }
   return { kind: 'unresolved', rootTxId: result.rootTxId };
+}
+
+/**
+ * The item `queue-bundle` hands to `queueBundle` for a bundle placed by
+ * {@link resolveQueuedBundleRoot}: an L1 transaction as its own root, a
+ * nested bundle with its L1 root and payload offset, which the unbundler
+ * adds to each item's offset in the bundle.
+ */
+export function queuedBundleItem(
+  id: string,
+  placed: Exclude<QueuedBundleRoot, { kind: 'unresolved' }>,
+): NormalizedDataItem | PartialJsonTransaction {
+  return (
+    placed.kind === 'nested'
+      ? {
+          id,
+          root_tx_id: placed.rootTxId,
+          root_parent_offset: placed.rootParentOffset,
+          data_offset: 0,
+        }
+      : { id, root_tx_id: id }
+  ) as NormalizedDataItem | PartialJsonTransaction;
 }
