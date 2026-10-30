@@ -8,6 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- An operator can capture the trace of one request: sent with
+  `X-AR-IO-Trace: 1` and the admin bearer key, its trace is kept by the
+  bundled OTEL collector whatever the sampling rates (new
+  `force-sample-policy`), and the response carries `X-AR-IO-Trace-Id` to
+  find it by. The trace already records every retrieval source tried, so
+  one curl answers "where did this come from, and what failed first"
+  (#626). Ignored without the admin key.
+
 - `CONTIGUOUS_DATA_CACHE_INDEX_MAX_BYTES_PER_SWEEP` (default 0, off) caps
   the bytes one contiguous-cache eviction sweep frees, so eviction is paced
   by bytes per interval instead of arriving in bursts. On turbo-gateway.com's

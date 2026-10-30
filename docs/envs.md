@@ -508,6 +508,13 @@ needs no `SOLANA_RPC_URL`.
 | OTEL_TAIL_SAMPLING_NESTED_BUNDLE_RATE            | Number               | 5                                             | Percentage (1-100) of nested bundle data item retrieval traces to sample. Captures TurboDynamoDB requests involving parent offsets for visibility into nested bundle paths |
 | OTEL_TAIL_SAMPLING_OFFSET_OVERWRITE_RATE         | Number               | 10                                            | Percentage (1-100) of offset overwrite risk traces to sample. Captures traces where both DynamoDB offsets AND raw data paths executed, the scenario that triggered the Release 59 offset bug |
 
+To keep the trace of one request regardless of these rates, send it with
+`X-AR-IO-Trace: 1` and the admin key (`Authorization: Bearer <ADMIN_API_KEY>`).
+The response then carries `X-AR-IO-Trace-Id`, and the collector's
+`force-sample-policy` keeps that trace. The trace records each retrieval
+source the gateway tried, in order, with its outcome and timing. Without the
+admin key the header is ignored.
+
 **Security Note:** Variables marked as **SENSITIVE SECRET** (such as `CDP_API_KEY_ID`, `CDP_API_KEY_SECRET`, and `CDP_API_KEY_SECRET_FILE`) contain confidential credentials that must never be printed to logs, exposed in error messages, or included in any diagnostic output. Always mask or omit these values in logs, store them in a secure secrets manager, and restrict access using the principle of least privilege.
 
 ## Solana Backend
