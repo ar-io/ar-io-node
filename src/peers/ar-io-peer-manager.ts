@@ -17,6 +17,13 @@ import {
 } from '../lib/random-weighted-choices.js';
 import { shuffleArray } from '../lib/random.js';
 import { PeerHashRing } from '../data/peer-hash-ring.js';
+import {
+  PeerListSnapshot,
+  PeerRegistryRecord,
+  readPeerListSnapshot,
+  removeStalePeerListTempFiles,
+  writePeerListSnapshot,
+} from './peer-list-cache.js';
 
 const DEFAULT_UPDATE_PEERS_REFRESH_INTERVAL_MS = 3_600_000; // 1 hour
 const DEFAULT_WEIGHT = 50; // Neutral starting weight
@@ -25,6 +32,30 @@ const MAX_WEIGHT = 100;
 const DEFAULT_SELECTION_CACHE_TTL_MS = 5000; // 5 seconds
 // How often weights decay toward their category default.
 const DECAY_INTERVAL_MS = 60_000;
+// A busy peer (429, 503) loses this fraction of a full failure's weight: it
+// has the data, or may, and will again have the capacity, unlike a peer that
+// lacks it or is broken.
+const BUSY_PENALTY_FRACTION = 0.2;
+
+/**
+ * Why a peer request failed, for weighting. `busy`: the peer said it is out
+ * of capacity (429, 503), which passes. `failed`: anything else, including
+ * not having the data.
+ */
+export type PeerFailureKind = 'failed' | 'busy';
+
+/** The failure kind an HTTP status from a peer stands for. */
+export function peerFailureKindForStatus(
+  status: number | undefined,
+): PeerFailureKind {
+  return status === 429 || status === 503 ? 'busy' : 'failed';
+}
+// While the peer list is empty, a failed registry read is retried after this
+// delay, doubling up to the maximum, instead of waiting for the hourly refresh.
+const DEFAULT_EMPTY_LIST_RETRY_INITIAL_MS = 10_000;
+const DEFAULT_EMPTY_LIST_RETRY_MAX_MS = 300_000;
+// A cached peer list older than this is still used, with a warning.
+const PEER_LIST_CACHE_STALE_WARN_MS = 24 * 60 * 60 * 1000;
 
 export interface ArIOPeer {
   address: string;
@@ -39,21 +70,7 @@ export interface PeerSuccessMetrics {
 
 export type WeightCategory = 'data' | 'chunk' | string;
 
-/**
- * What the gateway registry says about a peer, kept from the same read that
- * supplies its URL. Public on-chain data, surfaced so that a consumer of the
- * peer list (the index-swarm sidecar, a client choosing gateways) does not
- * have to read the registry again itself.
- */
-export interface PeerRegistryRecord {
-  /** The gateway's registered wallet. */
-  wallet: string;
-  /** The key the gateway observes and signs with. */
-  observerAddress?: string;
-  /** The operator's own stake, as the registry reports it. */
-  operatorStake?: number;
-  status?: string;
-}
+export type { PeerRegistryRecord };
 
 export interface FormattedPeer extends Partial<PeerRegistryRecord> {
   url: string;
@@ -82,6 +99,15 @@ export class ArIOPeerManager implements WithFormattedPeers {
   private self: (PeerRegistryRecord & { url: string }) | undefined;
   private intervalId?: NodeJS.Timeout;
   private decayIntervalId?: NodeJS.Timeout;
+  /** Where the last fetched peer list is kept; undefined disables it. */
+  private peerListCachePath: string | undefined;
+  private emptyListRetryInitialMs: number;
+  private emptyListRetryMaxMs: number;
+  private nextEmptyListRetryMs: number;
+  private emptyListRetryTimeout?: NodeJS.Timeout;
+  private inFlightRead?: Promise<void>;
+  /** Set by stopUpdatingPeers: a read still in flight must not reschedule. */
+  private updatesStopped = false;
 
   // Weight management per category
   private peerWeights: Map<WeightCategory, Map<string, number>> = new Map();
@@ -121,6 +147,9 @@ export class ArIOPeerManager implements WithFormattedPeers {
     hashRingHomeSetSize = config.PEER_HASH_RING_HOME_SET_SIZE,
     updatePeersRefreshIntervalMs = DEFAULT_UPDATE_PEERS_REFRESH_INTERVAL_MS,
     weightDecayHalfLifeMs = config.PEER_WEIGHT_DECAY_HALF_LIFE_MS,
+    peerListCachePath,
+    emptyListRetryInitialMs = DEFAULT_EMPTY_LIST_RETRY_INITIAL_MS,
+    emptyListRetryMaxMs = DEFAULT_EMPTY_LIST_RETRY_MAX_MS,
     circuitBreakerOptions = {
       timeout: config.ARIO_PROCESS_DEFAULT_CIRCUIT_BREAKER_TIMEOUT_MS,
       errorThresholdPercentage:
@@ -141,11 +170,27 @@ export class ArIOPeerManager implements WithFormattedPeers {
     updatePeersRefreshIntervalMs?: number;
     /** Half-life of a weight's distance from its default; 0 disables. */
     weightDecayHalfLifeMs?: number;
+    /**
+     * File the peer list is saved to after each successful registry read and
+     * loaded from at startup, so a restart while the registry is unreachable
+     * keeps the previous peers. Undefined or empty disables it (the
+     * AR_IO_PEER_LIST_CACHE_PATH setting always supplies a path).
+     */
+    peerListCachePath?: string;
+    emptyListRetryInitialMs?: number;
+    emptyListRetryMaxMs?: number;
     circuitBreakerOptions?: CircuitBreaker.Options;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.nodeWallet = nodeWallet;
     this.updatePeersRefreshIntervalMs = updatePeersRefreshIntervalMs;
+    this.peerListCachePath =
+      peerListCachePath !== undefined && peerListCachePath !== ''
+        ? peerListCachePath
+        : undefined;
+    this.emptyListRetryInitialMs = emptyListRetryInitialMs;
+    this.emptyListRetryMaxMs = emptyListRetryMaxMs;
+    this.nextEmptyListRetryMs = emptyListRetryInitialMs;
     this.networkProcess = networkProcess;
     this.hashRing = new PeerHashRing(hashRingVirtualNodes);
     this.hashRingHomeSetSize = hashRingHomeSetSize;
@@ -186,6 +231,9 @@ export class ArIOPeerManager implements WithFormattedPeers {
         }
       }
     } else {
+      // Start from the saved list, if any, so peers are available while the
+      // first registry read runs, and still there if it fails.
+      this.loadPeerListCache();
       this.updatePeerList();
       this.intervalId = setInterval(
         this.updatePeerList.bind(this),
@@ -433,30 +481,44 @@ export class ArIOPeerManager implements WithFormattedPeers {
   /**
    * Report failed peer interaction
    */
-  reportFailure(category: WeightCategory, peerId: string): void {
+  reportFailure(
+    category: WeightCategory,
+    peerId: string,
+    kind: PeerFailureKind = 'failed',
+  ): void {
     const categoryWeights = this.peerWeights.get(category);
     if (!categoryWeights) {
       this.registerCategory(category);
-      return this.reportFailure(category, peerId);
-    }
-
-    const currentWeight = categoryWeights.get(peerId);
-    if (currentWeight === undefined) {
-      // Peer not in this category yet, initialize it with low weight
-      categoryWeights.set(peerId, MIN_WEIGHT);
-      return;
+      return this.reportFailure(category, peerId, kind);
     }
 
     const categoryConfig = this.categoryConfigs.get(category) ?? {};
-    const temperatureDelta =
+    const fullDelta =
       categoryConfig.temperatureDelta ??
       config.WEIGHTED_PEERS_TEMPERATURE_DELTA;
+    // A busy peer is cooled by a fraction of a failure: one that is out of
+    // capacity for a moment should not rank with one that lacks the data.
+    const delta =
+      kind === 'busy' ? fullDelta * BUSY_PENALTY_FRACTION : fullDelta;
+
+    const currentWeight = categoryWeights.get(peerId);
+    if (currentWeight === undefined) {
+      // Peer not in this category yet: a failure starts it low, a busy
+      // answer only a little below the category default.
+      categoryWeights.set(
+        peerId,
+        kind === 'busy'
+          ? Math.max(
+              (categoryConfig.defaultWeight ?? DEFAULT_WEIGHT) - delta,
+              MIN_WEIGHT,
+            )
+          : MIN_WEIGHT,
+      );
+      return;
+    }
 
     // Cool down the failing peer
-    categoryWeights.set(
-      peerId,
-      Math.max(currentWeight - temperatureDelta, MIN_WEIGHT),
-    );
+    categoryWeights.set(peerId, Math.max(currentWeight - delta, MIN_WEIGHT));
   }
 
   /**
@@ -545,6 +607,7 @@ export class ArIOPeerManager implements WithFormattedPeers {
    * Stop updating the peer list
    */
   stopUpdatingPeers(): void {
+    this.updatesStopped = true;
     if (this.intervalId) {
       clearInterval(this.intervalId);
       this.intervalId = undefined;
@@ -552,6 +615,10 @@ export class ArIOPeerManager implements WithFormattedPeers {
     if (this.decayIntervalId) {
       clearInterval(this.decayIntervalId);
       this.decayIntervalId = undefined;
+    }
+    if (this.emptyListRetryTimeout) {
+      clearTimeout(this.emptyListRetryTimeout);
+      this.emptyListRetryTimeout = undefined;
     }
   }
 
@@ -572,6 +639,21 @@ export class ArIOPeerManager implements WithFormattedPeers {
   }
 
   /**
+   * Read the registry, sharing a read already in flight. The circuit breaker
+   * admits one read at a time and counts a rejected second one as a failure,
+   * so overlapping callers (the interval, the empty-list retry, refreshPeers)
+   * wait for the same read instead.
+   */
+  private updatePeerList(): Promise<void> {
+    if (this.inFlightRead === undefined) {
+      this.inFlightRead = this.readPeerList().finally(() => {
+        this.inFlightRead = undefined;
+      });
+    }
+    return this.inFlightRead;
+  }
+
+  /**
    * Refresh the peer pool from the AR.IO gateway registry.
    *
    * Pages through the registry, rebuilds the hash ring, and reconciles the
@@ -587,9 +669,11 @@ export class ArIOPeerManager implements WithFormattedPeers {
    * — and exclusions are counted by `ar_io_peers_skipped_leaving_total`.
    *
    * A registry fetch failure leaves the previous peer list in place rather
-   * than emptying it.
+   * than emptying it. If there is no previous list (a cold start with no
+   * saved one), the read is retried with backoff instead of waiting for the
+   * next hourly refresh. A successful read is saved to the peer list cache.
    */
-  private async updatePeerList(): Promise<void> {
+  private async readPeerList(): Promise<void> {
     const log = this.log.child({ method: 'updatePeerList' });
     log.info('Fetching AR.IO network peer list');
 
@@ -598,6 +682,7 @@ export class ArIOPeerManager implements WithFormattedPeers {
     let self: (PeerRegistryRecord & { url: string }) | undefined;
     const skipLeaving = config.SKIP_LEAVING_GATEWAYS;
     let skippedLeaving = 0;
+    let registryCount = 0;
     let cursor: string | undefined;
     let failed = false;
     do {
@@ -608,6 +693,7 @@ export class ArIOPeerManager implements WithFormattedPeers {
             limit: 1000,
           });
 
+        registryCount += items.length;
         for (const gateway of items) {
           // Our own node is never a peer, but its entry is kept apart.
           if (
@@ -686,7 +772,31 @@ export class ArIOPeerManager implements WithFormattedPeers {
     // with the pages fetched before the error, which on a first-page failure
     // is nothing at all, and every peer-first retrieval would fail until the
     // next successful refresh.
-    if (failed) return;
+    if (failed) {
+      if (Object.keys(this.peers).length === 0) {
+        this.scheduleEmptyListRetry();
+      }
+      return;
+    }
+
+    // A registry read that succeeds with no gateways at all is far more
+    // likely a registry or SDK fault than an empty network, so it is treated
+    // like a failure: keep what we have, and retry while that is nothing. (A
+    // read whose gateways were all filtered out, ourselves or leaving, is
+    // applied: that list really is empty.)
+    if (registryCount === 0) {
+      log.warn(
+        'Gateway registry returned no gateways; keeping the current list',
+        {
+          currentCount: Object.keys(this.peers).length,
+        },
+      );
+      if (Object.keys(this.peers).length === 0) {
+        this.scheduleEmptyListRetry();
+      }
+      return;
+    }
+    this.nextEmptyListRetryMs = this.emptyListRetryInitialMs;
 
     log.info('Successfully fetched AR.IO network peer list', {
       count: Object.keys(peers).length,
@@ -695,6 +805,25 @@ export class ArIOPeerManager implements WithFormattedPeers {
     });
     metrics.arIOPeersSkippedLeavingTotal.inc(skippedLeaving);
 
+    this.applyPeerList(peers, records, self);
+    this.savePeerListCache({
+      writtenAt: Date.now(),
+      peers,
+      records,
+      ...(self !== undefined ? { self } : {}),
+    });
+  }
+
+  /**
+   * Replace the peer list: rebuild the hash ring and reconcile the
+   * per-category weight maps, so new peers start at the category default and
+   * departed peers stop being selected.
+   */
+  private applyPeerList(
+    peers: Record<string, string>,
+    records: Record<string, PeerRegistryRecord>,
+    self: (PeerRegistryRecord & { url: string }) | undefined,
+  ): void {
     const oldPeers = this.peers;
     this.peers = peers;
     this.records = records;
@@ -727,5 +856,89 @@ export class ArIOPeerManager implements WithFormattedPeers {
         }
       }
     }
+  }
+
+  /**
+   * Retry a failed registry read while the peer list is empty. One retry is
+   * pending at a time; the delay doubles up to the maximum and resets on the
+   * next successful read.
+   */
+  private scheduleEmptyListRetry(): void {
+    if (this.updatesStopped || this.emptyListRetryTimeout !== undefined) {
+      return;
+    }
+    const delayMs = this.nextEmptyListRetryMs;
+    this.nextEmptyListRetryMs = Math.min(delayMs * 2, this.emptyListRetryMaxMs);
+    this.log.warn('No AR.IO peers; retrying the registry read', { delayMs });
+    this.emptyListRetryTimeout = setTimeout(() => {
+      this.emptyListRetryTimeout = undefined;
+      this.updatePeerList();
+    }, delayMs);
+    this.emptyListRetryTimeout.unref();
+  }
+
+  /**
+   * Load the saved peer list, if there is one. It is re-filtered with the
+   * current settings: our own wallet is never a peer (and a saved `self` for
+   * a different wallet is dropped), and `leaving` gateways are skipped when
+   * SKIP_LEAVING_GATEWAYS is on. A list of any age is used: stale peers mostly
+   * still exist, and failures demote those that do not.
+   */
+  private loadPeerListCache(): void {
+    if (this.peerListCachePath === undefined) return;
+    const log = this.log.child({
+      method: 'loadPeerListCache',
+      path: this.peerListCachePath,
+    });
+    removeStalePeerListTempFiles(this.peerListCachePath);
+    const snapshot = readPeerListSnapshot(this.peerListCachePath);
+    if (snapshot === undefined) {
+      log.info('No usable saved AR.IO peer list');
+      return;
+    }
+
+    const skipLeaving = config.SKIP_LEAVING_GATEWAYS;
+    const peers: Record<string, string> = {};
+    const records: Record<string, PeerRegistryRecord> = {};
+    for (const [wallet, url] of Object.entries(snapshot.peers)) {
+      if (wallet === this.nodeWallet) continue;
+      if (skipLeaving && snapshot.records[wallet]?.status === 'leaving') {
+        continue;
+      }
+      peers[wallet] = url;
+      if (snapshot.records[wallet] !== undefined) {
+        records[wallet] = snapshot.records[wallet];
+      }
+    }
+    const self =
+      snapshot.self !== undefined && snapshot.self.wallet === this.nodeWallet
+        ? snapshot.self
+        : undefined;
+    if (Object.keys(peers).length === 0 && self === undefined) {
+      log.info('Saved AR.IO peer list is empty');
+      return;
+    }
+
+    this.applyPeerList(peers, records, self);
+    const ageMs = Date.now() - snapshot.writtenAt;
+    const details = { count: Object.keys(peers).length, ageMs };
+    if (ageMs > PEER_LIST_CACHE_STALE_WARN_MS) {
+      log.warn('Loaded a stale saved AR.IO peer list', details);
+    } else {
+      log.info('Loaded saved AR.IO peer list', details);
+    }
+  }
+
+  /** Save a fetched peer list. Failure is logged, never thrown. */
+  private savePeerListCache(snapshot: PeerListSnapshot): void {
+    if (this.peerListCachePath === undefined) return;
+    const filePath = this.peerListCachePath;
+    writePeerListSnapshot(filePath, snapshot).catch((error: any) => {
+      this.log.warn('Failed to save AR.IO peer list', {
+        method: 'savePeerListCache',
+        path: filePath,
+        message: error?.message,
+      });
+    });
   }
 }

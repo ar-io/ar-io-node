@@ -766,6 +766,31 @@ export const PEERS_ROOT_TX_RATE_LIMIT_INTERVAL = env.varOrDefault(
 export const CHUNK_METADATA_ANCHOR_ENABLED =
   env.varOrDefault('CHUNK_METADATA_ANCHOR_ENABLED', 'true') === 'true';
 
+// Reference peers for chunk-metadata anchoring, as a JSON map of URL to
+// priority (lower first). Unset: the GATEWAYS_ROOT_TX_URLS pool, else every
+// TRUSTED_GATEWAYS_URLS entry. `{}` leaves anchoring with no peers, which
+// turns it off. Each probe asks the first peer not backed off after a
+// failure. Its own setting so anchoring can be pointed elsewhere, or
+// stopped, without changing root-TX lookups.
+export const CHUNK_METADATA_ANCHOR_PEER_URLS = (() => {
+  const raw = env.varOrUndefined('CHUNK_METADATA_ANCHOR_PEER_URLS');
+  if (raw === undefined || raw.trim() === '') return undefined;
+  const parsed = JSON.parse(raw) as Record<string, number>;
+  for (const [url, priority] of Object.entries(parsed)) {
+    try {
+      new URL(url);
+    } catch {
+      throw new Error(`Invalid URL in CHUNK_METADATA_ANCHOR_PEER_URLS: ${url}`);
+    }
+    if (typeof priority !== 'number' || priority <= 0) {
+      throw new Error(
+        `Invalid priority in CHUNK_METADATA_ANCHOR_PEER_URLS for ${url}: ${priority}`,
+      );
+    }
+  }
+  return parsed;
+})();
+
 // HTTP timeout (ms) for the peer HEAD/GET against `/chunk/{offset}/data`.
 // Kept tight: a slow reference peer should fail fast and let the
 // composite fall through to the existing tx-path / chain-search source.
@@ -1019,6 +1044,14 @@ export const PEER_HEDGE_DELAY_MS = env.nonNegativeIntOrDefault(
 export const PEER_MAX_HEDGED_REQUESTS = env.positiveIntOrDefault(
   'PEER_MAX_HEDGED_REQUESTS',
   3,
+);
+
+// File the AR.IO peer list is saved to after each successful registry read
+// and loaded from at startup, so a restart while the registry is unreachable
+// keeps the previous peers.
+export const AR_IO_PEER_LIST_CACHE_PATH = env.varOrDefault(
+  'AR_IO_PEER_LIST_CACHE_PATH',
+  'data/peers/ar-io-peers.json',
 );
 
 // Consistent hash ring configuration
@@ -3826,6 +3859,19 @@ export const TRUSTED_PROXIES =
     : TRUSTED_PROXIES_VALUE.split(',')
         .map((entry) => entry.trim())
         .filter((entry) => entry.length > 0);
+
+// Meter /graphql with the rate limiter (ENABLE_RATE_LIMITER) and x402
+// (ENABLE_X_402_USDC_DATA_EGRESS) at a flat cost per operation, charged to the
+// client's IP bucket only. Off by default: GraphQL is then free, as before.
+export const ENABLE_GRAPHQL_METERING =
+  env.varOrDefault('ENABLE_GRAPHQL_METERING', 'false') === 'true';
+
+// What one GraphQL operation costs, in the bytes the limiter and x402 price
+// (1 token = 1 KiB). A batch costs this per operation.
+export const GRAPHQL_OPERATION_COST_BYTES = env.positiveIntOrDefault(
+  'GRAPHQL_OPERATION_COST_BYTES',
+  10240,
+);
 
 export const RATE_LIMITER_IPS_AND_CIDRS_ALLOWLIST =
   env

@@ -24,6 +24,7 @@ import { arnsRouter } from './routes/arns.js';
 import { chunkRouter } from './routes/chunk/index.js';
 import { dataRouter } from './routes/data/index.js';
 import { makeApolloServerMiddleware } from './routes/graphql/index.js';
+import { createGraphqlMeter } from './routes/graphql/metering.js';
 import { openApiRouter } from './routes/openapi.js';
 import { datasetsRouter } from './routes/datasets.js';
 import * as system from './system.js';
@@ -187,6 +188,13 @@ const { middleware: apolloMiddleware, stop: stopApolloServer } =
   await makeApolloServerMiddleware({
     db: system.gqlQueryable,
     txMetadataResolver: system.dataItemMetaResolver,
+    meter: config.ENABLE_GRAPHQL_METERING
+      ? createGraphqlMeter({
+          rateLimiter: system.rateLimiter,
+          paymentProcessor: system.paymentProcessor,
+          operationCostBytes: config.GRAPHQL_OPERATION_COST_BYTES,
+        })
+      : undefined,
   });
 app.use('/graphql', apolloMiddleware);
 
