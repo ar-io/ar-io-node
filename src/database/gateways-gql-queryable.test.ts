@@ -5,6 +5,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import { strict as assert } from 'node:assert';
+import { setTimeout as delay } from 'node:timers/promises';
 import { describe, it } from 'node:test';
 import axios from 'axios';
 import { OperationDefinitionNode, SelectionSetNode, parse } from 'graphql';
@@ -1497,6 +1498,12 @@ describe('GatewaysGqlQueryable hop limit (#680)', () => {
       merger(false).getGqlTransaction({ id: 'remote' }),
     );
     assert.equal(tx, null);
+    // A block lookup with no sources answers too, rather than hanging.
+    const block = await Promise.race([
+      runWithGqlHops(3, () => merger(false).getGqlBlock({ id: 'b' })),
+      delay(1000).then(() => 'hung'),
+    ]);
+    assert.equal(block, undefined);
   });
 
   it('sends upstreams one hop more than the request it serves', async () => {

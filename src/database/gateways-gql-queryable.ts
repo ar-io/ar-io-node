@@ -1174,6 +1174,9 @@ export class GatewaysGqlQueryable
     method: string,
     args: unknown,
   ): Promise<T | undefined> {
+    // No sources (the hop limit reached with no local index): nothing would
+    // ever settle the promise below.
+    if (promises.length === 0) return Promise.resolve(undefined);
     return new Promise((resolve, reject) => {
       let remaining = promises.length;
       let rejectedCount = 0;

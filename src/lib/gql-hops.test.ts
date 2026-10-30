@@ -16,7 +16,18 @@ describe('GraphQL hop count', () => {
   it('parses a non-negative integer, anything else as 0', () => {
     assert.equal(parseGqlHops('2'), 2);
     assert.equal(parseGqlHops(['3', '9']), 3);
-    for (const bad of [undefined, '', 'x', '-1', '0']) {
+    assert.equal(parseGqlHops(' 2 '), 2);
+    for (const bad of [
+      undefined,
+      '',
+      'x',
+      '-1',
+      '0',
+      '2garbage',
+      '1.5',
+      '1e3',
+      '99999999999999999999',
+    ]) {
       assert.equal(parseGqlHops(bad), 0, String(bad));
     }
   });

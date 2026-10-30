@@ -18,11 +18,15 @@ import { headerNames } from '../constants.js';
  */
 const hopsStore = new AsyncLocalStorage<number>();
 
-/** Parses an inbound hop count: a non-negative integer, else 0. */
+/**
+ * Parses an inbound hop count: a header that is wholly a non-negative safe
+ * integer, else 0 (so `2garbage` is 0, not 2).
+ */
 export function parseGqlHops(value: string | string[] | undefined): number {
   const raw = Array.isArray(value) ? value[0] : value;
-  const hops = Number.parseInt(raw ?? '', 10);
-  return Number.isFinite(hops) && hops > 0 ? hops : 0;
+  if (raw === undefined || !/^\d+$/.test(raw.trim())) return 0;
+  const hops = Number(raw.trim());
+  return Number.isSafeInteger(hops) ? hops : 0;
 }
 
 /** The hop count of the GraphQL request being served; 0 outside one. */
