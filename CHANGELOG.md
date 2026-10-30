@@ -71,6 +71,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `docs/envs.md`.
 ### Fixed
 
+- `X-AR-IO-Stable` was `false` on every response, and stable data never got
+  `CACHE_STABLE_MAX_AGE` (30 days, `immutable`): since 2023 the gateway
+  compared SQLite's `1` with `true`, which never matched. A transaction at
+  height 1,500,000 on vilenarios.com, long past the fork depth, was served
+  `X-AR-IO-Stable: false` with a two-hour `max-age`. Stable data is now
+  reported stable, and directly addressed stable data (`/<id>`, `/raw/<id>`)
+  that is also verified and served from the gateway's own cache gets
+  `CACHE_STABLE_MAX_AGE`, `immutable`, for the first time; other stable data
+  keeps the unstable tiers, and ArNS responses keep their own TTL.
+  A data item the bundles flush has not yet promoted is also stable once
+  its root L1 transaction is, rather than waiting for the flush (an item
+  whose bundle has no `stable_block_transactions` row was never promoted).
+  Its root is the one the gateway's own unbundling recorded; locations
+  learned from peers do not count. With no local record of the data,
+  `X-AR-IO-Stable` and `X-AR-IO-Verified` are now sent as `false` instead
+  of being left out.
+
 - GraphQL no longer lists a data item's tags twice when the item was
   indexed from two bundles (or imported from an L2 band and later
   unbundled). The stable flush keeps the first stored row of an item, but
