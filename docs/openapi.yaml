@@ -2885,6 +2885,13 @@ paths:
           description: Invalid offset parameter
         '404':
           description: Chunk not found
+        '503':
+          description: 'The chunk could not be fetched in time (the serve deadline or an upstream timeout). Says nothing about whether it exists; retry after `Retry-After` seconds. Sent with `Cache-Control: no-store`.'
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+              description: Seconds to wait before retrying
     head:
       tags: [Chunks]
       summary: Get chunk metadata without body.
@@ -2945,6 +2952,13 @@ paths:
           description: Invalid offset parameter
         '404':
           description: Chunk not found
+        '503':
+          description: 'The chunk could not be fetched in time (the serve deadline or an upstream timeout). Says nothing about whether it exists; retry after `Retry-After` seconds. Sent with `Cache-Control: no-store`.'
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+              description: Seconds to wait before retrying
 
   '/chunk/{offset}/data':
     get:
@@ -3122,6 +3136,13 @@ paths:
           description: Invalid offset parameter
         '404':
           description: Chunk not found
+        '503':
+          description: 'The chunk could not be fetched in time (the serve deadline or an upstream timeout). Says nothing about whether it exists; retry after `Retry-After` seconds. Sent with `Cache-Control: no-store`.'
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+              description: Seconds to wait before retrying
         '500':
           description: Internal server error (e.g., merkle path parsing failed)
     head:
@@ -3268,6 +3289,13 @@ paths:
           description: Invalid offset parameter
         '404':
           description: Chunk not found
+        '503':
+          description: 'The chunk could not be fetched in time (the serve deadline or an upstream timeout). Says nothing about whether it exists; retry after `Retry-After` seconds. Sent with `Cache-Control: no-store`.'
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+              description: Seconds to wait before retrying
         '500':
           description: Internal server error (e.g., merkle path parsing failed)
 
