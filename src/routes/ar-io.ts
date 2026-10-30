@@ -19,6 +19,7 @@ import { NormalizedDataItem, PartialJsonTransaction } from '../types.js';
 import { DATA_PATH_REGEX } from '../constants.js';
 import { isEmptyString } from '../lib/string.js';
 import { isValidDataId, sanityCheckTx } from '../lib/validation.js';
+import { fromB64Url, toB64Url } from '../lib/encoding.js';
 import {
   resolveRootTxOffsets,
   sendRootTxOffsets,
@@ -439,8 +440,14 @@ arIoRouter.post(
   async (req, res) => {
     try {
       const { id } = req.body ?? {};
-      if (typeof id !== 'string' || !isValidDataId(id)) {
-        res.status(400).send("'id' must be a valid data ID");
+      // Canonical only: two encodings of the same 32 bytes would delete one
+      // database key and drop a different cache key.
+      if (
+        typeof id !== 'string' ||
+        !isValidDataId(id) ||
+        toB64Url(fromB64Url(id)) !== id
+      ) {
+        res.status(400).send("'id' must be a valid, canonical data ID");
         return;
       }
       const removed = await system.contiguousDataIndex.deleteDataId(id);
