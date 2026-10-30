@@ -53,9 +53,13 @@ import {
 } from '../../data/chunk-retrieval-service.js';
 import { setCommonChunkHeaders, setChunkETag } from './response-utils.js';
 
+// Retry-After on a 503: the chunk could not be fetched within the deadline,
+// which under load clears in seconds.
+const CHUNK_RETRY_AFTER_SECONDS = 5;
+
 /**
  * Thrown when a chunk serve exceeds {@link CHUNK_SERVE_DEADLINE_MS}. Classified
- * as a 404 by {@link classifyChunkRetrievalError}.
+ * as a 503 by {@link classifyChunkRetrievalError}.
  */
 export class ChunkServeTimeoutError extends Error {
   constructor(deadlineMs: number) {
@@ -164,18 +168,20 @@ export function selectChunkServeDeadline(
  * must not be reported as a 500:
  *
  *   - client hung up mid-retrieval                    → 499 (Client Closed Request)
- *   - chunk not locatable / not retrievable in time   → 404 (Not Found)
- *   - retrieval cancelled internally                  → 404 (Not Found)
+ *   - chunk not locatable / every source said no      → 404 (Not Found)
+ *   - not retrievable in time, or cancelled internally → 503 (Service Unavailable)
  *   - upstreams reachable but served bad data         → 502 (Bad Gateway)
  *
- * Timeouts — both per-source timeouts and our own wall-clock serve deadline —
- * map to 404, matching the established contract: a chunk fetch that fails for
- * any reason is wrapped as ChunkNotFoundError → 404 (chunk-retrieval-service),
- * and the /raw first-data timeout likewise ends in a 404. Keeping the deadline
- * consistent (404, not 504) keeps these out of the 5xx count, lets the cascade
- * fall through to other sources, and lets nginx serve a fast cached 404 under
- * load. The real reason is preserved out-of-band in the span attribute and the
- * chunk_serve_deadline_exceeded_total metric, not in the HTTP status.
+ * Timeouts (our own wall-clock serve deadline, a per-source timeout) and
+ * internal cancellations are 503 with Retry-After, not 404 (#917). A 404 for
+ * an offset is read as permanent: offsets are fixed by the weave's layout, so
+ * a client or peer that caches one keeps believing the chunk is missing; peer
+ * weighting reads it as "peer lacks data" rather than "peer is busy"; and the
+ * observer's reference-gateway client stops at a 404 instead of falling back.
+ * Under load, nearly every failure was this kind (99% of 6,572 requests at
+ * 500 concurrent), so the 404s described capacity, not data. Until #917 these
+ * were 404 on purpose (PE-9121), to keep them out of the 5xx count and let
+ * nginx serve a cached 404; that cached 404 is the harm.
  *
  * Only genuinely unexpected errors (programming/encoding bugs surfaced by the
  * handler's outer try/catch) should remain 500s.
@@ -194,26 +200,23 @@ export function classifyChunkRetrievalError(
   if (error instanceof ChunkNotFoundError) {
     return { statusCode: 404, errorType: error.errorType };
   }
-  // Our own wall-clock cap on the whole serve fired. 404 (not 504) to match
-  // the timeout-as-not-found contract; the reason lives in the metric/span.
+  // Our own wall-clock cap on the whole serve fired: not found *in time*,
+  // which says nothing about whether the chunk exists.
   if (error instanceof ChunkServeTimeoutError) {
-    return { statusCode: 404, errorType: 'serve_deadline_exceeded' };
+    return { statusCode: 503, errorType: 'serve_deadline_exceeded' };
   }
   // AbortSignal.timeout() rejects with a TimeoutError; the tx-chunks
-  // first-data timeout carries 'timeout' in its message. Treated as
-  // not-retrievable-in-time → 404, same as a wrapped ChunkNotFoundError.
+  // first-data timeout carries 'timeout' in its message.
   if (error?.name === 'TimeoutError' || /timeout/i.test(error?.message ?? '')) {
-    return { statusCode: 404, errorType: 'upstream_timeout' };
+    return { statusCode: 503, errorType: 'upstream_timeout' };
   }
   // An AbortError that reaches here is an *internal* cancellation, because a
   // client disconnect already returned above: a source's own abort signal, or
   // a losing peer cancelled once another won. That is the same condition as a
-  // timeout, so it takes the same 404 rather than falling through to 502.
-  // Without this a cancelled fetch is reported as a server-side gateway fault,
-  // which inflates the 5xx count the wall-clock deadline exists to protect and
-  // denies nginx the cacheable negative it gets for every other failure.
+  // timeout, so it takes the same 503 rather than 502, which would report it
+  // as the upstreams serving bad data.
   if (error?.name === 'AbortError') {
-    return { statusCode: 404, errorType: 'upstream_aborted' };
+    return { statusCode: 503, errorType: 'upstream_aborted' };
   }
   return { statusCode: 502, errorType: 'upstream_unavailable' };
 }
@@ -261,7 +264,16 @@ function sendChunkRetrievalError(
       });
     }
   }
-  if (statusCode >= 500) {
+  // A 503 is load, and arrives in floods exactly when the gateway is busiest:
+  // counted (chunk_serve_deadline_exceeded_total, the span), not logged per
+  // request. Other 5xx are rare and worth a line each.
+  if (statusCode === 503) {
+    log.debug('Chunk not retrievable in time', {
+      offset,
+      errorType,
+      message: error?.message,
+    });
+  } else if (statusCode >= 500) {
     span.recordException(error);
     log.warn('Unable to retrieve chunk from upstream sources', {
       offset,
@@ -273,6 +285,12 @@ function sendChunkRetrievalError(
   if (!response.headersSent) {
     if (statusCode === 404) {
       response.sendStatus(404);
+    } else if (statusCode === 503) {
+      // Try again shortly, and do not keep this answer: the chunk may well
+      // be there on the next attempt.
+      response.setHeader('Retry-After', String(CHUNK_RETRY_AFTER_SECONDS));
+      response.setHeader('Cache-Control', 'no-store');
+      response.status(503).end();
     } else {
       response.status(statusCode).end();
     }

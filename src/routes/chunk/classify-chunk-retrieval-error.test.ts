@@ -27,16 +27,15 @@ describe('classifyChunkRetrievalError - cancellation', () => {
       name: 'AbortError',
     });
 
-  it('maps an internal AbortError to 404 upstream_aborted, not 502', () => {
+  it('maps an internal AbortError to 503 upstream_aborted, not 502', () => {
     // A client disconnect returns 499 in the branch above, so an AbortError
     // reaching the rest of the classifier is internal: a source's own abort
     // signal, or a losing peer cancelled once another won. Observed on a live
-    // gateway as 'This operation was aborted' reported with statusCode 502,
-    // which contradicts the timeout-as-not-found contract the wall-clock
-    // deadline was built around.
+    // gateway as 'This operation was aborted' reported with statusCode 502.
+    // It is the same condition as a timeout, so it gets the timeout's 503.
     const verdict = classifyChunkRetrievalError(abortError(), false);
 
-    assert.strictEqual(verdict.statusCode, 404);
+    assert.strictEqual(verdict.statusCode, 503);
     assert.strictEqual(verdict.errorType, 'upstream_aborted');
   });
 
@@ -47,7 +46,7 @@ describe('classifyChunkRetrievalError - cancellation', () => {
     assert.strictEqual(verdict.errorType, 'client_disconnected');
   });
 
-  it('keeps the serve deadline on 404 rather than the new abort branch', () => {
+  it('keeps the serve deadline its own error type rather than the abort branch', () => {
     // The deadline rejects before it aborts, so it must still surface as
     // serve_deadline_exceeded and stay attributable to the deadline metric.
     const verdict = classifyChunkRetrievalError(
@@ -55,7 +54,7 @@ describe('classifyChunkRetrievalError - cancellation', () => {
       false,
     );
 
-    assert.strictEqual(verdict.statusCode, 404);
+    assert.strictEqual(verdict.statusCode, 503);
     assert.strictEqual(verdict.errorType, 'serve_deadline_exceeded');
   });
 
