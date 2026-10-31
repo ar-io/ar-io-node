@@ -87,6 +87,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   than strictly by weight: decay keeps weights in order, so a strict sort
   left a recovering peer behind its neighbours for good. Heavier peers still
   usually go first, and a peer near the minimum weight rarely does.
+  `PEER_WEIGHT_DECAY_HALF_LIFE_MS=0` turns off both the decay and the drawn
+  order, restoring the previous peer selection exactly.
 - `/chunk/<offset>` and `/chunk/<offset>/data` now answer **503** with
   `Retry-After: 5` and `Cache-Control: no-store`, not 404, when a chunk
   could not be fetched in time: the serve deadline
