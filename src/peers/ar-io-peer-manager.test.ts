@@ -267,7 +267,9 @@ describe('ArIOPeerManager', () => {
         initialPeers: INITIAL_PEERS,
         initialCategories: ['test'],
         hashRingHomeSetSize: 3,
-        weightDecayHalfLifeMs: 0,
+        // Decay on, with a half-life no test outlives, so only the
+        // explicit decayWeights call below moves weights.
+        weightDecayHalfLifeMs: 24 * 60 * 60 * 1000,
       });
       const weights = m.getWeights('test')!;
       weights.set(cooled, 1); // cooled to the floor during an outage
@@ -291,6 +293,31 @@ describe('ArIOPeerManager', () => {
         firstShare() > 0.15, // 43.9 of 203.9 total weight: ~21.5%
         'a peer decayed back toward the default gets first attempts again',
       );
+      m.shutdown();
+    });
+
+    it('orders the home set strictly by weight with decay off (#1119)', () => {
+      const [low, mid, high] = Object.values(INITIAL_PEERS);
+      const m = new ArIOPeerManager({
+        log,
+        networkProcess: mockedArIOInstance,
+        initialPeers: INITIAL_PEERS,
+        initialCategories: ['test'],
+        hashRingHomeSetSize: 3,
+        weightDecayHalfLifeMs: 0,
+      });
+      const weights = m.getWeights('test')!;
+      weights.set(low, 1);
+      weights.set(mid, 40);
+      weights.set(high, 80);
+      // As before decay existed: the same order on every key, every time.
+      for (let i = 0; i < 200; i++) {
+        assert.deepEqual(m.selectPeersForKey('test', `key-${i}`, 3), [
+          high,
+          mid,
+          low,
+        ]);
+      }
       m.shutdown();
     });
 

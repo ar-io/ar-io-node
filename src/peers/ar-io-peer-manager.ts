@@ -99,6 +99,12 @@ export class ArIOPeerManager implements WithFormattedPeers {
   private self: (PeerRegistryRecord & { url: string }) | undefined;
   private intervalId?: NodeJS.Timeout;
   private decayIntervalId?: NodeJS.Timeout;
+  /**
+   * Whether weights decay (PEER_WEIGHT_DECAY_HALF_LIFE_MS > 0). It also picks
+   * the home-set order: a weighted draw with decay, strictly by weight
+   * without it, so turning decay off restores the earlier behaviour whole.
+   */
+  private weightDecayEnabled: boolean;
   /** Where the last fetched peer list is kept; undefined disables it. */
   private peerListCachePath: string | undefined;
   private emptyListRetryInitialMs: number;
@@ -241,7 +247,8 @@ export class ArIOPeerManager implements WithFormattedPeers {
       );
     }
 
-    if (weightDecayHalfLifeMs > 0) {
+    this.weightDecayEnabled = weightDecayHalfLifeMs > 0;
+    if (this.weightDecayEnabled) {
       const factor = 0.5 ** (DECAY_INTERVAL_MS / weightDecayHalfLifeMs);
       this.decayIntervalId = setInterval(
         () => this.decayWeights(factor),
@@ -354,24 +361,26 @@ export class ArIOPeerManager implements WithFormattedPeers {
     // Get home set from hash ring
     const homeSet = this.hashRing.getHomeSet(key, this.hashRingHomeSetSize);
 
-    // Order the home set by a weighted draw without replacement
-    // (Efraimidis-Spirakis: sort by random^(1/weight)), not strictly by
-    // weight. Decay keeps weights in order as it pulls them to the default,
-    // so under a strict sort a peer cooled during an outage stays behind its
-    // healthy neighbours, and callers that try only the first few peers
-    // (the chunk source) would never give it a first attempt. A drawn order
-    // still favours heavier peers, rarely puts a peer near MIN_WEIGHT first,
-    // and lets a peer that has decayed back toward the default win its share.
-    const rankedHomeSet = homeSet
-      .map((peer) => ({
-        peer,
-        key:
-          Math.random() **
-          (1 /
-            Math.max(categoryWeights?.get(peer) ?? DEFAULT_WEIGHT, MIN_WEIGHT)),
-      }))
-      .sort((a, b) => b.key - a.key)
-      .map(({ peer }) => peer);
+    // With decay on, order the home set by a weighted draw without
+    // replacement (Efraimidis-Spirakis: sort by random^(1/weight)), not
+    // strictly by weight. Decay keeps weights in order as it pulls them to the
+    // default, so under a strict sort a peer cooled during an outage stays
+    // behind its healthy neighbours, and callers that try only the first few
+    // peers (the chunk source) would never give it a first attempt. A drawn
+    // order still favours heavier peers, rarely puts a peer near MIN_WEIGHT
+    // first, and lets a peer that has decayed back toward the default win its
+    // share. With decay off, the strict sort is kept, as before decay existed.
+    const weightOf = (peer: string) =>
+      categoryWeights?.get(peer) ?? DEFAULT_WEIGHT;
+    const rankedHomeSet = this.weightDecayEnabled
+      ? homeSet
+          .map((peer) => ({
+            peer,
+            key: Math.random() ** (1 / Math.max(weightOf(peer), MIN_WEIGHT)),
+          }))
+          .sort((a, b) => b.key - a.key)
+          .map(({ peer }) => peer)
+      : homeSet.sort((a, b) => weightOf(b) - weightOf(a));
 
     // Fill remaining slots with general weighted selection (exclude home set)
     const homeSetUrls = new Set(rankedHomeSet);
