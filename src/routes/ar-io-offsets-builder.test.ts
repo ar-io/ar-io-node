@@ -16,7 +16,7 @@ import {
   sendRootTxOffsets,
 } from './ar-io-offsets-builder.js';
 import { createHttpSigMiddleware } from '../middleware/httpsig.js';
-import { deriveKeyId } from '../lib/httpsig.js';
+import { buildSignatureBase, deriveKeyId } from '../lib/httpsig.js';
 import { formatContentDigest } from '../lib/digest.js';
 import { ContiguousDataAttributes, RootTxLookupResult } from '../types.js';
 
@@ -304,4 +304,250 @@ describe('sendRootTxOffsets', () => {
     assert.match(covered, /"x-ar-io-root-transaction-id"/);
     assert.match(covered, /"content-digest"/);
   });
+});
+
+describe('resolveRootTxOffsets with absolute Arweave offsets', () => {
+  const ITEM_ID = 'wndEaLf1BwnhuNmpDisdl0wWLnIrsVhQnPE0W24cWM8';
+  const ROOT_START = 392971320336631;
+  const ROOT_SIZE = 3555491;
+  /** A location lookup that knows `ids` as stable roots, recording calls. */
+  const stableRoots = (ids: string[]) => {
+    const calls: string[] = [];
+    return {
+      calls,
+      getRootArweaveLocation: async (txId: string) => {
+        calls.push(txId);
+        return ids.includes(txId)
+          ? { startOffset: ROOT_START, dataSize: ROOT_SIZE }
+          : undefined;
+      },
+    };
+  };
+  /** A local CDB64 lookup with no answer. */
+  const noCdb64 = async () => undefined;
+
+  it('adds the root location and the derived item/payload starts for a data item', async () => {
+    const result = await resolveRootTxOffsets({
+      id: ITEM_ID,
+      attributes: attributes({ parentId: ROOT_TX_ID }),
+      lookupLocalCdb64: noCdb64,
+      ...stableRoots([ROOT_TX_ID]),
+    });
+
+    assert.equal(result?.source, 'db');
+    assert.equal(result?.offsets.rootTxId, ROOT_TX_ID);
+    assert.equal(result?.offsets.rootOffset, 19512);
+    assert.equal(result?.offsets.rootArweaveStartOffset, ROOT_START);
+    assert.equal(result?.offsets.rootArweaveDataSize, ROOT_SIZE);
+    assert.equal(result?.offsets.itemArweaveStartOffset, ROOT_START + 19512);
+    assert.equal(result?.offsets.dataArweaveStartOffset, ROOT_START + 20788);
+  });
+
+  it('adds nothing for an item nested more than one level in our index (#907)', async () => {
+    const roots = stableRoots([ROOT_TX_ID]);
+    const result = await resolveRootTxOffsets({
+      id: ITEM_ID,
+      attributes: attributes({ parentId: PARENT_ID }),
+      lookupLocalCdb64: noCdb64,
+      ...roots,
+    });
+
+    assert.equal(result?.offsets.rootOffset, 19512, 'relative answer kept');
+    assert.equal(result?.offsets.rootArweaveStartOffset, undefined);
+    assert.equal(result?.offsets.itemArweaveStartOffset, undefined);
+    assert.deepEqual(roots.calls, [], 'no location lookup');
+  });
+
+  it('adds nothing when the root is not stable with a recorded offset', async () => {
+    const result = await resolveRootTxOffsets({
+      id: ITEM_ID,
+      attributes: attributes({ parentId: ROOT_TX_ID }),
+      lookupLocalCdb64: noCdb64,
+      ...stableRoots([]),
+    });
+
+    assert.equal(result?.source, 'db');
+    assert.equal(result?.offsets.rootArweaveStartOffset, undefined);
+    assert.equal(result?.offsets.dataArweaveStartOffset, undefined);
+  });
+
+  it('adds the root location to a CDB64 answer', async () => {
+    const result = await resolveRootTxOffsets({
+      id: ITEM_ID,
+      attributes: undefined,
+      lookupLocalCdb64: async () => ({
+        rootTxId: ROOT_TX_ID,
+        rootOffset: 500,
+        rootDataOffset: 600,
+      }),
+      ...stableRoots([ROOT_TX_ID]),
+    });
+
+    assert.equal(result?.source, 'cdb64');
+    assert.equal(result?.offsets.itemArweaveStartOffset, ROOT_START + 500);
+    assert.equal(result?.offsets.dataArweaveStartOffset, ROOT_START + 600);
+  });
+
+  it('answers a stable L1 transaction as its own root, without item offsets', async () => {
+    const result = await resolveRootTxOffsets({
+      id: ROOT_TX_ID,
+      attributes: attributes({
+        rootTransactionId: undefined,
+        rootDataItemOffset: undefined,
+        rootDataOffset: undefined,
+        itemSize: undefined,
+        size: ROOT_SIZE,
+        contentType: 'application/octet-stream',
+      }),
+      lookupLocalCdb64: noCdb64,
+      ...stableRoots([ROOT_TX_ID]),
+    });
+
+    assert.equal(result?.source, 'l1');
+    assert.deepEqual(result?.offsets, {
+      rootTxId: ROOT_TX_ID,
+      contentType: 'application/octet-stream',
+      dataSize: ROOT_SIZE,
+      rootArweaveStartOffset: ROOT_START,
+      rootArweaveDataSize: ROOT_SIZE,
+      itemArweaveStartOffset: ROOT_START,
+      dataArweaveStartOffset: ROOT_START,
+    });
+  });
+
+  it('declines an L1 transaction that is not stable with a recorded offset', async () => {
+    const result = await resolveRootTxOffsets({
+      id: ROOT_TX_ID,
+      attributes: attributes({ rootTransactionId: undefined }),
+      lookupLocalCdb64: noCdb64,
+      ...stableRoots([]),
+    });
+
+    assert.equal(result, undefined);
+  });
+
+  it('does not take an ID with a parent but no root for an L1 transaction', async () => {
+    const roots = stableRoots([ITEM_ID]);
+    const result = await resolveRootTxOffsets({
+      id: ITEM_ID,
+      attributes: attributes({
+        rootTransactionId: undefined,
+        parentId: PARENT_ID,
+      }),
+      lookupLocalCdb64: noCdb64,
+      ...roots,
+    });
+
+    assert.equal(result, undefined);
+    assert.deepEqual(roots.calls, []);
+  });
+
+  it('keeps the previous behaviour when no location lookup is given', async () => {
+    const result = await resolveRootTxOffsets({
+      id: ROOT_TX_ID,
+      attributes: attributes({ rootTransactionId: undefined }),
+      lookupLocalCdb64: noCdb64,
+    });
+
+    assert.equal(result, undefined, 'L1 IDs are still declined');
+  });
+});
+
+describe('signed /ar-io/offsets answers with Arweave offsets', () => {
+  const ROOT_START = 392971320336631;
+  const ROOT_SIZE = 3555491;
+  const ITEM_ID = 'wndEaLf1BwnhuNmpDisdl0wWLnIrsVhQnPE0W24cWM8';
+
+  /** The route's flow (resolve, then send) behind the HTTPSIG middleware. */
+  const signedApp = (
+    privateKey: crypto.KeyObject,
+    attrs: ContiguousDataAttributes,
+  ) => {
+    const server = express();
+    server.use(
+      createHttpSigMiddleware({
+        privateKey,
+        keyId: deriveKeyId(crypto.createPublicKey(privateKey)),
+        bindRequest: false,
+      }),
+    );
+    server.get('/ar-io/offsets/:id', async (req, res) => {
+      const resolved = await resolveRootTxOffsets({
+        id: req.params.id,
+        attributes: attrs,
+        lookupLocalCdb64: async () => undefined,
+        getRootArweaveLocation: async (txId) =>
+          txId === ROOT_TX_ID
+            ? { startOffset: ROOT_START, dataSize: ROOT_SIZE }
+            : undefined,
+      });
+      if (resolved === undefined) {
+        res.status(404).send('Offsets not found');
+        return;
+      }
+      sendRootTxOffsets(res, resolved.offsets, 30);
+    });
+    return server;
+  };
+
+  /** Rebuilds the RFC 9421 base from the response and verifies it with `publicKey`. */
+  const verify = (res: request.Response, publicKey: crypto.KeyObject) => {
+    const input = res.headers['signature-input'] as string;
+    const components = (input.match(/^sig1=\(([^)]*)\)/)?.[1] ?? '')
+      .split(/\s+/)
+      .filter((s) => s.length > 0)
+      .map((s) => s.replace(/"/g, ''))
+      .filter((c) => !c.startsWith('@'));
+    const created = Number(input.match(/created=(\d+)/)?.[1]);
+    const keyId = input.match(/keyid="([^"]+)"/)?.[1] ?? '';
+    const { base } = buildSignatureBase(
+      res.status,
+      (n) => res.headers[n.toLowerCase()] as string | undefined,
+      components,
+      'GET',
+      '',
+      false,
+      created,
+      keyId,
+    );
+    const sig = Buffer.from(
+      (res.headers['signature'] as string).match(/sig1=:([^:]+):/)?.[1] ?? '',
+      'base64',
+    );
+    return {
+      components,
+      ok: crypto.verify(null, Buffer.from(base, 'latin1'), publicKey, sig),
+    };
+  };
+
+  for (const [name, id, attrs] of [
+    [
+      'an L1 transaction',
+      ROOT_TX_ID,
+      attributes({ rootTransactionId: undefined, size: ROOT_SIZE }),
+    ],
+    ['a data item', ITEM_ID, attributes({ parentId: ROOT_TX_ID })],
+  ] as const) {
+    it(`signs the answer for ${name}: trigger set, digest covers the body, signature verifies`, async () => {
+      const { privateKey, publicKey } = crypto.generateKeyPairSync('ed25519');
+      const res = await request(signedApp(privateKey, attrs))
+        .get(`/ar-io/offsets/${id}`)
+        .expect(200);
+
+      // The trigger is set, so the answer is never sent unsigned.
+      assert.equal(res.headers['x-ar-io-root-transaction-id'], ROOT_TX_ID);
+      assert.equal(res.body.rootArweaveStartOffset, ROOT_START);
+      // Content-Digest is the hash of the exact body bytes.
+      assert.equal(
+        res.headers['content-digest'],
+        formatContentDigest(
+          crypto.createHash('sha256').update(res.text).digest('base64url'),
+        ),
+      );
+      const { components, ok } = verify(res, publicKey);
+      assert.ok(components.includes('content-digest'));
+      assert.ok(components.includes('x-ar-io-root-transaction-id'));
+      assert.equal(ok, true, 'signature verifies with the gateway key');
+    });
+  }
 });

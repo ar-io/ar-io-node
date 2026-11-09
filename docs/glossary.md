@@ -878,7 +878,26 @@ it runs the node's whole `ON_DEMAND_RETRIEVAL_ORDER` cascade first. The offsets
 endpoint performs a single indexed read and never touches contiguous data, so a
 miss costs the same as a hit. Consumed by the `peers` entry in
 `ROOT_TX_LOOKUP_ORDER`, which supersedes the header-scraping `gateways` entry
-for peers that serve it.
+for peers that serve it. When the root is stable with a recorded offset the
+answer also carries its [root Arweave offsets](#root-arweave-offset), and a
+stable L1 transaction is answered as its own root (`rootTxId` equal to the ID,
+no item offsets).
+
+<a id="root-arweave-offset"></a> **Root Arweave Offset** - The absolute place
+of a root [transaction's](#transaction) data in the weave, published signed as
+`X-AR-IO-Root-Arweave-Start-Offset` (its first byte, in Arweave's offset numbering) and
+`X-AR-IO-Root-Arweave-Data-Size` on data responses, and as
+`rootArweaveStartOffset` / `rootArweaveDataSize` (plus the derived
+`itemArweaveStartOffset` / `dataArweaveStartOffset`) by the
+[offsets endpoint](#offsets-endpoint). It uses the start convention of
+`X-Arweave-Chunk-Tx-Start-Offset`; Arweave's `GET /tx/{id}/offset` reports the
+END offset, and start = offset - size + 1. Added with the root-relative offsets
+it gives each byte of an item its weave offset, which is what a client needs to
+fetch chunks from any gateway or node and verify them itself
+(docs/arweave-offset-verification.md). Published only for stable roots with a
+recorded offset, read from the node's own index, and not for
+[data items](#data-item) nested more than one level deep in the node's bundle
+index, whose parent offsets may be unknown.
 
 <a id="chain-anchored-offset"></a> **Chain-Anchored Offset** - A
 [transaction offset](#transaction-offset) reported by an untrusted peer (via

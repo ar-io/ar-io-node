@@ -30,6 +30,7 @@ import { GatewaysDataSource } from './data/gateways-data-source.js';
 import { GatewayThrottle } from './data/gateway-throttle.js';
 import { FilteredContiguousDataSource } from './data/filtered-contiguous-data-source.js';
 import { ReadThroughDataCache } from './data/read-through-data-cache.js';
+import { RootArweaveLocationSource } from './data/root-arweave-location-source.js';
 import { SamplingContiguousDataSource } from './data/sampling-contiguous-data-source.js';
 import { SequentialDataSource } from './data/sequential-data-source.js';
 import { TxChunksDataSource } from './data/tx-chunks-data-source.js';
@@ -385,6 +386,14 @@ export const compositeDataAttributesStore = new CompositeDataAttributesSource({
 });
 export const dataAttributesStore: ContiguousDataAttributesStore =
   compositeDataAttributesStore;
+
+// The root transaction's absolute Arweave location, read from this node's own
+// index (stable transactions with a recorded offset) and never the network.
+// Published, signed, on data responses and by /ar-io/offsets.
+export const rootArweaveLocationSource = new RootArweaveLocationSource({
+  log,
+  txGeometrySource: db,
+});
 
 // Create shared cache for root TX lookups
 // LRUCache v11 requires values to be objects, not primitives with undefined

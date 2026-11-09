@@ -1836,7 +1836,7 @@ export const x402PaymentSettledUsdcCounter = new promClient.Counter({
 // lookup's probes.
 export const offsetsLookupTotal = new promClient.Counter({
   name: 'offsets_lookup_total',
-  help: 'GET /ar-io/offsets/:id answers by source (db, cdb64, or none for a 404)',
+  help: 'GET /ar-io/offsets/:id answers by source (db, cdb64, l1 for a stable L1 transaction, or none for a 404)',
   labelNames: ['source'] as const,
 });
 

@@ -90,6 +90,11 @@ export const CO_SIGNABLE_HEADERS = new Set([
   'x-ar-io-root-item-offset',
   'x-ar-io-root-item-size',
   'x-ar-io-root-path',
+  // The root transaction's absolute place in the weave. They are only set on
+  // data responses, which always carry the x-ar-io-data-id trigger, so they
+  // are always signed when present.
+  'x-ar-io-root-arweave-start-offset',
+  'x-ar-io-root-arweave-data-size',
   // The rest of an ArNS resolution. They only ever appear alongside a
   // trigger: x-arns-name on a resolved-name response, x-arns-resolved-id and
   // x-arns-ttl-seconds on /ar-io/resolver/:name (which sets no x-arns-name).

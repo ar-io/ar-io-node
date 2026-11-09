@@ -776,11 +776,26 @@ paths:
   '/ar-io/offsets/{id}':
     get:
       tags: [Gateway]
-      summary: Get root transaction offsets for a data item
+      summary: Get root transaction offsets for a data item or L1 transaction
       description: |
         Returns the location of a data item within its root L1 transaction,
         from this node's own data: its index first, then CDB64 indexes on its
         local disk, such as bands installed by Index Sharing.
+
+        When the root is a stable transaction with a recorded offset, the
+        answer also carries its absolute Arweave offsets
+        (`rootArweaveStartOffset`, `rootArweaveDataSize`,
+        `itemArweaveStartOffset`, `dataArweaveStartOffset`), so a client can
+        fetch the item's chunks by absolute offset from any gateway or node
+        and verify them against the block's `tx_root`
+        (docs/arweave-offset-verification.md). They are omitted for data items
+        nested more than one level deep in this node's bundle index.
+
+        A stable L1 transaction with a recorded offset is answered as its own
+        root: `rootTxId` is the ID itself, with `dataSize`, `contentType` and
+        the Arweave offsets, and no item offsets (`rootOffset`,
+        `rootDataOffset`, `size`), which is how root TX indexes describe an L1
+        root.
 
         This is the cheap counterpart to `HEAD /raw/{id}`, which exposes the
         same values in `X-AR-IO-Root-*` headers but only as a side effect of a
@@ -822,7 +837,7 @@ paths:
               schema:
                 type: string
             X-AR-IO-Root-Transaction-Id:
-              description: The root transaction ID, as in the body. Its presence makes the response signed.
+              description: The root transaction ID, as in the body (the ID itself for an L1 transaction). Set on every 200, and its presence makes the response signed.
               schema:
                 type: string
             Content-Digest:
@@ -860,7 +875,19 @@ paths:
                     description: Total size of the data item in bytes, including its header.
                   dataSize:
                     type: integer
-                    description: Size of the data item's payload in bytes, excluding its header. Never set by a CDB64 index.
+                    description: Size of the data item's payload in bytes, excluding its header (for an L1 transaction, its data size). Never set by a CDB64 index.
+                  rootArweaveStartOffset:
+                    type: integer
+                    description: Absolute weave offset of the first byte of the root transaction's data, in Arweave's offset numbering (as /chunk/{offset} uses it). Arweave's /tx/{id}/offset reports the END offset; start = offset - size + 1. Only for stable roots with a recorded offset.
+                  rootArweaveDataSize:
+                    type: integer
+                    description: Size in bytes of the root transaction's data. Present with rootArweaveStartOffset.
+                  itemArweaveStartOffset:
+                    type: integer
+                    description: Absolute weave offset of the first byte of the data item (its header); rootArweaveStartOffset + rootOffset. For an L1 transaction, equal to rootArweaveStartOffset.
+                  dataArweaveStartOffset:
+                    type: integer
+                    description: Absolute weave offset of the first byte of the item's payload; rootArweaveStartOffset + rootDataOffset. For an L1 transaction, equal to rootArweaveStartOffset.
                 required:
                   - rootTxId
         '400':
@@ -873,7 +900,8 @@ paths:
           description: |
             This node cannot place the ID inside a root transaction — the ID is
             unknown to its index, or has no indexed root parent, and no local
-            CDB64 index covers it.
+            CDB64 index covers it — and it is not a stable L1 transaction with
+            a recorded offset.
           headers:
             Cache-Control:
               description: '`public, max-age=<CACHE_NOT_FOUND_MAX_AGE>, must-revalidate`'
@@ -1713,6 +1741,7 @@ paths:
 
         For ANS-104 data items, offset headers are returned to help navigate bundle hierarchies:
         - Root offset headers (X-AR-IO-Root-Data-Item-Offset, X-AR-IO-Root-Data-Offset) provide byte offsets from the start of the root L1 transaction
+        - X-AR-IO-Root-Arweave-Start-Offset / X-AR-IO-Root-Arweave-Data-Size give the root transaction's absolute place in the weave (stable roots only, signed), so chunks can be fetched by absolute offset and verified
         - Parent offset headers provide byte offsets from the start of the immediate parent bundle's payload
         - Offset relationships: rootDataItemOffset = rootParentOffset + offset, rootDataOffset = rootParentOffset + dataOffset
       parameters:
@@ -1819,6 +1848,23 @@ paths:
                 type: integer
               description: Byte offset of the data payload from the start of the root L1 transaction data (ANS-104 bundles only)
               example: 2176
+            X-AR-IO-Root-Arweave-Start-Offset:
+              schema:
+                type: integer
+              description: |
+                Absolute weave offset of the first byte of the root transaction's data
+                in Arweave's offset numbering (as /chunk/{offset} and /tx/{id}/offset use it), the same convention as X-Arweave-Chunk-Tx-Start-Offset.
+                Arweave's GET /tx/{id}/offset reports the END offset: start = offset - size + 1.
+                For an L1 transaction the root is the transaction itself. Sent only when the
+                root is a stable transaction with a recorded offset, and not for data items
+                nested more than one level deep in this node's bundle index. Signed.
+                See docs/arweave-offset-verification.md.
+              example: 392971320336631
+            X-AR-IO-Root-Arweave-Data-Size:
+              schema:
+                type: integer
+              description: Size in bytes of the root transaction's data. Sent with, and under the same conditions as, X-AR-IO-Root-Arweave-Start-Offset. Signed.
+              example: 3555491
             X-AR-IO-Data-Item-Root-Parent-Offset:
               schema:
                 type: integer
@@ -1975,6 +2021,23 @@ paths:
                 type: integer
               description: Byte offset of the data payload from the start of the root L1 transaction data (ANS-104 bundles only)
               example: 2176
+            X-AR-IO-Root-Arweave-Start-Offset:
+              schema:
+                type: integer
+              description: |
+                Absolute weave offset of the first byte of the root transaction's data
+                in Arweave's offset numbering (as /chunk/{offset} and /tx/{id}/offset use it), the same convention as X-Arweave-Chunk-Tx-Start-Offset.
+                Arweave's GET /tx/{id}/offset reports the END offset: start = offset - size + 1.
+                For an L1 transaction the root is the transaction itself. Sent only when the
+                root is a stable transaction with a recorded offset, and not for data items
+                nested more than one level deep in this node's bundle index. Signed.
+                See docs/arweave-offset-verification.md.
+              example: 392971320336631
+            X-AR-IO-Root-Arweave-Data-Size:
+              schema:
+                type: integer
+              description: Size in bytes of the root transaction's data. Sent with, and under the same conditions as, X-AR-IO-Root-Arweave-Start-Offset. Signed.
+              example: 3555491
             X-AR-IO-Data-Item-Root-Parent-Offset:
               schema:
                 type: integer
@@ -2088,6 +2151,7 @@ paths:
 
         For ANS-104 data items, offset headers are returned to help navigate bundle hierarchies:
         - Root offset headers (X-AR-IO-Root-Data-Item-Offset, X-AR-IO-Root-Data-Offset) provide byte offsets from the start of the root L1 transaction
+        - X-AR-IO-Root-Arweave-Start-Offset / X-AR-IO-Root-Arweave-Data-Size give the root transaction's absolute place in the weave (stable roots only, signed), so chunks can be fetched by absolute offset and verified
         - Parent offset headers provide byte offsets from the start of the immediate parent bundle's payload
         - Offset relationships: rootDataItemOffset = rootParentOffset + offset, rootDataOffset = rootParentOffset + dataOffset
       parameters:
@@ -2188,6 +2252,23 @@ paths:
                 type: integer
               description: Byte offset of the data payload from the start of the root L1 transaction data (ANS-104 bundles only)
               example: 2176
+            X-AR-IO-Root-Arweave-Start-Offset:
+              schema:
+                type: integer
+              description: |
+                Absolute weave offset of the first byte of the root transaction's data
+                in Arweave's offset numbering (as /chunk/{offset} and /tx/{id}/offset use it), the same convention as X-Arweave-Chunk-Tx-Start-Offset.
+                Arweave's GET /tx/{id}/offset reports the END offset: start = offset - size + 1.
+                For an L1 transaction the root is the transaction itself. Sent only when the
+                root is a stable transaction with a recorded offset, and not for data items
+                nested more than one level deep in this node's bundle index. Signed.
+                See docs/arweave-offset-verification.md.
+              example: 392971320336631
+            X-AR-IO-Root-Arweave-Data-Size:
+              schema:
+                type: integer
+              description: Size in bytes of the root transaction's data. Sent with, and under the same conditions as, X-AR-IO-Root-Arweave-Start-Offset. Signed.
+              example: 3555491
             X-AR-IO-Data-Item-Root-Parent-Offset:
               schema:
                 type: integer
@@ -2338,6 +2419,23 @@ paths:
                 type: integer
               description: Byte offset of the data payload from the start of the root L1 transaction data (ANS-104 bundles only)
               example: 2176
+            X-AR-IO-Root-Arweave-Start-Offset:
+              schema:
+                type: integer
+              description: |
+                Absolute weave offset of the first byte of the root transaction's data
+                in Arweave's offset numbering (as /chunk/{offset} and /tx/{id}/offset use it), the same convention as X-Arweave-Chunk-Tx-Start-Offset.
+                Arweave's GET /tx/{id}/offset reports the END offset: start = offset - size + 1.
+                For an L1 transaction the root is the transaction itself. Sent only when the
+                root is a stable transaction with a recorded offset, and not for data items
+                nested more than one level deep in this node's bundle index. Signed.
+                See docs/arweave-offset-verification.md.
+              example: 392971320336631
+            X-AR-IO-Root-Arweave-Data-Size:
+              schema:
+                type: integer
+              description: Size in bytes of the root transaction's data. Sent with, and under the same conditions as, X-AR-IO-Root-Arweave-Start-Offset. Signed.
+              example: 3555491
             X-AR-IO-Data-Item-Root-Parent-Offset:
               schema:
                 type: integer
@@ -2472,6 +2570,23 @@ paths:
                 type: integer
               description: Byte offset of the data payload from the start of the root L1 transaction data (ANS-104 bundles only)
               example: 2176
+            X-AR-IO-Root-Arweave-Start-Offset:
+              schema:
+                type: integer
+              description: |
+                Absolute weave offset of the first byte of the root transaction's data
+                in Arweave's offset numbering (as /chunk/{offset} and /tx/{id}/offset use it), the same convention as X-Arweave-Chunk-Tx-Start-Offset.
+                Arweave's GET /tx/{id}/offset reports the END offset: start = offset - size + 1.
+                For an L1 transaction the root is the transaction itself. Sent only when the
+                root is a stable transaction with a recorded offset, and not for data items
+                nested more than one level deep in this node's bundle index. Signed.
+                See docs/arweave-offset-verification.md.
+              example: 392971320336631
+            X-AR-IO-Root-Arweave-Data-Size:
+              schema:
+                type: integer
+              description: Size in bytes of the root transaction's data. Sent with, and under the same conditions as, X-AR-IO-Root-Arweave-Start-Offset. Signed.
+              example: 3555491
             X-AR-IO-Data-Item-Root-Parent-Offset:
               schema:
                 type: integer
