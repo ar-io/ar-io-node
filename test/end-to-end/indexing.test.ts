@@ -10,7 +10,6 @@ import { StartedDockerComposeEnvironment } from 'testcontainers';
 import axios from 'axios';
 import wait from '../../src/lib/wait.js';
 import Sqlite, { Database } from 'better-sqlite3';
-import crypto from 'node:crypto';
 import { b64UrlToUtf8, toB64Url, fromB64Url } from '../../src/lib/encoding.js';
 import {
   cleanDb,
@@ -28,23 +27,21 @@ import { isTestFiltered } from '../utils.js';
 
 const projectRootPath = process.cwd();
 
-const getHashForIdFromChain = async (id: string): Promise<string> => {
-  const res = await axios.get(`https://turbo-gateway.com/raw/${id}`, {
-    responseType: 'stream',
-  });
-  const stream = res.data;
-
-  if (stream === null) {
-    throw new Error('Stream is null');
-  }
-
-  const hasher = crypto.createHash('sha256');
-
-  for await (const chunk of stream) {
-    hasher.update(chunk);
-  }
-
-  return hasher.digest('base64url');
+// sha256 (base64url) of each fixture's data. Arweave data is immutable, so
+// these never change; they used to be fetched from turbo-gateway.com on every
+// run, which failed the suite whenever that gateway could not serve one of the
+// ids (2026-11-09). Checked against arweave.net and two gateways, and the two
+// data items against the bundle's own bytes (id = sha256(signature)).
+const FIXTURE_DATA_HASHES: Record<string, string> = {
+  // the bundle
+  'kJA49GtBVUWex2yiRKX1KSDbCE6I2xGicR-62_pnJ_c':
+    'RUVSl_tElXhGlRBefhcoOr2qi7rcFtA3025MSE30osk',
+  // a bundle inside it
+  '10F4NJtg5A5n3Acv5PyHNKt8pRlVFjxEYtdI1Omu6Vs':
+    'RyjFn5gUYckpCByBXC1qL6dX2iXxxUSYJBSj7qNzVSg',
+  // an item inside that one
+  BPmdp7m8wQQvSKPInkolQyAV40xmbut930fN_e7YemM:
+    'V4ADYFG-IYCk9MwFVHtluI_7tVkAFPqV5NwzPvVm4jw',
 };
 
 async function fetchGqlHeight(): Promise<number | undefined> {
@@ -251,16 +248,12 @@ describe('Indexing', function () {
     });
 
     it('Verifying if DataItem hash was correctly indexed', async function () {
-      const bundleHash = await getHashForIdFromChain(
-        'kJA49GtBVUWex2yiRKX1KSDbCE6I2xGicR-62_pnJ_c',
-      );
-      const dataItemHash = await getHashForIdFromChain(
-        '10F4NJtg5A5n3Acv5PyHNKt8pRlVFjxEYtdI1Omu6Vs',
-      );
-
-      const nestedDataItemHash = await getHashForIdFromChain(
-        'BPmdp7m8wQQvSKPInkolQyAV40xmbut930fN_e7YemM',
-      );
+      const bundleHash =
+        FIXTURE_DATA_HASHES['kJA49GtBVUWex2yiRKX1KSDbCE6I2xGicR-62_pnJ_c'];
+      const dataItemHash =
+        FIXTURE_DATA_HASHES['10F4NJtg5A5n3Acv5PyHNKt8pRlVFjxEYtdI1Omu6Vs'];
+      const nestedDataItemHash =
+        FIXTURE_DATA_HASHES['BPmdp7m8wQQvSKPInkolQyAV40xmbut930fN_e7YemM'];
 
       const stmt = dataDb.prepare(
         'SELECT hash, parent_hash FROM contiguous_data_parents',
