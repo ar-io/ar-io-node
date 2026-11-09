@@ -27,6 +27,7 @@ const ROOT_END_OFFSET = 392971323892121;
 const ROOT_SIZE = 3555491;
 const ROOT_START = ROOT_END_OFFSET - ROOT_SIZE + 1;
 
+/** A geometry source answering from `answers` (an Error is thrown), recording calls. */
 function geometrySource(
   answers: Record<string, TxGeometry | undefined | Error>,
 ) {
@@ -46,6 +47,7 @@ function geometrySource(
   };
 }
 
+/** Attributes for a stable item with no root or parent unless overridden. */
 function attributes(
   overrides: Partial<ContiguousDataAttributes> = {},
 ): ContiguousDataAttributes {

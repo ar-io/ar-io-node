@@ -64,6 +64,7 @@ const manifestPathResolver: ManifestPathResolver = {
   resolveFromTrustedCache: () => undefined,
 } as unknown as ManifestPathResolver;
 
+/** Attributes for a stable item with no root or parent unless overridden. */
 function attributes(
   overrides: Partial<ContiguousDataAttributes> = {},
 ): ContiguousDataAttributes {
@@ -77,6 +78,7 @@ function attributes(
   } as ContiguousDataAttributes;
 }
 
+/** A location source backed by `stable`: the geometry of stable transactions. */
 function locations(stable: Record<string, TxGeometry>) {
   return new RootArweaveLocationSource({
     log,

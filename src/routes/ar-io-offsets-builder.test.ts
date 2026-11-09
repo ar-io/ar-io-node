@@ -310,6 +310,7 @@ describe('resolveRootTxOffsets with absolute Arweave offsets', () => {
   const ITEM_ID = 'wndEaLf1BwnhuNmpDisdl0wWLnIrsVhQnPE0W24cWM8';
   const ROOT_START = 392971320336631;
   const ROOT_SIZE = 3555491;
+  /** A location lookup that knows `ids` as stable roots, recording calls. */
   const stableRoots = (ids: string[]) => {
     const calls: string[] = [];
     return {
@@ -322,6 +323,7 @@ describe('resolveRootTxOffsets with absolute Arweave offsets', () => {
       },
     };
   };
+  /** A local CDB64 lookup with no answer. */
   const noCdb64 = async () => undefined;
 
   it('adds the root location and the derived item/payload starts for a data item', async () => {
@@ -488,6 +490,7 @@ describe('signed /ar-io/offsets answers with Arweave offsets', () => {
     return server;
   };
 
+  /** Rebuilds the RFC 9421 base from the response and verifies it with `publicKey`. */
   const verify = (res: request.Response, publicKey: crypto.KeyObject) => {
     const input = res.headers['signature-input'] as string;
     const components = (input.match(/^sig1=\(([^)]*)\)/)?.[1] ?? '')

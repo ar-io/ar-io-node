@@ -47,6 +47,12 @@ export class RootArweaveLocationSource {
   private found: LRUCache<string, RootArweaveLocation>;
   private missing: LRUCache<string, typeof NOT_FOUND>;
 
+  /**
+   * @param txGeometrySource - this node's index (`getTxGeometry`), read only
+   * @param cacheSize - maximum entries in each of the found and miss caches
+   * @param missTtlMs - how long a miss is remembered before the index is asked
+   *   again
+   */
   constructor({
     log,
     txGeometrySource,
@@ -190,6 +196,10 @@ export class RootArweaveAnnotatingDataAttributesSource
   private source: DataAttributesSource;
   private locations: RootArweaveLocationSource;
 
+  /**
+   * @param source - the attributes source to wrap
+   * @param locations - where the root's Arweave location is looked up
+   */
   constructor({
     source,
     locations,
@@ -201,6 +211,7 @@ export class RootArweaveAnnotatingDataAttributesSource
     this.locations = locations;
   }
 
+  /** The wrapped source's attributes for `id`, with the root's location added. */
   async getDataAttributes(
     id: string,
   ): Promise<ContiguousDataAttributes | undefined> {
