@@ -41,6 +41,10 @@ import { RateLimiter } from '../../limiter/types.js';
 import { PaymentProcessor } from '../../payments/types.js';
 import { NegativeDataCache } from '../../data/negative-data-cache.js';
 import {
+  RootArweaveAnnotatingDataAttributesSource,
+  RootArweaveLocationSource,
+} from '../../data/root-arweave-location-source.js';
+import {
   checkPaymentAndRateLimits,
   adjustRateLimitTokens,
 } from '../../handlers/data-handler-utils.js';
@@ -889,6 +893,26 @@ const setDataHeaders = ({
 
   if (dataAttributes?.itemSize != null) {
     res.header(headerNames.rootItemSize, dataAttributes.itemSize.toString());
+  }
+
+  // The root transaction's absolute place in the Arweave weave: with the
+  // root-relative offsets above, a client can fetch the item's chunks by
+  // absolute offset from any gateway or node and verify them against the
+  // block's tx_root. Present only for stable roots (see
+  // RootArweaveAnnotatingDataAttributesSource); for an L1 transaction the
+  // root is the transaction itself.
+  if (
+    dataAttributes?.rootArweaveStartOffset != null &&
+    dataAttributes.rootArweaveDataSize != null
+  ) {
+    res.header(
+      headerNames.rootArweaveStartOffset,
+      dataAttributes.rootArweaveStartOffset.toString(),
+    );
+    res.header(
+      headerNames.rootArweaveDataSize,
+      dataAttributes.rootArweaveDataSize.toString(),
+    );
   }
 
   // Set relative offset headers for backward compatibility
@@ -1752,15 +1776,29 @@ export const sendPaymentRequired = (
 };
 
 // Data routes
+/**
+ * The handler's attributes source, wrapped to add the root's Arweave location
+ * when a location source is configured. Every attribute read in the handler,
+ * including the re-read after retrieval, then carries it.
+ */
+const withRootArweaveLocations = (
+  source: DataAttributesSource,
+  locations: RootArweaveLocationSource | undefined,
+): DataAttributesSource =>
+  locations === undefined
+    ? source
+    : new RootArweaveAnnotatingDataAttributesSource({ source, locations });
+
 export const createRawDataHandler = ({
   log,
-  dataAttributesSource,
+  dataAttributesSource: baseDataAttributesSource,
   dataSource,
   dataBlockListValidator,
   rateLimiter,
   paymentProcessor,
   negativeDataCache,
   dataItemMetaResolver,
+  rootArweaveLocationSource,
 }: {
   log: Logger;
   dataSource: ContiguousDataSource;
@@ -1770,7 +1808,13 @@ export const createRawDataHandler = ({
   paymentProcessor?: PaymentProcessor;
   negativeDataCache?: NegativeDataCache;
   dataItemMetaResolver?: TxMetadataResolver;
+  /** Adds the root's Arweave location headers; omitted, none are sent. */
+  rootArweaveLocationSource?: RootArweaveLocationSource;
 }) => {
+  const dataAttributesSource = withRootArweaveLocations(
+    baseDataAttributesSource,
+    rootArweaveLocationSource,
+  );
   return asyncHandler(async (req: Request, res: Response) => {
     const requestAttributes = getRequestAttributes(req, res);
     const id = req.params[0];
@@ -2511,7 +2555,7 @@ const sendManifestResponse = async ({
 
 export const createDataHandler = ({
   log,
-  dataAttributesSource,
+  dataAttributesSource: baseDataAttributesSource,
   dataSource,
   dataBlockListValidator,
   manifestPathResolver,
@@ -2519,6 +2563,7 @@ export const createDataHandler = ({
   paymentProcessor,
   negativeDataCache,
   dataItemMetaResolver,
+  rootArweaveLocationSource,
 }: {
   log: Logger;
   dataSource: ContiguousDataSource;
@@ -2529,7 +2574,13 @@ export const createDataHandler = ({
   paymentProcessor?: PaymentProcessor;
   negativeDataCache?: NegativeDataCache;
   dataItemMetaResolver?: TxMetadataResolver;
+  /** Adds the root's Arweave location headers; omitted, none are sent. */
+  rootArweaveLocationSource?: RootArweaveLocationSource;
 }) => {
+  const dataAttributesSource = withRootArweaveLocations(
+    baseDataAttributesSource,
+    rootArweaveLocationSource,
+  );
   return asyncHandler(async (req: Request, res: Response) => {
     const requestAttributes = getRequestAttributes(req, res);
     // Use dataId from request context (set by ArNS middleware) or from route params

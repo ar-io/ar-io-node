@@ -26,6 +26,7 @@ export const dataHandler = createDataHandler({
   paymentProcessor: system.paymentProcessor,
   negativeDataCache: system.negativeDataCache,
   dataItemMetaResolver: system.dataItemTagHeaderResolver,
+  rootArweaveLocationSource: system.rootArweaveLocationSource,
 });
 
 export const dataRouter = Router();
@@ -42,6 +43,7 @@ dataRouter.get(
     paymentProcessor: system.paymentProcessor,
     negativeDataCache: system.negativeDataCache,
     dataItemMetaResolver: system.dataItemTagHeaderResolver,
+    rootArweaveLocationSource: system.rootArweaveLocationSource,
   }),
 );
 dataRouter.get(FARCASTER_FRAME_DATA_PATH_REGEX, dataHandler);

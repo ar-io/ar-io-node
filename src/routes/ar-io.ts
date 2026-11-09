@@ -277,7 +277,8 @@ export const arIoInfoHandler = async (_req: Request, res: Response) => {
 arIoRouter.get('/ar-io/info', arIoInfoHandler);
 
 /**
- * Root transaction offsets for a data item, from this node's own data.
+ * Root transaction offsets for a data item or L1 transaction, from this node's
+ * own data.
  *
  * This is the cheap counterpart to probing a peer with `HEAD /raw/:id`. That
  * route emits the same offsets in `X-AR-IO-Root-*` headers, but only as a side
@@ -289,9 +290,19 @@ arIoRouter.get('/ar-io/info', arIoInfoHandler);
  * A hit costs one SQLite read; a miss costs that plus a read or two per local
  * CDB64 source.
  *
+ * When the root is a stable transaction with a recorded offset, the answer also
+ * carries its absolute Arweave offsets (`rootArweaveStartOffset`,
+ * `rootArweaveDataSize`, `itemArweaveStartOffset`, `dataArweaveStartOffset`),
+ * so a client can fetch the item's chunks by absolute offset from any gateway
+ * or node and verify them (docs/arweave-offset-verification.md). A stable L1
+ * transaction is answered as its own root (`rootTxId === id`, no item
+ * offsets) with those fields.
+ *
  * A 200 is signed (HTTPSIG), with `Content-Digest` binding the body, so it is
- * this gateway's attributable claim. The offsets are still a claim: confirm
- * them by reading the item header at `rootOffset`.
+ * this gateway's attributable claim. `X-AR-IO-Root-Transaction-Id`, the signing
+ * trigger, is set on every 200, including L1 answers (where it is the ID
+ * itself). The offsets are still a claim: confirm them by reading the item
+ * header at `rootOffset`, or by verifying the chunks.
  *
  * Consumed by `PeersRootTxIndex` via the `peers` entry in
  * `ROOT_TX_LOOKUP_ORDER`.
@@ -305,8 +316,11 @@ arIoRouter.get('/ar-io/offsets/:id', async (req: Request, res: Response) => {
 
   try {
     const resolved = await resolveRootTxOffsets({
+      id,
       attributes: await system.dataAttributesStore.getDataAttributes(id),
       lookupLocalCdb64: () => system.lookupLocalCdb64RootTx(id),
+      getRootArweaveLocation: (txId) =>
+        system.rootArweaveLocationSource.getRootArweaveLocation(txId),
     });
 
     if (resolved === undefined) {

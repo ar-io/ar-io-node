@@ -68,6 +68,9 @@ describe('httpsig lib', () => {
         'x-arns-resolved-at',
         'x-arns-undername-limit',
         'x-arns-record-index',
+        // Only set on data responses, which always carry a trigger.
+        'x-ar-io-root-arweave-start-offset',
+        'x-ar-io-root-arweave-data-size',
       ]) {
         assert.equal(isSignableHeader(header), true, header);
         assert.equal(isTriggerHeader(header), false, `${header} is no trigger`);
