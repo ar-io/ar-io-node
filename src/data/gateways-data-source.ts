@@ -455,6 +455,12 @@ export class GatewaysDataSource implements ContiguousDataSource {
                   signal: controller.signal,
                   method: 'GET',
                   headers: {
+                    // We want the stored bytes, never a representation of
+                    // them. axios defaults to `application/json, text/plain,
+                    // */*`, and arweave.net (HyperBEAM) answers that with a
+                    // JSON envelope of the data instead of the data, which we
+                    // would then cache and serve as the item.
+                    Accept: '*/*',
                     'Accept-Encoding': 'identity',
                     ...requestAttributesHeaders?.headers,
                     ...(region

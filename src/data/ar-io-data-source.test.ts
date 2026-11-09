@@ -403,6 +403,34 @@ describe('ArIODataSource', () => {
       assert.equal(rangeHeader, 'bytes=100-299');
     });
 
+    // axios defaults to `application/json, text/plain, */*`; a /raw endpoint
+    // that negotiates (arweave.net) answers that with a JSON envelope.
+    it('should send Accept: */* on full and ranged requests', async () => {
+      const accepts: (string | undefined)[] = [];
+      mock.method(axios, 'get', async (_: string, config: any) => {
+        accepts.push(config.headers['Accept']);
+        const ranged = config.headers['Range'] !== undefined;
+        return {
+          status: ranged ? 206 : 200,
+          data: axiosStreamData,
+          headers: {
+            'content-length': ranged ? '200' : '123',
+            'content-type': 'application/octet-stream',
+            [headerNames.verified.toLowerCase()]: 'true',
+            [headerNames.trusted.toLowerCase()]: 'false',
+          },
+        };
+      });
+
+      await dataSource.getData({ id: 'dataId' });
+      await dataSource.getData({
+        id: 'dataId',
+        region: { offset: 100, size: 200 },
+      });
+
+      assert.deepEqual(accepts, ['*/*', '*/*']);
+    });
+
     // PE-9081: peer responds 200 to a Range request — must be rejected.
     it('should reject 200 responses when region is provided', async () => {
       mock.method(axios, 'get', async () => ({
