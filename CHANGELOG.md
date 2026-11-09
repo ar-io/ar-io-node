@@ -119,6 +119,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `docs/envs.md`.
 ### Fixed
 
+- Data fetched from a trusted gateway could be a JSON wrapper of the item
+  instead of the item. arweave.net (now HyperBEAM) answers a request whose
+  `Accept` includes `application/json` with a JSON document of the data
+  (`raw-id`, `body`, `commitments`, `hashpath`, ...), for full and range
+  requests alike, and axios sent its default `application/json,
+  text/plain, */*` because the gateway set no `Accept`. arweave.net is in
+  the default `TRUSTED_GATEWAYS_URLS`, so a gateway whose first upstream
+  missed cached the wrapper and served it as the item, with the wrong
+  content type and digest (observers report `dataHashDigest` and
+  `contentType` mismatches). Byte fetches from trusted gateways, AR.IO
+  peers and HTTP range sources now send `Accept: */*`. Copies already
+  cached keep serving the wrapper until purged: they start with
+  `{"accept-ranges"`.
 - Two gateways that listed each other in `GATEWAYS_GQL_URLS` called each
   other's `/graphql` without end, until every hop timed out (#680). Fanned
   out queries now carry `X-AR-IO-Hops`, and a request that has already
