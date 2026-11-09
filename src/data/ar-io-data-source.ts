@@ -174,6 +174,8 @@ export class ArIODataSource implements ContiguousDataSource {
     try {
       const response = await axios.get(`${peerAddress}${path}`, {
         headers: {
+          // The stored bytes, not a JSON representation; see GatewaysDataSource.
+          Accept: '*/*',
           'Accept-Encoding': 'identity',
           'X-AR-IO-Node-Release': config.AR_IO_NODE_RELEASE,
           ...headers,
