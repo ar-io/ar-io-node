@@ -119,6 +119,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `docs/envs.md`.
 ### Fixed
 
+- A blocked ID requested outside its sandbox (on the apex, `/<id>` or
+  `/<id>/<path>`, or on an IP host such as a load balancer's) was still
+  redirected with a 302 to its sandbox subdomain, which answers 451. Abuse
+  checkers stop at the 302, so a host's abuse desk kept reporting the URL as
+  live after the takedown. The sandbox middleware now checks the local block
+  list first and answers 451 directly, with the short not-found TTL (these
+  hosts are not revalidated on unblock). An ID that is not blocked is
+  redirected as before; if the block list check fails, so is a blocked one.
 - Data fetched from a trusted gateway could be a JSON wrapper of the item
   instead of the item. arweave.net (now HyperBEAM) answers a request whose
   `Accept` includes `application/json` with a JSON document of the data
