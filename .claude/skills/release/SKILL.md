@@ -271,7 +271,10 @@ compose directory: `down` there stops production. Either:
   live gateway onto the release image (`CORE_IMAGE_TAG` and, if it changed,
   `ENVOY_IMAGE_TAG` in its `.env`, then recreate those services by name with
   its own `-f` files and profiles), and check health, logs and requests
-  through every layer; and
+  through every layer. `INDEX_EXPORT_IMAGE_TAG`, or an override file's own
+  tag variable for another sidecar, outranks `CORE_IMAGE_TAG`: if the `.env`
+  sets one, point it at the release image too, or that profile goes untested
+  on the old image (`docker ps --format '{{.Names}} {{.Image}}'`); and
 - start the remaining profiles' services in an isolated project from the
   release worktree, which cannot touch the live containers:
 
