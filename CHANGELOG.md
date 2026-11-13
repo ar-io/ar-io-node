@@ -9,9 +9,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Added
 
 - Data responses for an item or transaction whose root is a stable L1
-  transaction now carry `X-AR-IO-Root-Arweave-Start-Offset` and
-  `X-AR-IO-Root-Arweave-Data-Size`: the root's place in the weave, in
-  Arweave's own numbering (start = `/tx/{id}/offset`'s `offset - size + 1`),
+  transaction with an offset recorded in the local index now carry
+  `X-AR-IO-Root-Arweave-Start-Offset` and
+  `X-AR-IO-Root-Arweave-Data-Size` (otherwise neither is sent): the root's
+  place in the weave, in Arweave's own numbering (start = `/tx/{id}/offset`'s `offset - size + 1`),
   read from the local index only and signed with the other root headers
   (#1140). With the root-relative offsets already sent, a client can fetch
   the item's chunks by absolute offset from any gateway or node and check
