@@ -8,6 +8,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- Data responses for an item or transaction whose root is a stable L1
+  transaction now carry `X-AR-IO-Root-Arweave-Start-Offset` and
+  `X-AR-IO-Root-Arweave-Data-Size`: the root's place in the weave, in
+  Arweave's own numbering (start = `/tx/{id}/offset`'s `offset - size + 1`),
+  read from the local index only and signed with the other root headers
+  (#1140). With the root-relative offsets already sent, a client can fetch
+  the item's chunks by absolute offset from any gateway or node and check
+  them against the block's `tx_root`; `docs/arweave-offset-verification.md`
+  gives the recipe. `GET /ar-io/offsets/:id` gains `rootArweaveStartOffset`,
+  `rootArweaveDataSize`, `itemArweaveStartOffset` and
+  `dataArweaveStartOffset`, and now answers L1 IDs. Items in a nested bundle
+  whose place in its root may be unknown (#907) get no absolute offsets.
+
 - An operator can capture the trace of one request: sent with
   `X-AR-IO-Trace: 1` and the admin bearer key, the request runs in its own
   root span, which the head sampler always samples (whatever
@@ -144,7 +157,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   other's `/graphql` without end, until every hop timed out (#680). Fanned
   out queries now carry `X-AR-IO-Hops`, and a request that has already
   passed through `GATEWAYS_GQL_MAX_HOPS` gateways (default 2) is answered
-  from the local index only.
+  from the local index only. A gateway that excludes its local index
+  (`GATEWAYS_GQL_INCLUDE_LOCAL=false`) answers such a request with nothing
+  and a `FANOUT_HOP_LIMIT` warning, so a federation-only gateway that other
+  gateways query through one more hop should raise `GATEWAYS_GQL_MAX_HOPS`
+  (for example to 3).
 - The Iceberg metadata scripts declared `root_parent_offset` as `int`; it
   is a byte offset into a root bundle and passes 2^31 in bundles over
   2 GiB, so it is now `long`, like the other offsets (#907). A nested
