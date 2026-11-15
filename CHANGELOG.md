@@ -4,7 +4,26 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased]
+## [Release 88] - 2026-11-15
+
+This is a **recommended release** focused on **verifiable offsets, data
+correctness, and resilient peer and chunk retrieval**. Key highlights
+include signed absolute Arweave offsets on data responses and from
+`/ar-io/offsets` (now answering L1 IDs), so a client can verify an item's
+chunks against the chain from any source; importing verified `parquet-l2`
+bands, such as `ardrive-l2`, into ClickHouse or SQLite so GraphQL answers
+for their items without unbundling; a fix for trusted-gateway fetches that
+cached arweave.net's JSON wrapper in place of the data (copies already
+cached start with `{"accept-ranges"` and need purging); `X-AR-IO-Stable`
+reported correctly for the first time, with verified stable data given the
+30-day `immutable` cache tier; chunk fetches that time out answered 503
+rather than a cacheable 404; AR.IO peer weights that recover after an
+outage, a peer list kept across restarts, and anchor lookups that fail
+over between peers; GraphQL fixes for signatures and owner keys read from
+wrong offsets, duplicated tags, upstream fan-out loops and fields lost from
+upstream results; blocked IDs answered 451 instead of being redirected to
+their sandbox; and opt-in metering of `/graphql` through the rate limiter
+and x402.
 
 ### Added
 
