@@ -248,6 +248,36 @@ describe('CompositeArNSResolver', () => {
       );
     });
 
+    // Concurrent requests for one name share the first request's pending
+    // resolution, so they must share its quiet handling of a miss too.
+    it('logs no error or warning for concurrent requests for an unregistered name', async () => {
+      const { logger, calls } = recordingLog();
+      const compositeResolver = new CompositeArNSResolver({
+        log: logger,
+        resolvers: [{ resolve: miss }, { resolve: miss }],
+        resolutionCache: mockResolutionCache,
+        registryCache: mockRegistryCache,
+        networkProcess: unusedNetworkProcess,
+        arnsNamesCache: {} as ArNSNamesCache, // unused, avoids unawaited promises
+        maxConcurrentResolutions: 2,
+        resolverTimeoutMs: 50,
+      });
+
+      const results = await Promise.all(
+        [1, 2, 3].map(() =>
+          compositeResolver.resolve({ name: 'unregistered' }),
+        ),
+      );
+
+      for (const result of results) {
+        assert.equal(result.resolvedId, undefined);
+      }
+      assert.deepEqual(
+        calls.filter((c) => c.level === 'error' || c.level === 'warn'),
+        [],
+      );
+    });
+
     it('still logs an error when a resolver times out', async () => {
       const { logger, calls } = recordingLog();
       const compositeResolver = new CompositeArNSResolver({

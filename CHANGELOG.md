@@ -12,6 +12,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- Concurrent requests for an unregistered ArNS name no longer log
+  `Error resolving name: All promises were rejected`. Requests that joined
+  another request's pending resolution received its raw rejection and logged
+  it as an error; they now share its result, so a miss logs only once, as a
+  miss. Clients repeatedly requesting one unregistered name produced hundreds
+  of these errors per hour.
+
 ## [Release 88] - 2026-11-15
 
 This is a **recommended release** focused on **verifiable offsets, data

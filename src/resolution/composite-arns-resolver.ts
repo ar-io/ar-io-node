@@ -198,11 +198,14 @@ export class CompositeArNSResolver implements NameResolver {
       trace.setSpan(context.active(), parentSpan),
     );
 
-    // Return the pending resolution for the name if it exists
+    // Return the pending resolution for the name if it exists. It is the raw
+    // Promise.any, so it rejects when no resolver resolves the name; the
+    // request that started it logs that failure (or treats it as a miss)
+    // below, so a request sharing it only needs the undefined result.
     if (this.pendingResolutions[name]) {
       span.addEvent('Using pending resolution');
       span.end();
-      return this.pendingResolutions[name];
+      return this.pendingResolutions[name].catch(() => undefined);
     }
 
     const limit = pLimit(this.maxConcurrentResolutions);
