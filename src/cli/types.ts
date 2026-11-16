@@ -189,3 +189,27 @@ export interface IndexCensusCLIOptions extends GlobalCLIOptions {
   force?: boolean;
   bucket?: string;
 }
+
+export interface BackfillBundlesCLIOptions extends GlobalCLIOptions {
+  from?: string;
+  to?: string;
+  bundlesDb?: string;
+  coreDb?: string;
+  gatewayUrl?: string;
+  dryRun?: boolean;
+  filter?: string;
+  maxImporterQueue?: string;
+  maxIndexerQueue?: string;
+  bytesPerHour?: string;
+  quietWindow?: string;
+  nodeMetricsUrl?: string;
+  maxEventLoopLag?: string;
+  maxLoad1?: string;
+  minFree?: string;
+  maxDiskBusy?: string;
+  haltAfter?: string;
+  poll?: string;
+  maxRetries?: string;
+  cooldownHours?: string;
+  limit?: string;
+}

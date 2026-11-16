@@ -418,6 +418,99 @@ export const optionMap = {
     description:
       'Remove from ClickHouse the rows an import of this band wrote (its loaded job lists them), and forget the band in the ledger. A later run imports it again unless it is removed from the bands directory',
   },
+  backfillFrom: {
+    alias: '--from <height>',
+    description: 'Lowest root transaction height to backfill. Required',
+  },
+  backfillTo: {
+    alias: '--to <height>',
+    description: 'Highest root transaction height to backfill. Required',
+  },
+  backfillCoreDb: {
+    alias: '--core-db <path>',
+    description:
+      "The gateway's core.db, opened read-only (default data/sqlite/core.db)",
+  },
+  backfillGatewayUrl: {
+    alias: '--gateway-url <url>',
+    description:
+      'The gateway to queue on, read its unbundle filter and metrics from (default http://core:4000). Its admin key comes from ADMIN_API_KEY',
+  },
+  backfillDryRun: {
+    alias: '--dry-run',
+    description: 'Select and count, per bucket, but queue nothing',
+  },
+  backfillFilter: {
+    alias: '--filter <json>',
+    description:
+      "An unbundle filter to select with instead of the gateway's (dry run only, e.g. to size a filter change before making it)",
+  },
+  backfillMaxImporterQueue: {
+    alias: '--max-importer-queue <n>',
+    description:
+      'Wait while the gateway has this many bundles waiting to download (default 50)',
+  },
+  backfillMaxIndexerQueue: {
+    alias: '--max-indexer-queue <n>',
+    description:
+      "Wait while this many data items wait to be indexed (default 200000). Keep it below the gateway's MAX_DATA_ITEM_QUEUE_SIZE, or downloaded bundles are dropped unparsed",
+  },
+  backfillBytesPerHour: {
+    alias: '--bytes-per-hour <size>',
+    description:
+      'Queue at most this many bundle bytes in any hour, e.g. 42G (default no limit)',
+  },
+  backfillQuietWindow: {
+    alias: '--quiet-window <HH:MM-HH:MM>',
+    description:
+      "Queue nothing in this daily UTC window, or 'none' (default 03:30-07:30)",
+  },
+  backfillNodeMetricsUrl: {
+    alias: '--node-metrics-url <url>',
+    description:
+      "A Prometheus node exporter's /metrics on the gateway's host, for --max-load1, --min-free and --max-disk-busy",
+  },
+  backfillMaxEventLoopLag: {
+    alias: '--max-event-loop-lag <pause-ms:halt-ms>',
+    description:
+      "Pause and halt limits on the gateway's event loop lag p99 (default 200:1000)",
+  },
+  backfillMaxLoad1: {
+    alias: '--max-load1 <pause:halt>',
+    description: 'Pause and halt limits on the host load average, e.g. 20:28',
+  },
+  backfillMinFree: {
+    alias: '--min-free <mountpoint=pause:halt,...>',
+    description:
+      'Pause and halt floors on free space per mount point, e.g. /data=600G:400G',
+  },
+  backfillMaxDiskBusy: {
+    alias: '--max-disk-busy <device=pause%:halt%,...>',
+    description: 'Pause and halt limits on how busy a disk is, e.g. sda=70:90',
+  },
+  backfillHaltAfter: {
+    alias: '--halt-after <seconds>',
+    description:
+      'Stop once a guard has stayed past its halt limit this long (default 900); until then it pauses',
+  },
+  backfillPoll: {
+    alias: '--poll <seconds>',
+    description: 'How often to recheck while paused (default 30)',
+  },
+  backfillMaxRetries: {
+    alias: '--max-retries <n>',
+    description:
+      'Leave out bundles that have failed this many times (default 2)',
+  },
+  backfillCooldown: {
+    alias: '--cooldown-hours <n>',
+    description:
+      'Leave out bundles queued again within this many hours, so a rerun does not queue what is still in flight (default 6)',
+  },
+  backfillLimit: {
+    alias: '--limit <n>',
+    description: 'Stop after queueing this many bundles, e.g. for a pilot',
+  },
 } satisfies Record<string, CommanderOption>;
 
 export const globalOptions: CommanderOption[] = [optionMap.debug];
@@ -584,4 +677,28 @@ export const indexCensusOptions: CommanderOption[] = [
   optionMap.censusOutput,
   optionMap.force,
   optionMap.bucket,
+];
+
+export const backfillBundlesOptions: CommanderOption[] = [
+  optionMap.backfillFrom,
+  optionMap.backfillTo,
+  optionMap.bundlesDb,
+  optionMap.backfillCoreDb,
+  optionMap.backfillGatewayUrl,
+  optionMap.backfillDryRun,
+  optionMap.backfillFilter,
+  optionMap.backfillMaxImporterQueue,
+  optionMap.backfillMaxIndexerQueue,
+  optionMap.backfillBytesPerHour,
+  optionMap.backfillQuietWindow,
+  optionMap.backfillNodeMetricsUrl,
+  optionMap.backfillMaxEventLoopLag,
+  optionMap.backfillMaxLoad1,
+  optionMap.backfillMinFree,
+  optionMap.backfillMaxDiskBusy,
+  optionMap.backfillHaltAfter,
+  optionMap.backfillPoll,
+  optionMap.backfillMaxRetries,
+  optionMap.backfillCooldown,
+  optionMap.backfillLimit,
 ];

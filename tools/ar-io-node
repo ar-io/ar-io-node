@@ -25,6 +25,7 @@
 #     --bands-dir data/indexes/installed/ardrive-l2 \
 #     --publication https://<publisher>/ar-io/indexes --registry-url http://core:4000
 #   ./tools/ar-io-node index-census --output data/indexes/census/short-roots.tsv
+#   ./tools/ar-io-node backfill-bundles --from 1300000 --to 1309999 --dry-run
 #   ./tools/ar-io-node get-gateway --address <wallet>
 #
 # Mounts only what a command needs: data/indexes for index-band-* commands
@@ -43,6 +44,7 @@
 # under `/`;
 # for index-census the SQLite directory read-only, the ClickHouse settings
 # and data/indexes for --output;
+# for backfill-bundles the SQLite directory read-only and the admin key;
 # for any other command only the file
 # a --wallet-file names, read-only. Band commands never take a key. It runs as
 # your user, so data/indexes/published/<index> must be writable by you;
@@ -263,6 +265,31 @@ case "${COMMAND}" in
     fi
     rewrite_paths --bundles-db --roots --output
     # CLICKHOUSE_URL names the ClickHouse service on the gateway's network.
+    join_gateway_network
+    ;;
+  backfill-bundles)
+    # Read-only on the gateway's SQLite (core.db and bundles.db); queues on
+    # the gateway over its network with the admin key, passed by name (or
+    # its file, mounted read-only) so it stays off the command line.
+    SQLITE_PATH="$(setting SQLITE_DATA_PATH)"
+    SQLITE_PATH="$(realpath -m "${SQLITE_PATH:-./data/sqlite}")"
+    if [[ -d "${SQLITE_PATH}" ]]; then
+      DOCKER_ARGS+=(-v "${SQLITE_PATH}:/app/data/sqlite:ro")
+      MOUNT_HOSTS+=("${SQLITE_PATH}")
+      MOUNT_TARGETS+=("data/sqlite")
+    fi
+    KEY_FILE="$(setting ADMIN_API_KEY_FILE)"
+    if [[ -n "${KEY_FILE}" ]]; then
+      DOCKER_ARGS+=(-v "$(realpath -e "${KEY_FILE}"):/run/secrets/admin-api-key:ro"
+        -e ADMIN_API_KEY_FILE=/run/secrets/admin-api-key)
+    else
+      value="$(setting ADMIN_API_KEY)"
+      if [[ -n "${value}" ]]; then
+        export "ADMIN_API_KEY=${value}"
+        DOCKER_ARGS+=(-e ADMIN_API_KEY)
+      fi
+    fi
+    rewrite_paths --bundles-db --core-db
     join_gateway_network
     ;;
   index-l2-import)
