@@ -72,6 +72,27 @@ describe('CompositeArNSResolver', () => {
     assert.deepEqual(result, mockResolution);
   });
 
+  it('resolves a name that is also an Object.prototype key', async () => {
+    const resolver: NameResolver = {
+      resolve: mock.fn(async () => mockResolution),
+    };
+
+    const compositeResolver = new CompositeArNSResolver({
+      log,
+      resolvers: [resolver],
+      resolutionCache: mockResolutionCache,
+      registryCache: mockRegistryCache,
+      networkProcess: unusedNetworkProcess,
+      arnsNamesCache: {} as ArNSNamesCache, // unused, avoids unawaited promises
+      maxConcurrentResolutions: 1,
+    });
+
+    const result = await compositeResolver.resolve({ name: 'constructor' });
+
+    assert.strictEqual((resolver.resolve as any).mock.calls.length, 1);
+    assert.deepEqual(result, mockResolution);
+  });
+
   it('should try all resolvers when earlier ones fail', async () => {
     const resolver1: NameResolver = {
       resolve: mock.fn(async () => {

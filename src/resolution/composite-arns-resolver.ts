@@ -41,10 +41,12 @@ export class CompositeArNSResolver implements NameResolver {
       }
     | undefined;
   private arnsNamesCache: ArNSNamesCache;
+  // Keyed by ArNS name, which can be any Object.prototype key (a name such
+  // as `constructor` is valid), so the object has no prototype.
   private pendingResolutions: Record<
     string,
     Promise<NameResolution | undefined> | undefined
-  > = {};
+  > = Object.create(null);
   private maxConcurrentResolutions: number;
   private resolverTimeoutMs: number;
   private lastResolverTimeoutMs: number;
