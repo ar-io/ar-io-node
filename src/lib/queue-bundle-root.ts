@@ -82,3 +82,36 @@ export function queuedBundleItem(
       : { id, root_tx_id: id }
   ) as NormalizedDataItem | PartialJsonTransaction;
 }
+
+/** A `queue-bundle` request body, checked. */
+export type QueueBundleRequest =
+  | { ok: true; id: string; bypassFilter: boolean; prioritized: boolean }
+  | { ok: false; message: string };
+
+/**
+ * Checks a `POST /ar-io/admin/queue-bundle` body. `bypassFilter` and
+ * `prioritized` both default to true. `prioritized: false` queues the bundle
+ * behind everything already waiting, in the importer's size-capped queue, so
+ * a bulk backfill never jumps ahead of the bundles the gateway is indexing
+ * live; a prioritized bundle goes to the front, whatever the cap.
+ */
+export function parseQueueBundleRequest(body: unknown): QueueBundleRequest {
+  const {
+    id,
+    bypassFilter = true,
+    prioritized = true,
+  } = typeof body === 'object' && body !== null
+    ? (body as Record<string, unknown>)
+    : {};
+  if (id === undefined) return { ok: false, message: "Must provide 'id'" };
+  if (typeof id !== 'string') {
+    return { ok: false, message: "'id' must be a string" };
+  }
+  if (typeof bypassFilter !== 'boolean') {
+    return { ok: false, message: "'bypassFilter' must be a boolean" };
+  }
+  if (typeof prioritized !== 'boolean') {
+    return { ok: false, message: "'prioritized' must be a boolean" };
+  }
+  return { ok: true, id, bypassFilter, prioritized };
+}

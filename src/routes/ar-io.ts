@@ -20,6 +20,7 @@ import { isEmptyString } from '../lib/string.js';
 import { isValidDataId, sanityCheckTx } from '../lib/validation.js';
 import { fromB64Url, toB64Url } from '../lib/encoding.js';
 import {
+  parseQueueBundleRequest,
   queuedBundleItem,
   resolveQueuedBundleRoot,
 } from '../lib/queue-bundle-root.js';
@@ -551,30 +552,30 @@ arIoRouter.post(
   express.json(),
   async (req, res) => {
     try {
-      const { id, bypassFilter = true } = req.body;
-
-      if (id === undefined) {
-        res.status(400).send("Must provide 'id'");
+      const request = parseQueueBundleRequest(req.body);
+      if (!request.ok) {
+        res.status(400).send(request.message);
         return;
       }
+      const { id, bypassFilter, prioritized } = request;
 
-      if (bypassFilter !== undefined && typeof bypassFilter !== 'boolean') {
-        res.status(400).send("'bypassFilter' must be a boolean");
+      // A non-prioritized bundle is dropped, not queued, once the importer's
+      // queue is full, so say so and let the caller retry.
+      if (
+        (bypassFilter || !prioritized) &&
+        (await system.bundleDataImporter.isQueueFull())
+      ) {
+        res.status(429).send('Bundle importer queue is full');
         return;
       }
 
       // if byPassFilter is false, then queue like queue-tx
       if (bypassFilter === false) {
-        system.prioritizedTxIds.add(id);
+        if (prioritized) system.prioritizedTxIds.add(id);
         system.txFetcher.queueTxId({ txId: id });
         res.json({ message: 'TX queued' });
         // TODO: alternatively could be a redirect
         // res.redirect(307, '/ar-io/admin/queue-tx');
-        return;
-      }
-
-      if (await system.bundleDataImporter.isQueueFull()) {
-        res.status(429).send('Bundle importer queue is full');
         return;
       }
 
@@ -591,7 +592,7 @@ arIoRouter.post(
       }
       const queuedBundle = await system.queueBundle(
         queuedBundleItem(id, placed),
-        true,
+        prioritized,
         bypassFilter,
       );
 
