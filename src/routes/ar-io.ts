@@ -560,7 +560,10 @@ arIoRouter.post(
       const { id, bypassFilter, prioritized } = request;
 
       // A non-prioritized bundle is dropped, not queued, once the importer's
-      // queue is full, so say so and let the caller retry.
+      // queue is full, so say so and let the caller retry. This early check
+      // only saves work: admission is decided when the bundle is pushed (see
+      // the 'rejected' status below), since another request can take the
+      // last slot while this one awaits.
       if (
         (bypassFilter || !prioritized) &&
         (await system.bundleDataImporter.isQueueFull())
@@ -598,6 +601,11 @@ arIoRouter.post(
 
       if (queuedBundle.error !== undefined) {
         res.status(503).send(queuedBundle.error);
+        return;
+      }
+
+      if (queuedBundle.status === 'rejected') {
+        res.status(429).send('Bundle importer queue is full');
         return;
       }
 

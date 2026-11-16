@@ -167,6 +167,32 @@ describe('DataImporter', () => {
       assert.equal(args.id, mockItem.id);
       assert.ok(args.signal instanceof AbortSignal);
     });
+
+    it('reports whether the item was admitted', async () => {
+      mock.method(contiguousDataSource, 'getData');
+
+      assert.equal(await bundleDataImporter.queueItem(mockItem, false), true);
+      assert.equal(
+        await bundleDataImporterWithFullQueue.queueItem(mockItem, false),
+        false,
+        'a non-prioritized item is refused when the queue is full',
+      );
+      assert.equal(
+        await bundleDataImporterWithFullQueue.queueItem(mockItem, true),
+        true,
+        'a prioritized item is always admitted',
+      );
+
+      const noWorkers = new DataImporter({
+        log,
+        contiguousDataSource,
+        ans104Unbundler,
+        workerCount: 0,
+        maxQueueSize: 10,
+      });
+      assert.equal(await noWorkers.queueItem(mockItem, true), false);
+      await noWorkers.stop();
+    });
   });
 
   describe('download', () => {

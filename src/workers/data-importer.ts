@@ -83,25 +83,30 @@ export class DataImporter {
     item: ImportableItem,
     prioritized: boolean | undefined,
     bypassFilter = false,
-  ): Promise<void> {
+  ): Promise<boolean> {
+    // Returns whether the item was admitted. A non-prioritized item is
+    // dropped when the queue is full, so callers that report "queued" must
+    // check this rather than an earlier capacity probe.
     const log = this.log.child({ method: 'queueItem', id: item.id });
     if (this.workerCount === 0) {
       log.debug('Skipping contiguous-data download, no workers.');
-      return;
+      return false;
     }
 
     if (prioritized === true) {
       log.debug('Queueing prioritized contiguous data download...');
       this.queue.unshift({ item, prioritized, bypassFilter });
       log.debug('Prioritized contiguous data download queued.');
+      return true;
     } else if (this.queue.length() < this.maxQueueSize) {
       log.debug('Queueing contiguous data download...');
       this.queue.push({ item, prioritized, bypassFilter });
       log.debug('Contiguous data download queued.');
-    } else {
-      metrics.dataImporterQueueFullSkipsCounter.inc({ importer: this.name });
-      log.debug('Skipping contiguous data download, queue is full.');
+      return true;
     }
+    metrics.dataImporterQueueFullSkipsCounter.inc({ importer: this.name });
+    log.debug('Skipping contiguous data download, queue is full.');
+    return false;
   }
 
   async download({
