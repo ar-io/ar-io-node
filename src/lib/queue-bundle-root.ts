@@ -115,3 +115,16 @@ export function parseQueueBundleRequest(body: unknown): QueueBundleRequest {
   }
   return { ok: true, id, bypassFilter, prioritized };
 }
+
+/**
+ * Whether a checked `queue-bundle` request is subject to the importer's
+ * normal-queue cap. Only a non-prioritized bundle is: the importer admits a
+ * prioritized one at the front of the queue whatever its length, so the
+ * route must not answer 429 for it (a request with only `id` is
+ * prioritized).
+ */
+export function queueBundleNeedsCapacity(request: {
+  prioritized: boolean;
+}): boolean {
+  return !request.prioritized;
+}

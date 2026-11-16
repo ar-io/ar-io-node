@@ -10,6 +10,7 @@ import { describe, it } from 'node:test';
 import type { DataItemRootIndex, RootTxLookupResult } from '../types.js';
 import {
   parseQueueBundleRequest,
+  queueBundleNeedsCapacity,
   queuedBundleItem,
   resolveQueuedBundleRoot,
 } from './queue-bundle-root.js';
@@ -151,5 +152,37 @@ describe('parseQueueBundleRequest', () => {
       ok: false,
       message: "'id' must be a string",
     });
+  });
+});
+
+describe('queueBundleNeedsCapacity', () => {
+  const id = 'x'.repeat(43);
+  const checked = (body: unknown) => {
+    const r = parseQueueBundleRequest(body);
+    assert.ok(r.ok);
+    return r;
+  };
+
+  it('does not cap a default request, which is prioritized', () => {
+    // A full importer queue must not turn `{ id }` into a 429: the importer
+    // admits prioritized bundles whatever the cap.
+    assert.equal(queueBundleNeedsCapacity(checked({ id })), false);
+    assert.equal(
+      queueBundleNeedsCapacity(checked({ id, bypassFilter: false })),
+      false,
+    );
+  });
+
+  it('caps a non-prioritized request', () => {
+    assert.equal(
+      queueBundleNeedsCapacity(checked({ id, prioritized: false })),
+      true,
+    );
+    assert.equal(
+      queueBundleNeedsCapacity(
+        checked({ id, prioritized: false, bypassFilter: false }),
+      ),
+      true,
+    );
   });
 });

@@ -21,6 +21,7 @@ import { isValidDataId, sanityCheckTx } from '../lib/validation.js';
 import { fromB64Url, toB64Url } from '../lib/encoding.js';
 import {
   parseQueueBundleRequest,
+  queueBundleNeedsCapacity,
   queuedBundleItem,
   resolveQueuedBundleRoot,
 } from '../lib/queue-bundle-root.js';
@@ -565,7 +566,7 @@ arIoRouter.post(
       // the 'rejected' status below), since another request can take the
       // last slot while this one awaits.
       if (
-        (bypassFilter || !prioritized) &&
+        queueBundleNeedsCapacity(request) &&
         (await system.bundleDataImporter.isQueueFull())
       ) {
         res.status(429).send('Bundle importer queue is full');
