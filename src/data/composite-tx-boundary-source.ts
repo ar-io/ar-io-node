@@ -9,6 +9,21 @@ import winston from 'winston';
 import { RequestAttributes, TxBoundary, TxBoundarySource } from '../types.js';
 
 /**
+ * Thrown when no source found the boundary and the chain fallback, the one
+ * source that could have, was skipped because it was at its concurrency
+ * limit. Nothing was learned about the offset: it is load, not absence, and
+ * callers must not report it as not found (#917).
+ */
+export class TxBoundaryUnavailableError extends Error {
+  constructor(absoluteOffset: bigint) {
+    super(
+      `TX boundary lookup for offset ${absoluteOffset} skipped: chain fallback at its concurrency limit`,
+    );
+    this.name = 'TxBoundaryUnavailableError';
+  }
+}
+
+/**
  * Composite transaction boundary source that orchestrates multiple sources
  * with a DB-first strategy:
  * 1. Database (fastest) — for indexed transactions
@@ -196,7 +211,7 @@ export class CompositeTxBoundarySource implements TxBoundarySource {
           activeChainFallbackCount: this.activeChainFallbackCount,
           chainFallbackConcurrencyLimit: this.chainFallbackConcurrencyLimit,
         });
-        return null;
+        throw new TxBoundaryUnavailableError(absoluteOffset);
       }
 
       this.activeChainFallbackCount++;

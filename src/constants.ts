@@ -57,6 +57,8 @@ export const headerNames = {
   dataItemSize: 'X-AR-IO-Data-Item-Size',
   rootDataItemOffset: 'X-AR-IO-Root-Data-Item-Offset',
   rootDataOffset: 'X-AR-IO-Root-Data-Offset',
+  rootArweaveStartOffset: 'X-AR-IO-Root-Arweave-Start-Offset',
+  rootArweaveDataSize: 'X-AR-IO-Root-Arweave-Data-Size',
   arnsTtlSeconds: 'X-ArNS-TTL-Seconds',
   arnsName: 'X-ArNS-Name',
   arnsBasename: 'X-ArNS-Basename',

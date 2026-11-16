@@ -38,6 +38,31 @@ describe('HttpByteRangeSource', () => {
       assert.equal(capturedConfig.maxBodyLength, 100);
     });
 
+    // arweave.net answers a range request carrying axios's default
+    // `application/json, …` Accept with a 206 JSON envelope, not the slice.
+    it('should send Accept: */* with the range', async () => {
+      let capturedConfig: any;
+      const fakeClient = {
+        get: mock.fn(async (_url: string, config: any) => {
+          capturedConfig = config;
+          return {
+            status: 206,
+            data: Buffer.alloc(16, 0x41),
+            headers: { 'content-length': '16' },
+          };
+        }),
+      } as any;
+
+      const source = new HttpByteRangeSource({
+        url: 'http://example.test/x',
+        httpClient: fakeClient,
+      });
+
+      await source.read(0, 16);
+      assert.equal(capturedConfig.headers['Accept'], '*/*');
+      assert.equal(capturedConfig.headers['Range'], 'bytes=0-15');
+    });
+
     it('should still reject post-hoc on size mismatch even if axios let bytes through', async () => {
       const fakeClient = {
         get: mock.fn(async () => ({

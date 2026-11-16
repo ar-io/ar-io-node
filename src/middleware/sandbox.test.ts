@@ -117,6 +117,71 @@ describe('createSandboxMiddleware', () => {
     });
   });
 
+  describe('blocked ID outside its sandbox', () => {
+    // Abuse checkers stop at the 302, so a blocked ID requested on the apex
+    // or an LB IP looked live although its sandbox answers 451 (Hetzner
+    // tickets citing https://<LB IP>/<id>, 2026-11).
+    const blocked = validator(async (id) => id === ID);
+
+    for (const host of ['example.com', '203.0.113.7']) {
+      it(`answers 451 with a short TTL and no redirect on ${host}`, async () => {
+        const res = await request(createApp(blocked))
+          .get(`/${ID}`)
+          .set('Host', host);
+        assert.equal(res.status, 451);
+        assert.equal(res.headers.location, undefined);
+        assert.match(res.text, new RegExp(`Blocked ID: ${ID}$`));
+        assert.match(res.headers['cache-control'], /must-revalidate/);
+        assert.doesNotMatch(res.headers['cache-control'], /immutable/);
+      });
+    }
+
+    it('covers manifest paths under the ID', async () => {
+      const res = await request(createApp(blocked))
+        .get(`/${ID}/index.html`)
+        .set('Host', 'example.com');
+      assert.equal(res.status, 451);
+      assert.equal(res.headers.location, undefined);
+    });
+
+    it('treats HEAD like GET', async () => {
+      const res = await request(createApp(blocked))
+        .head(`/${ID}`)
+        .set('Host', '203.0.113.7');
+      assert.equal(res.status, 451);
+    });
+
+    it('still redirects an ID that is not blocked', async () => {
+      const other = toB64Url(Buffer.alloc(32, 7));
+      const res = await request(createApp(blocked))
+        .get(`/${other}`)
+        .set('Host', '203.0.113.7');
+      assert.equal(res.status, 302);
+    });
+
+    it('redirects as before when the block list check fails', async () => {
+      const failing = validator(async () => {
+        throw new Error('db unavailable');
+      });
+      const res = await request(createApp(failing))
+        .get(`/${ID}`)
+        .set('Host', 'example.com');
+      assert.equal(res.status, 302);
+      assert.equal(
+        res.headers.location,
+        `https://${SANDBOX}.example.com/${ID}?`,
+      );
+    });
+
+    it('leaves the ID on its own sandbox to the data route', async () => {
+      const res = await request(createApp(blocked))
+        .get(`/${ID}`)
+        .set('Host', `${SANDBOX}.example.com`);
+      assert.equal(res.status, 200);
+      assert.equal(res.text, 'downstream');
+    });
+  });
+
   describe('unchanged behavior', () => {
     const passesThrough = async (host: string, path = '/', method = 'get') => {
       const res = await (request(createApp(notBlocked)) as any)

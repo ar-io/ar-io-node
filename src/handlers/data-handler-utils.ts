@@ -43,6 +43,12 @@ export interface CheckPaymentAndRateLimitsParams {
    * or 'direct' to render the paywall inline
    */
   browserPaymentFlow?: 'redirect' | 'direct';
+  /**
+   * Charge only the client's IP bucket. For a route whose path names no
+   * resource (`/graphql`), the per-path resource bucket would be one bucket
+   * shared by every client, and one client could empty it for all.
+   */
+  skipResourceBucket?: boolean;
 }
 
 /**
@@ -91,6 +97,7 @@ export async function checkPaymentAndRateLimits({
   paymentProcessor,
   parentSpan,
   browserPaymentFlow,
+  skipResourceBucket = false,
 }: CheckPaymentAndRateLimitsParams): Promise<CheckPaymentAndRateLimitsResult> {
   const span = startChildSpan(
     'checkPaymentAndRateLimits',
@@ -333,6 +340,7 @@ export async function checkPaymentAndRateLimits({
           predictedTokens,
           paymentVerified,
           contentLengthForTopOff,
+          { skipResourceBucket },
         );
 
         rateLimitSpan.setAttribute('rate_limit.allowed', limitResult.allowed);

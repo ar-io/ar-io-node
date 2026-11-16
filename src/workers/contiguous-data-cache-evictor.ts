@@ -52,6 +52,7 @@ export class ContiguousDataCacheEvictor {
   private batchSize: number;
   private unlinkConcurrency: number;
   private maxBatchesPerSweep: number;
+  private maxBytesPerSweep: number;
 
   private timer: NodeJS.Timeout | undefined;
   private sweeping = false;
@@ -68,6 +69,7 @@ export class ContiguousDataCacheEvictor {
     batchSize = config.CONTIGUOUS_DATA_CACHE_INDEX_EVICTION_BATCH_SIZE,
     unlinkConcurrency = config.CONTIGUOUS_DATA_CACHE_INDEX_UNLINK_CONCURRENCY,
     maxBatchesPerSweep = config.CONTIGUOUS_DATA_CACHE_INDEX_MAX_BATCHES_PER_SWEEP,
+    maxBytesPerSweep = config.CONTIGUOUS_DATA_CACHE_INDEX_MAX_BYTES_PER_SWEEP,
   }: {
     log: Logger;
     dataStore: ContiguousDataStore;
@@ -80,6 +82,7 @@ export class ContiguousDataCacheEvictor {
     batchSize?: number;
     unlinkConcurrency?: number;
     maxBatchesPerSweep?: number;
+    maxBytesPerSweep?: number;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.dataStore = dataStore;
@@ -98,6 +101,12 @@ export class ContiguousDataCacheEvictor {
       'maxBatchesPerSweep',
       maxBatchesPerSweep,
     );
+    if (!Number.isInteger(maxBytesPerSweep) || maxBytesPerSweep < 0) {
+      throw new Error(
+        `maxBytesPerSweep must be a non-negative integer, received ${String(maxBytesPerSweep)}`,
+      );
+    }
+    this.maxBytesPerSweep = maxBytesPerSweep;
   }
 
   start(): void {
@@ -187,8 +196,13 @@ export class ContiguousDataCacheEvictor {
         highWatermarkPercent: this.highWatermarkPercent,
       });
 
+      // Below the free-space floor the byte budget does not apply: pacing must
+      // never be what lets the disk fill.
+      const emergency =
+        this.minFreeBytes > 0 && usage.freeBytes < this.minFreeBytes;
       let evicted = 0;
       let bytesFreed = 0;
+      let byteBudgetReached = false;
       for (let batch = 0; batch < this.maxBatchesPerSweep; batch++) {
         const candidates =
           await this.cacheIndex.selectContiguousDataCacheEvictionCandidates(
@@ -242,12 +256,24 @@ export class ContiguousDataCacheEvictor {
         if (this.recovered(usage.usedPercent, usage.freeBytes)) {
           break;
         }
+        // Pace by bytes: stop here and let the next interval continue. On
+        // btrfs statfs lags the unlinks, so the next interval usually finds
+        // the disk still over pressure and evicts the next budget.
+        if (
+          !emergency &&
+          this.maxBytesPerSweep > 0 &&
+          bytesFreed >= this.maxBytesPerSweep
+        ) {
+          byteBudgetReached = true;
+          break;
+        }
       }
 
       this.log.info('Index eviction sweep complete', {
         evicted,
         bytesFreed,
         usedPercent: usage?.usedPercent,
+        byteBudgetReached,
       });
     } catch (error: unknown) {
       this.log.warn('Index eviction sweep failed', {

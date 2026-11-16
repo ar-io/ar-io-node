@@ -1219,6 +1219,22 @@ export interface ContiguousDataAttributes {
    */
   rootDataOffset?: number;
 
+  // Absolute location of the root transaction in the Arweave weave. Added at
+  // read time by RootArweaveAnnotatingDataAttributesSource, never stored, and
+  // only for stable roots with a recorded offset.
+
+  /**
+   * Absolute weave offset of the first byte of the root transaction's data
+   * in Arweave's offset numbering, the one `GET /chunk/{offset}` takes.
+   * Arweave's `GET /tx/{id}/offset` reports the END offset; start =
+   * offset - size + 1. For an L1 transaction the root is the
+   * transaction itself.
+   */
+  rootArweaveStartOffset?: number;
+
+  /** Size in bytes of the root transaction's data. */
+  rootArweaveDataSize?: number;
+
   // Status flags
 
   /**
@@ -1348,6 +1364,8 @@ export interface ContiguousDataIndex {
     trusted?: boolean;
   }): Promise<void>;
   clearDataHash(id: string): Promise<void>;
+  /** Forgets what is recorded for one ID; true when there was a record. */
+  deleteDataId(id: string): Promise<boolean>;
   getVerifiableDataIds(options?: {
     minVerificationPriority?: number;
   }): Promise<string[]>;

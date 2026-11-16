@@ -124,10 +124,40 @@ export function createSandboxMiddleware({
       const queryString = url.parse(req.originalUrl).query ?? '';
       const path = req.path.replace(/\/\//, '/');
       const protocol = sandboxProtocol ?? 'https';
-      return res.redirect(
-        302,
-        `${protocol}://${idSandbox}.${req.matchedArnsRootHost ?? config.ARNS_ROOT_HOST}${path}?${queryString}`,
-      );
+      const location = `${protocol}://${idSandbox}.${req.matchedArnsRootHost ?? config.ARNS_ROOT_HOST}${path}?${queryString}`;
+      // A blocked ID is answered 451 here rather than redirected: abuse
+      // checkers (Hetzner's included) stop at the 302 and keep reporting the
+      // apex or LB-IP URL as live although the sandbox answers 451. The check
+      // is the local moderation lookup the data route makes; on an error the
+      // redirect goes out as before. Short TTL like the bare sandbox root
+      // above: these hosts (an LB IP in particular) are not revalidated on
+      // unblock, so a long-lived 451 would outlive the block.
+      dataBlockListValidator
+        .isIdBlocked(id)
+        .catch((error: any) => {
+          log.warn('Unable to check block list before sandbox redirect', {
+            id,
+            message: error.message,
+          });
+          return false;
+        })
+        .then((blocked) => {
+          if (blocked) {
+            res.header(
+              'Cache-Control',
+              `public, max-age=${config.CACHE_NOT_FOUND_MAX_AGE}, must-revalidate`,
+            );
+            res
+              .status(451)
+              .send(
+                `Requested content blocked by this node's content policy. Blocked ID: ${id}`,
+              );
+            return;
+          }
+          res.redirect(302, location);
+        })
+        .catch(next);
+      return;
     }
 
     next();

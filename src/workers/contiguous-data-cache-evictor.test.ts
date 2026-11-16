@@ -168,6 +168,74 @@ describe('ContiguousDataCacheEvictor', () => {
     assert.equal(h.remaining.size, 485);
   });
 
+  it('stops a sweep once maxBytesPerSweep is freed (each entry is 1000 bytes)', async () => {
+    const h = makeHarness({
+      initialUsedPercent: 99,
+      entryCount: 500,
+      freePerEvict: 0, // never recovers within the sweep (statfs lag)
+    });
+
+    await makeEvictor(h, {
+      batchSize: 5,
+      maxBatchesPerSweep: 100,
+      maxBytesPerSweep: 12_000,
+    }).sweep();
+
+    // Budget is checked after each batch: 5,000 / 10,000 / 15,000 bytes, so
+    // the third batch crosses 12,000 and the sweep stops there.
+    assert.equal(h.unlinked.length, 15);
+    assert.equal(h.remaining.size, 485);
+  });
+
+  it('leaves sweeps bounded only by the batch cap when maxBytesPerSweep is 0', async () => {
+    const h = makeHarness({
+      initialUsedPercent: 99,
+      entryCount: 500,
+      freePerEvict: 0,
+    });
+
+    await makeEvictor(h, {
+      batchSize: 5,
+      maxBatchesPerSweep: 4,
+      maxBytesPerSweep: 0,
+    }).sweep();
+
+    assert.equal(h.unlinked.length, 20);
+  });
+
+  it('ignores the byte budget while free space is below minFreeBytes', async () => {
+    const h = makeHarness({
+      initialUsedPercent: 99, // 1 of 100 GB free (fakeStatfs bsize 1e9)
+      entryCount: 500,
+      freePerEvict: 0,
+    });
+
+    await makeEvictor(h, {
+      batchSize: 5,
+      maxBatchesPerSweep: 3,
+      maxBytesPerSweep: 2_000,
+      minFreeBytes: 5_000_000_000,
+    }).sweep();
+
+    // An emergency must evict at full speed: only the batch cap stops it.
+    assert.equal(h.unlinked.length, 15);
+  });
+
+  it('rejects an invalid maxBytesPerSweep at construction', () => {
+    const h = makeHarness({
+      initialUsedPercent: 50,
+      entryCount: 1,
+      freePerEvict: 0,
+    });
+    for (const bad of [-1, 1.5, Number.NaN]) {
+      assert.throws(
+        () => makeEvictor(h, { maxBytesPerSweep: bad }),
+        /maxBytesPerSweep must be a non-negative integer/,
+        String(bad),
+      );
+    }
+  });
+
   it('evicts oldest-first until usage recovers below the low watermark', async () => {
     const h = makeHarness({
       initialUsedPercent: 90, // over high(80)

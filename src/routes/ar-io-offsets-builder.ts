@@ -8,18 +8,41 @@ import crypto from 'node:crypto';
 import { Response } from 'express';
 
 import { headerNames } from '../constants.js';
+import {
+  RootArweaveLocation,
+  rootArweaveCandidate,
+} from '../data/root-arweave-location-source.js';
 import { formatContentDigest } from '../lib/digest.js';
 import { ContiguousDataAttributes, RootTxLookupResult } from '../types.js';
 
 /**
+ * Absolute Arweave weave offsets added to an offsets answer when the root is a
+ * stable transaction with a recorded offset. All are weave offsets in Arweave's
+ * numbering, the one `GET /chunk/{offset}` takes (Arweave's
+ * `GET /tx/{id}/offset` reports the END offset; start = offset - size + 1).
+ */
+export interface RootArweaveOffsets {
+  /** First byte of the root transaction's data in the weave. */
+  rootArweaveStartOffset?: number;
+  /** Size of the root transaction's data. */
+  rootArweaveDataSize?: number;
+  /** First byte of the item (its header, for a data item) in the weave. */
+  itemArweaveStartOffset?: number;
+  /** First byte of the item's payload in the weave. */
+  dataArweaveStartOffset?: number;
+}
+
+/**
  * Response body of `GET /ar-io/offsets/:id`.
  *
- * Deliberately identical in shape to {@link RootTxLookupResult}, the internal
- * vocabulary every root TX index already speaks, so a consuming peer can pass
- * the decoded body straight through without a translation layer. All offsets
- * and sizes are byte values relative to the root L1 transaction's data.
+ * {@link RootTxLookupResult}, the internal vocabulary every root TX index
+ * already speaks, so a consuming peer can pass the decoded body straight
+ * through without a translation layer, plus the absolute Arweave offsets
+ * ({@link RootArweaveOffsets}), which peers that don't know them ignore. The
+ * {@link RootTxLookupResult} offsets and sizes are byte values relative to the
+ * root L1 transaction's data.
  */
-export type RootTxOffsetsResponse = RootTxLookupResult;
+export type RootTxOffsetsResponse = RootTxLookupResult & RootArweaveOffsets;
 
 /**
  * Projects locally indexed data attributes into the offsets response.
@@ -72,7 +95,7 @@ export function buildRootTxOffsets(
 }
 
 /** Which lookup answered an offsets request. */
-export type RootTxOffsetsSource = 'db' | 'cdb64';
+export type RootTxOffsetsSource = 'db' | 'cdb64' | 'l1';
 
 /**
  * Answers `GET /ar-io/offsets/:id` from this node's own data, never from the
@@ -89,10 +112,120 @@ export type RootTxOffsetsSource = 'db' | 'cdb64';
  * is a publisher's claim, and a location without `dataSize` is one a consumer
  * serves only after verifying the item's signature.
  *
+ * Given `id` and `getRootArweaveLocation`, the answer also carries the root's
+ * absolute Arweave offsets ({@link RootArweaveOffsets}) when the root is a
+ * stable transaction with a recorded offset, and an ID nothing places inside a
+ * root is answered as an L1 transaction when it is one (source `l1`).
+ *
  * @returns the response and the lookup that produced it, or `undefined` when
- *   neither can place the item. A CDB64 lookup that throws counts as a miss.
+ *   nothing can place the ID. A CDB64 lookup that throws counts as a miss.
  */
 export async function resolveRootTxOffsets({
+  id,
+  attributes,
+  lookupLocalCdb64,
+  getRootArweaveLocation,
+}: {
+  /** The requested ID; required for the Arweave offsets and L1 answers. */
+  id?: string;
+  attributes: ContiguousDataAttributes | undefined;
+  lookupLocalCdb64: () => Promise<RootTxLookupResult | undefined>;
+  /**
+   * The root's absolute Arweave location from this node's own index. When
+   * omitted, answers carry no Arweave offsets and L1 IDs are declined.
+   */
+  getRootArweaveLocation?: (
+    txId: string,
+  ) => Promise<RootArweaveLocation | undefined>;
+}): Promise<
+  { offsets: RootTxOffsetsResponse; source: RootTxOffsetsSource } | undefined
+> {
+  const resolved = await resolveRelativeRootTxOffsets({
+    attributes,
+    lookupLocalCdb64,
+  });
+  if (id === undefined || getRootArweaveLocation === undefined) {
+    return resolved;
+  }
+
+  if (resolved !== undefined) {
+    // An answer from our own index names the root only when the item may have
+    // an absolute location published at all (see rootArweaveCandidate: items
+    // nested more than one level deep in our bundle index are excluded, #907).
+    // A CDB64 answer is a band's root-relative location and does not depend on
+    // our index's parent offsets.
+    const root =
+      resolved.source === 'db'
+        ? rootArweaveCandidate(id, attributes)
+        : resolved.offsets.rootTxId;
+    if (root === undefined || root !== resolved.offsets.rootTxId) {
+      return resolved;
+    }
+    const location = await getRootArweaveLocation(root);
+    if (location === undefined) {
+      return resolved;
+    }
+    const { rootOffset, rootDataOffset } = resolved.offsets;
+    return {
+      ...resolved,
+      offsets: {
+        ...resolved.offsets,
+        rootArweaveStartOffset: location.startOffset,
+        rootArweaveDataSize: location.dataSize,
+        itemArweaveStartOffset:
+          rootOffset !== undefined
+            ? location.startOffset + rootOffset
+            : undefined,
+        dataArweaveStartOffset:
+          rootDataOffset !== undefined
+            ? location.startOffset + rootDataOffset
+            : undefined,
+      },
+    };
+  }
+
+  // Nothing places the ID inside a root. It is answered as an L1 transaction
+  // only when the location lookup proves it is one: that lookup answers for
+  // stable transactions with a recorded offset and nothing else, so an absent
+  // root is never taken as proof on its own. The answer is `rootTxId === id`
+  // without item offsets, the shape root TX indexes already use for an L1
+  // root, so a consuming peer passes it through instead of reading an item
+  // header at offset 0.
+  if (rootArweaveCandidate(id, attributes ?? EMPTY_ATTRIBUTES) !== id) {
+    return undefined;
+  }
+  const location = await getRootArweaveLocation(id);
+  if (location === undefined) {
+    return undefined;
+  }
+  return {
+    offsets: {
+      rootTxId: id,
+      contentType: attributes?.contentType,
+      dataSize: location.dataSize,
+      rootArweaveStartOffset: location.startOffset,
+      rootArweaveDataSize: location.dataSize,
+      itemArweaveStartOffset: location.startOffset,
+      dataArweaveStartOffset: location.startOffset,
+    },
+    source: 'l1',
+  };
+}
+
+/**
+ * An attributes record with no root and no parent, so an ID this node has no
+ * attributes for is still tried as an L1 transaction.
+ */
+const EMPTY_ATTRIBUTES = {
+  isManifest: false,
+  stable: false,
+} as ContiguousDataAttributes;
+
+/**
+ * The root-relative part of {@link resolveRootTxOffsets}: the local index,
+ * then local CDB64 indexes.
+ */
+async function resolveRelativeRootTxOffsets({
   attributes,
   lookupLocalCdb64,
 }: {

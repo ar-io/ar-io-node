@@ -17,8 +17,9 @@
  * check more: every band of an index declares the same selection, in its
  * `band.json`, in the publication's metadata for it, and in the index's
  * `filter` when the publisher sets one. Checks of the rows themselves
- * belong to an importer. Installed bands go under `installed/<index>/`;
- * the gateway itself reads none.
+ * belong to an importer. Installed bands go under `installed/<index>/`,
+ * where `index-l2-import` (`L2_BAND_IMPORT_ENABLED`) verifies them row by
+ * row and loads them into ClickHouse.
  */
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';

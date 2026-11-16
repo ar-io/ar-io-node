@@ -162,6 +162,53 @@ describe('buildArIoInfo', () => {
     assert.strictEqual(result.rateLimiter, undefined);
   });
 
+  it('reports GraphQL metering under rateLimiter and x402 when it is on', () => {
+    const base = {
+      wallet: 'test-wallet',
+      programIds: {
+        core: 'P_CORE',
+        gar: 'P_GAR',
+        arns: 'P_ARNS',
+        ant: 'P_ANT',
+      },
+      ans104UnbundleFilter: {},
+      ans104IndexFilter: {},
+      release: 'r123',
+      bundlerUrls: [],
+      rateLimiter: {
+        enabled: true,
+        resourceCapacity: 1000000,
+        resourceRefillRate: 100,
+        ipCapacity: 100000,
+        ipRefillRate: 20,
+      },
+      x402: {
+        enabled: true,
+        network: 'base-sepolia',
+        walletAddress: '0x0',
+        facilitatorUrl: 'https://x402.org/facilitator',
+        perBytePrice: 0.0000000001,
+        minPrice: 0.001,
+        maxPrice: 1.0,
+        capacityMultiplier: 10,
+      },
+    };
+    const metered = buildArIoInfo({
+      ...base,
+      graphqlOperationCostBytes: 10240,
+    });
+    assert.deepStrictEqual(metered.rateLimiter?.graphql, {
+      operationCostTokens: 10,
+      operationCostBytes: 10240,
+      buckets: ['ip'],
+    });
+    assert.deepStrictEqual(metered.x402?.graphql, { pricePerOperation: 0.001 });
+
+    const free = buildArIoInfo(base);
+    assert.strictEqual(free.rateLimiter?.graphql, undefined);
+    assert.strictEqual(free.x402?.graphql, undefined);
+  });
+
   it('should include x402 when enabled with mainnet', () => {
     const result = buildArIoInfo({
       wallet: 'test-wallet',

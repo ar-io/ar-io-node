@@ -52,6 +52,14 @@ export interface TokenAdjustmentContext {
 }
 
 /**
+ * Per-call options for {@link RateLimiter.checkLimit}.
+ */
+export interface CheckLimitOptions {
+  /** Charge only the IP bucket, never the per-path resource bucket. */
+  skipResourceBucket?: boolean;
+}
+
+/**
  * Rate limiter interface for controlling request rate limits
  */
 export interface RateLimiter {
@@ -62,6 +70,9 @@ export interface RateLimiter {
    * @param predictedTokens Predicted number of tokens to consume
    * @param x402PaymentProvided Whether x402 payment was provided
    * @param contentLengthForTopOff Content length for bucket top-off (if payment provided)
+   * @param options.skipResourceBucket Charge only the client's IP bucket. For
+   * a route whose path does not name a resource (`/graphql`), the
+   * per-path resource bucket would be one bucket shared by every client.
    * @returns Promise<RateLimitCheckResult>
    */
   checkLimit(
@@ -70,6 +81,7 @@ export interface RateLimiter {
     predictedTokens: number,
     x402PaymentProvided?: boolean,
     contentLengthForTopOff?: number,
+    options?: CheckLimitOptions,
   ): Promise<RateLimitCheckResult>;
 
   /**

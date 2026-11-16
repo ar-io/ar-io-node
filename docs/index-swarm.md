@@ -720,7 +720,9 @@ from them stays in `core.db`.
 [L2 bands](index-publication.md#l2-bands)), are opt-in the same way: a
 subscription takes one only when it names it, `"name": ["root-tx-index",
 "ardrive-l2"]`. The sidecar checks and installs them under
-`installed/<index>/`; nothing in the gateway reads them yet. Check an
+`installed/<index>/`. A gateway with ClickHouse can import them, so its
+GraphQL answers for their items without unbundling them
+(`L2_BAND_IMPORT_ENABLED`, [`index-l2-import`](cli.md#index-l2-import)). Check an
 installed index row by row, and its locations against the chain, with
 [`index-l2-verify`](cli.md#index-l2-verify) (see
 [index-verification.md](index-verification.md)). A publisher

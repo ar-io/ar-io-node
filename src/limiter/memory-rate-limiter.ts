@@ -9,6 +9,7 @@ import { Request, Response } from 'express';
 import { extractAllClientIPs, isAnyIpAllowlisted } from '../lib/ip-utils.js';
 import log from '../log.js';
 import {
+  CheckLimitOptions,
   RateLimiter,
   RateLimitCheckResult,
   TokenAdjustmentContext,
@@ -205,6 +206,7 @@ export class MemoryRateLimiter implements RateLimiter {
     predictedTokens: number,
     x402PaymentProvided = false,
     contentLengthForTopOff = 0,
+    options: CheckLimitOptions = {},
   ): Promise<RateLimitCheckResult> {
     const method = req.method;
     const canonicalPath = getCanonicalPathFromRequest(req);
@@ -261,7 +263,11 @@ export class MemoryRateLimiter implements RateLimiter {
 
     // Check resource bucket ONLY if no payment was provided AND no paid tokens were used
     // (payment or using paid tokens grants bypass of per-resource limits)
-    if (!x402PaymentProvided && consumeResult.paid === 0) {
+    if (
+      !x402PaymentProvided &&
+      consumeResult.paid === 0 &&
+      options.skipResourceBucket !== true
+    ) {
       const resourceBucket = this.getOrCreateBucket(
         resourceKey,
         this.config.resourceCapacity,
@@ -312,7 +318,7 @@ export class MemoryRateLimiter implements RateLimiter {
       };
     }
 
-    // Paid request - skip resource check
+    // Paid request, or the caller asked to skip it - no resource check
     return {
       allowed: true,
       ipTokensConsumed: predictedTokens,

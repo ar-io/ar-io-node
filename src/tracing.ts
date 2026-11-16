@@ -16,11 +16,9 @@ import {
   Span,
   SpanOptions,
 } from '@opentelemetry/api';
-import {
-  TraceIdRatioBasedSampler,
-  SimpleSpanProcessor,
-} from '@opentelemetry/sdk-trace-node';
+import { SimpleSpanProcessor } from '@opentelemetry/sdk-trace-node';
 import { ATTR_SERVICE_NAME } from '@opentelemetry/semantic-conventions';
+import { createGatewaySampler } from './lib/force-sample.js';
 import {
   resourceFromAttributes,
   detectResources,
@@ -144,9 +142,9 @@ if (!isTestEnvironment) {
         disableLogCorrelation: false, // Inject trace_id/span_id (default)
       }),
     ],
-    sampler: new TraceIdRatioBasedSampler(
-      1 / OTEL_TRACING_SAMPLING_RATE_DENOMINATOR,
-    ),
+    // Ratio sampling by trace ID, except that a request forced with
+    // X-AR-IO-Trace is always sampled (see lib/force-sample.ts).
+    sampler: createGatewaySampler(OTEL_TRACING_SAMPLING_RATE_DENOMINATOR),
   });
 
   if (

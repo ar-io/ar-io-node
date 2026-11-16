@@ -4,6 +4,274 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Release 88] - 2026-11-15
+
+This is a **recommended release** focused on **verifiable offsets, data
+correctness, and resilient peer and chunk retrieval**. Key highlights
+include signed absolute Arweave offsets on data responses and from
+`/ar-io/offsets` (now answering L1 IDs), so a client can verify an item's
+chunks against the chain from any source; importing verified `parquet-l2`
+bands, such as `ardrive-l2`, into ClickHouse or SQLite so GraphQL answers
+for their items without unbundling; a fix for trusted-gateway fetches that
+cached arweave.net's JSON wrapper in place of the data (copies already
+cached start with `{"accept-ranges"` and need purging); `X-AR-IO-Stable`
+reported correctly for the first time, with verified stable data given the
+30-day `immutable` cache tier; chunk fetches that time out answered 503
+rather than a cacheable 404; AR.IO peer weights that recover after an
+outage, a peer list kept across restarts, and anchor lookups that fail
+over between peers; GraphQL fixes for signatures and owner keys read from
+wrong offsets, duplicated tags, upstream fan-out loops and fields lost from
+upstream results; blocked IDs answered 451 instead of being redirected to
+their sandbox; and opt-in metering of `/graphql` through the rate limiter
+and x402.
+
+### Added
+
+- Data responses for an item or transaction whose root is a stable L1
+  transaction with an offset recorded in the local index now carry
+  `X-AR-IO-Root-Arweave-Start-Offset` and
+  `X-AR-IO-Root-Arweave-Data-Size` (otherwise neither is sent): the root's
+  place in the weave, in Arweave's own numbering (start = `/tx/{id}/offset`'s `offset - size + 1`),
+  read from the local index only and signed with the other root headers
+  (#1140). With the root-relative offsets already sent, a client can fetch
+  the item's chunks by absolute offset from any gateway or node and check
+  them against the block's `tx_root`; `docs/arweave-offset-verification.md`
+  gives the recipe. `GET /ar-io/offsets/:id` gains `rootArweaveStartOffset`,
+  `rootArweaveDataSize`, `itemArweaveStartOffset` and
+  `dataArweaveStartOffset`, and now answers L1 IDs. Items in a nested bundle
+  whose place in its root may be unknown (#907) get no absolute offsets.
+
+- An operator can capture the trace of one request: sent with
+  `X-AR-IO-Trace: 1` and the admin bearer key, the request runs in its own
+  root span, which the head sampler always samples (whatever
+  `OTEL_TRACING_SAMPLING_RATE_DENOMINATOR` is) and the bundled OTEL
+  collector always keeps (new `force-sample-policy`), and the response
+  carries `X-AR-IO-Trace-Id` to find it by. Unforced requests are sampled
+  exactly as before. The trace already records every retrieval source tried, so
+  one curl answers "where did this come from, and what failed first"
+  (#626). Ignored without the admin key.
+
+- `arweave_chunk_fetch_orphaned_total{result}` counts shared Arweave peer
+  chunk fetches that finished after every caller waiting on them had gone
+  (#885). They are left running on purpose, as cache warming, which helps a
+  later caller only if the result lands within the chunk promise cache's
+  TTL. On one gateway 99.3% of peer-origin chunk requests were cancelled by
+  the caller, so this measures how much fetch work outlives its callers.
+  That work is bounded by the number of peer attempts, not by time (the
+  per-attempt timeout stops once headers arrive); this is now documented
+  where it arises (`getChunkByAny`).
+
+- `POST /ar-io/admin/invalidate-data` (`{"id": "<id>"}`) forgets what the
+  gateway recorded for one ID: cached hash, stored location, trust and
+  verification, in the index and in memory, so the next request resolves
+  it afresh (#959 item 6). It is the way to correct a wrong record that
+  later writes cannot replace, such as one already marked verified, without
+  editing SQLite by hand. The cached bytes are kept (they are stored by hash
+  and may belong to other IDs); caches in front of the gateway still need
+  their own purge.
+
+- `ENABLE_GRAPHQL_METERING` (default off) puts `/graphql` under the rate
+  limiter and x402, at a flat `GRAPHQL_OPERATION_COST_BYTES` per operation
+  (default 10 KiB, 10 tokens; a batch pays per operation), charged before
+  the query runs. Until now the most expensive route a gateway serves was
+  the one it could not meter. Only the client's IP bucket is charged: the
+  per-path resource bucket would be a single allowance shared by every
+  GraphQL client. `/ar-io/info` reports the cost and the price.
+- `CONTIGUOUS_DATA_CACHE_INDEX_MAX_BYTES_PER_SWEEP` (default 0, off) caps
+  the bytes one contiguous-cache eviction sweep frees, so eviction is paced
+  by bytes per interval instead of arriving in bursts. On turbo-gateway.com's
+  btrfs cache HDD one 10,000-file sweep freed 258 GB over 30 minutes and
+  stalled the disk (p99 latency 232 s for two minutes). The budget is ignored
+  while free space is below `CONTIGUOUS_DATA_CACHE_MIN_FREE_BYTES`. Docker
+  Compose now also passes `CONTIGUOUS_DATA_CACHE_INDEX_UNLINK_CONCURRENCY`
+  and `CONTIGUOUS_DATA_CACHE_INDEX_MAX_BATCHES_PER_SWEEP`, which it did not.
+- `ar-io-node index-l2-import --target clickhouse` and its worker
+  (`L2_BAND_IMPORT_ENABLED`, off by default) load installed `parquet-l2`
+  bands, such as `ardrive-l2`, into a gateway's ClickHouse, so its GraphQL
+  answers for their data items without unbundling them. Each band is
+  verified first (bound to the publisher's signed publication, its roots
+  found in the L1 index, a sample of items read on chain) and refused whole
+  if a check fails. One placement is kept per item, items ClickHouse
+  already holds are left alone and disagreements counted
+  (`l2_band_import_conflicts_total`), and nothing above ClickHouse's top
+  height is written. Jobs are queued under `ETL_STAGING_PATH/l2-import` and
+  loaded by `clickhouse-auto-import`, one at a time between its own batches
+  (`CLICKHOUSE_AUTO_IMPORT_L2_POLL_INTERVAL`), with `clickhouse-import`'s
+  new `CLICKHOUSE_IMPORT_KEEP_EXISTING`, which inserts only keys ClickHouse
+  lacks, so a row the gateway exported meanwhile is never replaced. A ledger,
+  `parquet_l2_imports` in `bundles.db` (new migration), records each band;
+  `--forget <band>` removes what an import wrote. One 3.2M-item band of
+  `ardrive-l2` verifies and queues in about two minutes and loads in about
+  40 seconds. `--target sqlite` (`L2_BAND_IMPORT_TARGET=sqlite`) does the
+  same for a gateway without ClickHouse, writing the items straight into
+  `bundles.db` beside the running gateway, up to its stable L1 tip, in
+  short transactions it can resume from; it is refused where
+  `CLICKHOUSE_URL` is set. All of `ardrive-l2` is about 370 GB in SQLite.
+
+### Changed
+
+- AR.IO peer selection weights now drift back to their category default
+  when nothing reports on a peer, halfway every
+  `PEER_WEIGHT_DECAY_HALF_LIFE_MS` (default 15 min; `0` turns it off)
+  (#1119). A peer marked down during an outage used to keep its low weight
+  until it was picked and succeeded, which its low weight made unlikely.
+  For that to reach the peers tried first, a key's home set (the hash-ring
+  peers asked before any others) is now ordered by a weighted draw rather
+  than strictly by weight: decay keeps weights in order, so a strict sort
+  left a recovering peer behind its neighbours for good. Heavier peers still
+  usually go first, and a peer near the minimum weight rarely does.
+  `PEER_WEIGHT_DECAY_HALF_LIFE_MS=0` turns off both the decay and the drawn
+  order, restoring the previous peer selection exactly.
+- `/chunk/<offset>` and `/chunk/<offset>/data` now answer **503** with
+  `Retry-After: 5` and `Cache-Control: no-store`, not 404, when a chunk
+  could not be fetched in time: the serve deadline
+  (`CHUNK_SERVE_DEADLINE_MS`), an upstream timeout, or an internal
+  cancellation (#917). A 404 for an offset reads as permanent, so clients
+  and peers cached it, peer weighting took it for "lacks the data", and the
+  observer's reference-gateway client stopped at it instead of trying the
+  network. Under load nearly every failure was this kind: 99% of requests
+  at 500 concurrent, with a working gateway. A boundary lookup skipped
+  because the chain fallback was at its concurrency limit is also a 503
+  (`boundary_unavailable`), not a 404. A 404 now means no source found the
+  chunk; one case is still ambiguous: when every peer fetch timed out, the
+  peer cascade does not report why, and that ends in a 404 (`fetch_failed`).
+  Dashboards will show these 503s as 5xx. Serve-deadline 503s are counted,
+  as before, by `chunk_serve_deadline_exceeded_total`; all of them carry
+  their reason in the `chunk.retrieval.error` span attribute; they are
+  logged at debug rather than warn so a busy gateway does not flood its
+  logs.
+
+- The default `GRAPHQL_ROOT_TX_GATEWAYS_URLS` is now
+  `{ "https://arweave.net": 1 }`, replacing
+  `https://arweave-search.goldsky.com`, which now answers every request with
+  a 307 to `https://arweave.net/graphql`: nodes on the default were already
+  querying arweave.net, through an extra hop. Behaviour is otherwise
+  unchanged. arweave.net rate-limits some addresses on its gateway endpoints
+  (429, `retry-after: 299`); `{}` turns the source off, and a gateway with its
+  own indexer can list that instead. The variable is now documented in
+  `docs/envs.md`.
+### Fixed
+
+- A blocked ID requested outside its sandbox (on the apex, `/<id>` or
+  `/<id>/<path>`, or on an IP host such as a load balancer's) was still
+  redirected with a 302 to its sandbox subdomain, which answers 451. Abuse
+  checkers stop at the 302, so a host's abuse desk kept reporting the URL as
+  live after the takedown. The sandbox middleware now checks the local block
+  list first and answers 451 directly, with the short not-found TTL (these
+  hosts are not revalidated on unblock). An ID that is not blocked is
+  redirected as before; if the block list check fails, so is a blocked one.
+- Data fetched from a trusted gateway could be a JSON wrapper of the item
+  instead of the item. arweave.net (now HyperBEAM) answers a request whose
+  `Accept` includes `application/json` with a JSON document of the data
+  (`raw-id`, `body`, `commitments`, `hashpath`, ...), for full and range
+  requests alike, and axios sent its default `application/json,
+  text/plain, */*` because the gateway set no `Accept`. arweave.net is in
+  the default `TRUSTED_GATEWAYS_URLS`, so a gateway whose first upstream
+  missed cached the wrapper and served it as the item, with the wrong
+  content type and digest (observers report `dataHashDigest` and
+  `contentType` mismatches). Byte fetches from trusted gateways, AR.IO
+  peers and HTTP range sources now send `Accept: */*`. Copies already
+  cached keep serving the wrapper until purged: they start with
+  `{"accept-ranges"`.
+- Two gateways that listed each other in `GATEWAYS_GQL_URLS` called each
+  other's `/graphql` without end, until every hop timed out (#680). Fanned
+  out queries now carry `X-AR-IO-Hops`, and a request that has already
+  passed through `GATEWAYS_GQL_MAX_HOPS` gateways (default 2) is answered
+  from the local index only. A gateway that excludes its local index
+  (`GATEWAYS_GQL_INCLUDE_LOCAL=false`) answers such a request with nothing
+  and a `FANOUT_HOP_LIMIT` warning, so a federation-only gateway that other
+  gateways query through one more hop should raise `GATEWAYS_GQL_MAX_HOPS`
+  (for example to 3).
+- The Iceberg metadata scripts declared `root_parent_offset` as `int`; it
+  is a byte offset into a root bundle and passes 2^31 in bundles over
+  2 GiB, so it is now `long`, like the other offsets (#907). A nested
+  bundle unbundled without a known offset in its root, whose items are
+  recorded at `root_parent_offset` 0, is now logged and counted
+  (`bundles_unbundle_unknown_parent_offset_total`) so its producers can be
+  found.
+- `POST /ar-io/admin/queue-bundle` queued every ID as its own root, so for a
+  bundle that is itself a data item each of its items was recorded with the
+  bundle as root and offsets relative to the bundle (#959 item 5, whose
+  writer was unknown). Serving then rejected those locations, since the
+  "root" is not an L1 transaction, and items failed intermittently. The
+  route now looks up a nested bundle's root and payload offset first, and
+  answers 409 when the root is known but the offset is not. Rows written
+  this way before can be cleared with `POST /ar-io/admin/invalidate-data`.
+- A data item stored in two bundles could be given a location made of one
+  copy's root and the other copy's offsets: data attributes took the root
+  from the location recorded at fetch time and filled missing offsets from
+  the bundles index, even when the two named different roots (#959). The
+  index now fills in only when it names the same root. Separately, an ID
+  found only through its data root (an L1 transaction whose bytes are also
+  a data item's) borrowed that other item's root and offsets; it no longer
+  gets any location that way, and the ID's own row now always wins over one
+  found through the data root.
+- AR.IO peer weighting no longer treats a busy peer like one without the
+  data: a 429 or 503 from a peer costs it a fifth of a failure's weight
+  (#1118). Chunk peers were also penalised twice for every refusal (once
+  where it was detected and again in the request's catch); each now counts
+  once.
+- Chunk-metadata anchoring asked only the first peer of its pool, so when
+  that peer failed every lookup fell through to the slower chain search.
+  It now asks the first peer not backed off: a peer that is unreachable,
+  refuses (429, 402, 401, 5xx; a 404 is a healthy peer without the chunk)
+  or contradicts the chain is skipped for 30 s, doubling to 10 min, and the
+  next peer takes its probes. The pool now keeps every entry in priority
+  order (previously `GATEWAYS_ROOT_TX_URLS` in object order, or only the
+  first `TRUSTED_GATEWAYS_URLS` entry), and has its own setting,
+  `CHUNK_METADATA_ANCHOR_PEER_URLS`, so anchoring can be pointed elsewhere
+  or turned off (`{}`) without changing root-TX lookups.
+- A gateway that started while the AR.IO gateway registry was unreachable
+  had no peers until the next hourly refresh, so every peer retrieval failed
+  for up to an hour. The peer list is now saved after each successful
+  registry read (`AR_IO_PEER_LIST_CACHE_PATH`, default
+  `data/peers/ar-io-peers.json`; Docker Compose mounts it from
+  `PEERS_DATA_PATH`, default `./data/peers`) and loaded at startup, and
+  while the list is empty a failed read is retried after 10 s, backing off
+  to 5 min. A registry read that returns no gateways at all is treated as a
+  failure rather than applied as an empty list.
+- `X-AR-IO-Stable` was `false` on every response, and stable data never got
+  `CACHE_STABLE_MAX_AGE` (30 days, `immutable`): since 2023 the gateway
+  compared SQLite's `1` with `true`, which never matched. A transaction at
+  height 1,500,000 on vilenarios.com, long past the fork depth, was served
+  `X-AR-IO-Stable: false` with a two-hour `max-age`. Stable data is now
+  reported stable, and directly addressed stable data (`/<id>`, `/raw/<id>`)
+  that is also verified and served from the gateway's own cache gets
+  `CACHE_STABLE_MAX_AGE`, `immutable`, for the first time; other stable data
+  keeps the unstable tiers, and ArNS responses keep their own TTL.
+  A data item the bundles flush has not yet promoted is also stable once
+  its root L1 transaction is, rather than waiting for the flush (an item
+  whose bundle has no `stable_block_transactions` row was never promoted).
+  This is the same test the flush applies before promoting it, so no
+  placement is trusted more than before. With no local record of the data,
+  `X-AR-IO-Stable` and `X-AR-IO-Verified` are now sent as `false` instead
+  of being left out.
+
+- GraphQL no longer lists a data item's tags twice when the item was
+  indexed from two bundles (or imported from an L2 band and later
+  unbundled). The stable flush keeps the first stored row of an item, but
+  wrote the tags of every placement beside it; it now writes tags only
+  where it stores the item. Tag rows already duplicated are not removed.
+- GraphQL no longer serves, or caches, a data item's signature or owner key
+  read from a wrong offset. A signature is used only when its SHA-256 is the
+  id, and an owner key only when its SHA-256 is the owner address; anything
+  else counts as `attribute_fetch_total{outcome="invalid"}` and is logged
+  with the offset that produced it. Cached entries that fail either check
+  are removed. Rows with item-relative owner and signature offsets had been
+  served wrong signatures, and, through the owner cache keyed by address,
+  wrong owner keys for every item of the same owner.
+
+- GraphQL results merged from upstream gateways (`GATEWAYS_GQL_URLS`) lost
+  fields the query had asked for, because the selection forwarded upstream
+  left out what the gateway reads back. Amounts read 0 AR when a query
+  selected `quantity { ar }` or `fee { ar }` without `winston`; `parent`
+  was null without `bundledIn`; and a field selected twice under different
+  aliases (`a: tags { name } b: tags { value }`) kept only the first
+  selection's sub-fields, which failed the whole query for tags. The
+  forwarded selection now always asks for `winston`, merges every selection
+  of a field, and the parent is read from `parent` or `bundledIn`. Stored
+  data was never wrong, so nothing needs reindexing.
+
 ## [Release 87] - 2026-10-26
 
 This is a **recommended release** focused on **index builds that fit

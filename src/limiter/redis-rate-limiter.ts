@@ -13,6 +13,7 @@ import {
 import { extractAllClientIPs, isAnyIpAllowlisted } from '../lib/ip-utils.js';
 import log from '../log.js';
 import {
+  CheckLimitOptions,
   RateLimiter,
   RateLimitCheckResult,
   TokenAdjustmentContext,
@@ -74,6 +75,7 @@ export class RedisRateLimiter implements RateLimiter {
     predictedTokens: number,
     x402PaymentProvided = false,
     contentLengthForTopOff = 0,
+    options: CheckLimitOptions = {},
   ): Promise<RateLimitCheckResult> {
     const method = req.method;
     const canonicalPath = getCanonicalPathFromRequest(req);
@@ -123,7 +125,7 @@ export class RedisRateLimiter implements RateLimiter {
 
       // Check resource bucket ONLY if no paid tokens were consumed for this request
       // (consuming paid tokens grants bypass of per-resource limits)
-      if (ipResult.paidConsumed === 0) {
+      if (ipResult.paidConsumed === 0 && options.skipResourceBucket !== true) {
         const resourceResult =
           await this.redisClient.getOrCreateBucketAndConsume(
             resourceKey,
@@ -192,7 +194,7 @@ export class RedisRateLimiter implements RateLimiter {
         };
       }
 
-      // Paid request - skip resource check
+      // Paid request, or the caller asked to skip it - no resource check
       return {
         allowed: true,
         ipTokensConsumed: ipResult.consumed,

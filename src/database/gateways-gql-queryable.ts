@@ -5,11 +5,13 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import { default as axios, AxiosInstance } from 'axios';
-import { FieldNode, SelectionSetNode, print } from 'graphql';
+import { FieldNode, Kind, SelectionSetNode } from 'graphql';
 import CircuitBreaker from 'opossum';
 import winston from 'winston';
 
 import * as config from '../config.js';
+import { headerNames } from '../constants.js';
+import { currentGqlHops } from '../lib/gql-hops.js';
 import { fromB64Url } from '../lib/encoding.js';
 import { createAgentPair } from '../lib/http-agent.js';
 import * as metrics from '../metrics.js';
@@ -124,66 +126,69 @@ const DEFAULT_TRANSACTION_NODE_FIELDS = `
  */
 const REQUIRED_CO_FIELDS_BY_FIELD: Record<string, readonly string[]> = {
   block: ['id', 'timestamp', 'height', 'previous'],
+  // The flat GqlTransaction keeps an amount only in winston
+  // (`mapRemoteTransaction` reads `quantity.winston` / `fee.winston`), and
+  // the local Amount resolver derives `ar` from it. Forwarding a user's
+  // `quantity { ar }` as is left winston unrequested, so it mapped to '0'
+  // and every amount read 0 AR unless `winston` was selected too.
+  quantity: ['winston'],
+  fee: ['winston'],
 };
 
 /**
  * Render a GraphQL selection set as a plain fragment body (no surrounding
- * braces). Aliases are stripped and selections are deduped by canonical name,
- * because the mapper reads canonical keys like `node.anchor`. Non-field
- * selections (fragment spreads, inline fragments) cause a bail-out — the caller
- * falls back to the default field set.
+ * braces). Aliases are stripped, because the mapper reads canonical keys like
+ * `node.anchor`, and every selection of one field is merged into one: a query
+ * may select a field twice under different aliases (`a: tags { name }
+ * b: tags { value }`), and forwarding only the first would leave the other's
+ * sub-fields unrequested. Fragment spreads and inline fragments, at any
+ * depth, cause a bail-out — the caller falls back to the default field set,
+ * which selects every field the mapper reads.
  */
 function renderSelectionSet(
   selectionSet: SelectionSetNode,
 ): string | undefined {
-  const byName = new Map<string, string>();
+  const byName = new Map<string, FieldNode[]>();
   for (const sel of selectionSet.selections) {
     if (sel.kind !== 'Field') return undefined;
-    const field = sel as FieldNode;
-    const name = field.name.value;
-    if (byName.has(name)) continue;
-    if (field.selectionSet !== undefined) {
-      const nested = renderSelectionSet(field.selectionSet);
-      if (nested === undefined) {
-        // Inner selection contains a FragmentSpread or InlineFragment.
-        // For most fields we can preserve the user's intent by printing
-        // the field as-is. But for fields whose flat-mapper invariant
-        // depends on specific co-fields being present
-        // (REQUIRED_CO_FIELDS_BY_FIELD), printing a fragment as-is can
-        // leave those co-fields unselected — reproducing the original
-        // `Transaction.block` nulling bug PR #718 was meant to fix.
-        // Bail to the caller's fallback (`DEFAULT_TRANSACTION_NODE_FIELDS`,
-        // which includes the full co-field set) rather than silently
-        // emitting a fragment-shaped selection that loses correctness.
-        if (REQUIRED_CO_FIELDS_BY_FIELD[name] !== undefined) {
-          return undefined;
-        }
-        byName.set(name, print(field));
-        continue;
-      }
-      const required = REQUIRED_CO_FIELDS_BY_FIELD[name];
-      if (required !== undefined) {
-        // Union the user's sub-selection with the required co-fields.
-        const present = new Set(
-          field.selectionSet.selections
-            .filter((s): s is FieldNode => s.kind === 'Field')
-            .map((s) => s.name.value),
-        );
-        const additions = required.filter((f) => !present.has(f)).join(' ');
-        byName.set(
-          name,
-          additions === ''
-            ? `${name} { ${nested} }`
-            : `${name} { ${nested} ${additions} }`,
-        );
-      } else {
-        byName.set(name, `${name} { ${nested} }`);
-      }
+    const name = sel.name.value;
+    const fields = byName.get(name);
+    if (fields === undefined) {
+      byName.set(name, [sel]);
     } else {
-      byName.set(name, name);
+      fields.push(sel);
     }
   }
-  return Array.from(byName.values()).join(' ');
+  const rendered: string[] = [];
+  for (const [name, fields] of byName) {
+    const subSelections = fields.flatMap(
+      (field) => field.selectionSet?.selections ?? [],
+    );
+    if (subSelections.length === 0) {
+      rendered.push(name);
+      continue;
+    }
+    const nested = renderSelectionSet({
+      kind: Kind.SELECTION_SET,
+      selections: subSelections,
+    });
+    if (nested === undefined) return undefined;
+    // Union the user's sub-selection with the required co-fields.
+    const present = new Set(
+      subSelections
+        .filter((s): s is FieldNode => s.kind === 'Field')
+        .map((s) => s.name.value),
+    );
+    const additions = (REQUIRED_CO_FIELDS_BY_FIELD[name] ?? [])
+      .filter((f) => !present.has(f))
+      .join(' ');
+    rendered.push(
+      additions === ''
+        ? `${name} { ${nested} }`
+        : `${name} { ${nested} ${additions} }`,
+    );
+  }
+  return rendered.join(' ');
 }
 
 /**
@@ -327,10 +332,13 @@ class RemoteGqlQueryable implements GqlQueryable {
     query: string,
     variables: Record<string, unknown>,
   ): Promise<{ data: T; warnings: GqlWarning[] }> {
-    const response = await this.axiosInstance.post(`${this.url}/graphql`, {
-      query,
-      variables,
-    });
+    // One hop on from the request being served, so the upstream can tell
+    // a fanned-out query from a client's and stop at the hop limit.
+    const response = await this.axiosInstance.post(
+      `${this.url}/graphql`,
+      { query, variables },
+      { headers: { [headerNames.hops]: String(currentGqlHops() + 1) } },
+    );
     const body = response.data;
     if (body?.errors && Array.isArray(body.errors) && body.errors.length > 0) {
       throw new Error(
@@ -501,6 +509,9 @@ interface RemoteTxNode {
     previous?: string;
   } | null;
   bundledIn?: { id: string } | null;
+  // Deprecated alias of bundledIn; a user's selection is forwarded as is,
+  // so the parent id may arrive under either name.
+  parent?: { id: string } | null;
 }
 
 /**
@@ -515,8 +526,8 @@ function mapRemoteTransaction(
   const decoded = decodeTransactionGqlCursor(cursor);
   // Single-record transaction(id) responses have no cursor. Infer data-item
   // status from bundledIn so the shape matches cursor-derived results.
-  const dataItemId =
-    decoded.dataItemId ?? (node.bundledIn != null ? node.id : 'AA');
+  const parentId = node.bundledIn?.id ?? node.parent?.id ?? null;
+  const dataItemId = decoded.dataItemId ?? (parentId !== null ? node.id : 'AA');
   const isDataItem = dataItemId !== 'AA';
   return {
     id: node.id,
@@ -541,7 +552,7 @@ function mapRemoteTransaction(
     blockTimestamp: node.block?.timestamp ?? null,
     height: node.block?.height ?? null,
     blockPreviousBlock: node.block?.previous ?? null,
-    parentId: node.bundledIn?.id ?? null,
+    parentId,
     blockTransactionIndex: decoded.blockTransactionIndex ?? 0,
     dataItemId,
     tags: node.tags ?? [],
@@ -750,6 +761,7 @@ export class GatewaysGqlQueryable
   private readonly sourceLabels: string[];
   private readonly softDeadlineEnabled: boolean;
   private readonly softDeadlineMs: number;
+  private readonly maxHops: number;
 
   constructor({
     log,
@@ -766,6 +778,7 @@ export class GatewaysGqlQueryable
     },
     softDeadlineEnabled = config.GATEWAYS_GQL_SOFT_DEADLINE_ENABLED,
     softDeadlineMs = config.GATEWAYS_GQL_SOFT_DEADLINE_MS,
+    maxHops = config.GATEWAYS_GQL_MAX_HOPS,
     axiosInstance,
   }: {
     log: winston.Logger;
@@ -775,11 +788,14 @@ export class GatewaysGqlQueryable
     circuitBreakerOptions?: CircuitBreaker.Options;
     softDeadlineEnabled?: boolean;
     softDeadlineMs?: number;
+    /** Inbound hop count at which only the local index is asked. */
+    maxHops?: number;
     axiosInstance?: AxiosInstance;
   }) {
     this.log = log.child({ class: 'GatewaysGqlQueryable' });
     this.softDeadlineEnabled = softDeadlineEnabled;
     this.softDeadlineMs = softDeadlineMs;
+    this.maxHops = maxHops;
 
     if (urls.length === 0 && localGqlQueryable === undefined) {
       throw new Error(
@@ -814,6 +830,7 @@ export class GatewaysGqlQueryable
     labels?: string[];
     softDeadlineEnabled?: boolean;
     softDeadlineMs?: number;
+    maxHops?: number;
   }): GatewaysGqlQueryable {
     if (params.sources.length === 0) {
       throw new Error('forTesting requires at least one source');
@@ -824,6 +841,7 @@ export class GatewaysGqlQueryable
       localGqlQueryable: params.sources[0],
       softDeadlineEnabled: params.softDeadlineEnabled,
       softDeadlineMs: params.softDeadlineMs,
+      maxHops: params.maxHops,
     });
 
     (merger as any).sources = params.sources;
@@ -864,6 +882,43 @@ export class GatewaysGqlQueryable
     );
   }
 
+  /**
+   * The sources to ask for the request being served. A request that has
+   * already passed through `maxHops` gateways is answered from the local
+   * index alone (none when it is not included), never fanned out again: two
+   * gateways listing each other would otherwise call each other until every
+   * hop timed out (#680).
+   */
+  private activeSources(): {
+    sources: GqlQueryable[];
+    labels: string[];
+    hopLimited: boolean;
+  } {
+    if (currentGqlHops() < this.maxHops) {
+      return {
+        sources: this.sources,
+        labels: this.sourceLabels,
+        hopLimited: false,
+      };
+    }
+    const local = this.sourceLabels.indexOf('<local>');
+    return local === -1
+      ? { sources: [], labels: [], hopLimited: true }
+      : {
+          sources: [this.sources[local]],
+          labels: ['<local>'],
+          hopLimited: true,
+        };
+  }
+
+  /** The warning a hop-limited fan-out adds when it asked no upstream. */
+  private hopLimitWarning(): GqlWarning {
+    return {
+      code: 'FANOUT_HOP_LIMIT',
+      message: `Request had passed through ${currentGqlHops()} gateways (GATEWAYS_GQL_MAX_HOPS ${this.maxHops}); upstream gateways were not asked`,
+    };
+  }
+
   async getGqlTransaction({
     id,
     warnings,
@@ -883,7 +938,9 @@ export class GatewaysGqlQueryable
     // optimistic copy can beat a peer that has the same transaction
     // properly indexed with its block height, and the resolved row's
     // data is silently dropped (PE-9092).
-    const promises = this.sources.map((source) =>
+    const { sources, hopLimited } = this.activeSources();
+    if (hopLimited) warnings?.push(this.hopLimitWarning());
+    const promises = sources.map((source) =>
       source.getGqlTransaction({ id, warnings }),
     );
 
@@ -898,7 +955,9 @@ export class GatewaysGqlQueryable
   }
 
   async getGqlBlock({ id }: { id: string }): Promise<GqlBlock | undefined> {
-    const promises = this.sources.map((source) => source.getGqlBlock({ id }));
+    const promises = this.activeSources().sources.map((source) =>
+      source.getGqlBlock({ id }),
+    );
 
     return this.raceFirstNonNull(promises, 'getGqlBlock', { id });
   }
@@ -907,18 +966,23 @@ export class GatewaysGqlQueryable
     args: TransactionQueryArgs,
   ): Promise<GqlTransactionsResult> {
     const sortOrder = args.sortOrder ?? 'HEIGHT_DESC';
+    const { sources, labels, hopLimited } = this.activeSources();
     const results = await this.settleWithSoftDeadline(
-      this.sources.map((source) => source.getGqlTransactions(args)),
+      sources.map((source) => source.getGqlTransactions(args)),
       (result) => result.edges.length > 0,
     );
     const failureWarnings = this.handleSourceFailures(
       results,
       'getGqlTransactions',
       args,
+      labels,
     );
 
     const streams: GqlTransactionEdge[][] = [];
-    const warnings: GqlWarning[] = [...failureWarnings];
+    const warnings: GqlWarning[] = [
+      ...(hopLimited ? [this.hopLimitWarning()] : []),
+      ...failureWarnings,
+    ];
     let anyUpstreamHasMore = false;
     for (let i = 0; i < results.length; i++) {
       const r = results[i];
@@ -927,7 +991,7 @@ export class GatewaysGqlQueryable
         if (r.value.pageInfo.hasNextPage) anyUpstreamHasMore = true;
         if (r.value.warnings !== undefined && r.value.warnings.length > 0) {
           for (const w of r.value.warnings) {
-            warnings.push({ ...w, source: w.source ?? this.sourceLabels[i] });
+            warnings.push({ ...w, source: w.source ?? labels[i] });
           }
         }
       }
@@ -950,18 +1014,23 @@ export class GatewaysGqlQueryable
 
   async getGqlBlocks(args: BlockQueryArgs): Promise<GqlBlocksResult> {
     const sortOrder = args.sortOrder ?? 'HEIGHT_DESC';
+    const { sources, labels, hopLimited } = this.activeSources();
     const results = await this.settleWithSoftDeadline(
-      this.sources.map((source) => source.getGqlBlocks(args)),
+      sources.map((source) => source.getGqlBlocks(args)),
       (result) => result.edges.length > 0,
     );
     const failureWarnings = this.handleSourceFailures(
       results,
       'getGqlBlocks',
       args,
+      labels,
     );
 
     const streams: { cursor: string; node: GqlBlock }[][] = [];
-    const warnings: GqlWarning[] = [...failureWarnings];
+    const warnings: GqlWarning[] = [
+      ...(hopLimited ? [this.hopLimitWarning()] : []),
+      ...failureWarnings,
+    ];
     let anyUpstreamHasMore = false;
     for (let i = 0; i < results.length; i++) {
       const r = results[i];
@@ -972,7 +1041,7 @@ export class GatewaysGqlQueryable
         if (r.value.pageInfo.hasNextPage) anyUpstreamHasMore = true;
         if (r.value.warnings !== undefined && r.value.warnings.length > 0) {
           for (const w of r.value.warnings) {
-            warnings.push({ ...w, source: w.source ?? this.sourceLabels[i] });
+            warnings.push({ ...w, source: w.source ?? labels[i] });
           }
         }
       }
@@ -1105,6 +1174,9 @@ export class GatewaysGqlQueryable
     method: string,
     args: unknown,
   ): Promise<T | undefined> {
+    // No sources (the hop limit reached with no local index): nothing would
+    // ever settle the promise below.
+    if (promises.length === 0) return Promise.resolve(undefined);
     return new Promise((resolve, reject) => {
       let remaining = promises.length;
       let rejectedCount = 0;
@@ -1236,9 +1308,10 @@ export class GatewaysGqlQueryable
     results: PromiseSettledResult<unknown>[],
     method: string,
     args: unknown,
+    labels: string[] = this.sourceLabels,
   ): GqlWarning[] {
     const failures = results
-      .map((r, i) => ({ r, label: this.sourceLabels[i] }))
+      .map((r, i) => ({ r, label: labels[i] }))
       .filter((x) => x.r.status === 'rejected') as {
       r: PromiseRejectedResult;
       label: string;

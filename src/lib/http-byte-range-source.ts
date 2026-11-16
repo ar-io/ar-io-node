@@ -111,6 +111,10 @@ export class HttpByteRangeSource implements ByteRangeSource {
       const response = await this.httpClient.get(this.url, {
         headers: {
           Range: buildRangeHeader(offset, offset + size - 1),
+          // The stored bytes: arweave.net answers a range request carrying
+          // axios's default `application/json, …` Accept with a 206 JSON
+          // envelope instead of the slice.
+          Accept: '*/*',
           'Accept-Encoding': 'identity',
         },
         responseType: 'arraybuffer',

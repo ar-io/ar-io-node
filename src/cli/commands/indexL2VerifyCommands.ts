@@ -173,7 +173,7 @@ const isDirectory = (dir: string) =>
  * the node's own beside the L2 index (`installed/parquet-l1`, then
  * `published/parquet-l1`, two levels up from `--bands-dir`).
  */
-async function l1Index(
+export async function l1Index(
   bandsDir: string,
   given: string | undefined,
 ): Promise<{ bandsDir: string; required: boolean } | undefined> {

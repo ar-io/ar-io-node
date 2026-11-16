@@ -22,6 +22,7 @@ import {
   indexL1AuditOptions,
   indexL1VerifyOptions,
   indexL2VerifyOptions,
+  indexL2ImportOptions,
   indexBandVerifyOptions,
   indexCensusOptions,
 } from './options.js';
@@ -32,6 +33,7 @@ import type {
   IndexL1ImportCLIOptions,
   IndexL1AuditCLIOptions,
   IndexL2VerifyCLIOptions,
+  IndexL2ImportCLIOptions,
   IndexL1VerifyCLIOptions,
   IndexBandVerifyCLIOptions,
   IndexCensusCLIOptions,
@@ -49,6 +51,8 @@ const indexL1ImportCommands = async () =>
   import('./commands/indexL1ImportCommands.js');
 const indexL2VerifyCommands = async () =>
   import('./commands/indexL2VerifyCommands.js');
+const indexL2ImportCommands = async () =>
+  import('./commands/indexL2ImportCommands.js');
 const indexL1VerifyCommands = async () =>
   import('./commands/indexL1VerifyCommands.js');
 const indexL1AuditCommands = async () =>
@@ -206,6 +210,39 @@ makeCommand<IndexL1VerifyCLIOptions>({
     'signatures checks what nothing else binds. Pre-2.0 blocks and blocks',
     'holding a format-1 transaction with data are reported unbound. Exits 1',
     'if a check fails or something unbound is not accepted.',
+    CONTRACT,
+  ].join('\n'),
+);
+
+makeCommand<IndexL2ImportCLIOptions>({
+  name: 'index-l2-import',
+  description:
+    "Load verified parquet-l2 bands into this gateway's index: --target clickhouse queues the rows its ClickHouse lacks for clickhouse-auto-import",
+  options: indexL2ImportOptions,
+  action: async (options) =>
+    (await indexL2ImportCommands()).indexL2ImportCLICommand(options, {
+      log: createCliLogger({ debug: options.debug === true }),
+    }),
+}).addHelpText(
+  'after',
+  [
+    '',
+    'Example (the gateway runs this itself when L2_BAND_IMPORT_ENABLED=true):',
+    '  ar-io-node index-l2-import --target clickhouse \\',
+    '    --bands-dir data/indexes/installed/ardrive-l2 \\',
+    '    --publication https://<publisher>/ar-io/indexes \\',
+    '    --registry-url http://core:4000',
+    '',
+    'Each band is verified first (bound to the signed publication, every',
+    'root found in the L1 index, a sample of items read on chain); a band',
+    'that fails a check is refused and nothing of it is written. Items',
+    "ClickHouse already holds are left alone, and nothing above ClickHouse's",
+    'top height is written. Jobs are queued newest band first and loaded by',
+    'clickhouse-auto-import, one at a time.',
+    '',
+    'To undo an import:',
+    '  ar-io-node index-l2-import --target clickhouse \\',
+    '    --bands-dir data/indexes/installed/ardrive-l2 --forget <band-id>',
     CONTRACT,
   ].join('\n'),
 );

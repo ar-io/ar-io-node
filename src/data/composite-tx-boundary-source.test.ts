@@ -9,7 +9,10 @@ import { before, describe, it, mock } from 'node:test';
 
 import { createTestLogger } from '../../test/test-logger.js';
 import { TxBoundary, TxBoundarySource } from '../types.js';
-import { CompositeTxBoundarySource } from './composite-tx-boundary-source.js';
+import {
+  CompositeTxBoundarySource,
+  TxBoundaryUnavailableError,
+} from './composite-tx-boundary-source.js';
 
 const OFFSET = 51530681327863n;
 const B64_DATA_ROOT = 'wRq6f05oRupfTW_M5dcYBtwK5P8rSNYu20vC6D_o-M4';
@@ -339,6 +342,43 @@ describe('CompositeTxBoundarySource', () => {
         (error: any) => error.name === 'AbortError',
       );
       assert.equal((anchorSource.getTxBoundary as any).mock.callCount(), 0);
+    });
+  });
+
+  describe('chain fallback at its concurrency limit (#917)', () => {
+    it('says it is unavailable rather than that the offset has no boundary', async () => {
+      let release: () => void = () => undefined;
+      const slowChain: TxBoundarySource = {
+        getTxBoundary: () =>
+          new Promise((resolve) => {
+            release = () => resolve(boundary('chain-tx'));
+          }),
+      };
+      const composite = new CompositeTxBoundarySource({
+        log,
+        dbSource: sourceReturning(null),
+        chainSource: slowChain,
+        chainFallbackConcurrencyLimit: 1,
+      });
+
+      const first = composite.getTxBoundary(OFFSET);
+      await new Promise((resolve) => setImmediate(resolve));
+      await assert.rejects(
+        composite.getTxBoundary(OFFSET + 1n),
+        TxBoundaryUnavailableError,
+      );
+      release();
+      assert.equal((await first)?.id, 'chain-tx');
+    });
+
+    it('still answers null when every source, chain included, missed', async () => {
+      const composite = new CompositeTxBoundarySource({
+        log,
+        dbSource: sourceReturning(null),
+        chainSource: sourceReturning(null),
+        chainFallbackConcurrencyLimit: 1,
+      });
+      assert.equal(await composite.getTxBoundary(OFFSET), null);
     });
   });
 });

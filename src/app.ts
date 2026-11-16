@@ -12,6 +12,7 @@ import log from './log.js';
 import * as metrics from './metrics.js';
 import { createAbortSignalMiddleware } from './middleware/abort-signal.js';
 import { createRequestIdMiddleware } from './middleware/request-id.js';
+import { createForceTraceMiddleware } from './middleware/force-trace.js';
 import { createDefaultCacheControlMiddleware } from './middleware/cache-control.js';
 import { createErrorHandlerMiddleware } from './middleware/error-handler.js';
 import { createHttpSigMiddleware } from './middleware/httpsig.js';
@@ -24,6 +25,7 @@ import { arnsRouter } from './routes/arns.js';
 import { chunkRouter } from './routes/chunk/index.js';
 import { dataRouter } from './routes/data/index.js';
 import { makeApolloServerMiddleware } from './routes/graphql/index.js';
+import { createGraphqlMeter } from './routes/graphql/metering.js';
 import { openApiRouter } from './routes/openapi.js';
 import { datasetsRouter } from './routes/datasets.js';
 import * as system from './system.js';
@@ -95,6 +97,7 @@ if (system.clickhouseStreamer !== undefined) {
 if (config.START_WRITERS) {
   system.blockImporter.start();
   system.l1BandImportWorker?.start();
+  system.l2BandImportWorker?.start();
   system.txOffsetRepairWorker.start();
   system.txRepairWorker.start();
   system.bundleRepairWorker.start();
@@ -120,6 +123,11 @@ app.use(createRequestIdMiddleware());
 
 // Attach AbortSignal to all requests for client disconnect handling
 app.use(createAbortSignalMiddleware());
+
+// X-AR-IO-Trace (admin only): keep this request's trace and return its ID
+app.use(
+  createForceTraceMiddleware({ adminApiKey: () => config.ADMIN_API_KEY }),
+);
 
 // HTTPSIG response signing — must be before cache-control so the writeHead
 // LIFO order ensures signing runs AFTER cache-control has set default headers.
@@ -186,6 +194,15 @@ const { middleware: apolloMiddleware, stop: stopApolloServer } =
   await makeApolloServerMiddleware({
     db: system.gqlQueryable,
     txMetadataResolver: system.dataItemMetaResolver,
+    meter: config.ENABLE_GRAPHQL_METERING
+      ? createGraphqlMeter({
+          rateLimiter: system.rateLimiter,
+          paymentProcessor: system.paymentProcessor,
+          operationCostBytes: config.GRAPHQL_OPERATION_COST_BYTES,
+        })
+      : undefined,
+    ownerFetcher: system.ownerFetcher,
+    signatureFetcher: system.signatureFetcher,
   });
 app.use('/graphql', apolloMiddleware);
 

@@ -433,6 +433,13 @@ export const bundlesUnbundleStartedCounter = new promClient.Counter({
   help: 'Count of Ans104Unbundler.unbundle invocations (fastq job starts).',
 });
 
+export const bundlesUnbundleUnknownParentOffsetTotal = new promClient.Counter(
+  {
+    name: 'bundles_unbundle_unknown_parent_offset_total',
+    help: 'Nested bundles unbundled without a known offset in their root, so their items were recorded with root_parent_offset 0, which is wrong for them (#907)',
+  },
+);
+
 export const bundlesUnbundleInFlightGauge = new promClient.Gauge({
   name: 'bundles_unbundle_in_flight',
   help: 'Ans104Unbundler.unbundle invocations currently in progress. Pinned at the worker count with no completions indicates the unbundler is hung.',
@@ -599,7 +606,9 @@ export const attributeFetchCounter = new promClient.Counter({
     'fetchDataFromParent — data items only), `chain` (chainSource — ' +
     'transactions only), `derived` (secp256k1 owner-from-tx recovery), ' +
     '`incomplete_root` (PE-9073 guard fired). `outcome` is one of `hit`, ' +
-    '`aborted`, `error`, `not_found`.',
+    '`aborted`, `error`, `not_found`, `invalid` (a signature that does not ' +
+    'hash to its id, or an owner key that does not hash to its address: ' +
+    'neither served nor cached).',
   labelNames: ['kind', 'subject', 'source', 'outcome'],
 });
 
@@ -1350,6 +1359,12 @@ export const requestChunkTotal = new promClient.Counter({
   ] as const,
 });
 
+export const chunkFetchOrphanedTotal = new promClient.Counter({
+  name: 'arweave_chunk_fetch_orphaned_total',
+  help: 'Shared Arweave peer chunk fetches that finished after every caller waiting on them had gone, by outcome. A success serves a later caller only if it lands within the chunk promise cache TTL and is not evicted first; compare with get_chunk_total to see how much fetch work outlives its callers',
+  labelNames: ['result'] as const,
+});
+
 export const getChunkTotal = new promClient.Counter({
   name: 'get_chunk_total',
   help: 'Higher level count of chunk discovery, counts when the caller request for chunk ends, stores the status of the request',
@@ -1821,7 +1836,7 @@ export const x402PaymentSettledUsdcCounter = new promClient.Counter({
 // lookup's probes.
 export const offsetsLookupTotal = new promClient.Counter({
   name: 'offsets_lookup_total',
-  help: 'GET /ar-io/offsets/:id answers by source (db, cdb64, or none for a 404)',
+  help: 'GET /ar-io/offsets/:id answers by source (db, cdb64, l1 for a stable L1 transaction, or none for a 404)',
   labelNames: ['source'] as const,
 });
 
@@ -2398,4 +2413,27 @@ export const l1BandImportRowsTotal = new promClient.Counter({
 export const l1BandImportUncoveredHeights = new promClient.Gauge({
   name: 'l1_band_import_uncovered_heights',
   help: 'Heights below the gateway that it lacks and no installed L1 band holds yet',
+});
+
+/** Runs of the L2 band import worker, by result. */
+export const l2BandImportRunsTotal = new promClient.Counter({
+  name: 'l2_band_import_runs_total',
+  help: 'L2 band import worker runs, by result (queued: jobs written for clickhouse-auto-import, idle, failed, deferred: a refused import waiting for its bands to change, unreadable: the on-chain sample could not be read)',
+  labelNames: ['result'] as const,
+});
+
+/** Data item rows the L2 band import worker has queued for ClickHouse. */
+export const l2BandImportRowsTotal = new promClient.Counter({
+  name: 'l2_band_import_rows_total',
+  help: 'Data item rows the L2 band import worker has queued for ClickHouse',
+});
+
+/**
+ * Items an L2 band places differently from the row ClickHouse already holds
+ * for them (another root, parent, owner, size or location). The gateway's
+ * row is kept; the count says how often a publisher and this gateway disagree.
+ */
+export const l2BandImportConflictsTotal = new promClient.Counter({
+  name: 'l2_band_import_conflicts_total',
+  help: 'Items an L2 band places differently from the row ClickHouse already holds (the held row is kept)',
 });

@@ -1357,6 +1357,266 @@ one with nothing verified at all. `onchain.bands` gives each band's located
 share, how many items were drawn (`drawn`, of them `drawnUniform` over
 every located item, the rest nested items on top), and how each ended.
 
+## `index-l2-import`
+
+Loads verified `parquet-l2` bands, one L2 index such as `ardrive-l2`, into
+this gateway's index, so its GraphQL answers for their data items without
+unbundling them. `--target clickhouse` queues the rows this gateway's
+ClickHouse lacks for `clickhouse-auto-import` to load; `--target sqlite`,
+for a gateway without ClickHouse, writes them into `bundles.db` itself
+([SQLite target](#the-sqlite-target)). The gateway runs it itself when
+`L2_BAND_IMPORT_ENABLED=true` (see [envs.md](envs.md)); run it by hand to
+import now, or to undo an import.
+
+```bash
+# queue the newest bands ClickHouse lacks, each verified first
+./tools/ar-io-node index-l2-import --target clickhouse \
+  --bands-dir data/indexes/installed/ardrive-l2 \
+  --publication https://turbo-gateway.com/ar-io/indexes \
+  --registry-url http://core:4000
+
+# undo one band's import
+./tools/ar-io-node index-l2-import --target clickhouse \
+  --bands-dir data/indexes/installed/ardrive-l2 \
+  --forget l2-h1900000-1999999-3078e8b8-10ec39700bc0
+```
+
+What a run does, band by band, newest first:
+
+1. **Verifies the band**, as `index-l2-verify` does with the same options,
+   lookups aside: bound to `--publication` (required), every root found in
+   the L1 index (`--l1-bands-dir`, or the node's own `installed/parquet-l1`
+   or `published/parquet-l1`; required), and `--onchain` items read from
+   Arweave nodes (`0` is refused; `--gateway-url` is not offered, since a
+   gateway would be trusted). A band that fails any check, or that this
+   gateway's own wallet (`AR_IO_WALLET`) published, is refused and nothing
+   of it is written. The other bands are still tried; the run then exits 1
+   with what it queued, `refused` naming each band refused and why,
+   `refusals` giving each one's failed checks, and `refusal` saying whether
+   every refusal was only an on-chain sample that could not be read
+   (`unreadable`: an outage, tried again later) or something failed
+   (`refused`).
+2. **Keeps one placement per item.** A band holds a row per place an item
+   sits; the gateway's index holds one. A located place is kept before an
+   unlocated one, then the first in chain order (height, block index,
+   `root_parent_offset`, `offset`). An item no band row locates is kept with
+   zeros for its location, which ClickHouse reads as unknown; it is found by
+   GraphQL and never used to fetch data.
+3. **Leaves alone what ClickHouse holds** (first writer wins).
+   `transactions` keeps the newest row of a key, so a band row at a key the
+   gateway already holds would replace the gateway's row. That is prevented
+   where it cannot race: when auto-import loads a job, it inserts only rows
+   whose key `transactions` lacks then, and whose item it does not hold
+   within 1,000 heights at any key (`CLICKHOUSE_IMPORT_KEEP_EXISTING=true`),
+   so an item the gateway exported after the job was written keeps the
+   gateway's row, and gets no second placement. Before writing, the job is also trimmed, which is what the counts
+   report: each 10,000-height window's
+   ids are sent to ClickHouse (as external data) and the rows it holds for
+   them, 1,000 heights either side, come back: an item held at the same key
+   is left out (`present`), and counted `conflicting` when its root, parent,
+   owner, size or location differ, with up to five example ids in a warning;
+   an item held at another height nearby is left out too (`elsewhere`), the
+   same item in another bundle. An item the gateway holds further away is
+   written again, at its first placement: a second true row for it.
+4. **Writes nothing above ClickHouse's top height**, where the gateway's
+   own export has not yet been. The rest of a band waits for a later run
+   (`aboveCeiling`); the ledger records how far each band went.
+5. **Queues a job** in the Parquet exporter's layout under
+   `--jobs-dir/queue/<band>.<time>`, assembled in `--jobs-dir/.partial` and
+   renamed in whole. Every row carries the band's `createdAt` as `indexed_at`,
+   so the same band always writes the same rows. `clickhouse-auto-import`
+   loads queued jobs one at a time with `clickhouse-import`, between its own
+   batches, then moves each to `done/` or, after
+   `CLICKHOUSE_AUTO_IMPORT_L2_MAX_ATTEMPTS` failures, to `failed/`, keeping
+   only `job.json` and `written.parquet` (the ids written). The next run
+   reads that back into the ledger (`loaded`, `failed`). A run that finds a
+   job failed writes nothing and exits 1, so the gateway's worker waits,
+   twice as long each time, before writing the band again.
+
+The ledger is `parquet_l2_imports` in `bundles.db`, one row per band and
+target: what was written and left out, the allow flags the band was
+accepted with, and when it was queued and loaded. A band whose id and
+digest the ledger holds as loaded up to the ceiling is not read again, so a
+run with nothing to do reads the bands directory, the ledger and
+ClickHouse's top height, and writes nothing. A republished band has a new
+id, and is checked and imported again; only its new items are written.
+
+No job is written over the heights of a job still in the queue (a band and
+its republished replacement, say): it would be built before the other
+loads, could list the same items, and `--forget` on it would then take the
+other's rows. Such a band is listed in `behindQueued` and written once the
+queued job has loaded.
+
+Runs take a lock (`--jobs-dir/.l2-import.lock`, held by the kernel, so
+across containers and released however a run ends): a second run is
+refused while one is going. Holding it, a run first removes what an
+interrupted run left (`.partial/` and its scratch folders).
+
+`--forget <band>` removes what imports of a band wrote: the ids in the
+`written.parquet` of every job written for it, loaded (`done/`) or failed
+after some partitions loaded (`failed/`), within their heights and with the
+band's `indexed_at`. Rows the gateway wrote itself carry its own
+`indexed_at`, and loading never replaced one (step 3), so they are not
+touched. `transactions` has a projection, so this is a ClickHouse mutation
+(`ALTER TABLE ... DELETE`, waited for) that rewrites the parts holding the
+band's rows: heavy, meant for undoing an import. It is refused while a job
+of the band waits in the queue. The ledger row goes, and the jobs move to
+`forgotten/`; a later run imports the band again unless it is removed from
+the bands directory.
+
+| Option | Meaning |
+| --- | --- |
+| `--target clickhouse\|sqlite` | Where to import. Required. `sqlite` is refused where `CLICKHOUSE_URL` is set |
+| `--bands-dir <path>` | The index's installed bands, `data/indexes/installed/<index>`. Its name is the index's name in the ledger. Required |
+| `--bundles-db <path>` | The `bundles.db` holding the ledger, and for `sqlite` the items too, written beside the running gateway (default `data/sqlite/bundles.db`) |
+| `--core-db <path>` | The gateway's `core.db`, read-only: the block of every height an item is written at comes from `stable_blocks` (default `data/sqlite/core.db`). A height it lacks is refused: `clickhouse-import` would drop its items silently, and SQLite GraphQL would never show them. For `sqlite`, its top stable block is the ceiling |
+| `--jobs-dir <path>` | Where jobs are queued: `l2-import` under `ETL_STAGING_PATH`, where `clickhouse-auto-import` looks (default `$ETL_STAGING_PATH/l2-import`, or `data/etl/staging/l2-import` where it is unset, as in the core container, which mounts it there). `tools/ar-io-node` always uses the node's own and refuses this option |
+| `--tmp-dir <path>` | Where DuckDB spills and scratch files go (default `data/tmp`, the gateway's temp volume rather than the container's own disk). `tools/ar-io-node` always uses the node's `TEMP_DATA_PATH` and refuses this option |
+| `--max-bands <n>` | Write at most this many bands (default: as many as the queue has room for; for `sqlite`, every pending band) |
+| `--max-queued <n>` | Write no job while this many wait in the queue (default 2; `clickhouse` only) |
+| `--forget <band>` | Remove an import's rows, as above |
+| `--publication`, `--publisher-key`, `--registry-url`, `--index`, `--l1-bands-dir`, `--onchain`, `--seed`, `--arweave-nodes`, `--read-timeout`, `--allow-agreement`, `--allow-unlocated`, `--max-unlocated-share`, `--max-unchecked`, `--allow-expired`, `--band-deadline`, `--spill-max`, `--duckdb-threads` | As for `index-l2-verify`. The allow flags a band was accepted with are recorded in the ledger |
+
+ClickHouse is reached as the gateway reaches it, through `CLICKHOUSE_URL`,
+`CLICKHOUSE_USER` and `CLICKHOUSE_PASSWORD`; every read runs with
+`readonly = 2` and the bounds the census uses.
+
+### The SQLite target
+
+`--target sqlite` is for a gateway that keeps its index in SQLite alone. A
+band is verified exactly as above (step 1), one placement is kept per item
+as above (step 2), and its items are then written into `bundles.db`:
+`stable_data_items`, `stable_data_item_tags`, `wallets`, `tag_names` and
+`tag_values`, as the gateway's own flush writes them. Its `new_*` tables,
+`bundles` and `filters` are not touched.
+
+- **Content type and encoding from the item's tags.** `content_type` and
+  `content_encoding` are served as the item's own (its data's
+  `Content-Type` and `Content-Encoding`), so they are taken from its first
+  `Content-Type` and `Content-Encoding` tags, as the gateway takes them when
+  it unbundles, and not from the band's columns of the same name, which no
+  check binds to the item. Items whose band row said otherwise are counted
+  (`typeFromTags`).
+- **Located items only.** An item no band row locates is skipped and
+  counted (`unlocated`): `data_offset` is required here, and an invented
+  one would point retrieval at the wrong bytes.
+- **Nothing above the stable L1 tip**, the top height of `core.db`'s
+  `stable_blocks` (`ceiling`). SQLite GraphQL shows an item only beside its
+  block, so a band with items at a height `core.db` has no block for is
+  refused before anything of it is written; import or fill the L1 index
+  there first. Two cases are listed without being verified: a band that
+  starts above the tip is in `aboveCeiling`, and is imported once the
+  gateway's own sync reaches it; a band that starts at or below the tip but
+  has no block in `core.db` anywhere in its heights (up to the tip), as on a
+  gateway that began at a later `START_HEIGHT`, is in `noBlocks`, and is
+  imported only once the L1 index is filled there (`index-l1-import`). A
+  run refuses outright when `core.db` holds no stable block.
+- **First writer wins.** Every insert is `ON CONFLICT DO NOTHING`, as the
+  gateway's flush is: an import never changes a row the gateway holds, and
+  the gateway never changes an imported one. An item already held is
+  counted `present` when it is at the same height and block index (and
+  `conflicting` when its root, parent, owner, size or location differ, with
+  up to five example ids in a warning), or `elsewhere`. Its tags are not
+  written.
+- **Marked as the band's.** Every row carries the band's `createdAt` as
+  `indexed_at` and `stable_at`, so writing a band twice writes the same rows,
+  and a later run counts the band's own rows as `alreadyImported`.
+- **Beside the running gateway.** Transactions are `BEGIN IMMEDIATE`, at most
+  10,000 items or 250 ms long, with a 50 ms pause after each and none open
+  while the band is read; the WAL is checkpointed every 10 s, waiting at most
+  1 s for the gateway's readers so its writers are never held long. The run's own
+  connection uses a 256 MiB page cache and `synchronous = NORMAL`.
+- **Resumable.** The ledger row's counts move in the same transaction as
+  the rows they count, so a run stopped part way leaves the ledger matching
+  the database (`completed_at` unset), and the next run writes the rest.
+- **Disk.** A band is refused when the free space beside `bundles.db` is
+  under 4 KiB per item plus 2 GiB. All of `ardrive-l2` takes about 370 GB.
+
+The lock is `.l2-import.lock` beside `bundles.db`. `--forget <band>`
+removes the items a band wrote, and their tags, a batch at a time: those
+whose `indexed_at` and `stable_at` are both the band's `createdAt` (the
+gateway's flush sets `stable_at` when it flushes, after the item was
+indexed). An item the gateway has since unbundled itself
+(`bundle_data_items` records it) is kept (`keptIndexed`): its flush found
+the imported row and left it, and its bundle is done, so nothing would
+write the item again. The band must still be in `--bands-dir`, for its `createdAt`.
+A band republished over the same heights can share that `createdAt`, so
+its rows go too; the ledger rows of every SQLite import over those heights
+are removed with the band's (`reset`), in the transaction that removes the
+first rows, so a forget stopped part way leaves no band held complete, and
+the next run writes their items again. Wallets and tag names stay. The result is `{ "imported", "imports":
+[{ "band", "heightRange", "counts", "conflictExamples" }] }` with the
+summary fields above (no `waiting`, `loaded` or `failed`); `counts` has
+`bandRows`, `otherPlacements`, `aboveCeiling`, `unlocated`, `present`,
+`conflicting`, `elsewhere`, `alreadyImported`, `written`, `tags` and
+`noOwnerKey` (items written whose owner's key the band lacks, shown by
+SQLite GraphQL only where `wallets` already holds the key) and `typeFromTags`. The summary also lists
+`noBlocks`. `--forget` prints `{ "forgotten", "target",
+"indexedAt", "heightRange", "items", "tags", "keptIndexed", "reset" }`.
+
+What an operator should know:
+
+- The import does not stop the gateway unbundling the same bundles near
+  the tip (or with `BACKFILL_BUNDLE_RECORDS`); where it does, the gateway's
+  row is dropped at flush and only bandwidth is spent.
+- When the gateway later unbundles an imported item at another placement,
+  the imported row and its tags are kept, and its flush adds no tags of its
+  own: it writes an item's tags only where it stores the item.
+- An item whose owner's key the band lacks (`noOwnerKey`) takes disk, and
+  SQLite GraphQL, which joins `wallets`, shows it only if the gateway holds
+  that owner's key from elsewhere.
+- A running worker imports a forgotten band again if it is still installed;
+  remove it from the bands directory, or stop the worker, first.
+- `--forget` needs the band in `--bands-dir`. A band uninstalled after its
+  replacement arrived is forgotten through the replacement: both carry the
+  same `createdAt` over the same heights.
+
+### `index-l2-import` result
+
+```json
+{
+  "bandsDir": "data/indexes/installed/ardrive-l2",
+  "index": "ardrive-l2",
+  "target": "clickhouse",
+  "ceiling": 2029000,
+  "bands": 45,
+  "done": 43,
+  "waiting": 0,
+  "pending": 2,
+  "aboveCeiling": [],
+  "loaded": [],
+  "failed": [],
+  "imported": 1,
+  "jobs": [
+    {
+      "band": "l2-h1900000-1999999-3078e8b8-10ec39700bc0",
+      "job": "l2-h1900000-1999999-3078e8b8-10ec39700bc0.20261027T180754Z",
+      "heightRange": [1900000, 1999999],
+      "partitions": ["height=1900000-1909999", "height=1910000-1919999"],
+      "counts": {
+        "bandRows": 3183150, "otherPlacements": 6069, "aboveCeiling": 0,
+        "present": 0, "conflicting": 0, "elsewhere": 0,
+        "written": 3177081, "unlocated": 0, "tags": 23245827, "blocks": 15397
+      },
+      "conflictExamples": []
+    }
+  ],
+  "seconds": 127.8
+}
+```
+
+A job also carries `version`, `kind`, `bandId`, `bandDigest`, `index`,
+`publisher`, `indexedAt` and `createdAt`, as its `job.json` does. A band
+with nothing left to write has `"job": null` and its counts. `pending`
+counts the bands still to import, this run's included; `waiting` the bands
+whose jobs are queued; `behindQueued` the bands waiting for a queued job
+over their heights. A run with a refusal prints its result on stderr
+with `refused`, `refusal` and `refusals` (each band's failed `checks` and
+on-chain sample). `--forget`
+prints `{ "forgotten", "jobs", "indexedAt", "ids", "matched",
+"heightRange" }`: `matched` is the rows ClickHouse held for those ids before
+the delete.
+
 ## `index-census`
 
 Checks that this gateway's ClickHouse holds every data item its bundle

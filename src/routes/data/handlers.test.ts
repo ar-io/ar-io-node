@@ -2074,6 +2074,25 @@ st
           'rH97YzYj4XAQhOYHRljfHw1lLl1XTQP5--TfXcNws7Q';
         const EXPECTED_TESTING_CONTENT_DIGEST = `sha-256=:rH97YzYj4XAQhOYHRljfHw1lLl1XTQP5++TfXcNws7Q=:`;
 
+        it('sends X-AR-IO-Stable and X-AR-IO-Verified as false when there is no local row', async () => {
+          // dataAttributesSource returns undefined: nothing to assert either
+          // from, so both are sent as false rather than left out.
+          app.get(
+            '/:id',
+            createDataHandler({
+              log,
+              dataAttributesSource,
+              dataSource,
+              dataBlockListValidator,
+              manifestPathResolver,
+            }),
+          );
+
+          const res = await request(app).get('/not-a-real-id').expect(200);
+          assert.equal(res.headers['x-ar-io-stable'], 'false');
+          assert.equal(res.headers['x-ar-io-verified'], 'false');
+        });
+
         it('computes digest/etag from the buffered body when no stored hash is available', async () => {
           // dataAttributesSource returns undefined (no stored hash).
           // dataSource returns 10 bytes ('testing...') with size=10, under
@@ -4750,6 +4769,50 @@ st
             );
           });
       });
+
+      for (const [label, overrides] of [
+        ['unverified', { verified: false, cached: true }],
+        ['not served from our cache', { verified: true, cached: false }],
+      ] as const) {
+        it(`does not mark stable data immutable when it is ${label}`, async () => {
+          dataAttributesSource.getDataAttributes = () =>
+            Promise.resolve({
+              hash: 'test-hash',
+              size: 10,
+              offset: 0,
+              contentType: 'application/octet-stream',
+              isManifest: false,
+              stable: true,
+              verified: overrides.verified,
+              signature: null,
+            });
+          dataSource.getData = () =>
+            Promise.resolve({
+              stream: Readable.from(Buffer.from('testing...')),
+              size: 10,
+              verified: false,
+              trusted: true,
+              cached: overrides.cached,
+              requestAttributes: { origin: 'node-url', hops: 0, clientIps: [] },
+            });
+          app.get(
+            '/:id',
+            createDataHandler({
+              log,
+              dataAttributesSource,
+              dataSource,
+              dataBlockListValidator,
+              manifestPathResolver,
+            }),
+          );
+          const res = await request(app).get('/not-a-real-id').expect(200);
+          assert.equal(
+            res.headers['cache-control'],
+            `public, max-age=${config.CACHE_UNSTABLE_TRUSTED_MAX_AGE}`,
+          );
+          assert.equal(res.headers['x-ar-io-stable'], 'true');
+        });
+      }
 
       it('should use 12-hour max-age for unstable but trusted data', async () => {
         dataAttributesSource.getDataAttributes = () =>

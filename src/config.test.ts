@@ -8,6 +8,7 @@ import { describe, it } from 'node:test';
 import { strict as assert } from 'node:assert';
 
 import {
+  GRAPHQL_ROOT_TX_GATEWAYS_URLS,
   ARNS_ROOT_HOSTS,
   ARNS_ROOT_HOST,
   deriveChunkDataCacheMinAgeSeconds,
@@ -330,5 +331,19 @@ describe('deriveChunkDataCacheMinAgeSeconds', () => {
         }
       }
     }
+  });
+});
+
+describe('GRAPHQL_ROOT_TX_GATEWAYS_URLS default', () => {
+  // arweave-search.goldsky.com now 307s every request to
+  // https://arweave.net/graphql, so the default names arweave.net directly.
+  it('is arweave.net when the variable is unset', (t) => {
+    if (process.env.GRAPHQL_ROOT_TX_GATEWAYS_URLS !== undefined) {
+      t.skip('GRAPHQL_ROOT_TX_GATEWAYS_URLS is set in this environment');
+      return;
+    }
+    assert.deepEqual(GRAPHQL_ROOT_TX_GATEWAYS_URLS, {
+      'https://arweave.net': 1,
+    });
   });
 });

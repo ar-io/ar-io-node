@@ -477,11 +477,16 @@ export const DATA_IMPORTER_DOWNLOAD_TIMEOUT_MS = env.positiveIntOrDefault(
   1000 * 60 * 20, // 20 minutes
 );
 
-// GraphQL root TX lookup gateways (separate from data retrieval gateways)
+// GraphQL root TX lookup gateways (separate from data retrieval gateways).
+// arweave.net, named directly: the previous default,
+// arweave-search.goldsky.com, now answers every request with a 307 to
+// https://arweave.net/graphql, so nodes on the default were already querying
+// arweave.net through an extra hop. arweave.net rate-limits some addresses on
+// its gateway endpoints (429, retry-after 299); `{}` turns this source off.
 export const GRAPHQL_ROOT_TX_GATEWAYS_URLS = JSON.parse(
   env.varOrDefault(
     'GRAPHQL_ROOT_TX_GATEWAYS_URLS',
-    '{ "https://arweave-search.goldsky.com": 1 }',
+    '{ "https://arweave.net": 1 }',
   ),
 ) as Record<string, number>;
 
@@ -583,6 +588,16 @@ export const GATEWAYS_GQL_CIRCUIT_BREAKER_RESET_TIMEOUT_MS =
 // preserving the prior behavior.
 export const GATEWAYS_GQL_SOFT_DEADLINE_ENABLED =
   env.varOrDefault('GATEWAYS_GQL_SOFT_DEADLINE_ENABLED', 'false') === 'true';
+// A GraphQL request that has already passed through this many gateways
+// (X-AR-IO-Hops) is answered from the local index only, never fanned out
+// again, so two gateways listing each other in GATEWAYS_GQL_URLS cannot call
+// each other without end. 2 lets a gateway that fans out to another that
+// fans out to its own indexers (turbo-gateway.com) still reach them.
+export const GATEWAYS_GQL_MAX_HOPS = env.positiveIntOrDefault(
+  'GATEWAYS_GQL_MAX_HOPS',
+  2,
+);
+
 export const GATEWAYS_GQL_SOFT_DEADLINE_MS = env.positiveIntOrDefault(
   'GATEWAYS_GQL_SOFT_DEADLINE_MS',
   2_000,
@@ -760,6 +775,31 @@ export const PEERS_ROOT_TX_RATE_LIMIT_INTERVAL = env.varOrDefault(
 // search inside CompositeTxBoundarySource. See ar-io/ar-io-node#681.
 export const CHUNK_METADATA_ANCHOR_ENABLED =
   env.varOrDefault('CHUNK_METADATA_ANCHOR_ENABLED', 'true') === 'true';
+
+// Reference peers for chunk-metadata anchoring, as a JSON map of URL to
+// priority (lower first). Unset: the GATEWAYS_ROOT_TX_URLS pool, else every
+// TRUSTED_GATEWAYS_URLS entry. `{}` leaves anchoring with no peers, which
+// turns it off. Each probe asks the first peer not backed off after a
+// failure. Its own setting so anchoring can be pointed elsewhere, or
+// stopped, without changing root-TX lookups.
+export const CHUNK_METADATA_ANCHOR_PEER_URLS = (() => {
+  const raw = env.varOrUndefined('CHUNK_METADATA_ANCHOR_PEER_URLS');
+  if (raw === undefined || raw.trim() === '') return undefined;
+  const parsed = JSON.parse(raw) as Record<string, number>;
+  for (const [url, priority] of Object.entries(parsed)) {
+    try {
+      new URL(url);
+    } catch {
+      throw new Error(`Invalid URL in CHUNK_METADATA_ANCHOR_PEER_URLS: ${url}`);
+    }
+    if (typeof priority !== 'number' || priority <= 0) {
+      throw new Error(
+        `Invalid priority in CHUNK_METADATA_ANCHOR_PEER_URLS for ${url}: ${priority}`,
+      );
+    }
+  }
+  return parsed;
+})();
 
 // HTTP timeout (ms) for the peer HEAD/GET against `/chunk/{offset}/data`.
 // Kept tight: a slow reference peer should fail fast and let the
@@ -964,6 +1004,17 @@ export const WEIGHTED_PEERS_TEMPERATURE_DELTA = +env.varOrDefault(
   '2',
 );
 
+// How fast an AR.IO peer's selection weight returns to its category default
+// when nothing reports on it: half the distance every this many ms. Without
+// it a peer that failed during an outage keeps its low weight until it is
+// picked and succeeds, which its low weight makes unlikely. 0 turns decay
+// off, and with it the weighted-draw order of a key's home set, which is
+// then sorted strictly by weight as before decay existed.
+export const PEER_WEIGHT_DECAY_HALF_LIFE_MS = env.nonNegativeIntOrDefault(
+  'PEER_WEIGHT_DECAY_HALF_LIFE_MS',
+  15 * 60 * 1000,
+);
+
 // Per-peer concurrency limiter
 export const PEER_MAX_CONCURRENT_OUTBOUND = env.positiveIntOrDefault(
   'PEER_MAX_CONCURRENT_OUTBOUND',
@@ -1004,6 +1055,14 @@ export const PEER_HEDGE_DELAY_MS = env.nonNegativeIntOrDefault(
 export const PEER_MAX_HEDGED_REQUESTS = env.positiveIntOrDefault(
   'PEER_MAX_HEDGED_REQUESTS',
   3,
+);
+
+// File the AR.IO peer list is saved to after each successful registry read
+// and loaded from at startup, so a restart while the registry is unreachable
+// keeps the previous peers.
+export const AR_IO_PEER_LIST_CACHE_PATH = env.varOrDefault(
+  'AR_IO_PEER_LIST_CACHE_PATH',
+  'data/peers/ar-io-peers.json',
 );
 
 // Consistent hash ring configuration
@@ -1780,6 +1839,73 @@ export const L1_BAND_IMPORT_ALLOW_UNSAMPLED =
 export const L1_BAND_IMPORT_CACHE_MIB = +env.varOrDefault(
   'L1_BAND_IMPORT_CACHE_MIB',
   '512',
+);
+
+/**
+ * Import installed `parquet-l2` bands (subscribe to them with the
+ * index-swarm sidecar) into this gateway's ClickHouse, so its GraphQL
+ * answers for their data items without unbundling them. Every band is
+ * verified first; `clickhouse-auto-import` loads what is queued.
+ */
+export const L2_BAND_IMPORT_ENABLED =
+  env.varOrDefault('L2_BAND_IMPORT_ENABLED', 'false') === 'true';
+
+/** Installed L2 indexes to import, comma-separated, e.g. `ardrive-l2`. */
+export const L2_BAND_IMPORT_INDEXES = env
+  .varOrDefault('L2_BAND_IMPORT_INDEXES', '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter((s) => s.length > 0);
+
+/**
+ * Where to import: `clickhouse` (a gateway with ClickHouse) or `sqlite`
+ * (one without: the items are written into `bundles.db`).
+ */
+export const L2_BAND_IMPORT_TARGET = env.varOrDefault(
+  'L2_BAND_IMPORT_TARGET',
+  'clickhouse',
+);
+
+/**
+ * The publisher's signed index publication every imported band must be
+ * listed in, e.g. `https://turbo-gateway.com/ar-io/indexes`.
+ */
+export const L2_BAND_IMPORT_PUBLICATION = env.varOrUndefined(
+  'L2_BAND_IMPORT_PUBLICATION',
+);
+
+/** Seconds between import runs, counted from the end of the last. */
+export const L2_BAND_IMPORT_INTERVAL_SECONDS = +env.varOrDefault(
+  'L2_BAND_IMPORT_INTERVAL_SECONDS',
+  '600',
+);
+
+/**
+ * Arweave nodes the on-chain sample reads items from, comma-separated
+ * (default: the tip and data nodes `index-l2-verify` uses).
+ */
+export const L2_BAND_IMPORT_ARWEAVE_NODES = env
+  .varOrDefault('L2_BAND_IMPORT_ARWEAVE_NODES', '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter((s) => s.length > 0);
+
+/**
+ * On-chain sample items per band (of 20) that may go unread, nodes lacking
+ * their chunks, and the band still be imported (`--max-unchecked`). 0 by
+ * default: a band with any item unread waits and is tried again. An unread
+ * item is counted as possibly fabricated, and the bound the sample gives is
+ * stated with it; the ledger records the value a band was accepted with.
+ */
+export const L2_BAND_IMPORT_MAX_UNCHECKED = +env.varOrDefault(
+  'L2_BAND_IMPORT_MAX_UNCHECKED',
+  '0',
+);
+
+/** Jobs waiting for clickhouse-auto-import before a run writes no more. */
+export const L2_BAND_IMPORT_MAX_QUEUED = +env.varOrDefault(
+  'L2_BAND_IMPORT_MAX_QUEUED',
+  '2',
 );
 
 //
@@ -3041,6 +3167,18 @@ export const CONTIGUOUS_DATA_CACHE_INDEX_MAX_BATCHES_PER_SWEEP =
     50,
   );
 
+// The most bytes (index sizes) one sweep evicts; 0 (the default) bounds a sweep
+// only by MAX_BATCHES_PER_SWEEP. With EVICTION_INTERVAL_MS it paces eviction by
+// bytes: on a copy-on-write filesystem such as btrfs, freeing a few hundred GB
+// of large blobs in one sweep is a burst the disk pays for at the next commit.
+// Ignored while free space is below CONTIGUOUS_DATA_CACHE_MIN_FREE_BYTES, so an
+// emergency still evicts at full speed.
+export const CONTIGUOUS_DATA_CACHE_INDEX_MAX_BYTES_PER_SWEEP =
+  env.nonNegativeIntOrDefault(
+    'CONTIGUOUS_DATA_CACHE_INDEX_MAX_BYTES_PER_SWEEP',
+    0,
+  );
+
 // Whether to refresh a cache entry's last_access (and promote its tier on a
 // preferred-ArNS read) on cache HITS. On => LRU eviction; off => FIFO by
 // cache-write time. Operators without an edge cache see every read at the core,
@@ -3732,6 +3870,19 @@ export const TRUSTED_PROXIES =
     : TRUSTED_PROXIES_VALUE.split(',')
         .map((entry) => entry.trim())
         .filter((entry) => entry.length > 0);
+
+// Meter /graphql with the rate limiter (ENABLE_RATE_LIMITER) and x402
+// (ENABLE_X_402_USDC_DATA_EGRESS) at a flat cost per operation, charged to the
+// client's IP bucket only. Off by default: GraphQL is then free, as before.
+export const ENABLE_GRAPHQL_METERING =
+  env.varOrDefault('ENABLE_GRAPHQL_METERING', 'false') === 'true';
+
+// What one GraphQL operation costs, in the bytes the limiter and x402 price
+// (1 token = 1 KiB). A batch costs this per operation.
+export const GRAPHQL_OPERATION_COST_BYTES = env.positiveIntOrDefault(
+  'GRAPHQL_OPERATION_COST_BYTES',
+  10240,
+);
 
 export const RATE_LIMITER_IPS_AND_CIDRS_ALLOWLIST =
   env

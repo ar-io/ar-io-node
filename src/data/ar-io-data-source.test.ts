@@ -311,6 +311,33 @@ describe('ArIODataSource', () => {
       });
     });
 
+    for (const [status, kind] of [
+      [503, 'busy'],
+      [404, 'failed'],
+    ] as const) {
+      it(`reports a peer answering ${status} as ${kind}`, async () => {
+        mock.method(axios, 'get', async () => ({
+          status,
+          data: axiosStreamData,
+          headers: {},
+        }));
+        const reported: unknown[] = [];
+        mock.method(
+          peerManager,
+          'reportFailure',
+          (_category: string, _peer: string, k?: string) => {
+            reported.push(k);
+          },
+        );
+        await assert.rejects(dataSource.getData({ id: 'dataId' }));
+        assert.ok(reported.length > 0);
+        assert.ok(
+          reported.every((k) => k === kind),
+          String(reported),
+        );
+      });
+    }
+
     it('should throw an error if all peers fail', async () => {
       mock.method(axios, 'get', () => {
         throw new Error('All peers failed');
@@ -374,6 +401,34 @@ describe('ArIODataSource', () => {
       await dataSource.getData({ id: 'dataId', region });
 
       assert.equal(rangeHeader, 'bytes=100-299');
+    });
+
+    // axios defaults to `application/json, text/plain, */*`; a /raw endpoint
+    // that negotiates (arweave.net) answers that with a JSON envelope.
+    it('should send Accept: */* on full and ranged requests', async () => {
+      const accepts: (string | undefined)[] = [];
+      mock.method(axios, 'get', async (_: string, config: any) => {
+        accepts.push(config.headers['Accept']);
+        const ranged = config.headers['Range'] !== undefined;
+        return {
+          status: ranged ? 206 : 200,
+          data: axiosStreamData,
+          headers: {
+            'content-length': ranged ? '200' : '123',
+            'content-type': 'application/octet-stream',
+            [headerNames.verified.toLowerCase()]: 'true',
+            [headerNames.trusted.toLowerCase()]: 'false',
+          },
+        };
+      });
+
+      await dataSource.getData({ id: 'dataId' });
+      await dataSource.getData({
+        id: 'dataId',
+        region: { offset: 100, size: 200 },
+      });
+
+      assert.deepEqual(accepts, ['*/*', '*/*']);
     });
 
     // PE-9081: peer responds 200 to a Range request — must be rejected.

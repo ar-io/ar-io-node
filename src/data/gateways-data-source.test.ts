@@ -517,6 +517,36 @@ describe('GatewayDataSource', () => {
       assert.equal(requestParams.headers['Range'], 'bytes=100-299');
     });
 
+    // axios defaults to `application/json, text/plain, */*`; arweave.net
+    // answers that with a JSON envelope of the data instead of the data.
+    it('should send Accept: */* on full and ranged requests', async () => {
+      const sent: any[] = [];
+      mockedAxiosInstance.request = async (params: any) => {
+        sent.push(params);
+        return {
+          status: params.headers.Range !== undefined ? 206 : 200,
+          headers: {
+            'content-length':
+              params.headers.Range !== undefined ? '200' : '123',
+            'content-type': 'application/octet-stream',
+          },
+          data: axiosStreamData,
+        };
+      };
+
+      await dataSource.getData({ id: 'some-id' });
+      await dataSource.getData({
+        id: 'some-id',
+        region: { offset: 100, size: 200 },
+      });
+
+      assert.equal(sent.length, 2);
+      for (const params of sent) {
+        assert.equal(params.headers['Accept'], '*/*');
+      }
+      assert.equal(sent[1].headers['Range'], 'bytes=100-299');
+    });
+
     it('should handle errors when fetching data with region', async () => {
       mockedAxiosInstance.request = async () => {
         throw new Error('Failed to fetch data with region');

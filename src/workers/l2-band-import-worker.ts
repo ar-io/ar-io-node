@@ -1,0 +1,396 @@
+/**
+ * AR.IO Gateway
+ * Copyright (C) 2022-2025 Permanent Data Solutions, Inc. All Rights Reserved.
+ *
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+import { ChildProcess } from 'node:child_process';
+import * as fsp from 'node:fs/promises';
+import * as path from 'node:path';
+import winston from 'winston';
+
+import * as metrics from '../metrics.js';
+import { cliInvocation, spawnFill } from './l1-band-import-worker.js';
+
+/** What one run reported, as `index-l2-import` prints it. */
+export interface L2ImportSummary {
+  imported?: number;
+  pending?: number;
+  waiting?: number;
+  jobs?: Array<{
+    band?: string;
+    job?: string | null;
+    counts?: { written?: number; conflicting?: number };
+  }>;
+  /** `--target sqlite`: the bands written, each with its counts. */
+  imports?: Array<{
+    band?: string;
+    counts?: { written?: number; conflicting?: number };
+  }>;
+  loaded?: string[];
+  failed?: Array<{ job: string; reason: string }>;
+  refused?: string;
+  /** `unreadable`: only the on-chain sample could not be read (an outage). */
+  refusal?: 'refused' | 'unreadable';
+}
+
+/** Runs the import command once and reports how it ended. */
+export type L2ImportRunner = (
+  args: string[],
+  onLog: (level: string, line: string) => void,
+  register: (child: ChildProcess) => void,
+) => Promise<{ code: number | null; summary?: L2ImportSummary; tail: string }>;
+
+/**
+ * glibc's allocator settings the import runs with, as index-export does
+ * (docker-compose.yaml, INDEX_EXPORT_MALLOC_*), unless the environment sets
+ * them. Without them DuckDB's freed memory stays in glibc's arenas: an
+ * 8M-item band peaked at 5.9 GiB with DuckDB held to 2 GB, and at 2.4 GiB
+ * with them.
+ */
+export const IMPORT_ALLOCATOR_ENV = {
+  MALLOC_ARENA_MAX: '2',
+  MALLOC_MMAP_THRESHOLD_: '131072',
+  MALLOC_TRIM_THRESHOLD_: '131072',
+} as const;
+
+/** The import's environment: this process's, with the allocator settings. */
+export function importEnv(
+  env: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  return { ...IMPORT_ALLOCATOR_ENV, ...env };
+}
+
+/** Spawns the import with {@link importEnv}. */
+export const spawnImport: L2ImportRunner = (args, onLog, register) =>
+  spawnFill(args, onLog, register, importEnv());
+
+/** The longest an import whose sample could not be read waits before it is tried again. */
+export const UNREADABLE_MAX_BACKOFF_MS = 2 * 3600 * 1000;
+
+/**
+ * Imports installed `parquet-l2` bands into this gateway's index by running
+ * `ar-io-node index-l2-import --target <clickhouse|sqlite>` on a schedule,
+ * once per index named in `L2_BAND_IMPORT_INDEXES`.
+ *
+ * Each run verifies the bands it takes. For ClickHouse it queues jobs for
+ * `clickhouse-auto-import` to load; for SQLite it writes the items into
+ * `bundles.db` itself. A run with nothing to do reads the bands directory,
+ * the ledger and the target's top height, and writes nothing. It keeps
+ * running so the publisher's next tip band, and heights the gateway reaches
+ * later, are imported too.
+ *
+ * A child process, as the L1 import is (`L1BandImportWorker`): DuckDB's
+ * native code and memory stay out of the gateway. A band refused is not
+ * verified again every interval: its index waits, twice as long each time,
+ * until its directory changes.
+ */
+export class L2BandImportWorker {
+  private log: winston.Logger;
+  private readonly runs: Array<{ index: string; dir: string; args: string[] }>;
+  private intervalMs: number;
+  private firstRunDelayMs: number;
+  private runImport: L2ImportRunner;
+  private listDir: (dir: string) => Promise<string[]>;
+  private hasBandFile: (file: string) => Promise<boolean>;
+  private now: () => number;
+  private maxBackoffMs: number;
+  private refused = new Map<
+    string,
+    {
+      kind: 'refused' | 'unreadable' | 'failed';
+      entries: string;
+      until: number;
+      backoffMs: number;
+    }
+  >();
+  private timer: NodeJS.Timeout | undefined;
+  private child: ChildProcess | undefined;
+  private running: Promise<unknown> | undefined;
+  private stopped = true;
+
+  constructor({
+    log,
+    target = 'clickhouse',
+    indexes,
+    indexesDir = 'data/indexes/installed',
+    publication,
+    registryUrl,
+    arweaveNodes,
+    maxQueued,
+    maxUnchecked = 0,
+    intervalMs,
+    firstRunDelayMs = 120_000,
+    runImport = spawnImport,
+    invocation = cliInvocation(),
+    listDir = (dir: string) => fsp.readdir(dir),
+    hasBandFile = (file: string) =>
+      fsp.access(file).then(
+        () => true,
+        () => false,
+      ),
+    now = Date.now,
+    maxBackoffMs = 24 * 3600 * 1000,
+  }: {
+    log: winston.Logger;
+    /** `--target`: `clickhouse`, or `sqlite` for a gateway without it. */
+    target?: 'clickhouse' | 'sqlite';
+    /** Installed index names, e.g. `ardrive-l2`. */
+    indexes: string[];
+    indexesDir?: string;
+    /** The publisher's signed publication (`--publication`). */
+    publication: string;
+    /** Where the publication's key is read (`--registry-url`). */
+    registryUrl: string;
+    /** Arweave nodes the on-chain sample reads (`--arweave-nodes`). */
+    arweaveNodes?: string[];
+    maxQueued?: number;
+    /** Sample items per band that may go unread (`--max-unchecked`). */
+    maxUnchecked?: number;
+    intervalMs: number;
+    firstRunDelayMs?: number;
+    runImport?: L2ImportRunner;
+    invocation?: string[];
+    listDir?: (dir: string) => Promise<string[]>;
+    /** Injected in tests: whether a band directory still holds band.json. */
+    hasBandFile?: (file: string) => Promise<boolean>;
+    now?: () => number;
+    maxBackoffMs?: number;
+  }) {
+    this.log = log.child({ class: 'L2BandImportWorker' });
+    this.intervalMs = intervalMs;
+    this.firstRunDelayMs = firstRunDelayMs;
+    this.runImport = runImport;
+    this.listDir = listDir;
+    this.hasBandFile = hasBandFile;
+    this.now = now;
+    this.maxBackoffMs = maxBackoffMs;
+    this.runs = indexes.map((index) => {
+      const dir = path.join(indexesDir, index);
+      return {
+        index,
+        dir,
+        args: [
+          ...invocation,
+          'index-l2-import',
+          '--target',
+          target,
+          '--bands-dir',
+          dir,
+          '--publication',
+          publication,
+          '--registry-url',
+          registryUrl,
+          ...(arweaveNodes !== undefined && arweaveNodes.length > 0
+            ? ['--arweave-nodes', arweaveNodes.join(',')]
+            : []),
+          // The queue is the ClickHouse target's: SQLite is written in place.
+          ...(maxQueued !== undefined && target === 'clickhouse'
+            ? ['--max-queued', String(maxQueued)]
+            : []),
+          ...(maxUnchecked > 0
+            ? ['--max-unchecked', String(maxUnchecked)]
+            : []),
+        ],
+      };
+    });
+  }
+
+  start(): void {
+    if (!this.stopped) return;
+    this.stopped = false;
+    this.log.info('Starting', {
+      intervalMs: this.intervalMs,
+      indexes: this.runs.map((r) => r.index),
+    });
+    this.schedule(this.firstRunDelayMs);
+  }
+
+  async stop(): Promise<void> {
+    this.stopped = true;
+    if (this.timer !== undefined) clearTimeout(this.timer);
+    this.timer = undefined;
+    // An interrupted run is safe: a job is queued only once whole, and the
+    // ledger records it only after.
+    this.child?.kill('SIGTERM');
+    await this.running;
+  }
+
+  private schedule(delayMs: number): void {
+    if (this.stopped) return;
+    this.timer = setTimeout(() => {
+      this.timer = undefined;
+      this.running = this.runAll().finally(() => {
+        this.running = undefined;
+        this.schedule(this.intervalMs);
+      });
+    }, delayMs);
+  }
+
+  /** Runs every index once, one after another. */
+  async runAll(): Promise<void> {
+    for (const run of this.runs) {
+      if (this.stopped) return;
+      await this.runOnce(run.index);
+    }
+  }
+
+  /** Runs one index's import once; never throws. */
+  async runOnce(index: string): Promise<L2ImportSummary | undefined> {
+    const run = this.runs.find((r) => r.index === index);
+    if (run === undefined) return undefined;
+    const started = Date.now();
+    // A worker never started is stopped too (tests run it so); only one
+    // stopped while this run was going was shut down under it.
+    const wasRunning = !this.stopped;
+    let entries: string;
+    try {
+      // Each entry with whether it still holds a band: retiring a band
+      // removes its band.json minutes before its directory, and the bands
+      // read change then, so a band refused before is no reason to wait.
+      const names = (await this.listDir(run.dir)).sort();
+      const marked = await Promise.all(
+        names.map(
+          async (name) =>
+            `${name}:${(await this.hasBandFile(path.join(run.dir, name, 'band.json'))) ? 1 : 0}`,
+        ),
+      );
+      entries = marked.join('\n');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        metrics.l2BandImportRunsTotal.inc({ result: 'idle' });
+        this.log.info('No bands installed yet for this index', {
+          index,
+          bandsDir: run.dir,
+        });
+        return undefined;
+      }
+      entries = '';
+    }
+    // Shut down while the directory was read: start no child that stop()
+    // has already passed by.
+    if (wasRunning && this.stopped) return undefined;
+    const last = this.refused.get(index);
+    if (
+      last !== undefined &&
+      last.entries === entries &&
+      this.now() < last.until
+    ) {
+      metrics.l2BandImportRunsTotal.inc({ result: 'deferred' });
+      this.log.debug('Import deferred: the same bands were refused last time', {
+        index,
+        retryAt: new Date(last.until).toISOString(),
+      });
+      return undefined;
+    }
+
+    try {
+      const result = await this.runImport(
+        run.args,
+        (level, line) => {
+          if (level === 'error' || level === 'warn') {
+            this.log.warn(line, { index });
+          } else if (level === 'info') {
+            this.log.info(line, { index });
+          } else {
+            this.log.debug(line, { index });
+          }
+        },
+        (child) => {
+          this.child = child;
+        },
+      );
+      this.child = undefined;
+      const summary = result.summary;
+      // Jobs a run queued, and bands it wrote into SQLite, count whether or
+      // not it refused another band.
+      for (const job of [
+        ...(summary?.jobs ?? []),
+        ...(summary?.imports ?? []),
+      ]) {
+        metrics.l2BandImportRowsTotal.inc(job.counts?.written ?? 0);
+        metrics.l2BandImportConflictsTotal.inc(job.counts?.conflicting ?? 0);
+      }
+      const imported = (summary?.imported ?? 0) > 0;
+      if (result.code !== 0 && imported) {
+        // Some bands queued, another refused: no wait, so the bands that
+        // pass keep moving; the refused one is tried again next run.
+        this.refused.delete(index);
+        metrics.l2BandImportRunsTotal.inc({ result: 'queued' });
+        this.log.warn('Import queued bands and refused others', {
+          index,
+          imported: summary?.imported,
+          refused: summary?.refused,
+          seconds: Math.round((Date.now() - started) / 1000),
+        });
+        return summary;
+      }
+      if (result.code !== 0) {
+        const unreadable = summary?.refusal === 'unreadable';
+        metrics.l2BandImportRunsTotal.inc({
+          result: unreadable ? 'unreadable' : 'failed',
+        });
+        // A refused band waits until it changes; so does a run that failed
+        // without refusing (a crash, an outage), up to two hours, since it
+        // may pass next time but should not be retried at every interval.
+        if (!(wasRunning && this.stopped)) {
+          const kind =
+            summary?.refused === undefined
+              ? 'failed'
+              : unreadable
+                ? 'unreadable'
+                : 'refused';
+          const same = last?.kind === kind && last.entries === entries;
+          const cap =
+            kind === 'refused' ? this.maxBackoffMs : UNREADABLE_MAX_BACKOFF_MS;
+          const backoffMs = same
+            ? Math.min(cap, (last?.backoffMs ?? 0) * 2)
+            : this.intervalMs;
+          this.refused.set(index, {
+            kind,
+            entries,
+            backoffMs,
+            until: this.now() + backoffMs,
+          });
+        }
+        if (wasRunning && this.stopped) {
+          this.log.info(
+            'Import interrupted by shutdown; the next run redoes it',
+            {
+              index,
+            },
+          );
+        } else {
+          this.log.error('Import failed; the next run carries on from here', {
+            index,
+            code: result.code,
+            reason: summary?.refused ?? result.tail.trim().split('\n').pop(),
+            seconds: Math.round((Date.now() - started) / 1000),
+          });
+        }
+        return summary;
+      }
+      this.refused.delete(index);
+      metrics.l2BandImportRunsTotal.inc({
+        result: imported ? 'queued' : 'idle',
+      });
+      this.log[imported ? 'info' : 'debug']('Import finished', {
+        index,
+        imported: summary?.imported,
+        pending: summary?.pending,
+        waiting: summary?.waiting,
+        loaded: summary?.loaded?.length,
+        seconds: Math.round((Date.now() - started) / 1000),
+      });
+      return summary;
+    } catch (error) {
+      this.child = undefined;
+      metrics.l2BandImportRunsTotal.inc({ result: 'failed' });
+      this.log.error('Could not run the import', {
+        index,
+        error: (error as Error).message,
+      });
+      return undefined;
+    }
+  }
+}

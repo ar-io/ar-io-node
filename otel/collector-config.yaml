@@ -31,6 +31,14 @@ processors:
     expected_new_traces_per_sec: 100
 
     policies:
+      # Policy 0: Always keep a trace an operator asked for, with the
+      # admin-gated X-AR-IO-Trace request header (src/middleware/force-trace.ts)
+      - name: force-sample-policy
+        type: boolean_attribute
+        boolean_attribute:
+          key: ar_io.force_sample
+          value: true
+
       # Policy 1: Sample traces with errors at configurable rate
       # Default: 100% (configurable via OTEL_TAIL_SAMPLING_ERROR_RATE)
       # Catches HTTP 5xx responses and application errors

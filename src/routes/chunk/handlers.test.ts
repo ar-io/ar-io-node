@@ -226,6 +226,33 @@ describe('Chunk routes', () => {
       });
   });
 
+  // #917: a chunk that could not be fetched in time is not a missing chunk.
+  for (const [label, error] of [
+    ['the serve deadline fired', new ChunkServeTimeoutError(12000)],
+    [
+      'an upstream timed out',
+      Object.assign(new Error('timed out'), { name: 'TimeoutError' }),
+    ],
+  ] as const) {
+    it(`returns 503 with Retry-After, never cached, when ${label}`, async () => {
+      app.get(
+        CHUNK_OFFSET_PATH,
+        createChunkOffsetHandler({
+          chunkRetrievalService: {
+            retrieveChunk: async () => {
+              throw error;
+            },
+          } as any,
+          log,
+        }),
+      );
+
+      const res = await request(app).get('/chunk/1234').expect(503);
+      assert.strictEqual(res.headers['retry-after'], '5');
+      assert.strictEqual(res.headers['cache-control'], 'no-store');
+    });
+  }
+
   it('should return 404 if chunk fetch fails', async () => {
     const chunkRetrievalService = mockNotFoundService(
       'Chunk fetch failed',
@@ -1192,21 +1219,21 @@ describe('withChunkServeDeadline', () => {
 });
 
 describe('classifyChunkRetrievalError', () => {
-  it('maps ChunkServeTimeoutError to 404 serve_deadline_exceeded (timeout-as-not-found)', () => {
+  it('maps ChunkServeTimeoutError to 503 serve_deadline_exceeded, not 404 (#917)', () => {
     const v = classifyChunkRetrievalError(
       new ChunkServeTimeoutError(12000),
       false,
     );
-    assert.strictEqual(v.statusCode, 404);
+    assert.strictEqual(v.statusCode, 503);
     assert.strictEqual(v.errorType, 'serve_deadline_exceeded');
   });
 
-  it('maps a TimeoutError to 404 upstream_timeout', () => {
+  it('maps a TimeoutError to 503 upstream_timeout', () => {
     const v = classifyChunkRetrievalError(
       Object.assign(new Error('timed out'), { name: 'TimeoutError' }),
       false,
     );
-    assert.strictEqual(v.statusCode, 404);
+    assert.strictEqual(v.statusCode, 503);
     assert.strictEqual(v.errorType, 'upstream_timeout');
   });
 
