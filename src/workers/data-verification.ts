@@ -21,7 +21,7 @@ import * as config from '../config.js';
 import * as metrics from '../metrics.js';
 
 export type QueueBundleResponse = {
-  status: 'skipped' | 'queued' | 'error';
+  status: 'skipped' | 'queued' | 'rejected' | 'error';
   error?: string;
 };
 

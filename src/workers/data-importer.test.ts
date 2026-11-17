@@ -119,6 +119,44 @@ describe('DataImporter', () => {
       assert.ok(args.signal instanceof AbortSignal);
     });
 
+    it('runs prioritized items before waiting non-prioritized ones', async () => {
+      // Hold the single worker on a first download so the rest wait.
+      let release: () => void = () => undefined;
+      const held = new Promise<void>((resolve) => (release = resolve));
+      const started: string[] = [];
+      const source: ContiguousDataSource = {
+        getData: async ({ id }: { id: string }) => {
+          started.push(id);
+          if (id === 'first') await held;
+          return {
+            stream: Readable.from(Buffer.from('x')),
+            size: 1,
+            verified: false,
+            trusted: false,
+            cached: false,
+          };
+        },
+      };
+      const importer = new DataImporter({
+        log,
+        contiguousDataSource: source,
+        workerCount: 1,
+        maxQueueSize: 10,
+      });
+
+      await importer.queueItem({ id: 'first' }, false);
+      await importer.queueItem({ id: 'backfill-1' }, false);
+      await importer.queueItem({ id: 'live' }, true);
+      await importer.queueItem({ id: 'backfill-2' }, false);
+      release();
+      while (started.length < 4) {
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+      await importer.stop();
+
+      assert.deepEqual(started, ['first', 'live', 'backfill-1', 'backfill-2']);
+    });
+
     it('should queue a prioritized item if the queue is full', async () => {
       mock.method(contiguousDataSource, 'getData');
 
@@ -128,6 +166,32 @@ describe('DataImporter', () => {
         .arguments[0];
       assert.equal(args.id, mockItem.id);
       assert.ok(args.signal instanceof AbortSignal);
+    });
+
+    it('reports whether the item was admitted', async () => {
+      mock.method(contiguousDataSource, 'getData');
+
+      assert.equal(await bundleDataImporter.queueItem(mockItem, false), true);
+      assert.equal(
+        await bundleDataImporterWithFullQueue.queueItem(mockItem, false),
+        false,
+        'a non-prioritized item is refused when the queue is full',
+      );
+      assert.equal(
+        await bundleDataImporterWithFullQueue.queueItem(mockItem, true),
+        true,
+        'a prioritized item is always admitted',
+      );
+
+      const noWorkers = new DataImporter({
+        log,
+        contiguousDataSource,
+        ans104Unbundler,
+        workerCount: 0,
+        maxQueueSize: 10,
+      });
+      assert.equal(await noWorkers.queueItem(mockItem, true), false);
+      await noWorkers.stop();
     });
   });
 

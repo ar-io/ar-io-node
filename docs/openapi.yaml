@@ -3652,9 +3652,42 @@ paths:
         offset (`ROOT_TX_LOOKUP_ORDER`) so its items are recorded at their real
         location; when the root is known but the offset is not, it answers 409
         rather than record locations relative to the bundle.
+
+        A bundle is queued ahead of everything waiting unless `prioritized` is
+        false. A non-prioritized bundle waits behind the bundles the gateway is
+        indexing live, in the importer's queue, which holds at most
+        `BUNDLE_DATA_IMPORTER_QUEUE_SIZE`; when it is full the gateway answers
+        429 and the caller should retry later. Use it for bulk backfills.
       operationId: adminQueueBundle
       requestBody:
-        $ref: '#/components/requestBodies/QueueTxRequest'
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id]
+              properties:
+                id:
+                  $ref: '#/components/schemas/Base64Url43'
+                  description: ID of the bundle to queue.
+                bypassFilter:
+                  type: boolean
+                  default: true
+                  description: >-
+                    Queue without applying ANS104_UNBUNDLE_FILTER. When false,
+                    the transaction is fetched and queued as by queue-tx, and
+                    the filter decides.
+                prioritized:
+                  type: boolean
+                  default: true
+                  description: >-
+                    Queue ahead of everything waiting. When false, queue behind
+                    the live bundles, in the size-capped queue (429 when full).
+            examples:
+              backfill:
+                value:
+                  id: '3lyxgbgEvqNSvJrTX2J7CfRychUD5KClFhhVLyTPNCQ'
+                  prioritized: false
       responses:
         '200':
           $ref: '#/components/responses/QueueTxSuccess'
@@ -3662,6 +3695,8 @@ paths:
           $ref: '#/components/responses/MissingIdOrBypassFilter'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '429':
+          description: Not prioritized and the bundle importer's queue is full; retry later.
         '409':
           description: The ID is a data item whose offset in its root is unknown; queue the enclosing bundle instead.
         '500':

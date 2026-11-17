@@ -9,6 +9,8 @@ import { describe, it } from 'node:test';
 
 import type { DataItemRootIndex, RootTxLookupResult } from '../types.js';
 import {
+  parseQueueBundleRequest,
+  queueBundleNeedsCapacity,
   queuedBundleItem,
   resolveQueuedBundleRoot,
 } from './queue-bundle-root.js';
@@ -104,5 +106,83 @@ describe('resolveQueuedBundleRoot', () => {
         root_tx_id: id,
       });
     });
+  });
+});
+
+describe('parseQueueBundleRequest', () => {
+  const id = 'x'.repeat(43);
+
+  it('defaults bypassFilter and prioritized to true', () => {
+    assert.deepEqual(parseQueueBundleRequest({ id }), {
+      ok: true,
+      id,
+      bypassFilter: true,
+      prioritized: true,
+    });
+  });
+
+  it('passes prioritized: false through', () => {
+    assert.deepEqual(
+      parseQueueBundleRequest({ id, bypassFilter: false, prioritized: false }),
+      { ok: true, id, bypassFilter: false, prioritized: false },
+    );
+  });
+
+  it('refuses a body without an id', () => {
+    assert.deepEqual(parseQueueBundleRequest({}), {
+      ok: false,
+      message: "Must provide 'id'",
+    });
+    assert.deepEqual(parseQueueBundleRequest(undefined), {
+      ok: false,
+      message: "Must provide 'id'",
+    });
+  });
+
+  it('refuses fields of the wrong type', () => {
+    assert.deepEqual(parseQueueBundleRequest({ id, prioritized: 'false' }), {
+      ok: false,
+      message: "'prioritized' must be a boolean",
+    });
+    assert.deepEqual(parseQueueBundleRequest({ id, bypassFilter: 0 }), {
+      ok: false,
+      message: "'bypassFilter' must be a boolean",
+    });
+    assert.deepEqual(parseQueueBundleRequest({ id: 7 }), {
+      ok: false,
+      message: "'id' must be a string",
+    });
+  });
+});
+
+describe('queueBundleNeedsCapacity', () => {
+  const id = 'x'.repeat(43);
+  const checked = (body: unknown) => {
+    const r = parseQueueBundleRequest(body);
+    assert.ok(r.ok);
+    return r;
+  };
+
+  it('does not cap a default request, which is prioritized', () => {
+    // A full importer queue must not turn `{ id }` into a 429: the importer
+    // admits prioritized bundles whatever the cap.
+    assert.equal(queueBundleNeedsCapacity(checked({ id })), false);
+    assert.equal(
+      queueBundleNeedsCapacity(checked({ id, bypassFilter: false })),
+      false,
+    );
+  });
+
+  it('caps a non-prioritized request', () => {
+    assert.equal(
+      queueBundleNeedsCapacity(checked({ id, prioritized: false })),
+      true,
+    );
+    assert.equal(
+      queueBundleNeedsCapacity(
+        checked({ id, prioritized: false, bypassFilter: false }),
+      ),
+      true,
+    );
   });
 });

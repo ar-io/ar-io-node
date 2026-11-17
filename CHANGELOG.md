@@ -8,6 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- `POST /ar-io/admin/queue-bundle` takes `prioritized` (default `true`).
+  With `prioritized: false` the bundle waits behind the bundles the gateway
+  is indexing live, in the importer's size-capped queue
+  (`BUNDLE_DATA_IMPORTER_QUEUE_SIZE`), and the route answers 429 while that
+  queue is full. Until now every bundle queued by ID went to the front, so a
+  bulk backfill delayed live indexing.
+
 ### Changed
 
 ### Fixed

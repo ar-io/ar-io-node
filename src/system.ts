@@ -1979,7 +1979,9 @@ metrics.registerQueueLengthGauge('bundleDataImporter', {
   length: () => bundleDataImporter.queueDepth(),
 });
 export type QueueBundleResponse = {
-  status: 'skipped' | 'queued' | 'error';
+  // 'rejected': the importer's queue was full at admission, so the bundle was
+  // not queued (it stays not fully indexed; the caller may retry).
+  status: 'skipped' | 'queued' | 'rejected' | 'error';
   error?: string;
 };
 export async function queueBundle(
@@ -2033,7 +2035,7 @@ export async function queueBundle(
         return { status: 'skipped' };
       }
 
-      bundleDataImporter.queueItem(
+      const admitted = await bundleDataImporter.queueItem(
         {
           ...item,
           index:
@@ -2044,6 +2046,9 @@ export async function queueBundle(
         isPrioritized,
         bypassFilter,
       );
+      if (!admitted) {
+        return { status: 'rejected' };
+      }
       metrics.bundlesQueuedCounter.inc({ bundle_format: 'ans-104' });
     } else {
       await db.saveBundle({
