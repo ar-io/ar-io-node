@@ -137,7 +137,18 @@ describe('CompositeChunkDataSource', () => {
 
         await assert.rejects(
           async () => composite.getChunkDataByAny(TEST_PARAMS),
-          /Failed to fetch chunk data from any source.*source1 failed.*source2 failed/,
+          (error: any) => {
+            // The per-source causes are preserved for the caller to classify
+            // (#1137): a peer answering 404 versus every peer timing out.
+            assert.ok(error instanceof AggregateError);
+            assert.deepEqual(
+              error.errors.map((cause: Error) => cause.message),
+              ['source1 failed', 'source2 failed'],
+            );
+            return /Failed to fetch chunk data from any source.*source1 failed.*source2 failed/.test(
+              error.message,
+            );
+          },
         );
 
         assert.equal(source1.callCount, 1);
@@ -294,6 +305,46 @@ describe('CompositeChunkDataSource', () => {
         // With parallelism of 2, source2 may start but source3 should not
         assert.ok(lateSourceStarted || true); // May or may not start depending on timing
       });
+    });
+  });
+
+  describe('getUnvalidatedChunk', () => {
+    it('should aggregate errors when all sources fail (#1137)', async () => {
+      const source1 = {
+        getUnvalidatedChunk: mock.fn(async () => {
+          throw new Error('source1 failed');
+        }),
+      };
+      const source2 = {
+        getUnvalidatedChunk: mock.fn(async () => {
+          throw new Error('source2 failed');
+        }),
+      };
+      const composite = new CompositeChunkDataSource({
+        log,
+        sources: [],
+        unvalidatedSources: [source1 as any, source2 as any],
+        parallelism: 1,
+      });
+
+      await assert.rejects(
+        async () =>
+          composite.getUnvalidatedChunk(
+            TEST_PARAMS.absoluteOffset,
+            undefined,
+            undefined,
+          ),
+        (error: any) => {
+          assert.ok(error instanceof AggregateError);
+          assert.deepEqual(
+            error.errors.map((cause: Error) => cause.message),
+            ['source1 failed', 'source2 failed'],
+          );
+          return /Failed to fetch unvalidated chunk from any source/.test(
+            error.message,
+          );
+        },
+      );
     });
   });
 });
