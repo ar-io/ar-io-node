@@ -116,6 +116,7 @@ export async function handleDataRateLimitingAndPayment({
   id,
   data,
   dataAttributes,
+  itemHeadersPromise,
   requestAttributes,
   rateLimiter,
   paymentProcessor,
@@ -127,6 +128,11 @@ export async function handleDataRateLimitingAndPayment({
   id: string;
   data: ContiguousData;
   dataAttributes: ContiguousDataAttributes | undefined;
+  /**
+   * From {@link fireItemHeaderResolution}, so a multipart range is priced
+   * with the type it is sent with (see {@link servedContentType}).
+   */
+  itemHeadersPromise?: Promise<ResolvedItemHeaders | undefined>;
   requestAttributes: RequestAttributes;
   rateLimiter?: RateLimiter;
   paymentProcessor?: PaymentProcessor;
@@ -139,10 +145,11 @@ export async function handleDataRateLimitingAndPayment({
   }
 
   // Determine actual content type that will be used in response
-  const contentType =
-    dataAttributes?.contentType ??
-    data.sourceContentType ??
-    'application/octet-stream';
+  const contentType = servedContentType({
+    dataAttributes,
+    data,
+    itemHeaders: await itemHeadersPromise,
+  });
 
   // Generate boundary once for multipart requests (random but consistent within request)
   const boundary =
@@ -451,6 +458,12 @@ export const sanitizeTagHeaderValue = (value: string): string => {
 /** Resolved metadata for setting response headers. */
 export interface ResolvedItemHeaders {
   tags: { name: string; value: string }[];
+  /**
+   * True when the headers came from this gateway's own record of the item
+   * (its header store, its index, or a parse of the item's signed bytes),
+   * not from tags a peer sent with the data.
+   */
+  local?: boolean;
   signature?: string;
   owner?: string;
   ownerAddress?: string;
@@ -472,6 +485,7 @@ export const resolveItemHeaders = async (
   if (meta != null) {
     return {
       tags: meta.tags ?? [],
+      local: true,
       signature: meta.signature,
       owner: meta.owner,
       ownerAddress: meta.ownerAddress,
@@ -754,6 +768,56 @@ const resolveTaggedContentEncoding = async ({
   return undefined;
 };
 
+// The characters Node accepts in a header value (`checkInvalidHeaderChar`).
+const HEADER_VALUE_REGEX = /^[\t\x20-\x7e\x80-\xff]*$/;
+
+/**
+ * The Content-Type to serve an item with.
+ *
+ * The stored type is used when it is the item's own: its indexed tag, or a
+ * tag recorded from a verified fetch. Otherwise it is only the per-hash
+ * value, shared by every item with the same bytes, or another gateway's
+ * answer for this ID, and either can disagree with the item's tag. A
+ * per-hash value recorded from an older peer's response may carry a
+ * `; charset=utf-8` the tag never had. So when this gateway knows the
+ * item's own `Content-Type` tag, the tag wins, as it does once the item is
+ * indexed. Tags a peer sent are not trusted to do that.
+ */
+export const servedContentType = ({
+  dataAttributes,
+  data,
+  itemHeaders,
+}: {
+  dataAttributes: ContiguousDataAttributes | undefined;
+  data: Pick<ContiguousData, 'sourceContentType'>;
+  itemHeaders?: ResolvedItemHeaders;
+}): string => {
+  const source = dataAttributes?.contentTypeSource;
+  if (
+    source !== 'indexed' &&
+    source !== 'item' &&
+    itemHeaders?.local === true
+  ) {
+    const tag = itemHeaders.tags.find(
+      (t) => t.name.toLowerCase() === 'content-type',
+    );
+    // A tag is uploader data. One Node would refuse as a header value
+    // (a CR or LF, say) would make setHeader throw, so it is not used.
+    if (
+      tag !== undefined &&
+      tag.value.trim() !== '' &&
+      HEADER_VALUE_REGEX.test(tag.value)
+    ) {
+      return tag.value;
+    }
+  }
+  return (
+    dataAttributes?.contentType ??
+    data.sourceContentType ??
+    DEFAULT_CONTENT_TYPE
+  );
+};
+
 const setDataHeaders = ({
   req,
   res,
@@ -781,10 +845,7 @@ const setDataHeaders = ({
   res.header('Accept-Ranges', 'bytes');
 
   // Determine content type for cache control decision
-  const contentType =
-    dataAttributes?.contentType ??
-    data.sourceContentType ??
-    DEFAULT_CONTENT_TYPE;
+  const contentType = servedContentType({ dataAttributes, data, itemHeaders });
 
   // Determine if response should use private cache control
   const usePrivate = shouldUsePrivateCacheControl(contentType, data.size);
@@ -1179,6 +1240,8 @@ interface HandleRangeRequestArgs {
   data: ContiguousData;
   id: string;
   dataAttributes: ContiguousDataAttributes | undefined;
+  /** For {@link servedContentType}. */
+  itemHeaders?: ResolvedItemHeaders;
   requestAttributes: RequestAttributes;
   parentSpan?: Span;
 }
@@ -1488,6 +1551,7 @@ const serveUncachedRange = async ({
       id,
       data,
       dataAttributes: attributes,
+      itemHeadersPromise,
       requestAttributes,
       rateLimiter,
       paymentProcessor,
@@ -1541,10 +1605,11 @@ const serveUncachedRange = async ({
         res,
         range,
         totalSize: size,
-        contentType:
-          attributes?.contentType ??
-          data.sourceContentType ??
-          DEFAULT_CONTENT_TYPE,
+        contentType: servedContentType({
+          dataAttributes: attributes,
+          data,
+          itemHeaders,
+        }),
       })
     ) {
       rangeData.stream.destroy();
@@ -1568,6 +1633,7 @@ const handleRangeRequest = async ({
   data,
   id,
   dataAttributes,
+  itemHeaders,
   requestAttributes,
   parentSpan,
 }: HandleRangeRequestArgs) => {
@@ -1608,10 +1674,11 @@ const handleRangeRequest = async ({
     }
 
     const isSingleRange = ranges.length === 1;
-    const contentType =
-      dataAttributes?.contentType ??
-      data.sourceContentType ??
-      'application/octet-stream';
+    const contentType = servedContentType({
+      dataAttributes,
+      data,
+      itemHeaders,
+    });
 
     setDigestStableVerifiedHeaders({ req, res, dataAttributes, data });
     useReprDigest(res);
@@ -2012,6 +2079,7 @@ export const createRawDataHandler = ({
             id,
             data,
             dataAttributes,
+            itemHeadersPromise: tagsPromise,
             requestAttributes,
             rateLimiter,
             paymentProcessor,
@@ -2068,6 +2136,7 @@ export const createRawDataHandler = ({
               data,
               id,
               dataAttributes,
+              itemHeaders,
               requestAttributes,
               parentSpan: span,
             });
@@ -2427,6 +2496,7 @@ const sendManifestResponse = async ({
       id: resolvedId,
       data,
       dataAttributes,
+      itemHeadersPromise,
       requestAttributes,
       rateLimiter,
       paymentProcessor,
@@ -2487,6 +2557,7 @@ const sendManifestResponse = async ({
           data,
           id: resolvedId,
           dataAttributes,
+          itemHeaders,
           requestAttributes,
           parentSpan,
         });
@@ -2854,6 +2925,7 @@ export const createDataHandler = ({
             id,
             data,
             dataAttributes,
+            itemHeadersPromise: tagsPromise,
             requestAttributes,
             rateLimiter,
             paymentProcessor,
@@ -2998,6 +3070,7 @@ export const createDataHandler = ({
             data,
             id,
             dataAttributes,
+            itemHeaders,
             requestAttributes,
             parentSpan: span,
           });
