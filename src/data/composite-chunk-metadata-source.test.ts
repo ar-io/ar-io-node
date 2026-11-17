@@ -140,7 +140,18 @@ describe('CompositeChunkMetadataSource', () => {
 
         await assert.rejects(
           async () => composite.getChunkMetadataByAny(TEST_PARAMS),
-          /Failed to fetch chunk metadata from any source.*source1 failed.*source2 failed/,
+          (error: any) => {
+            // The per-source causes are preserved for the caller to classify
+            // (#1137): a peer answering 404 versus every peer timing out.
+            assert.ok(error instanceof AggregateError);
+            assert.deepEqual(
+              error.errors.map((cause: Error) => cause.message),
+              ['source1 failed', 'source2 failed'],
+            );
+            return /Failed to fetch chunk metadata from any source.*source1 failed.*source2 failed/.test(
+              error.message,
+            );
+          },
         );
 
         assert.equal(source1.callCount, 1);
