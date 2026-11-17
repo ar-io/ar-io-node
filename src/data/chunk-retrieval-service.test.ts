@@ -332,6 +332,97 @@ describe('ChunkRetrievalService', () => {
     });
   });
 
+  describe('retrieveChunk - all peers time out (#1137)', () => {
+    const timeoutError = () =>
+      new DOMException('The operation timed out.', 'TimeoutError');
+    const notFoundError = () =>
+      Object.assign(new Error('Peer peer1.example.com returned status 404'), {
+        status: 404,
+      });
+
+    const serviceWithFailingSource = (failure: Error) => {
+      const txBoundarySource = createMockTxBoundarySource();
+      const chunkSource = createMockChunkSource();
+      (chunkSource.getChunkByAny as any).mock.mockImplementation(async () => {
+        throw failure;
+      });
+      return new ChunkRetrievalService({
+        log,
+        chunkSource,
+        txBoundarySource,
+      });
+    };
+
+    it('throws a TimeoutError when every attempt timed out', async () => {
+      const service = serviceWithFailingSource(
+        new AggregateError(
+          [timeoutError(), timeoutError()],
+          'Failed to fetch chunk from AR.IO peers after 2 attempts',
+        ),
+      );
+
+      await assert.rejects(
+        () => service.retrieveChunk(ABSOLUTE_OFFSET),
+        (error: any) => {
+          // A TimeoutError reaches the route as 503 upstream_timeout; a
+          // ChunkNotFoundError would be answered (and cached) as 404.
+          assert.equal(error.name, 'TimeoutError');
+          assert.equal(error instanceof ChunkNotFoundError, false);
+          return true;
+        },
+      );
+    });
+
+    it('throws a TimeoutError for a bare timeout, not just an aggregate', async () => {
+      const service = serviceWithFailingSource(timeoutError());
+
+      await assert.rejects(
+        () => service.retrieveChunk(ABSOLUTE_OFFSET),
+        (error: any) => {
+          assert.equal(error.name, 'TimeoutError');
+          assert.equal(error instanceof ChunkNotFoundError, false);
+          return true;
+        },
+      );
+    });
+
+    it('keeps 404 when any attempt was a definitive 404', async () => {
+      const service = serviceWithFailingSource(
+        new AggregateError(
+          [notFoundError(), timeoutError()],
+          'Failed to fetch chunk data from any source. Errors: 404; timeout',
+        ),
+      );
+
+      await assert.rejects(
+        () => service.retrieveChunk(ABSOLUTE_OFFSET),
+        (error: any) => {
+          assert(error instanceof ChunkNotFoundError);
+          assert.equal(error.errorType, 'fetch_failed');
+          return true;
+        },
+      );
+    });
+
+    it('keeps 404 when every attempt failed some other way', async () => {
+      const service = serviceWithFailingSource(
+        new AggregateError(
+          [new Error('connect ECONNREFUSED'), new Error('boom')],
+          'Failed to fetch chunk data from any source. Errors: refused; boom',
+        ),
+      );
+
+      await assert.rejects(
+        () => service.retrieveChunk(ABSOLUTE_OFFSET),
+        (error: any) => {
+          assert(error instanceof ChunkNotFoundError);
+          assert.equal(error.errorType, 'fetch_failed');
+          return true;
+        },
+      );
+    });
+  });
+
   describe('retrieveChunk - cache miss with boundary fetch', () => {
     it('should fall through to boundary fetch when only one cache store has data', async () => {
       const chunkDataStore = createMockChunkDataStore();
