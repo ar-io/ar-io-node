@@ -34,7 +34,10 @@ import {
   QueueOutcome,
   runBackfill,
 } from '../../lib/backfill-bundles/run.js';
-import { selectBucket } from '../../lib/backfill-bundles/select.js';
+import {
+  recheckBundle,
+  selectBucket,
+} from '../../lib/backfill-bundles/select.js';
 import { parseMetrics } from '../../lib/prometheus-text.js';
 import type { BackfillBundlesCLIOptions, JsonSerializable } from '../types.js';
 import { positiveIntegerFromOptions } from '../utils.js';
@@ -114,7 +117,9 @@ export function guardConfigFromOptions(
     maxImporterQueue:
       positiveIntegerFromOptions(options, 'maxImporterQueue') ?? 50,
     maxIndexerQueue:
-      positiveIntegerFromOptions(options, 'maxIndexerQueue') ?? 200_000,
+      // Half the gateway's default MAX_DATA_ITEM_QUEUE_SIZE (100,000): above
+      // it the gateway downloads a bundle and skips parsing it.
+      positiveIntegerFromOptions(options, 'maxIndexerQueue') ?? 50_000,
     eventLoopLag: parseThreshold(
       options.maxEventLoopLag ?? '200:1000',
       (ms) => Number(ms) / 1000,
@@ -165,6 +170,11 @@ function readsOwnerKey(filter: unknown): boolean {
         typeof value === 'object' &&
         value !== null &&
         'owner' in value) ||
+      // A hash partition on the owner key reads it too.
+      (key === 'hashPartition' &&
+        typeof value === 'object' &&
+        value !== null &&
+        (value as { partitionKey?: unknown }).partitionKey === 'owner') ||
       readsOwnerKey(value),
   );
 }
@@ -239,6 +249,13 @@ export async function backfillBundlesCLICommand(
         filter,
         from: bucketFrom,
         to: bucketTo,
+        maxRetries: positiveIntegerFromOptions(options, 'maxRetries') ?? 2,
+        cooldownSeconds:
+          (positiveIntegerFromOptions(options, 'cooldownHours') ?? 6) * 3600,
+        nowSeconds: Math.floor(nowMs() / 1000),
+      }),
+    recheckBundle: (id) =>
+      recheckBundle(bundles, id, {
         maxRetries: positiveIntegerFromOptions(options, 'maxRetries') ?? 2,
         cooldownSeconds:
           (positiveIntegerFromOptions(options, 'cooldownHours') ?? 6) * 3600,

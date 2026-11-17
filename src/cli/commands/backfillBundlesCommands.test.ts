@@ -10,6 +10,8 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
+import Sqlite from 'better-sqlite3';
+
 import { createTestLogger } from '../../../test/test-logger.js';
 import {
   createFixture,
@@ -38,6 +40,7 @@ function fakeGateway({
         [
           'queue_length{queue_name="bundleDataImporter"} 0',
           'queue_length{queue_name="ans104DataIndexer"} 0',
+          'queue_length{queue_name="dataItemIndexer"} 0',
           `nodejs_eventloop_lag_p99_seconds ${typeof lagSeconds === 'function' ? lagSeconds() : lagSeconds}`,
         ].join('\n'),
       );
@@ -198,6 +201,74 @@ describe('backfill-bundles CLI', () => {
       ),
       /owner_address/,
     );
+  });
+
+  it('refuses a hash partition on the owner public key', async () => {
+    const gw = fakeGateway({
+      filter: {
+        not: {
+          hashPartition: {
+            partitionCount: 1,
+            partitionKey: 'owner',
+            targetPartitions: [0],
+          },
+        },
+      },
+    });
+    await assert.rejects(
+      backfillBundlesCLICommand(
+        { ...base(), dryRun: true },
+        { log, env: {}, fetch: gw.fetchImpl, ...clock() },
+      ),
+      /owner_address/,
+    );
+  });
+
+  it('rechecks a bundle just before queueing it', async () => {
+    // The first bundle waits on a full importer. Meanwhile something else
+    // queues it, so the run must leave it and go on with the rest.
+    const gw = fakeGateway({ queueAnswers: [429] });
+    const t = clock();
+    const firstId = Buffer.from(expectedSelected[0], 'base64url');
+    const probe = new Sqlite(bundlesDb, { readonly: true });
+    const original = (
+      probe
+        .prepare('SELECT last_queued_at FROM bundles WHERE id = ?')
+        .get(firstId) as { last_queued_at: number | null }
+    ).last_queued_at;
+    probe.close();
+    let writer: Sqlite.Database | undefined;
+    const result: any = await backfillBundlesCLICommand(base(), {
+      log,
+      env: { ADMIN_API_KEY: 'k' },
+      fetch: gw.fetchImpl,
+      nowMs: t.nowMs,
+      sleep: async (ms: number) => {
+        await t.sleep(ms);
+        if (writer === undefined) {
+          writer = new Sqlite(bundlesDb);
+          writer
+            .prepare('UPDATE bundles SET last_queued_at = ? WHERE id = ?')
+            .run(
+              Math.floor(t.nowMs() / 1000),
+              Buffer.from(expectedSelected[0], 'base64url'),
+            );
+        }
+      },
+    });
+    try {
+      assert.deepEqual(
+        gw.queued.map((q) => q.id),
+        expectedSelected.slice(1),
+      );
+      assert.equal(result.totals.alreadyQueued, 1);
+    } finally {
+      // Leave the shared fixture as the other tests expect it.
+      writer
+        ?.prepare('UPDATE bundles SET last_queued_at = ? WHERE id = ?')
+        .run(original, firstId);
+      writer?.close();
+    }
   });
 
   it('retries a bundle the gateway had no room for', async () => {

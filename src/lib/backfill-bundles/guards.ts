@@ -105,6 +105,9 @@ export function readGuards({
   };
   queue('bundleDataImporter', config.maxImporterQueue);
   queue('ans104DataIndexer', config.maxIndexerQueue);
+  // The gateway unbundles a non-prioritized bundle only while both indexer
+  // queues are under MAX_DATA_ITEM_QUEUE_SIZE (system.ts).
+  queue('dataItemIndexer', config.maxIndexerQueue);
 
   if (config.eventLoopLag !== undefined) {
     const value = metricValue(gateway, 'nodejs_eventloop_lag_p99_seconds');

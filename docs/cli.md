@@ -1746,11 +1746,16 @@ in the range whose `bundles` row was skipped (`last_skipped_at` set) and is
 not fully indexed, and that the gateway's unbundle filter matches. The
 filter is the one the gateway reports in `/ar-io/info`, judged with the same
 code forward indexing uses, against each transaction's tags, owner address
-and target from `core.db`. A filter on `owner` (the public key) is refused,
-because `core.db` keeps only the address. It leaves out bundles that have
+and target from `core.db`. A filter on `owner` (the public key), including a
+`hashPartition` on `owner`, is refused, because `core.db` keeps only the
+address. It leaves out bundles that have
 failed `--max-retries` times, and bundles queued again within
 `--cooldown-hours` (still in flight, or with the repair worker). Both
 databases are opened read-only.
+
+**Recheck.** Just before queueing a bundle it reads the bundle's state again:
+a bundle that another run or the repair worker queued during a wait is left
+alone.
 
 **How it queues.** Through `POST /ar-io/admin/queue-bundle` with
 `prioritized: false`, so each bundle waits behind the bundles the gateway is
@@ -1763,11 +1768,12 @@ each bundle it waits while:
 - the quiet window is on (`--quiet-window`, default `03:30-07:30` UTC);
 - the hourly byte budget is spent (`--bytes-per-hour`);
 - the gateway's queues are full: `bundleDataImporter` at
-  `--max-importer-queue` (default 50) or `ans104DataIndexer` at
-  `--max-indexer-queue` (default 200,000). Keep the second below the
-  gateway's `MAX_DATA_ITEM_QUEUE_SIZE` (default 100,000), or the unbundler
-  drops a downloaded bundle unparsed, to be retried later by the repair
-  worker;
+  `--max-importer-queue` (default 50), or `ans104DataIndexer` or
+  `dataItemIndexer` at `--max-indexer-queue` (default 50,000). The
+  gateway unbundles only while both indexer queues are under its limit, so
+  keep this below the gateway's `MAX_DATA_ITEM_QUEUE_SIZE` (default
+  100,000), or the unbundler drops a downloaded bundle unparsed, to be
+  retried later by the repair worker;
 - a guard is past its pause limit. The guards are the event loop lag p99
   (`--max-event-loop-lag`, default `200:1000` ms), and, from a node exporter
   (`--node-metrics-url`), `--max-load1`, `--min-free` per mount point and
@@ -1791,7 +1797,7 @@ many bundles, for a pilot. After a range, check it with `index-census
 | `--gateway-url` | The gateway to read the filter and metrics from and queue on (default `http://core:4000`); its admin key comes from `ADMIN_API_KEY` or `ADMIN_API_KEY_FILE` |
 | `--dry-run` | Select and count, queue nothing |
 | `--filter <json>` | Select with this unbundle filter instead (with `--dry-run` only) |
-| `--max-importer-queue`, `--max-indexer-queue` | Queue ceilings (defaults 50, 200000) |
+| `--max-importer-queue`, `--max-indexer-queue` | Queue ceilings (defaults 50, 50000) |
 | `--bytes-per-hour <size>` | Hourly budget of bundle bytes, e.g. `42G` (default none) |
 | `--quiet-window` | Daily UTC window to queue nothing in, or `none` (default `03:30-07:30`) |
 | `--node-metrics-url` | Node exporter `/metrics` for the host guards |

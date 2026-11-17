@@ -453,7 +453,7 @@ export const optionMap = {
   backfillMaxIndexerQueue: {
     alias: '--max-indexer-queue <n>',
     description:
-      "Wait while this many data items wait to be indexed (default 200000). Keep it below the gateway's MAX_DATA_ITEM_QUEUE_SIZE, or downloaded bundles are dropped unparsed",
+      "Wait while this many data items wait to be indexed (default 50000). Keep it below the gateway's MAX_DATA_ITEM_QUEUE_SIZE, or downloaded bundles are dropped unparsed",
   },
   backfillBytesPerHour: {
     alias: '--bytes-per-hour <size>',

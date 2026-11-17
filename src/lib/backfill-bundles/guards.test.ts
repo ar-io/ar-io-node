@@ -18,11 +18,17 @@ import {
   readGuards,
 } from './guards.js';
 
-const gatewayText = (importer: number, indexer: number, lagSeconds = 0.01) =>
+const gatewayText = (
+  importer: number,
+  indexer: number,
+  lagSeconds = 0.01,
+  dataItems = 0,
+) =>
   [
     '# TYPE queue_length gauge',
     `queue_length{queue_name="bundleDataImporter",release="88"} ${importer}`,
     `queue_length{queue_name="ans104DataIndexer",release="88"} ${indexer}`,
+    `queue_length{queue_name="dataItemIndexer",release="88"} ${dataItems}`,
     `nodejs_eventloop_lag_p99_seconds{release="88"} ${lagSeconds}`,
   ].join('\n');
 
@@ -63,6 +69,7 @@ describe('readGuards', () => {
     assert.deepEqual(states(second), {
       'queue bundleDataImporter': 'ok',
       'queue ans104DataIndexer': 'ok',
+      'queue dataItemIndexer': 'ok',
       'event loop lag p99': 'ok',
       load1: 'ok',
       'free /data': 'ok',
@@ -252,5 +259,18 @@ describe('review cases', () => {
     const budget = new HourlyByteBudget(undefined);
     for (let i = 0; i < 1000; i++) budget.record(1e9, i);
     assert.equal((budget as unknown as { queued: unknown[] }).queued.length, 0);
+  });
+});
+
+describe('dataItemIndexer guard', () => {
+  it('pauses when dataItemIndexer is full though ans104DataIndexer is not', () => {
+    const r = readGuards({
+      config,
+      gateway: parseMetrics(
+        gatewayText(10, 1000, 0.01, config.maxIndexerQueue),
+      ),
+      nowMs: 0,
+    });
+    assert.equal(states(r)['queue dataItemIndexer'], 'pause');
   });
 });

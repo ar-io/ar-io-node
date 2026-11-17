@@ -32,6 +32,11 @@ export interface BackfillDeps {
   log: Logger;
   /** The bundles of one bucket, with their verdicts (see `selectBucket`). */
   selectBucket: (from: number, to: number) => BackfillCandidate[];
+  /**
+   * The bundle's verdict now, just before queueing it; undefined if still
+   * eligible. Optional (tests and callers without bundles.db omit it).
+   */
+  recheckBundle?: (id: string) => BackfillVerdict | undefined;
   /** POST queue-bundle, non-prioritized. Throws on a transport error. */
   queueBundle: (id: string) => Promise<QueueOutcome>;
   gatewayMetrics: () => Promise<Sample[]>;
@@ -237,6 +242,17 @@ export async function runBackfill(
           paused('byte budget', budgetMs);
           await deps.sleep(budgetMs);
           continue;
+        }
+        const now = deps.recheckBundle?.(c.id);
+        if (now !== undefined) {
+          // Queued, indexed or failed since selection: leave it.
+          bucket.alreadyQueued++;
+          result.totals.alreadyQueued++;
+          log.info('Bundle no longer eligible; not queued', {
+            id: c.id,
+            verdict: now,
+          });
+          break;
         }
         const outcome = await deps.queueBundle(c.id);
         if (outcome === 'full') {

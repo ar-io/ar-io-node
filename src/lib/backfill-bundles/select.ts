@@ -86,6 +86,26 @@ export function judgeBundleState(
   return undefined;
 }
 
+/**
+ * The verdict a selected bundle has now, read again just before it is queued
+ * (a wait can last hours; another run or the repair worker may have queued
+ * it meanwhile). Undefined: still eligible.
+ */
+export function recheckBundle(
+  bundles: Database,
+  id: string,
+  options: { maxRetries: number; cooldownSeconds: number; nowSeconds: number },
+): BackfillVerdict | undefined {
+  const state = bundles
+    .prepare(
+      `SELECT last_queued_at, last_skipped_at, last_fully_indexed_at,
+              retry_attempt_count
+       FROM bundles WHERE id = ?`,
+    )
+    .get(Buffer.from(id, 'base64url')) as BundleState | undefined;
+  return judgeBundleState(state, options);
+}
+
 export interface SelectOptions {
   core: Database;
   bundles: Database;
