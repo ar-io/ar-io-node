@@ -110,6 +110,8 @@ export class CompositeChunkMetadataSource implements ChunkMetadataByAnySource {
     const errorMessage = `Failed to fetch chunk metadata from any source. Errors: ${errors
       .map((e) => e.message)
       .join('; ')}`;
-    throw new Error(errorMessage);
+    // Keep the per-source causes: the caller classifies the outcome from
+    // them (a peer answering 404 versus every peer timing out, #1137).
+    throw new AggregateError(errors, errorMessage);
   }
 }
