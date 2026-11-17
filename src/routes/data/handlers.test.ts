@@ -18,6 +18,7 @@ import { createTestLogger } from '../../../test/test-logger.js';
 
 const log = createTestLogger({ suite: 'Data routes' });
 import {
+  ContentTypeSource,
   ContiguousDataSource,
   DataAttributesSource,
   DataBlockListValidator,
@@ -1777,7 +1778,18 @@ st
         res.on('end', () => callback(null, Buffer.concat(chunks)));
       };
 
-      const serve = (contentType: string) => {
+      const serve = (
+        contentType: string,
+        {
+          contentTypeSource,
+          localTags,
+          upstreamTags,
+        }: {
+          contentTypeSource?: ContentTypeSource;
+          localTags?: { name: string; value: string }[];
+          upstreamTags?: { name: string; value: string }[];
+        } = {},
+      ) => {
         app.get(
           '/:id',
           createDataHandler({
@@ -1786,11 +1798,19 @@ st
             dataSource,
             dataBlockListValidator,
             manifestPathResolver,
+            dataItemMetaResolver:
+              localTags !== undefined
+                ? ({
+                    resolveFromLocal: async () => ({ tags: localTags }),
+                    resolve: async () => undefined,
+                  } as any)
+                : undefined,
           }),
         );
         dataAttributesSource.getDataAttributes = async () => ({
           size: body.length,
           contentType,
+          ...(contentTypeSource !== undefined ? { contentTypeSource } : {}),
           isManifest: false,
           stable: true,
           verified: true,
@@ -1811,6 +1831,7 @@ st
             verified: true,
             cached: false,
             trusted: true,
+            ...(upstreamTags !== undefined ? { upstreamTags } : {}),
           };
         };
       };
@@ -1871,6 +1892,79 @@ st
           .get('/not-a-real-id')
           .expect(200)
           .expect('Content-Type', 'text/html; charset=utf-8');
+      });
+
+      describe("the item's own Content-Type tag", () => {
+        const jsonTag = [{ name: 'Content-Type', value: 'application/json' }];
+
+        it('replaces a per-hash type an older peer added a charset to', async () => {
+          serve('application/json; charset=utf-8', { localTags: jsonTag });
+          const get = request(app)
+            .get('/not-a-real-id')
+            .buffer(true)
+            .parse(raw)
+            .expect(200)
+            .expect('Content-Type', 'application/json')
+            .then((res: any) => {
+              assert.deepEqual(res.body, body);
+            });
+          const head = request(app)
+            .head('/not-a-real-id')
+            .expect(200)
+            .expect('Content-Type', 'application/json');
+          await Promise.all([get, head]);
+        });
+
+        it('replaces it on a range response', async () => {
+          serve('application/json; charset=utf-8', { localTags: jsonTag });
+          await request(app)
+            .get('/not-a-real-id')
+            .set('Range', 'bytes=0-3')
+            .buffer(true)
+            .parse(raw)
+            .expect(206)
+            .expect('Content-Type', 'application/json');
+        });
+
+        it("replaces another gateway's answer for the item", async () => {
+          serve('application/json; charset=utf-8', {
+            contentTypeSource: 'upstream',
+            localTags: [{ name: 'content-type', value: 'application/json' }],
+          });
+          await request(app)
+            .get('/not-a-real-id')
+            .expect(200)
+            .expect('Content-Type', 'application/json');
+        });
+
+        it("does not replace the item's indexed type", async () => {
+          serve('text/html', {
+            contentTypeSource: 'indexed',
+            localTags: jsonTag,
+          });
+          await request(app)
+            .get('/not-a-real-id')
+            .expect(200)
+            .expect('Content-Type', 'text/html; charset=utf-8');
+        });
+
+        it('is not taken from tags a peer sent', async () => {
+          serve('application/json; charset=utf-8', { upstreamTags: jsonTag });
+          await request(app)
+            .get('/not-a-real-id')
+            .expect(200)
+            .expect('Content-Type', 'application/json; charset=utf-8');
+        });
+
+        it('keeps the stored type when the item has no Content-Type tag', async () => {
+          serve('application/json; charset=utf-8', {
+            localTags: [{ name: 'App-Name', value: 'x' }],
+          });
+          await request(app)
+            .get('/not-a-real-id')
+            .expect(200)
+            .expect('Content-Type', 'application/json; charset=utf-8');
+        });
       });
 
       it('leaves other types unchanged', async () => {

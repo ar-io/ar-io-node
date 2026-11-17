@@ -18,6 +18,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   it as an error; they now share its result, so a miss logs only once, as a
   miss. Clients repeatedly requesting one unregistered name produced hundreds
   of these errors per hour.
+- Data responses use the item's own `Content-Type` tag when the gateway
+  knows it but has only a per-hash or upstream type stored. Items cached
+  before Release 85 recorded types per content hash, often from an older
+  peer that added `; charset=utf-8` to JSON. Such an item was served as
+  `application/json; charset=utf-8` although its tag, which the response
+  also carried as `X-Arweave-Tag-Content-Type`, said `application/json`, so
+  gateways disagreed about one item's type. Tags a peer sent with the data
+  are not used for this.
 
 ## [Release 88] - 2026-11-15
 
