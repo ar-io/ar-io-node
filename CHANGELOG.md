@@ -15,6 +15,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   queue is full. Until now every bundle queued by ID went to the front, so a
   bulk backfill delayed live indexing.
 
+- `ar-io-node backfill-bundles --from <h> --to <h>` queues the L1 bundles a
+  gateway once skipped, and never fully indexed, that its current
+  `ANS104_UNBUNDLE_FILTER` matches: the bundles a widened filter would have
+  unbundled. It selects with the filter the gateway reports in
+  `/ar-io/info`, read-only from `core.db` and `bundles.db`, so it never
+  queues what forward indexing would skip, unlike
+  `FILTER_CHANGE_REPROCESS=true`, which re-queues every skipped bundle. It
+  queues non-prioritized, one 10,000-height bucket at a time, and waits on
+  the gateway's queues, an hourly byte budget, a daily quiet window and
+  optional host guards (load, free space, disk busy, from a node exporter),
+  halting if one stays past its limit. `--dry-run` counts per bucket and
+  per `Bundler-App-Name`, under the live filter or one given with
+  `--filter`. Rerunning a range resumes it. See `docs/cli.md`.
+
 ### Changed
 
 ### Fixed

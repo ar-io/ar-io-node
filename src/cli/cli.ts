@@ -25,6 +25,7 @@ import {
   indexL2ImportOptions,
   indexBandVerifyOptions,
   indexCensusOptions,
+  backfillBundlesOptions,
 } from './options.js';
 import { passthroughArgs, runSdkCli, sdkCli } from './passthrough.js';
 import type {
@@ -37,6 +38,7 @@ import type {
   IndexL1VerifyCLIOptions,
   IndexBandVerifyCLIOptions,
   IndexCensusCLIOptions,
+  BackfillBundlesCLIOptions,
 } from './types.js';
 import { applyOptions, makeCommand } from './utils.js';
 
@@ -59,6 +61,8 @@ const indexL1AuditCommands = async () =>
   import('./commands/indexL1AuditCommands.js');
 const indexCensusCommands = async () =>
   import('./commands/indexCensusCommands.js');
+const backfillBundlesCommands = async () =>
+  import('./commands/backfillBundlesCommands.js');
 
 const sdk = sdkCli();
 
@@ -330,6 +334,38 @@ makeCommand<IndexCensusCLIOptions>({
     'transactions), or missing (never imported; re-queue the bundle with',
     'POST /ar-io/admin/queue-bundle). Needs the transaction_ids table',
     'backfilled. Run again with --roots on the re-queued roots to verify.',
+    CONTRACT,
+  ].join('\n'),
+);
+
+makeCommand<BackfillBundlesCLIOptions>({
+  name: 'backfill-bundles',
+  description:
+    'Queue, behind live indexing, the L1 bundles this gateway skipped that its unbundle filter matches now',
+  options: backfillBundlesOptions,
+  action: async (options) =>
+    (await backfillBundlesCommands()).backfillBundlesCLICommand(options, {
+      log: createCliLogger({ debug: options.debug === true }),
+    }),
+}).addHelpText(
+  'after',
+  [
+    '',
+    'Example:',
+    '  ar-io-node backfill-bundles --from 1300000 --to 1309999 --dry-run',
+    '',
+    '  ar-io-node backfill-bundles --from 1300000 --to 1399999 \\',
+    '    --bytes-per-hour 42G --node-metrics-url http://host:9100/metrics \\',
+    '    --max-load1 20:28 --min-free /data=600G:400G --max-disk-busy sda=70:90',
+    '',
+    'Read-only on core.db and bundles.db. Selects stable L1 bundles that',
+    'were skipped and never fully indexed, and that the unbundle filter the',
+    'gateway reports in /ar-io/info matches, and queues them with',
+    'queue-bundle prioritized:false (ADMIN_API_KEY), one 10,000-height',
+    'bucket at a time. It waits while the queues are full, the byte budget',
+    'is spent, the quiet window is on or a guard is past its pause limit,',
+    'and stops (exit 1) once a guard stays past its halt limit for',
+    '--halt-after. Run the same range again to resume.',
     CONTRACT,
   ].join('\n'),
 );

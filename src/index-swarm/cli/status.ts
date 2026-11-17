@@ -13,6 +13,7 @@ import { directoryBytes } from '../disk.js';
 import { resolveEngineAuth } from '../engine-auth.js';
 import { QBittorrentTransport } from '../transport/qbittorrent.js';
 import { INSTALLED_ROOT_TX_SOURCE } from './setup-plan.js';
+import { parseMetrics, Sample } from '../../lib/prometheus-text.js';
 
 /**
  * `tools/index-swarm-status`: one answer to "is index sharing working here?".
@@ -29,29 +30,8 @@ export interface Check {
   fix?: string;
 }
 
-export interface Sample {
-  name: string;
-  labels: Record<string, string>;
-  value: number;
-}
-
-/** Parse Prometheus text exposition, enough for the gauges and counters here. */
-export function parseMetrics(text: string): Sample[] {
-  const out: Sample[] = [];
-  for (const line of text.split('\n')) {
-    if (line.length === 0 || line.startsWith('#')) continue;
-    const match = /^([a-zA-Z_:][a-zA-Z0-9_:]*)(\{(.*)\})?\s+(\S+)/.exec(line);
-    if (match === null) continue;
-    const labels: Record<string, string> = {};
-    for (const [, key, value] of (match[3] ?? '').matchAll(
-      /([a-zA-Z_][a-zA-Z0-9_]*)="((?:[^"\\]|\\.)*)"/g,
-    )) {
-      labels[key] = value.replace(/\\(.)/g, '$1');
-    }
-    out.push({ name: match[1], labels, value: Number(match[4]) });
-  }
-  return out;
-}
+export { parseMetrics };
+export type { Sample };
 
 const sum = (
   samples: Sample[],

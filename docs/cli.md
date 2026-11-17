@@ -36,6 +36,7 @@ The wrapper mounts only what a command needs:
 | `index-l1-*` | `INDEX_SWARM_DATA_PATH` read-only at `data/indexes`; `SQLITE_DATA_PATH` at `data/sqlite`, read-write for `index-l1-import` and read-only for `index-l1-verify` and `index-l1-audit`; for `index-l1-verify --bands-dir`, a spill folder (below); and the gateway's Docker network, so `--data-from`, `--anchor-from` or `--registry-url` can name `http://core:4000`. A `--publication` file is mapped like the other paths |
 | `index-census` | `SQLITE_DATA_PATH` read-only at `data/sqlite`; `CLICKHOUSE_URL`, `CLICKHOUSE_USER` and `CLICKHOUSE_PASSWORD`, passed by name; `INDEX_SWARM_DATA_PATH` at `data/indexes`, the only place `--output` may go; and the gateway's Docker network, where `CLICKHOUSE_URL` points |
 | `index-l2-*` | `INDEX_SWARM_DATA_PATH` read-only at `data/indexes`, and the gateway's Docker network, so `--gateway-url` can name `http://core:4000` |
+| `backfill-bundles` | `SQLITE_DATA_PATH` read-only at `data/sqlite`; `ADMIN_API_KEY`, passed by name, or the file `ADMIN_API_KEY_FILE` names, read-only; and the gateway's Docker network, so `--gateway-url http://core:4000` works |
 | any `ar.io` command | Nothing, except the file a `--wallet-file` (`-w`) names, read-only. A relative path is taken from where you ran the wrapper |
 
 It runs as your user, so what it writes is yours, and
@@ -1715,6 +1716,123 @@ not judge them. The TSV has the columns `root`, `height`, `expected`,
 ```bash
 awk -F'\t' '$10 == "missing" { print $1 }' short-roots.tsv
 ```
+
+## `backfill-bundles`
+
+Queues the L1 bundles this gateway once skipped, and never fully indexed,
+that its unbundle filter matches now. Use it after widening
+`ANS104_UNBUNDLE_FILTER`. The gateway applies a new filter only to bundles
+it sees from then on, and `FILTER_CHANGE_REPROCESS=true` re-queues every
+skipped bundle at once, including those the new filter still excludes. This
+command queues only the ones the filter matches, behind live indexing, at a
+pace you set.
+
+```bash
+# what a range holds, per 10,000-height bucket; queues nothing
+./tools/ar-io-node backfill-bundles --from 1300000 --to 1399999 --dry-run
+
+# the same, under a filter you have not deployed yet
+./tools/ar-io-node backfill-bundles --from 1300000 --to 1399999 --dry-run \
+  --filter '{"not":{"tags":[{"name":"Bundler-App-Name","value":"AO"}]}}'
+
+# queue it, at most 42 GB an hour, pausing on the host's load and disks
+./tools/ar-io-node backfill-bundles --from 1300000 --to 1399999 \
+  --bytes-per-hour 42G --node-metrics-url http://<host>:9100/metrics \
+  --max-load1 20:28 --min-free /data=600G:400G --max-disk-busy sda=70:90
+```
+
+**What it selects.** Stable L1 transactions tagged `Bundle-Format: binary`
+in the range whose `bundles` row was skipped (`last_skipped_at` set) and is
+not fully indexed, and that the gateway's unbundle filter matches. The
+filter is the one the gateway reports in `/ar-io/info`, judged with the same
+code forward indexing uses, against each transaction's tags, owner address
+and target from `core.db`. A filter on `owner` (the public key), including a
+`hashPartition` on `owner`, is refused, because `core.db` keeps only the
+address. It leaves out bundles that have
+failed `--max-retries` times, and bundles queued again within
+`--cooldown-hours` (still in flight, or with the repair worker). Both
+databases are opened read-only.
+
+**Recheck.** Just before queueing a bundle it reads the bundle's state again:
+a bundle that another run or the repair worker queued during a wait is left
+alone.
+
+**How it queues.** Through `POST /ar-io/admin/queue-bundle` with
+`prioritized: false`, so each bundle waits behind the bundles the gateway is
+indexing live, and with `bypassFilter: true`, since it has already applied
+the gateway's filter. That spares the gateway re-fetching every header to
+filter it again. It works one 10,000-height bucket at a time, in height
+order, so the ClickHouse import re-exports few buckets at once. Before
+each bundle it waits while:
+
+- the quiet window is on (`--quiet-window`, default `03:30-07:30` UTC);
+- the hourly byte budget is spent (`--bytes-per-hour`);
+- the gateway's queues are full: `bundleDataImporter` at
+  `--max-importer-queue` (default 50), or `ans104DataIndexer` or
+  `dataItemIndexer` at `--max-indexer-queue` (default 50,000). The
+  gateway unbundles only while both indexer queues are under its limit, so
+  keep this below the gateway's `MAX_DATA_ITEM_QUEUE_SIZE` (default
+  100,000), or the unbundler drops a downloaded bundle unparsed, to be
+  retried later by the repair worker;
+- a guard is past its pause limit. The guards are the event loop lag p99
+  (`--max-event-loop-lag`, default `200:1000` ms), and, from a node exporter
+  (`--node-metrics-url`), `--max-load1`, `--min-free` per mount point and
+  `--max-disk-busy` per device. A metric it cannot read counts as past its
+  pause limit.
+
+A guard that stays past its halt limit for `--halt-after` seconds (default
+900) stops the run, with exit 1 and its result on stderr. A 429 from the
+gateway, or the gateway being unreachable, makes it wait `--poll` seconds
+(default 30) and try the same bundle again.
+
+**Resuming.** The state is in `bundles.db`, so run the same range again: a
+bundle fully indexed since is no longer selected. `--limit` stops after that
+many bundles, for a pilot. After a range, check it with `index-census
+--from --to`.
+
+| Option | Meaning |
+| --- | --- |
+| `--from`, `--to` | The root transaction heights. Required |
+| `--bundles-db`, `--core-db` | The gateway's databases, read-only (defaults `data/sqlite/bundles.db`, `data/sqlite/core.db`) |
+| `--gateway-url` | The gateway to read the filter and metrics from and queue on (default `http://core:4000`); its admin key comes from `ADMIN_API_KEY` or `ADMIN_API_KEY_FILE` |
+| `--dry-run` | Select and count, queue nothing |
+| `--filter <json>` | Select with this unbundle filter instead (with `--dry-run` only) |
+| `--max-importer-queue`, `--max-indexer-queue` | Queue ceilings (defaults 50, 50000) |
+| `--bytes-per-hour <size>` | Hourly budget of bundle bytes, e.g. `42G` (default none) |
+| `--quiet-window` | Daily UTC window to queue nothing in, or `none` (default `03:30-07:30`) |
+| `--node-metrics-url` | Node exporter `/metrics` for the host guards |
+| `--max-event-loop-lag <pause:halt>` | In ms (default `200:1000`) |
+| `--max-load1 <pause:halt>` | Load average |
+| `--min-free <mount=pause:halt,...>` | Free-space floors, e.g. `/data=600G:400G` |
+| `--max-disk-busy <dev=pause:halt,...>` | Busy percentages, e.g. `sda=70:90` |
+| `--halt-after <s>`, `--poll <s>` | Defaults 900 and 30 |
+| `--max-retries`, `--cooldown-hours` | Defaults 2 and 6 |
+| `--limit <n>` | Stop after queueing this many |
+
+### `backfill-bundles` result
+
+```json
+{
+  "gatewayUrl": "http://core:4000",
+  "filter": "{\"not\":{\"or\":[...]}}",
+  "dryRun": true,
+  "heightRange": [1300000, 1319999],
+  "buckets": [
+    { "from": 1300000, "to": 1309999, "bundles": 9, "verdicts": { "selected": 2, "filtered-out": 1, "indexed": 1, "unrecorded": 1, "not-skipped": 1, "retries-exhausted": 1, "recently-queued": 1 }, "selectedBytes": 3000, "queued": 0, "alreadyQueued": 0, "refused": 0 }
+  ],
+  "totals": { "bundles": 9, "selected": 2, "selectedBytes": 3000, "queued": 0, "alreadyQueued": 0, "refused": 0, "verdicts": { "selected": 2 } },
+  "selectedByBundlerAppName": { "(none)": 1, "ArDrive": 1 },
+  "pausedSeconds": {},
+  "seconds": 0.4
+}
+```
+
+`unrecorded` bundles have no `bundles` row: the gateway never saw them
+through its bundle pipeline (for example, transactions loaded by
+`index-l1-import`); this command does not queue them. `not-skipped` bundles
+were queued live and belong to the repair worker. `selectedByBundlerAppName`
+is there to check, before a real run, that no bundle the filter should
+exclude was selected. A halted run adds `halted`, the guard and its reading.
 
 ## For scripts and agents
 
