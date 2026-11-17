@@ -117,7 +117,9 @@ export async function runBackfill(
       refused: 0,
       verdicts: {},
     },
-    selectedByBundlerAppName: {},
+    // Null prototype: a Bundler-App-Name of "__proto__" or "constructor" is
+    // an app name, not an inherited property.
+    selectedByBundlerAppName: Object.create(null) as Record<string, number>,
     pausedSeconds: {},
   };
   const paused = (reason: string, ms: number) => {
@@ -135,6 +137,10 @@ export async function runBackfill(
         });
         paused('quiet window', quietMs);
         await deps.sleep(quietMs);
+        // Nothing was observed while asleep: a halt cannot have lasted
+        // through it, and a disk rate over the window is not a reading.
+        for (const name of Object.keys(haltSince)) delete haltSince[name];
+        previousDisk = undefined;
         continue;
       }
       let gateway: Sample[] = [];

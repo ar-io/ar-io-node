@@ -158,8 +158,12 @@ export function readGuards({
       disk !== undefined &&
       before !== undefined &&
       after !== undefined &&
+      after >= before &&
       disk.atMs > previousDisk.atMs
     ) {
+      // A counter that went down (an exporter or host restart) gives no rate:
+      // the reading stays undefined (a pause) and this sample is the new
+      // baseline.
       value = (after - before) / ((disk.atMs - previousDisk.atMs) / 1000);
     }
     readings.push({
@@ -279,6 +283,8 @@ export class HourlyByteBudget {
   }
 
   record(bytes: number, nowMs: number): void {
+    // Without a budget nothing reads the history: keep none.
+    if (this.bytesPerHour === undefined) return;
     this.queued.push({ atMs: nowMs, bytes });
   }
 }

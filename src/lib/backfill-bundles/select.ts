@@ -108,7 +108,8 @@ export function selectBucket(options: SelectOptions): BackfillCandidate[] {
   const { core, bundles, filter } = options;
   const txs = core
     .prepare(
-      `SELECT st.id, st.height, st.data_size, st.owner_address, st.target
+      `SELECT st.id, st.height, st.data_size, st.owner_address, st.target,
+              st.quantity
        FROM stable_transaction_tags stt
        JOIN stable_transactions st ON st.id = stt.transaction_id
        WHERE stt.tag_name_hash = @name AND stt.tag_value_hash = @value
@@ -126,6 +127,7 @@ export function selectBucket(options: SelectOptions): BackfillCandidate[] {
     data_size: number | null;
     owner_address: Buffer;
     target: Buffer | null;
+    quantity: string | null;
   }[];
   const tagsOf = core.prepare(
     `SELECT tn.name, tv.value
@@ -142,7 +144,13 @@ export function selectBucket(options: SelectOptions): BackfillCandidate[] {
   );
 
   const out: BackfillCandidate[] = [];
+  // The join returns a transaction once per matching tag row, so one tagged
+  // `Bundle-Format: binary` twice would be counted twice. Rows of one
+  // transaction are adjacent (ordered by height and position).
+  let previousId: Buffer | undefined;
   for (const tx of txs) {
+    if (previousId !== undefined && previousId.equals(tx.id)) continue;
+    previousId = tx.id;
     const tags = tagsOf.all(tx.id) as { name: Buffer; value: Buffer }[];
     const appTag = tags.find((t) => t.name.toString() === 'Bundler-App-Name');
     let verdict = judgeBundleState(
@@ -155,6 +163,7 @@ export function selectBucket(options: SelectOptions): BackfillCandidate[] {
         height: tx.height,
         owner_address: toB64Url(tx.owner_address),
         target: tx.target !== null ? toB64Url(tx.target) : '',
+        quantity: tx.quantity ?? '0',
         tags: tags.map((t) => ({
           name: toB64Url(t.name),
           value: toB64Url(t.value),

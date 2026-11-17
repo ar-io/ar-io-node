@@ -34,6 +34,8 @@ export interface FixtureBundle {
   height: number;
   dataSize: number;
   tags: [string, string][];
+  /** The transaction's quantity (winston), default '0'. */
+  quantity?: string;
   /** The `bundles` row; absent for none. */
   state?: {
     last_queued_at?: number;
@@ -170,7 +172,7 @@ export function createFixture(
     `INSERT INTO stable_transactions (id, height, block_transaction_index,
        signature, format, last_tx, owner_address, target, quantity, reward,
        data_size, data_root, content_type, tag_count)
-     VALUES (@id, @height, 0, x'00', 2, x'00', @owner, NULL, '0', '0',
+     VALUES (@id, @height, 0, x'00', 2, x'00', @owner, NULL, @quantity, '0',
        @data_size, NULL, NULL, @tag_count)`,
   );
   const insertName = core.prepare(
@@ -199,6 +201,7 @@ export function createFixture(
       owner: Buffer.alloc(32, 1),
       data_size: b.dataSize,
       tag_count: b.tags.length,
+      quantity: b.quantity ?? '0',
     });
     b.tags.forEach(([name, value], index) => {
       const n = Buffer.from(name);

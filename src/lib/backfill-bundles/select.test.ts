@@ -166,3 +166,80 @@ describe('buckets', () => {
     assert.deepEqual(buckets(5, 5), [[5, 5]]);
   });
 });
+
+describe('backfill-bundles selection, review cases', () => {
+  const skippedRow = { last_skipped_at: 1_700_000_000 };
+  const tagged = (extra: [string, string][]) =>
+    [['Bundle-Format', 'binary'], ['Bundle-Version', '2.0.0'], ...extra] as [
+      string,
+      string,
+    ][];
+  const run = (
+    bundlesList: Parameters<typeof createFixture>[0],
+    filter: unknown,
+  ) => {
+    const { core, bundles } = createFixture(bundlesList);
+    try {
+      return selectBucket({
+        core,
+        bundles,
+        filter: createFilter(filter, log),
+        from: 1_300_000,
+        to: 1_309_999,
+        maxRetries: 2,
+        cooldownSeconds: 0,
+        nowSeconds: FIXTURE_NOW,
+      });
+    } finally {
+      core.close();
+      bundles.close();
+    }
+  };
+
+  it('counts a bundle tagged Bundle-Format twice once', () => {
+    const out = run(
+      [
+        {
+          label: 'twice',
+          height: 1_300_001,
+          dataSize: 10,
+          tags: tagged([['Bundle-Format', 'binary']]),
+          state: skippedRow,
+        },
+      ],
+      D1_FILTER,
+    );
+    assert.deepEqual(
+      out.map((c) => c.id),
+      [fixtureId('twice')],
+    );
+  });
+
+  it('gives the filter the transaction quantity', () => {
+    const out = run(
+      [
+        {
+          label: 'paid',
+          height: 1_300_001,
+          dataSize: 10,
+          tags: tagged([]),
+          quantity: '5',
+          state: skippedRow,
+        },
+        {
+          label: 'free',
+          height: 1_300_002,
+          dataSize: 10,
+          tags: tagged([]),
+          quantity: '0',
+          state: skippedRow,
+        },
+      ],
+      { attributes: { quantity: '5' } },
+    );
+    assert.deepEqual(Object.fromEntries(out.map((c) => [c.id, c.verdict])), {
+      [fixtureId('paid')]: 'selected',
+      [fixtureId('free')]: 'filtered-out',
+    });
+  });
+});

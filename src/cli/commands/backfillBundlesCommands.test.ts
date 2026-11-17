@@ -25,7 +25,7 @@ const log = createTestLogger({ suite: 'backfill-bundles' });
 function fakeGateway({
   filter = D1_FILTER as unknown,
   queueAnswers = [] as number[],
-  lagSeconds = 0.01,
+  lagSeconds = 0.01 as number | (() => number),
 } = {}) {
   const queued: { id: string; body: any; auth: string | null }[] = [];
   const answers = [...queueAnswers];
@@ -38,7 +38,7 @@ function fakeGateway({
         [
           'queue_length{queue_name="bundleDataImporter"} 0',
           'queue_length{queue_name="ans104DataIndexer"} 0',
-          `nodejs_eventloop_lag_p99_seconds ${lagSeconds}`,
+          `nodejs_eventloop_lag_p99_seconds ${typeof lagSeconds === 'function' ? lagSeconds() : lagSeconds}`,
         ].join('\n'),
       );
     }
@@ -121,10 +121,13 @@ describe('backfill-bundles CLI', () => {
         [1_310_000, 1_319_999, 2],
       ],
     );
-    assert.deepEqual(result.selectedByBundlerAppName, {
-      '(none)': 3,
-      ArDrive: 1,
-    });
+    assert.deepEqual(
+      { ...result.selectedByBundlerAppName },
+      {
+        '(none)': 3,
+        ArDrive: 1,
+      },
+    );
     assert.equal(result.totals.verdicts['filtered-out'], 2);
   });
 
@@ -279,6 +282,96 @@ describe('backfill-bundles CLI', () => {
       }),
       /ADMIN_API_KEY/,
     );
+  });
+
+  it('counts a 503 as refused and moves on, instead of retrying it forever', async () => {
+    const gw = fakeGateway({ queueAnswers: [503] });
+    const t = clock();
+    const result: any = await backfillBundlesCLICommand(base(), {
+      log,
+      env: { ADMIN_API_KEY: 'k' },
+      fetch: gw.fetchImpl,
+      ...t,
+    });
+    assert.equal(result.totals.refused, 1);
+    assert.deepEqual(
+      gw.queued.map((q) => q.id),
+      expectedSelected.slice(1),
+    );
+    assert.deepEqual(t.sleeps, []);
+  });
+
+  it('does not count the quiet window as time a guard held its halt', async () => {
+    // 03:25 UTC: the lag is in its halt band for 5 minutes before the
+    // window and 5 minutes after it. Neither stretch reaches --halt-after
+    // (10 minutes), so the run must not halt on the unobserved 4 hours.
+    let now = FIXTURE_NOW * 1000 - (4 * 60 + 35) * 60_000;
+    const windowEnd = FIXTURE_NOW * 1000 - 30 * 60_000; // 07:30 UTC
+    const gw = fakeGateway({
+      lagSeconds: () => (now < windowEnd + 5 * 60_000 ? 5 : 0.01),
+    });
+    const result: any = await backfillBundlesCLICommand(
+      { ...base(), haltAfter: '600', poll: '60' },
+      {
+        log,
+        env: { ADMIN_API_KEY: 'k' },
+        fetch: gw.fetchImpl,
+        nowMs: () => now,
+        sleep: async (ms: number) => {
+          now += ms;
+        },
+      },
+    );
+    assert.equal(result.totals.queued, 4);
+    assert.ok(result.pausedSeconds['quiet window'] > 0);
+  });
+
+  it('counts Bundler-App-Name values like __proto__ as app names', async () => {
+    const appDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'backfill-bundles-apps-'),
+    );
+    try {
+      const tags = (app: string): [string, string][] => [
+        ['Bundle-Format', 'binary'],
+        ['Bundle-Version', '2.0.0'],
+        ['Bundler-App-Name', app],
+      ];
+      const f = createFixture(
+        [
+          {
+            label: 'proto',
+            height: 1_300_001,
+            dataSize: 1,
+            tags: tags('__proto__'),
+            state: { last_skipped_at: 1_700_000_000 },
+          },
+          {
+            label: 'ctor',
+            height: 1_300_002,
+            dataSize: 1,
+            tags: tags('constructor'),
+            state: { last_skipped_at: 1_700_000_000 },
+          },
+        ],
+        appDir,
+      );
+      f.core.close();
+      f.bundles.close();
+      const gw = fakeGateway();
+      const result: any = await backfillBundlesCLICommand(
+        { ...base(), coreDb: f.coreDb!, bundlesDb: f.bundlesDb!, dryRun: true },
+        { log, env: {}, fetch: gw.fetchImpl, ...clock() },
+      );
+      const apps = result.selectedByBundlerAppName;
+      assert.equal(
+        Object.prototype.hasOwnProperty.call(apps, '__proto__'),
+        true,
+      );
+      assert.equal(apps['__proto__'], 1);
+      assert.equal(apps['constructor'], 1);
+    } finally {
+      fs.rmSync(appDir, { recursive: true, force: true });
+    }
   });
 
   it('needs --node-metrics-url for host guards', async () => {

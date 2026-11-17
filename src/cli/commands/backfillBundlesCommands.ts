@@ -265,6 +265,14 @@ export async function backfillBundlesCLICommand(
         return 'full';
       }
       const text = await response.text();
+      // 429 is a full importer queue; 502/504 a gateway behind a restart.
+      // Both are worth waiting for. 503 is the gateway failing to save or
+      // queue this bundle: retrying it forever would stall the whole run, so
+      // it counts as refused and the run moves on.
+      if (response.status === 503) {
+        deps.log.warn('Gateway refused the bundle (503)', { id, body: text });
+        return 'refused';
+      }
       if (response.status === 429 || response.status >= 502) return 'full';
       if (response.status === 401) {
         throw new Error('The gateway refused the admin key (401)');

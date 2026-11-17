@@ -218,3 +218,39 @@ describe('parseBytes', () => {
     assert.throws(() => parseBytes('lots'));
   });
 });
+
+describe('review cases', () => {
+  it('pauses, not passes, when the disk counter goes down', () => {
+    const first = readGuards({
+      config,
+      gateway: parseMetrics(gatewayText(10, 1000)),
+      node: parseMetrics(nodeText(5, 900e9, 1000)),
+      nowMs: 0,
+    });
+    const reset = readGuards({
+      config,
+      gateway: parseMetrics(gatewayText(10, 1000)),
+      node: parseMetrics(nodeText(5, 900e9, 5)),
+      nowMs: 30_000,
+      previousDisk: first.disk,
+    });
+    const busy = reset.readings.find((r) => r.name === 'busy sda')!;
+    assert.equal(busy.value, undefined);
+    assert.notEqual(busy.state, 'ok');
+    // The reset sample is the next baseline: 15 s busy in 30 s = 50%.
+    const next = readGuards({
+      config,
+      gateway: parseMetrics(gatewayText(10, 1000)),
+      node: parseMetrics(nodeText(5, 900e9, 20)),
+      nowMs: 60_000,
+      previousDisk: reset.disk,
+    });
+    assert.equal(next.readings.find((r) => r.name === 'busy sda')!.value, 0.5);
+  });
+
+  it('keeps no history without a byte budget', () => {
+    const budget = new HourlyByteBudget(undefined);
+    for (let i = 0; i < 1000; i++) budget.record(1e9, i);
+    assert.equal((budget as unknown as { queued: unknown[] }).queued.length, 0);
+  });
+});
