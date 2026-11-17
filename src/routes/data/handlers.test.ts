@@ -1956,6 +1956,21 @@ st
             .expect('Content-Type', 'application/json; charset=utf-8');
         });
 
+        it('keeps the stored type when the tag is not a valid header value', async () => {
+          serve('application/json; charset=utf-8', {
+            localTags: [
+              { name: 'Content-Type', value: 'application/json\r\nX-Test: 1' },
+            ],
+          });
+          await request(app)
+            .get('/not-a-real-id')
+            .expect(200)
+            .expect('Content-Type', 'application/json; charset=utf-8')
+            .then((res: any) => {
+              assert.equal(res.headers['x-test'], undefined);
+            });
+        });
+
         it('keeps the stored type when the item has no Content-Type tag', async () => {
           serve('application/json; charset=utf-8', {
             localTags: [{ name: 'App-Name', value: 'x' }],
@@ -4785,6 +4800,55 @@ st
         assert.equal(paymentProcessor.calculatedContexts[0].contentSize, 10);
         assert.equal(paymentProcessor.verifyCalls, 0);
         assert.equal(paymentProcessor.settleCalls, 0);
+      });
+
+      it("prices a multipart range with the item's own Content-Type tag", async () => {
+        testDataAttributesSource.getDataAttributes = async () => ({
+          size: 10,
+          offset: 0,
+          contentType: 'application/json; charset=utf-8',
+          isManifest: false,
+          stable: true,
+          verified: false,
+          signature: null,
+        });
+        testApp.get(
+          '/:id',
+          createDataHandler({
+            log,
+            dataAttributesSource: testDataAttributesSource,
+            dataSource: testDataSource,
+            dataBlockListValidator: testDataBlockListValidator,
+            manifestPathResolver: testManifestPathResolver,
+            rateLimiter,
+            paymentProcessor,
+            dataItemMetaResolver: {
+              resolveFromLocal: async () => ({
+                tags: [{ name: 'Content-Type', value: 'application/json' }],
+              }),
+              resolve: async () => undefined,
+            } as any,
+          }),
+        );
+
+        const res = await request(testApp)
+          .get('/test-id')
+          .set('Range', 'bytes=0-1,4-5')
+          .buffer(true)
+          .parse((r: any, callback: any) => {
+            const chunks: Buffer[] = [];
+            r.on('data', (chunk: Buffer) => chunks.push(chunk));
+            r.on('end', () => callback(null, Buffer.concat(chunks)));
+          })
+          .expect(206);
+
+        assert.match(
+          res.body.toString(),
+          /Content-Type: application\/json\r\n/,
+        );
+        const [context] = paymentProcessor.calculatedContexts;
+        assert.equal(context.contentType, 'application/json');
+        assert.equal(context.contentSize, res.body.length);
       });
 
       it('should respond 402 when an attached payment fails verification', async () => {

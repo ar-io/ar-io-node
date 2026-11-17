@@ -116,6 +116,7 @@ export async function handleDataRateLimitingAndPayment({
   id,
   data,
   dataAttributes,
+  itemHeadersPromise,
   requestAttributes,
   rateLimiter,
   paymentProcessor,
@@ -127,6 +128,11 @@ export async function handleDataRateLimitingAndPayment({
   id: string;
   data: ContiguousData;
   dataAttributes: ContiguousDataAttributes | undefined;
+  /**
+   * From {@link fireItemHeaderResolution}, so a multipart range is priced
+   * with the type it is sent with (see {@link servedContentType}).
+   */
+  itemHeadersPromise?: Promise<ResolvedItemHeaders | undefined>;
   requestAttributes: RequestAttributes;
   rateLimiter?: RateLimiter;
   paymentProcessor?: PaymentProcessor;
@@ -139,10 +145,11 @@ export async function handleDataRateLimitingAndPayment({
   }
 
   // Determine actual content type that will be used in response
-  const contentType =
-    dataAttributes?.contentType ??
-    data.sourceContentType ??
-    'application/octet-stream';
+  const contentType = servedContentType({
+    dataAttributes,
+    data,
+    itemHeaders: await itemHeadersPromise,
+  });
 
   // Generate boundary once for multipart requests (random but consistent within request)
   const boundary =
@@ -761,6 +768,9 @@ const resolveTaggedContentEncoding = async ({
   return undefined;
 };
 
+// The characters Node accepts in a header value (`checkInvalidHeaderChar`).
+const HEADER_VALUE_REGEX = /^[\t\x20-\x7e\x80-\xff]*$/;
+
 /**
  * The Content-Type to serve an item with.
  *
@@ -791,7 +801,13 @@ export const servedContentType = ({
     const tag = itemHeaders.tags.find(
       (t) => t.name.toLowerCase() === 'content-type',
     );
-    if (tag !== undefined && tag.value.trim() !== '') {
+    // A tag is uploader data. One Node would refuse as a header value
+    // (a CR or LF, say) would make setHeader throw, so it is not used.
+    if (
+      tag !== undefined &&
+      tag.value.trim() !== '' &&
+      HEADER_VALUE_REGEX.test(tag.value)
+    ) {
       return tag.value;
     }
   }
@@ -1535,6 +1551,7 @@ const serveUncachedRange = async ({
       id,
       data,
       dataAttributes: attributes,
+      itemHeadersPromise,
       requestAttributes,
       rateLimiter,
       paymentProcessor,
@@ -2062,6 +2079,7 @@ export const createRawDataHandler = ({
             id,
             data,
             dataAttributes,
+            itemHeadersPromise: tagsPromise,
             requestAttributes,
             rateLimiter,
             paymentProcessor,
@@ -2478,6 +2496,7 @@ const sendManifestResponse = async ({
       id: resolvedId,
       data,
       dataAttributes,
+      itemHeadersPromise,
       requestAttributes,
       rateLimiter,
       paymentProcessor,
@@ -2906,6 +2925,7 @@ export const createDataHandler = ({
             id,
             data,
             dataAttributes,
+            itemHeadersPromise: tagsPromise,
             requestAttributes,
             rateLimiter,
             paymentProcessor,
