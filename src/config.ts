@@ -4073,7 +4073,7 @@ export const ENABLE_X_402_USDC_DATA_EGRESS =
   env.varOrDefault('ENABLE_X_402_USDC_DATA_EGRESS', 'false') === 'true';
 export const X_402_USDC_NETWORK = env.varOrDefault(
   'X_402_USDC_NETWORK',
-  'base-sepolia', // base mainnet is the default (base-sepolia is the testnet)
+  'base-sepolia', // testnet by default; set 'base' for mainnet
 ) as 'base' | 'base-sepolia';
 export const X_402_USDC_WALLET_ADDRESS = env.varOrUndefined(
   'X_402_USDC_WALLET_ADDRESS',
