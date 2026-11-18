@@ -204,6 +204,18 @@ describe('backfill-bundles CLI', () => {
     ]);
   });
 
+  it('--owners rejects a non-canonical address', async () => {
+    const gw = fakeGateway();
+    // 43 characters, but the last one carries non-zero padding bits.
+    await assert.rejects(
+      backfillBundlesCLICommand(
+        { ...base(), dryRun: true, owners: 'A'.repeat(42) + 'B' },
+        { log, env: {}, fetch: gw.fetchImpl, ...clock() },
+      ),
+      /--owners/,
+    );
+  });
+
   it('--owners rejects a malformed address', async () => {
     const gw = fakeGateway();
     await assert.rejects(

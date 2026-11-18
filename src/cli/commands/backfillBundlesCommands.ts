@@ -170,7 +170,14 @@ function parseOwners(value: string | undefined): Set<string> | undefined {
     .filter((part) => part !== '');
   if (owners.length === 0) throw new Error('--owners lists no address');
   for (const owner of owners) {
-    if (!/^[A-Za-z0-9_-]{43}$/.test(owner)) {
+    // Canonical only: 32 bytes that re-encode to the same 43 characters. A
+    // value with non-zero padding bits would never equal a stored address.
+    const bytes = Buffer.from(owner, 'base64url');
+    if (
+      !/^[A-Za-z0-9_-]{43}$/.test(owner) ||
+      bytes.length !== 32 ||
+      bytes.toString('base64url') !== owner
+    ) {
       throw new Error(`--owners: '${owner}' is not a base64url owner address`);
     }
   }
