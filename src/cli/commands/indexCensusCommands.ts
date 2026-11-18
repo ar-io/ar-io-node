@@ -98,9 +98,12 @@ export async function indexCensusCLICommand(
   // Through tools/ar-io-node --output must stay in data/indexes. The SQLite
   // directory is mounted read-write too (WAL), so check the real path: a
   // symlink under data/indexes must not lead the output over bundles.db.
+  // Every write below uses this normalized path, the one checked: the raw
+  // string could still pass through a symlink before a '..' (live/../x).
+  const output =
+    options.output === undefined ? undefined : path.resolve(options.output);
   const dataRoot = process.env.AR_IO_NODE_CLI_DATA_DIR;
-  if (options.output !== undefined && dataRoot !== undefined) {
-    const output = path.resolve(options.output);
+  if (output !== undefined && dataRoot !== undefined) {
     const inside = (root: string, target: string) => {
       const relative = path.relative(root, target);
       return !relative.startsWith('..') && !path.isAbsolute(relative);
@@ -118,11 +121,7 @@ export async function indexCensusCLICommand(
       );
     }
   }
-  if (
-    options.output !== undefined &&
-    options.force !== true &&
-    fs.existsSync(options.output)
-  ) {
+  if (output !== undefined && options.force !== true && fs.existsSync(output)) {
     throw new Error(
       `--output ${options.output} exists; pass --force to replace it`,
     );
@@ -145,9 +144,7 @@ export async function indexCensusCLICommand(
 
   const db = new Sqlite(bundlesDb, { readonly: true, fileMustExist: true });
   const partial =
-    options.output === undefined
-      ? undefined
-      : `${options.output}.${process.pid}.partial`;
+    output === undefined ? undefined : `${output}.${process.pid}.partial`;
   let out: fs.WriteStream | undefined;
   // A write stream reports a failure (a missing directory, a full disk) as an
   // 'error' event, which try/catch doesn't see: record it and rethrow.
@@ -194,11 +191,11 @@ export async function indexCensusCLICommand(
           error ? reject(error) : resolve(),
         ),
       );
-      await fsp.rename(partial, options.output!);
+      await fsp.rename(partial, output!);
     }
     return {
       bundlesDb,
-      output: options.output ?? null,
+      output: output ?? null,
       ...result,
       seconds: Math.round((Date.now() - started) / 100) / 10,
     } as unknown as JsonSerializable;

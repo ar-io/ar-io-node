@@ -70,6 +70,7 @@ describe('indexCensusCLICommand', () => {
     const elsewhere = path.join(dir, 'sqlite');
     fs.mkdirSync(dataRoot);
     fs.mkdirSync(elsewhere);
+    fs.writeFileSync(path.join(elsewhere, 'bundles.db'), 'sentinel');
     fs.symlinkSync(elsewhere, path.join(dataRoot, 'live'));
     const saved = process.env.AR_IO_NODE_CLI_DATA_DIR;
     process.env.AR_IO_NODE_CLI_DATA_DIR = dataRoot;
@@ -87,7 +88,21 @@ describe('indexCensusCLICommand', () => {
           /outside data\/indexes/,
         );
       }
-      assert.deepEqual(fs.readdirSync(elsewhere), []);
+      // Normalizes to data/indexes/sqlite/bundles.db; the filesystem would
+      // follow live -> sqlite before the '..'. Written where it normalizes,
+      // never over the sibling's bundles.db.
+      const dotted = `${dataRoot}/live/../sqlite/bundles.db`;
+      const result = (await indexCensusCLICommand(
+        { bundlesDb, output: dotted, force: true },
+        { log, clickhouse: emptyClickHouse() },
+      )) as { output: string };
+      assert.equal(result.output, path.join(dataRoot, 'sqlite', 'bundles.db'));
+      assert.ok(fs.existsSync(result.output));
+      assert.deepEqual(fs.readdirSync(elsewhere), ['bundles.db']);
+      assert.equal(
+        fs.readFileSync(path.join(elsewhere, 'bundles.db'), 'utf8'),
+        'sentinel',
+      );
       const inside = path.join(dataRoot, 'census', 'short-roots.tsv');
       await indexCensusCLICommand(
         { bundlesDb, output: inside },
