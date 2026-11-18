@@ -65,6 +65,41 @@ describe('indexCensusCLICommand', () => {
     assert.match(fs.readFileSync(output, 'utf8'), /^root\theight\t/);
   });
 
+  it('refuses an output that a symlink leads out of the data root', async () => {
+    const dataRoot = path.join(dir, 'indexes');
+    const elsewhere = path.join(dir, 'sqlite');
+    fs.mkdirSync(dataRoot);
+    fs.mkdirSync(elsewhere);
+    fs.symlinkSync(elsewhere, path.join(dataRoot, 'live'));
+    const saved = process.env.AR_IO_NODE_CLI_DATA_DIR;
+    process.env.AR_IO_NODE_CLI_DATA_DIR = dataRoot;
+    try {
+      for (const output of [
+        path.join(dataRoot, 'live', 'bundles.db'),
+        path.join(dataRoot, 'live', 'new', 'short-roots.tsv'),
+        path.join(dir, 'short-roots.tsv'),
+      ]) {
+        await assert.rejects(
+          indexCensusCLICommand(
+            { bundlesDb, output },
+            { log, clickhouse: emptyClickHouse() },
+          ),
+          /outside data\/indexes/,
+        );
+      }
+      assert.deepEqual(fs.readdirSync(elsewhere), []);
+      const inside = path.join(dataRoot, 'census', 'short-roots.tsv');
+      await indexCensusCLICommand(
+        { bundlesDb, output: inside },
+        { log, clickhouse: emptyClickHouse() },
+      );
+      assert.ok(fs.existsSync(inside));
+    } finally {
+      if (saved === undefined) delete process.env.AR_IO_NODE_CLI_DATA_DIR;
+      else process.env.AR_IO_NODE_CLI_DATA_DIR = saved;
+    }
+  });
+
   it('fails cleanly, leaving no partial file, when the output cannot be written', async () => {
     const blocker = path.join(dir, 'not-a-directory');
     fs.writeFileSync(blocker, '');

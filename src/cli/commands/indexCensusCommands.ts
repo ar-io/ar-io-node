@@ -95,11 +95,24 @@ export async function indexCensusCLICommand(
   const roots =
     options.roots === undefined ? undefined : await readRoots(options.roots);
 
-  // Through tools/ar-io-node only data/indexes is writable from the host.
+  // Through tools/ar-io-node --output must stay in data/indexes. The SQLite
+  // directory is mounted read-write too (WAL), so check the real path: a
+  // symlink under data/indexes must not lead the output over bundles.db.
   const dataRoot = process.env.AR_IO_NODE_CLI_DATA_DIR;
   if (options.output !== undefined && dataRoot !== undefined) {
-    const relative = path.relative(dataRoot, path.resolve(options.output));
-    if (relative.startsWith('..') || path.isAbsolute(relative)) {
+    const output = path.resolve(options.output);
+    const inside = (root: string, target: string) => {
+      const relative = path.relative(root, target);
+      return !relative.startsWith('..') && !path.isAbsolute(relative);
+    };
+    let parent = path.dirname(output);
+    while (!fs.existsSync(parent) && path.dirname(parent) !== parent) {
+      parent = path.dirname(parent);
+    }
+    if (
+      !inside(dataRoot, output) ||
+      !inside(fs.realpathSync(dataRoot), fs.realpathSync(parent))
+    ) {
       throw new Error(
         `--output ${options.output} is outside data/indexes, the only directory mounted from the host`,
       );
