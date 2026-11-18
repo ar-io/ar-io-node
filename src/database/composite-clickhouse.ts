@@ -1275,6 +1275,10 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
    *   only those (height, block_transaction_index) pairs. If any parent is
    *   missing from the table, nothing is narrowed and the query runs as
    *   before: the missing parent's items could still be in `transactions`.
+   *   That unnarrowed `parent_id` scan has no index, so for a parent that is
+   *   not yet stable it trips `max_rows_to_read`; `resolvedParentsPkPrefix`
+   *   then carries the pairs of the parents that were found (none when no
+   *   parent was), for the stable leg to fall back to instead of failing.
    *
    * A failed lookup also leaves the query as before.
    */
@@ -1284,7 +1288,11 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
   }: {
     ids: string[];
     bundledIn?: string[] | null;
-  }): Promise<{ pkPrefix?: StablePkPrefix; noMatches: boolean }> {
+  }): Promise<{
+    pkPrefix?: StablePkPrefix;
+    noMatches: boolean;
+    resolvedParentsPkPrefix?: StablePkPrefix | null;
+  }> {
     if (!this.idLookupEnabled) return { noMatches: false };
     const filter =
       ids.length > 0
@@ -1343,20 +1351,24 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
     }
 
     const found = new Set(rows.map((r) => r.idHex));
-    if (!requested.every((id) => found.has(b64UrlToHex(id)))) {
-      metrics.clickhouseGqlIdLookupTotal.inc({ filter, outcome: 'partial' });
-      return { noMatches: false };
-    }
-    metrics.clickhouseGqlIdLookupTotal.inc({ filter, outcome: 'resolved' });
     const pairs = [
       ...new Set(rows.map((r) => `(${r.height}, ${r.blockTransactionIndex})`)),
     ];
+    const parentsPkPrefix: StablePkPrefix | null =
+      pairs.length === 0
+        ? null
+        : {
+            heights,
+            predicateSql: `(t.height, t.block_transaction_index) IN (${pairs.join(', ')})`,
+          };
+    if (!requested.every((id) => found.has(b64UrlToHex(id)))) {
+      metrics.clickhouseGqlIdLookupTotal.inc({ filter, outcome: 'partial' });
+      return { noMatches: false, resolvedParentsPkPrefix: parentsPkPrefix };
+    }
+    metrics.clickhouseGqlIdLookupTotal.inc({ filter, outcome: 'resolved' });
     return {
       noMatches: false,
-      pkPrefix: {
-        heights,
-        predicateSql: `(t.height, t.block_transaction_index) IN (${pairs.join(', ')})`,
-      },
+      pkPrefix: parentsPkPrefix ?? undefined,
     };
   }
 
@@ -1500,13 +1512,17 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
     // wait on it).
     const chStablePromise = (async () => {
       if (pastMinedRows) return [];
-      const { pkPrefix, noMatches } = await this.resolveStablePkPrefix({
-        ids,
-        bundledIn,
-      });
+      const { pkPrefix, noMatches, resolvedParentsPkPrefix } =
+        await this.resolveStablePkPrefix({
+          ids,
+          bundledIn,
+        });
       if (noMatches) return [];
 
-      const buildStableSql = (roundCursor: string | undefined) => {
+      const buildStableSql = (
+        roundCursor: string | undefined,
+        prefix: StablePkPrefix | undefined = pkPrefix,
+      ) => {
         const stableQuery = this.getGqlTransactionsBaseSql();
         this.addGqlTransactionFilters({
           query: stableQuery,
@@ -1520,7 +1536,7 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
           bundledIn,
           tags,
           encoded: encodedFilters,
-          pkPrefix,
+          pkPrefix: prefix,
         });
         return stableQuery.toString();
       };
@@ -1557,6 +1573,18 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
           // rare case left to surface the 158, no worse than before this feature.
           const willRetryWindowed =
             this.ownerProjectionApplies(owners, ids, tags) && ids.length === 0;
+          // A `bundledIn` parent missing from `transaction_ids` is almost
+          // always not yet stable: its items are in SQLite (or the unstable
+          // leg), and the unnarrowed `parent_id` scan above found none of
+          // them within the cap. Answer from the parents that were found
+          // rather than failing the whole query.
+          const willNarrowToResolvedParents =
+            !willRetryWindowed && resolvedParentsPkPrefix !== undefined;
+          const recovery = willRetryWindowed
+            ? 'windowed'
+            : willNarrowToResolvedParents
+              ? 'resolved_parents'
+              : 'none';
           metrics.clickhouseGqlTooManyRowsTotal.inc({
             filter: describeGqlFilterShape({
               ids,
@@ -1565,7 +1593,7 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
               bundledIn,
               tags,
             }),
-            recovery: willRetryWindowed ? 'windowed' : 'none',
+            recovery,
             id_count: bucketIdCount(ids.length),
           });
           this.log.warn(
@@ -1574,7 +1602,7 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
             {
               // Same vocabulary as the counter's `recovery` label so logs and
               // the metric correlate directly (grep `recovery="windowed"`).
-              recovery: willRetryWindowed ? 'windowed' : 'none',
+              recovery,
               maxRowsToRead: config.CLICKHOUSE_GQL_MAX_ROWS_TO_READ,
               idCount: ids.length,
               ids,
@@ -1603,6 +1631,23 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
               encoded: encodedFilters,
               pkPrefix,
             });
+          }
+          if (willNarrowToResolvedParents) {
+            if (resolvedParentsPkPrefix === null) return [];
+            const { rows, saturated } = await this.queryChTransactionRows({
+              leg: 'stable',
+              buildInnerSql: (roundCursor) =>
+                buildStableSql(roundCursor, resolvedParentsPkPrefix),
+              cursor,
+              pageSize,
+              sortOrder,
+              recipients,
+              owners,
+              ids,
+              tags,
+            });
+            stableSaturated = saturated;
+            return rows;
           }
         }
         throw err;

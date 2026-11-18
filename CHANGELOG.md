@@ -44,6 +44,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   as the database owner, as SQLite's WAL mode needs even for read-only
   connections; the commands still open the databases read-only.
 
+- GraphQL `transactions(bundledIn: [...])` no longer fails with `Limit for
+  rows or bytes to read exceeded` for a bundle that is not yet in ClickHouse
+  (with `CLICKHOUSE_GQL_ID_LOOKUP_ENABLED`). The unindexed `parent_id` scan
+  for such a parent is now re-run narrowed to the parents that were found, or
+  skipped when none were, so its items come from SQLite instead of the whole
+  query failing.
+
 - Concurrent requests for an unregistered ArNS name no longer log
   `Error resolving name: All promises were rejected`. Requests that joined
   another request's pending resolution received its raw rejection and logged
