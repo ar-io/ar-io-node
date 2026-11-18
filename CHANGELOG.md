@@ -8,6 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- `ar-io-node backfill-bundles --owners <address,...>` restricts a backfill
+  to bundles posted by the listed owner addresses, on top of the gateway's
+  unbundle filter. It only narrows the selection, so a real run may use it;
+  the rest are counted as `other-owner`.
+
 - `POST /ar-io/admin/queue-bundle` takes `prioritized` (default `true`).
   With `prioritized: false` the bundle waits behind the bundles the gateway
   is indexing live, in the importer's size-capped queue

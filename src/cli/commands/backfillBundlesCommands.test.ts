@@ -190,6 +190,43 @@ describe('backfill-bundles CLI', () => {
     assert.equal(gw.queued.length, 0);
   });
 
+  it('--owners narrows a real run to the listed owners', async () => {
+    const gw = fakeGateway();
+    const result: any = await backfillBundlesCLICommand(
+      { ...base(), owners: Buffer.alloc(32, 2).toString('base64url') },
+      { log, env: { ADMIN_API_KEY: 'k' }, fetch: gw.fetchImpl, ...clock() },
+    );
+    assert.equal(gw.queued.length, 0);
+    assert.equal(result.totals.queued, 0);
+    assert.ok((result.totals.verdicts['other-owner'] ?? 0) > 0);
+    assert.deepEqual(result.owners, [
+      Buffer.alloc(32, 2).toString('base64url'),
+    ]);
+  });
+
+  it('--owners rejects a non-canonical address', async () => {
+    const gw = fakeGateway();
+    // 43 characters, but the last one carries non-zero padding bits.
+    await assert.rejects(
+      backfillBundlesCLICommand(
+        { ...base(), dryRun: true, owners: 'A'.repeat(42) + 'B' },
+        { log, env: {}, fetch: gw.fetchImpl, ...clock() },
+      ),
+      /--owners/,
+    );
+  });
+
+  it('--owners rejects a malformed address', async () => {
+    const gw = fakeGateway();
+    await assert.rejects(
+      backfillBundlesCLICommand(
+        { ...base(), dryRun: true, owners: 'not-an-address' },
+        { log, env: {}, fetch: gw.fetchImpl, ...clock() },
+      ),
+      /--owners/,
+    );
+  });
+
   it('refuses a filter on the owner public key', async () => {
     const gw = fakeGateway({
       filter: { and: [{ attributes: { owner: 'abc' } }] },

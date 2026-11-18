@@ -502,6 +502,11 @@ export const optionMap = {
     description:
       'Leave out bundles that have failed this many times (default 2)',
   },
+  backfillOwners: {
+    alias: '--owners <addresses>',
+    description:
+      'Only bundles posted by these owner addresses (comma-separated, base64url), on top of the gateway filter; it can only narrow the selection',
+  },
   backfillCooldown: {
     alias: '--cooldown-hours <n>',
     description:
@@ -700,5 +705,6 @@ export const backfillBundlesOptions: CommanderOption[] = [
   optionMap.backfillPoll,
   optionMap.backfillMaxRetries,
   optionMap.backfillCooldown,
+  optionMap.backfillOwners,
   optionMap.backfillLimit,
 ];

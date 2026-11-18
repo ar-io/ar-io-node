@@ -1753,6 +1753,13 @@ failed `--max-retries` times, and bundles queued again within
 `--cooldown-hours` (still in flight, or with the repair worker). Both
 databases are opened read-only.
 
+**Owners.** `--owners <address,...>` restricts the selection to bundles posted by
+those owner addresses (base64url), on top of the gateway's filter. It can only
+narrow it (a bundle the filter rejects stays out), so a real run may use it,
+e.g. to backfill one bundling service's bundles first. Bundles that are
+otherwise eligible (skipped, never fully indexed, matched by the filter) but
+whose owner is not listed are counted as `other-owner`.
+
 **Recheck.** Just before queueing a bundle it reads the bundle's state again:
 a bundle that another run or the repair worker queued during a wait is left
 alone.

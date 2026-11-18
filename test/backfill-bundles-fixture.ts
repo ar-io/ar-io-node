@@ -36,6 +36,8 @@ export interface FixtureBundle {
   tags: [string, string][];
   /** The transaction's quantity (winston), default '0'. */
   quantity?: string;
+  /** The owner address (base64url), default {@link FIXTURE_OWNER}. */
+  owner?: string;
   /** The `bundles` row; absent for none. */
   state?: {
     last_queued_at?: number;
@@ -47,6 +49,8 @@ export interface FixtureBundle {
 
 /** Now, in the fixture's clock (seconds). */
 export const FIXTURE_NOW = 1_800_000_000;
+/** The default fixture owner address (32 bytes of 0x01). */
+export const FIXTURE_OWNER = Buffer.alloc(32, 1).toString('base64url');
 
 const turbo: [string, string][] = [
   ['Bundle-Format', 'binary'],
@@ -198,7 +202,7 @@ export function createFixture(
     insertTx.run({
       id,
       height: b.height,
-      owner: Buffer.alloc(32, 1),
+      owner: Buffer.from(b.owner ?? FIXTURE_OWNER, 'base64url'),
       data_size: b.dataSize,
       tag_count: b.tags.length,
       quantity: b.quantity ?? '0',
