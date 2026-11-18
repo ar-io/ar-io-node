@@ -40,6 +40,8 @@ export type BackfillVerdict =
   | 'not-skipped'
   /** The unbundle filter does not match it. */
   | 'filtered-out'
+  /** The filter matches, but its owner is not one of `--owners`. */
+  | 'other-owner'
   /** Failed `maxRetries` times; not queued again. */
   | 'retries-exhausted'
   /** Queued again since it was skipped, within the cooldown. */
@@ -110,6 +112,11 @@ export interface SelectOptions {
   core: Database;
   bundles: Database;
   filter: ItemFilter;
+  /**
+   * Owner addresses (base64url) to restrict to, on top of the filter. It can
+   * only narrow the selection: a bundle the filter rejects stays out.
+   */
+  owners?: ReadonlySet<string>;
   /** First and last height of the bucket, inclusive. */
   from: number;
   to: number;
@@ -190,6 +197,13 @@ export function selectBucket(options: SelectOptions): BackfillCandidate[] {
         })),
       };
       verdict = filter.match(item) ? 'selected' : 'filtered-out';
+      if (
+        verdict === 'selected' &&
+        options.owners !== undefined &&
+        !options.owners.has(item.owner_address as string)
+      ) {
+        verdict = 'other-owner';
+      }
     }
     out.push({
       id: toB64Url(tx.id),

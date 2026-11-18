@@ -161,6 +161,22 @@ function adminKey(env: Record<string, string | undefined>): string {
  * Filters that read the owner's public key cannot be judged from core.db,
  * which keeps only the owner address.
  */
+/** `--owners`: comma-separated base64url owner addresses (43 characters). */
+function parseOwners(value: string | undefined): Set<string> | undefined {
+  if (value === undefined) return undefined;
+  const owners = value
+    .split(',')
+    .map((part) => part.trim())
+    .filter((part) => part !== '');
+  if (owners.length === 0) throw new Error('--owners lists no address');
+  for (const owner of owners) {
+    if (!/^[A-Za-z0-9_-]{43}$/.test(owner)) {
+      throw new Error(`--owners: '${owner}' is not a base64url owner address`);
+    }
+  }
+  return new Set(owners);
+}
+
 function readsOwnerKey(filter: unknown): boolean {
   if (Array.isArray(filter)) return filter.some(readsOwnerKey);
   if (typeof filter !== 'object' || filter === null) return false;
@@ -225,6 +241,9 @@ export async function backfillBundlesCLICommand(
     );
   }
   const filter = createFilter(filterJson, deps.log);
+  // --owners narrows the gateway's filter (never widens it), so a real run may
+  // use it: anything it selects, forward indexing would also unbundle.
+  const owners = parseOwners(options.owners);
 
   const core = new Sqlite(options.coreDb ?? DEFAULT_CORE_DB, {
     readonly: true,
@@ -247,6 +266,7 @@ export async function backfillBundlesCLICommand(
         core,
         bundles,
         filter,
+        owners,
         from: bucketFrom,
         to: bucketTo,
         maxRetries: positiveIntegerFromOptions(options, 'maxRetries') ?? 2,
@@ -332,6 +352,7 @@ export async function backfillBundlesCLICommand(
     return {
       gatewayUrl,
       filter: canonicalize(filterJson),
+      owners: owners === undefined ? undefined : [...owners],
       ...result,
       seconds: Math.round((nowMs() - started) / 100) / 10,
     } as unknown as JsonSerializable;
@@ -341,6 +362,7 @@ export async function backfillBundlesCLICommand(
       throw {
         gatewayUrl,
         filter: canonicalize(filterJson),
+        owners: owners === undefined ? undefined : [...owners],
         ...error.result,
         seconds: Math.round((nowMs() - started) / 100) / 10,
       } as unknown as JsonSerializable;

@@ -14,6 +14,7 @@ import {
   createFixture,
   D1_FILTER,
   FIXTURE_NOW,
+  FIXTURE_OWNER,
   fixtureId,
 } from '../../../test/backfill-bundles-fixture.js';
 import {
@@ -240,6 +241,84 @@ describe('backfill-bundles selection, review cases', () => {
     assert.deepEqual(Object.fromEntries(out.map((c) => [c.id, c.verdict])), {
       [fixtureId('paid')]: 'selected',
       [fixtureId('free')]: 'filtered-out',
+    });
+  });
+});
+
+describe('backfill-bundles selection, --owners', () => {
+  const other = Buffer.alloc(32, 2).toString('base64url');
+  const tags = [
+    ['Bundle-Format', 'binary'],
+    ['Bundle-Version', '2.0.0'],
+  ] as [string, string][];
+  const skippedRow = { last_skipped_at: 1_700_000_000 };
+  const run = (owners: ReadonlySet<string> | undefined, filter: unknown) => {
+    const { core, bundles } = createFixture([
+      {
+        label: 'mine',
+        height: 1_300_001,
+        dataSize: 10,
+        tags,
+        state: skippedRow,
+      },
+      {
+        label: 'theirs',
+        height: 1_300_002,
+        dataSize: 10,
+        tags,
+        owner: other,
+        state: skippedRow,
+      },
+      {
+        label: 'mine-dedicated',
+        height: 1_300_003,
+        dataSize: 10,
+        tags: [...tags, ['Bundler-App-Name', 'AO']],
+        state: skippedRow,
+      },
+    ]);
+    try {
+      return Object.fromEntries(
+        selectBucket({
+          core,
+          bundles,
+          filter: createFilter(filter, log),
+          owners,
+          from: 1_300_000,
+          to: 1_309_999,
+          maxRetries: 2,
+          cooldownSeconds: 0,
+          nowSeconds: FIXTURE_NOW,
+        }).map((c) => [c.id, c.verdict]),
+      );
+    } finally {
+      core.close();
+      bundles.close();
+    }
+  };
+
+  it('selects only the listed owners, as other-owner otherwise', () => {
+    assert.deepEqual(run(new Set([FIXTURE_OWNER]), D1_FILTER), {
+      [fixtureId('mine')]: 'selected',
+      [fixtureId('theirs')]: 'other-owner',
+      [fixtureId('mine-dedicated')]: 'filtered-out',
+    });
+  });
+
+  it('never widens the filter: a listed owner the filter rejects stays out', () => {
+    const verdicts = run(new Set([FIXTURE_OWNER, other]), { never: true });
+    assert.deepEqual(Object.values(verdicts), [
+      'filtered-out',
+      'filtered-out',
+      'filtered-out',
+    ]);
+  });
+
+  it('without --owners selects every owner the filter matches', () => {
+    assert.deepEqual(run(undefined, D1_FILTER), {
+      [fixtureId('mine')]: 'selected',
+      [fixtureId('theirs')]: 'selected',
+      [fixtureId('mine-dedicated')]: 'filtered-out',
     });
   });
 });

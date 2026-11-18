@@ -211,5 +211,6 @@ export interface BackfillBundlesCLIOptions extends GlobalCLIOptions {
   poll?: string;
   maxRetries?: string;
   cooldownHours?: string;
+  owners?: string;
   limit?: string;
 }
