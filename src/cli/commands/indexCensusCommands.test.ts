@@ -115,6 +115,26 @@ describe('indexCensusCLICommand', () => {
     }
   });
 
+  it('refuses a pre-existing partial path instead of following it', async () => {
+    const target = path.join(dir, 'precious.db');
+    fs.writeFileSync(target, 'sentinel');
+    const output = path.join(dir, 'planted', 'short-roots.tsv');
+    fs.mkdirSync(path.dirname(output));
+    const planted = `${output}.${process.pid}.partial`;
+    fs.symlinkSync(target, planted);
+    await assert.rejects(
+      indexCensusCLICommand(
+        { bundlesDb, output },
+        { log, clickhouse: emptyClickHouse() },
+      ),
+      /EEXIST/,
+    );
+    assert.equal(fs.readFileSync(target, 'utf8'), 'sentinel');
+    // Not created by this run, so not removed by its cleanup either.
+    assert.ok(fs.lstatSync(planted).isSymbolicLink());
+    assert.equal(fs.existsSync(output), false);
+  });
+
   it('fails cleanly, leaving no partial file, when the output cannot be written', async () => {
     const blocker = path.join(dir, 'not-a-directory');
     fs.writeFileSync(blocker, '');

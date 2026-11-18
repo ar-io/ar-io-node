@@ -149,11 +149,20 @@ export async function indexCensusCLICommand(
   // A write stream reports a failure (a missing directory, a full disk) as an
   // 'error' event, which try/catch doesn't see: record it and rethrow.
   let writeError: Error | undefined;
+  // Set once this run has created the partial file, so a failure removes only
+  // a file it made, never one that was there before.
+  let createdPartial = false;
   const started = Date.now();
   try {
     if (partial !== undefined) {
       await fsp.mkdir(path.dirname(path.resolve(partial)), { recursive: true });
-      out = fs.createWriteStream(partial);
+      // 'wx' refuses an existing entry, a symlink included, instead of
+      // following it and truncating its target (bundles.db sits on a
+      // read-write mount beside data/indexes). Opened synchronously so a
+      // refusal fails here, before the census runs.
+      const fd = fs.openSync(partial, 'wx');
+      createdPartial = true;
+      out = fs.createWriteStream(partial, { fd });
       out.on('error', (error) => (writeError ??= error));
       out.write(TSV_HEADER + '\n');
     }
@@ -201,7 +210,9 @@ export async function indexCensusCLICommand(
     } as unknown as JsonSerializable;
   } catch (error) {
     out?.destroy();
-    if (partial !== undefined) await fsp.rm(partial, { force: true });
+    if (partial !== undefined && createdPartial) {
+      await fsp.rm(partial, { force: true });
+    }
     throw error;
   } finally {
     db.close();
