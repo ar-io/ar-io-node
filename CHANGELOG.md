@@ -38,6 +38,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- `tools/ar-io-node index-census` and `backfill-bundles` no longer fail
+  partway through a long run with `attempt to write a readonly database`.
+  The wrapper now mounts the gateway's SQLite directory read-write and runs
+  as the database owner, as SQLite's WAL mode needs even for read-only
+  connections; the commands still open the databases read-only.
+
 - Concurrent requests for an unregistered ArNS name no longer log
   `Error resolving name: All promises were rejected`. Requests that joined
   another request's pending resolution received its raw rejection and logged

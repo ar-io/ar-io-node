@@ -42,14 +42,16 @@
 # (created if missing; only for the checks that spill: index-l2-verify, and
 # index-l1-verify over --bands-dir), so a large check never fills the disk
 # under `/`;
-# for index-census the SQLite directory read-only, the ClickHouse settings
-# and data/indexes for --output;
-# for backfill-bundles the SQLite directory read-only and the admin key;
+# for index-census the SQLite directory, the ClickHouse settings and
+# data/indexes for --output; for backfill-bundles the SQLite directory and
+# the admin key (both open the live databases read-only but mount them
+# read-write and run as their owner; see mount_live_sqlite);
 # for any other command only the file
 # a --wallet-file names, read-only. Band commands never take a key. It runs as
 # your user, so data/indexes/published/<index> must be writable by you;
 # index-l1-import runs as the owner of the core.db it writes, which on a
-# Docker install is root, so the files it adds beside it match.
+# Docker install is root, so the files it adds beside it match; index-census
+# and backfill-bundles run as that owner too.
 # Prefer --wallet-file to --private-key: an inline key shows in `ps` and
 # `docker inspect`.
 
@@ -190,6 +192,27 @@ mount_spill() {
     -e "MALLOC_MMAP_THRESHOLD_=${mmap:-131072}"
     -e "MALLOC_TRIM_THRESHOLD_=${trim:-131072}")
 }
+# Mount the gateway's live SQLite for a command that opens it read-only, and
+# run as its owner. Not :ro: the gateway keeps its databases in WAL mode, and
+# even a read-only connection writes the -shm lock file. On a read-only mount
+# (or as a user who cannot write -shm) SQLite falls back to a read-only shared
+# memory mode that fails with "attempt to write a readonly database" when the
+# gateway resets its WAL during a long read. The command's connections stay
+# readonly, so it still cannot change the database. $1 names the file whose
+# owner to run as.
+mount_live_sqlite() {
+  local owner_of="${SQLITE_PATH}/$1" owner i
+  DOCKER_ARGS+=(-v "${SQLITE_PATH}:/app/data/sqlite")
+  MOUNT_HOSTS+=("${SQLITE_PATH}")
+  MOUNT_TARGETS+=("data/sqlite")
+  [[ -e "${owner_of}" ]] || owner_of="${SQLITE_PATH}"
+  owner="$(stat -c '%u:%g' "${owner_of}")"
+  for i in "${!DOCKER_ARGS[@]}"; do
+    if [[ "${DOCKER_ARGS[$i]}" == "--user" ]]; then
+      DOCKER_ARGS[$((i + 1))]="${owner}"
+    fi
+  done
+}
 # Join the gateway's network, so URLs such as http://core:4000 work.
 join_gateway_network() {
   local network
@@ -239,9 +262,9 @@ case "${COMMAND}" in
     join_gateway_network
     ;;
   index-census)
-    # Read-only on both: the gateway's SQLite (bundles.db) and its ClickHouse
+    # Reads the gateway's SQLite (bundles.db) read-only, and its ClickHouse
     # settings, passed by name as for index-band-export. --output goes under
-    # data/indexes, the only writable mount.
+    # data/indexes, the only other mount; it is written as bundles.db's owner.
     DATA_PATH="$(setting INDEX_SWARM_DATA_PATH)"
     DATA_PATH="$(realpath -m "${DATA_PATH:-./data/indexes}")"
     mkdir -p "${DATA_PATH}"
@@ -259,24 +282,20 @@ case "${COMMAND}" in
     SQLITE_PATH="$(setting SQLITE_DATA_PATH)"
     SQLITE_PATH="$(realpath -m "${SQLITE_PATH:-./data/sqlite}")"
     if [[ -d "${SQLITE_PATH}" ]]; then
-      DOCKER_ARGS+=(-v "${SQLITE_PATH}:/app/data/sqlite:ro")
-      MOUNT_HOSTS+=("${SQLITE_PATH}")
-      MOUNT_TARGETS+=("data/sqlite")
+      mount_live_sqlite bundles.db
     fi
     rewrite_paths --bundles-db --roots --output
     # CLICKHOUSE_URL names the ClickHouse service on the gateway's network.
     join_gateway_network
     ;;
   backfill-bundles)
-    # Read-only on the gateway's SQLite (core.db and bundles.db); queues on
+    # Reads the gateway's SQLite (core.db and bundles.db) read-only; queues on
     # the gateway over its network with the admin key, passed by name (or
     # its file, mounted read-only) so it stays off the command line.
     SQLITE_PATH="$(setting SQLITE_DATA_PATH)"
     SQLITE_PATH="$(realpath -m "${SQLITE_PATH:-./data/sqlite}")"
     if [[ -d "${SQLITE_PATH}" ]]; then
-      DOCKER_ARGS+=(-v "${SQLITE_PATH}:/app/data/sqlite:ro")
-      MOUNT_HOSTS+=("${SQLITE_PATH}")
-      MOUNT_TARGETS+=("data/sqlite")
+      mount_live_sqlite core.db
     fi
     KEY_FILE="$(setting ADMIN_API_KEY_FILE)"
     if [[ -n "${KEY_FILE}" ]]; then
