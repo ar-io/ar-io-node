@@ -1685,6 +1685,15 @@ describe('CompositeClickHouseDatabase', () => {
         result.edges.map((e) => e.node.id),
         [id('item')],
       );
+      // The unresolved parent is named, not silently dropped.
+      assert.ok(
+        result.warnings?.some(
+          (w) => w.code === 'PARTIAL_RESULT' && w.message.includes(id('fresh')),
+        ),
+      );
+      assert.ok(
+        !result.warnings?.some((w) => w.message.includes(id('bundle'))),
+      );
       assert.equal(await tooManyRowsCount('resolved_parents'), before + 1);
     });
 
@@ -1712,6 +1721,11 @@ describe('CompositeClickHouseDatabase', () => {
       assert.deepEqual(
         result.edges.map((e) => e.node.id),
         [id('fresh-item')],
+      );
+      assert.ok(
+        result.warnings?.some(
+          (w) => w.code === 'PARTIAL_RESULT' && w.message.includes(id('fresh')),
+        ),
       );
       assert.equal(await tooManyRowsCount('resolved_parents'), before + 1);
     });

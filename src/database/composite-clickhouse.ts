@@ -1278,7 +1278,8 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
    *   That unnarrowed `parent_id` scan has no index, so for a parent that is
    *   not yet stable it trips `max_rows_to_read`; `resolvedParentsPkPrefix`
    *   then carries the pairs of the parents that were found (none when no
-   *   parent was), for the stable leg to fall back to instead of failing.
+   *   parent was), for the stable leg to fall back to instead of failing,
+   *   and `unresolvedParents` the ids it leaves to the other legs.
    *
    * A failed lookup also leaves the query as before.
    */
@@ -1292,6 +1293,7 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
     pkPrefix?: StablePkPrefix;
     noMatches: boolean;
     resolvedParentsPkPrefix?: StablePkPrefix | null;
+    unresolvedParents?: string[];
   }> {
     if (!this.idLookupEnabled) return { noMatches: false };
     const filter =
@@ -1363,7 +1365,13 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
           };
     if (!requested.every((id) => found.has(b64UrlToHex(id)))) {
       metrics.clickhouseGqlIdLookupTotal.inc({ filter, outcome: 'partial' });
-      return { noMatches: false, resolvedParentsPkPrefix: parentsPkPrefix };
+      return {
+        noMatches: false,
+        resolvedParentsPkPrefix: parentsPkPrefix,
+        unresolvedParents: requested.filter(
+          (id) => !found.has(b64UrlToHex(id)),
+        ),
+      };
     }
     metrics.clickhouseGqlIdLookupTotal.inc({ filter, outcome: 'resolved' });
     return {
@@ -1493,6 +1501,10 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
     // because duplicate versions filled its window (see
     // queryChTransactionRows).
     let stableSaturated = false;
+    // Set when the stable leg answered a capped `bundledIn` scan from the
+    // resolved parents only: an unresolved parent's items in `transactions`
+    // below the SQLite leg's range would be missing, so say so.
+    let stablePartialWarning: GqlWarning | undefined;
     let unstableSaturated = false;
 
     // A pending row's cursor (no height) is past every mined row in
@@ -1512,11 +1524,15 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
     // wait on it).
     const chStablePromise = (async () => {
       if (pastMinedRows) return [];
-      const { pkPrefix, noMatches, resolvedParentsPkPrefix } =
-        await this.resolveStablePkPrefix({
-          ids,
-          bundledIn,
-        });
+      const {
+        pkPrefix,
+        noMatches,
+        resolvedParentsPkPrefix,
+        unresolvedParents,
+      } = await this.resolveStablePkPrefix({
+        ids,
+        bundledIn,
+      });
       if (noMatches) return [];
 
       const buildStableSql = (
@@ -1633,6 +1649,14 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
             });
           }
           if (willNarrowToResolvedParents) {
+            stablePartialWarning = {
+              code: 'PARTIAL_RESULT',
+              message:
+                'clickhouse bundledIn scan exceeded max_rows_to_read; items ' +
+                'of these parents (not in transaction_ids, usually not yet ' +
+                'stable) come from the other legs only: ' +
+                (unresolvedParents ?? []).join(','),
+            };
             if (resolvedParentsPkPrefix === null) return [];
             const { rows, saturated } = await this.queryChTransactionRows({
               leg: 'stable',
@@ -1748,6 +1772,7 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
     const stableTxs = await chStablePromise;
 
     const warnings: GqlWarning[] = [];
+    if (stablePartialWarning !== undefined) warnings.push(stablePartialWarning);
 
     // Unstable leg: rejection degrades to other-leg-only results with
     // a PARTIAL_RESULT warning so callers can surface it via GraphQL
