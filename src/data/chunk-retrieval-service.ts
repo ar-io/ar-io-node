@@ -109,6 +109,41 @@ export class ChunkNotFoundError extends Error {
   }
 }
 
+/**
+ * Flattens an AggregateError tree into its leaf errors. The chunk cascade
+ * reports one cause per attempt (#1137), so a failure that crossed several
+ * sources arrives nested: composite source over peer cascades over peers.
+ * A plain error is its own single leaf.
+ */
+function flattenAggregateErrors(error: any): any[] {
+  if (error instanceof AggregateError) {
+    return error.errors.flatMap((cause: any) => flattenAggregateErrors(cause));
+  }
+  return [error];
+}
+
+/**
+ * A peer that answers 404 affirmatively lacks the chunk. A 404 anywhere in
+ * the cascade is the only evidence the chunk does not exist; any other
+ * failure says the fetch did not complete.
+ */
+function isDefinitiveNotFound(error: any): boolean {
+  return error?.status === 404 || error?.response?.status === 404;
+}
+
+/**
+ * A per-peer timeout: fetch's AbortSignal.timeout() rejects with a
+ * TimeoutError, axios rejects with ECONNABORTED and a 'timeout of ...ms
+ * exceeded' message.
+ */
+function isPeerTimeout(error: any): boolean {
+  return (
+    error?.name === 'TimeoutError' ||
+    error?.code === 'ECONNABORTED' ||
+    /timeout/i.test(error?.message ?? '')
+  );
+}
+
 // =============================================================================
 // Service Implementation
 // =============================================================================
@@ -508,6 +543,21 @@ export class ChunkRetrievalService {
         // Re-throw AbortError without wrapping
         if (error.name === 'AbortError') {
           throw error;
+        }
+        // The cascade reports the reason for each attempt (#1137). A chunk
+        // no peer holds is a 404; a chunk every peer timed out on was not
+        // retrievable in time, so it throws a TimeoutError and the route
+        // answers 503 instead of caching a 404 for a chunk that may exist.
+        const leaves = flattenAggregateErrors(error);
+        if (
+          leaves.length > 0 &&
+          !leaves.some(isDefinitiveNotFound) &&
+          leaves.every(isPeerTimeout)
+        ) {
+          throw new DOMException(
+            `Chunk fetch timed out: ${error.message}`,
+            'TimeoutError',
+          );
         }
         throw new ChunkNotFoundError(
           `Chunk fetch failed: ${error.message}`,

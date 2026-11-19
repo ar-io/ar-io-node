@@ -196,7 +196,9 @@ export class CompositeChunkDataSource
         .map((e) => e.message)
         .join('; ')}`;
 
-      const error = new Error(errorMessage);
+      // Keep the per-source causes: the caller classifies the outcome from
+      // them (a peer answering 404 versus every peer timing out, #1137).
+      const error = new AggregateError(errors, errorMessage);
       span.recordException(error);
       throw error;
     } catch (error: any) {
@@ -370,7 +372,9 @@ export class CompositeChunkDataSource
         .map((e) => e.message)
         .join('; ')}`;
 
-      const error = new Error(errorMessage);
+      // Keep the per-source causes: the caller classifies the outcome from
+      // them (a peer answering 404 versus every peer timing out, #1137).
+      const error = new AggregateError(errors, errorMessage);
       span.recordException(error);
       throw error;
     } catch (error: any) {

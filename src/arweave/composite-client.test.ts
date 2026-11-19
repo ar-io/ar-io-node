@@ -630,6 +630,83 @@ describe('ArweaveCompositeClient', () => {
         [500, 500, 500, 500],
       );
     });
+
+    it('reports one 404 cause per peer when every peer answers 404 (#1137)', async () => {
+      const asked: string[] = [];
+      const first = await startPeer('first', asked);
+      const second = await startPeer('second', asked);
+
+      mockPeerManager.getPreferredChunkGetPeersByCost = mock.fn(() => [
+        first,
+        second,
+      ]);
+      mockPeerManager.selectBucketPeersForOffset = mock.fn(() => []);
+      mockPeerManager.selectPeers = mock.fn(() => []);
+      mockPeerManager.isPreferredChunkGetPeer = mock.fn(() => true);
+      mockPeerManager.recordChunkGetCost = mock.fn();
+
+      const client = createTestClient();
+
+      await assert.rejects(
+        client.peerGetChunk({
+          txSize: 262144,
+          absoluteOffset: 1_000_000,
+          dataRoot: toB64Url(Buffer.alloc(32)),
+          relativeOffset: 0,
+          retryCount: 10,
+          peerSelectionCount: 10,
+        }),
+        (error: any) => {
+          // The caller tells a peer that answered 404 (it does not hold the
+          // chunk) from one that timed out by reading the causes.
+          assert.ok(error instanceof AggregateError);
+          assert.equal(error.errors.length, 2);
+          assert.ok(
+            error.errors.every((cause: any) => cause.response?.status === 404),
+          );
+          return /Failed to fetch chunk from 2 peers/.test(error.message);
+        },
+      );
+
+      assert.deepEqual(asked, ['first', 'second']);
+    });
+
+    it('reports a timeout cause when the peer never answers (#1137)', async () => {
+      // Never responds: axios times out after PEER_CHUNK_REQUEST_TIMEOUT_MS.
+      const server = http.createServer(() => {});
+      await new Promise<void>((resolve) =>
+        server.listen(0, '127.0.0.1', resolve),
+      );
+      servers.push(server);
+      const hanging = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+
+      mockPeerManager.getPreferredChunkGetPeersByCost = mock.fn(() => [
+        hanging,
+      ]);
+      mockPeerManager.selectBucketPeersForOffset = mock.fn(() => []);
+      mockPeerManager.selectPeers = mock.fn(() => []);
+      mockPeerManager.isPreferredChunkGetPeer = mock.fn(() => true);
+      mockPeerManager.recordChunkGetCost = mock.fn();
+
+      const client = createTestClient();
+
+      await assert.rejects(
+        client.peerGetChunk({
+          txSize: 262144,
+          absoluteOffset: 1_000_000,
+          dataRoot: toB64Url(Buffer.alloc(32)),
+          relativeOffset: 0,
+          retryCount: 1,
+          peerSelectionCount: 1,
+        }),
+        (error: any) => {
+          assert.ok(error instanceof AggregateError);
+          assert.equal(error.errors.length, 1);
+          assert.equal(error.errors[0].code, 'ECONNABORTED');
+          return /Failed to fetch chunk from 1 peer/.test(error.message);
+        },
+      );
+    });
   });
 
   describe('postChunkToPeer status handling', () => {

@@ -274,4 +274,57 @@ describe('ArIOChunkSource', () => {
       });
     }
   });
+
+  describe('per-attempt failure causes (#1137)', () => {
+    const timeoutError = () =>
+      new DOMException('The operation timed out.', 'TimeoutError');
+
+    const twoPeers = () => {
+      mockPeerManager.selectPeersForKey = mock.fn(() => [
+        'http://peer1.example.com',
+        'http://peer2.example.com',
+      ]);
+    };
+
+    it('keeps one timeout cause per peer when every peer times out', async () => {
+      twoPeers();
+      global.fetch = mock.fn(async () => {
+        throw timeoutError();
+      }) as typeof global.fetch;
+
+      await assert.rejects(
+        arIOChunkSource.getChunkByAny(testChunkParams),
+        (error: any) => {
+          assert.ok(error instanceof AggregateError);
+          assert.ok(error.errors.length >= 1);
+          assert.ok(
+            error.errors.every((cause: any) => cause.name === 'TimeoutError'),
+          );
+          return /Failed to fetch chunk from AR.IO peers/.test(error.message);
+        },
+      );
+    });
+
+    it('keeps a 404 cause alongside a timeout cause', async () => {
+      twoPeers();
+      global.fetch = mock.fn(async (url: string) => {
+        if (url.includes('peer1')) {
+          return new Response('', { status: 404 });
+        }
+        throw timeoutError();
+      }) as typeof global.fetch;
+
+      await assert.rejects(
+        arIOChunkSource.getChunkByAny(testChunkParams),
+        (error: any) => {
+          assert.ok(error instanceof AggregateError);
+          assert.ok(error.errors.some((cause: any) => cause.status === 404));
+          assert.ok(
+            error.errors.some((cause: any) => cause.name === 'TimeoutError'),
+          );
+          return true;
+        },
+      );
+    });
+  });
 });

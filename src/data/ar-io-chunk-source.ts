@@ -275,6 +275,10 @@ export class ArIOChunkSource
       });
 
       // Retry with different peers on failure (try peers in parallel each attempt)
+      // Kept so the caller can tell a peer that answered 404 (it does not
+      // hold the chunk) from one that timed out: the aggregate below carries
+      // one cause per attempt instead of a single generic message (#1137).
+      const attemptErrors: Error[] = [];
       for (let attempt = 0; attempt < retryCount; attempt++) {
         // Stop early if the caller has gone away. Without this guard the loop
         // burns through every remaining attempt and then throws a generic
@@ -375,6 +379,14 @@ export class ArIOChunkSource
             attempt: attempt + 1,
             peersAttempted: selectedPeers.length,
           });
+
+          // Promise.any rejects with an AggregateError of the per-peer
+          // failures; keep them so the caller can classify the outcome.
+          if (error instanceof AggregateError) {
+            attemptErrors.push(...error.errors);
+          } else {
+            attemptErrors.push(error);
+          }
         }
       }
 
@@ -383,7 +395,8 @@ export class ArIOChunkSource
         total_attempts: retryCount,
       });
 
-      const error = new Error(
+      const error = new AggregateError(
+        attemptErrors,
         isValidated
           ? `Failed to fetch chunk from AR.IO peers after ${retryCount} attempts`
           : `Failed to fetch unvalidated chunk from AR.IO peers after ${retryCount} attempts`,

@@ -1351,6 +1351,10 @@ export class ArweaveCompositeClient
 
       // Iterate through peers sequentially (bucket peers first, then general)
       const maxAttempts = Math.min(orderedPeers.length, retryCount);
+      // Kept so the caller can tell a peer that answered 404 (it does not
+      // hold the chunk) from one that timed out: the aggregate below carries
+      // one cause per attempt instead of a single generic message (#1137).
+      const peerErrors: Error[] = [];
       for (let peerIndex = 0; peerIndex < maxAttempts; peerIndex++) {
         // Check if we're transitioning from bucket peers to general peers
         const peerType: ChunkPeerType =
@@ -1568,6 +1572,8 @@ export class ArweaveCompositeClient
             peerType,
           );
 
+          peerErrors.push(error);
+
           // Continue to next peer (no early exit needed in for loop)
         }
       }
@@ -1577,7 +1583,8 @@ export class ArweaveCompositeClient
         total_peers_tried: maxAttempts,
         available_peers: orderedPeers.length,
       });
-      const error = new Error(
+      const error = new AggregateError(
+        peerErrors,
         `Failed to fetch chunk from ${maxAttempts} peers (${orderedPeers.length} available)`,
       );
       span.recordException(error);
