@@ -1393,12 +1393,15 @@ describe('CompositeClickHouseDatabase', () => {
       lookupRows = [],
       lookupReject,
       stableRows = [],
+      stableReject,
       sqliteStub = sqlite,
     }: {
       idLookupEnabled: boolean;
       lookupRows?: any[];
       lookupReject?: Error;
       stableRows?: any[];
+      // Throws this error for the stable queries it matches.
+      stableReject?: (sqlStr: string) => Error | undefined;
       sqliteStub?: GqlQueryable;
     }) => {
       const composite = new CompositeClickHouseDatabase({
@@ -1415,6 +1418,8 @@ describe('CompositeClickHouseDatabase', () => {
             if (lookupReject !== undefined) throw lookupReject;
             return { json: async () => ({ data: lookupRows }) };
           }
+          const rejection = stableReject?.(sqlStr);
+          if (rejection !== undefined) throw rejection;
           return { json: async () => ({ data: stableRows }) };
         },
       };
@@ -1628,6 +1633,116 @@ describe('CompositeClickHouseDatabase', () => {
       assert.equal(stableQueries().length, 1);
       assert.ok(!stableQueries()[0].includes('t.block_transaction_index) IN'));
       assert.equal(await idLookupCount('bundledIn', 'partial'), before + 1);
+    });
+
+    // The unnarrowed `parent_id` scan for a parent not yet in ClickHouse.
+    const tooManyRowsWhenUnnarrowed = (sqlStr: string) =>
+      sqlStr.includes('t.block_transaction_index) IN')
+        ? undefined
+        : new Error(
+            'Code: 158. DB::Exception: Limit for rows or bytes to read exceeded: TOO_MANY_ROWS',
+          );
+    const tooManyRowsCount = async (recovery: string): Promise<number> => {
+      const out = await metrics.clickhouseGqlTooManyRowsTotal.get();
+      return out.values
+        .filter(
+          (v) =>
+            v.labels.filter === 'bundledIn' && v.labels.recovery === recovery,
+        )
+        .reduce((sum, v) => sum + v.value, 0);
+    };
+
+    it('narrows bundledIn to the parents found when the unnarrowed scan trips the row cap', async () => {
+      const before = await tooManyRowsCount('resolved_parents');
+      const { composite, stableQueries } = buildLookupComposite({
+        idLookupEnabled: true,
+        lookupRows: [
+          lookupRow({
+            id: id('bundle'),
+            height: 100,
+            blockTransactionIndex: 2,
+            isDataItem: false,
+          }),
+        ],
+        stableRows: [chRow({ id: id('item'), height: 100 })],
+        stableReject: tooManyRowsWhenUnnarrowed,
+      });
+
+      const result = await composite.getGqlTransactions({
+        pageSize: 10,
+        bundledIn: [id('bundle'), id('fresh')],
+      });
+
+      const stable = stableQueries();
+      assert.equal(stable.length, 2);
+      assert.ok(!stable[0].includes('t.block_transaction_index) IN'));
+      assert.ok(
+        stable[1].includes(
+          '(t.height, t.block_transaction_index) IN ((100, 2))',
+        ),
+      );
+      assert.deepEqual(
+        result.edges.map((e) => e.node.id),
+        [id('item')],
+      );
+      // The unresolved parent is named, not silently dropped.
+      assert.ok(
+        result.warnings?.some(
+          (w) => w.code === 'PARTIAL_RESULT' && w.message.includes(id('fresh')),
+        ),
+      );
+      assert.ok(
+        !result.warnings?.some((w) => w.message.includes(id('bundle'))),
+      );
+      assert.equal(await tooManyRowsCount('resolved_parents'), before + 1);
+    });
+
+    it('answers bundledIn from the other legs when no parent is in ClickHouse and the scan trips the row cap', async () => {
+      const before = await tooManyRowsCount('resolved_parents');
+      const fresh = sqliteTx({ id: id('fresh-item'), height: 500 });
+      const { composite, stableQueries } = buildLookupComposite({
+        idLookupEnabled: true,
+        lookupRows: [],
+        stableReject: tooManyRowsWhenUnnarrowed,
+        sqliteStub: makeSqliteStub({
+          transactions: {
+            pageInfo: { hasNextPage: false },
+            edges: [sqliteEdge(fresh)],
+          },
+        }),
+      });
+
+      const result = await composite.getGqlTransactions({
+        pageSize: 10,
+        bundledIn: [id('fresh')],
+      });
+
+      assert.equal(stableQueries().length, 1);
+      assert.deepEqual(
+        result.edges.map((e) => e.node.id),
+        [id('fresh-item')],
+      );
+      assert.ok(
+        result.warnings?.some(
+          (w) => w.code === 'PARTIAL_RESULT' && w.message.includes(id('fresh')),
+        ),
+      );
+      assert.equal(await tooManyRowsCount('resolved_parents'), before + 1);
+    });
+
+    it('still fails a capped query that is not a bundledIn with missing parents', async () => {
+      const { composite } = buildLookupComposite({
+        idLookupEnabled: true,
+        stableReject: tooManyRowsWhenUnnarrowed,
+      });
+
+      await assert.rejects(
+        composite.getGqlTransactions({
+          pageSize: 10,
+          tags: [{ name: 'App-Name', values: ['x'] }],
+        }),
+        /TOO_MANY_ROWS/,
+      );
     });
 
     it('queries without narrowing when the lookup fails', async () => {

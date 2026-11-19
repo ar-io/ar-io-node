@@ -880,7 +880,9 @@ export const clickhouseGqlDedupeHeadroomTotal = new promClient.Counter({
  * (Code 158 TOO_MANY_ROWS). `filter` is a low-cardinality descriptor of which
  * filter families the query used (e.g. `owners+tags`, `ids`, `none`),
  * `recovery` is `windowed` when the owner-projection height-windowing fallback
- * re-ran it or `none` when the 158 surfaced to the caller, and `id_count` is a
+ * re-ran it, `resolved_parents` when a `bundledIn` query with parents missing
+ * from `transaction_ids` was re-run narrowed to the parents found (or skipped
+ * when none were), or `none` when the 158 surfaced to the caller, and `id_count` is a
  * coarse bucket of the id-list size (`0`,`1`,`2`,`3-5`,`6-20`,`21+`) — the
  * dominant 158 source is multi-id `transactions(ids:[...])` lookups whose
  * id_bloom scatter scales with id count. The paired per-query warn log carries
@@ -907,7 +909,9 @@ export const clickhouseGqlTooManyRowsTotal = new promClient.Counter({
  *   - `none_found`: no requested id is in ClickHouse, so the stable query was
  *     skipped
  *   - `partial`: some `bundledIn` parents were not found, so the query ran
- *     unnarrowed, as before
+ *     unnarrowed, as before (if that trips `max_rows_to_read`, it is re-run
+ *     narrowed to the parents found: `clickhouse_gql_too_many_rows_total`
+ *     `recovery="resolved_parents"`)
  *   - `error`: the lookup failed, so the query ran unnarrowed, as before
  */
 export const clickhouseGqlIdLookupTotal = new promClient.Counter({
