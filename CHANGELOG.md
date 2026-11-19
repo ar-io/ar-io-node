@@ -45,6 +45,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- A nested bundle recorded in `bundles.db` as its own root (by
+  `queue-bundle` on an id whose root it could not resolve) is now corrected
+  when the bundle is saved again with its real root, for example when its
+  parent is unbundled. Before, the wrong root stayed: the repair worker
+  re-queued the nested bundle as an L1 transaction it could never fetch.
+
 - `tools/ar-io-node index-census` and `backfill-bundles` no longer fail
   partway through a long run with `attempt to write a readonly database`.
   The wrapper now mounts the gateway's SQLite directory read-write and runs

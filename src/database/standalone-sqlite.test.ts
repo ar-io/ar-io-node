@@ -2532,6 +2532,26 @@ describe('StandaloneSqliteDatabase', () => {
       });
     });
 
+    it('corrects a row saved with the bundle as its own root once its real root arrives', async () => {
+      const nested = '3333333333333333333333333333333333333333333';
+      const root = '4444444444444444444444444444444444444444444';
+      // queue-bundle on an id whose root it cannot resolve saves it as L1.
+      await db.saveBundle({ ...bundle, id: nested, rootTransactionId: nested });
+      let row = bundlesDb.prepare(sql).get({ id: fromB64Url(nested) });
+      assert.deepEqual(row.root_transaction_id, fromB64Url(nested));
+
+      // Unbundling its parent saves it again with the real root.
+      await db.saveBundle({ ...bundle, id: nested, rootTransactionId: root });
+      row = bundlesDb.prepare(sql).get({ id: fromB64Url(nested) });
+      assert.deepEqual(row.root_transaction_id, fromB64Url(root));
+
+      // A known root is never moved back to the id, or to another root.
+      await db.saveBundle({ ...bundle, id: nested, rootTransactionId: nested });
+      await db.saveBundle({ ...bundle, id: nested, rootTransactionId: id2 });
+      row = bundlesDb.prepare(sql).get({ id: fromB64Url(nested) });
+      assert.deepEqual(row.root_transaction_id, fromB64Url(root));
+    });
+
     it('should insert into bundles', async () => {
       const sql = `
         SELECT COUNT(*) AS cnt
