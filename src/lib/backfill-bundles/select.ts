@@ -256,8 +256,9 @@ export interface SelectIdsOptions {
 /**
  * The listed bundles, each with its verdict, by the same rules as
  * {@link selectBucket}: the `bundles` row first, then the unbundle filter on
- * the item (owner address, target, quantity, tags, height and, for a nested
- * bundle, its parent id, which `isNestedBundle` reads), then `--owners`. The
+ * the item, with the fields the gateway's filter sees (an L1 bundle with its
+ * height and quantity; a nested bundle with its parent id, which
+ * `isNestedBundle` reads, and without height or quantity), then `--owners`. The
  * `bundles` row decides first, so an id with no row is `unrecorded` whether
  * or not the gateway returned it; an eligible id the gateway did not return
  * is `unknown`. Neither is ever `selected`. Sorted by height (missing heights
@@ -280,18 +281,32 @@ export function selectIds(options: SelectIdsOptions): BackfillCandidate[] {
       if (item === undefined || item.height === undefined) {
         verdict = 'unknown';
       } else {
-        const matchable: MatchableTxLike = {
-          id,
-          height: item.height,
-          owner_address: item.ownerAddress,
-          target: item.target,
-          quantity: item.quantity,
-          parent_id: item.parentId ?? null,
-          tags: item.tags.map((t) => ({
-            name: Buffer.from(t.name).toString('base64url'),
-            value: Buffer.from(t.value).toString('base64url'),
-          })),
-        };
+        const tags = item.tags.map((t) => ({
+          name: Buffer.from(t.name).toString('base64url'),
+          value: Buffer.from(t.value).toString('base64url'),
+        }));
+        // The fields the gateway's own filter sees: an L1 bundle as
+        // selectBucket builds it (with height and quantity), a nested bundle
+        // as a NormalizedBundleDataItem (with parent_id, and no height or
+        // quantity), so a filter on those fields judges it as live
+        // indexing would.
+        const matchable: MatchableTxLike =
+          item.parentId === undefined
+            ? {
+                id,
+                height: item.height,
+                owner_address: item.ownerAddress,
+                target: item.target,
+                quantity: item.quantity,
+                tags,
+              }
+            : {
+                id,
+                owner_address: item.ownerAddress,
+                target: item.target,
+                parent_id: item.parentId,
+                tags,
+              };
         verdict = filter.match(matchable) ? 'selected' : 'filtered-out';
         if (
           verdict === 'selected' &&

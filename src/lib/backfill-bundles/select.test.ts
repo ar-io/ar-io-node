@@ -454,6 +454,26 @@ describe('selectIds (--ids-file)', () => {
     );
   });
 
+  it('judges a nested bundle without the height and quantity live indexing does not give it', () => {
+    const quantityZero = { attributes: { quantity: '0' } };
+    assert.deepEqual(
+      run(
+        ['untagged-a', 'untagged-b'],
+        [
+          item('untagged-a', undefined, { parentId: fixtureId('outer') }),
+          item('untagged-b'),
+        ],
+        quantityZero,
+      ),
+      {
+        // Live, a NormalizedBundleDataItem has no quantity: no match.
+        [fixtureId('untagged-a')]: 'filtered-out',
+        // An L1 bundle carries its quantity, as selectBucket gives it.
+        [fixtureId('untagged-b')]: 'selected',
+      },
+    );
+  });
+
   it('orders by height, unknown heights first, then list order', () => {
     const order = selectIds({
       bundles,

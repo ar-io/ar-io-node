@@ -1780,7 +1780,8 @@ and `--owners`, on the owner address, target, tags and height the gateway's
 GraphQL returns for it, 100 ids per request, including its parent for
 `isNestedBundle`. The `bundles` row decides first, so an id with no row is
 `unrecorded` whether or not GraphQL returned it. An otherwise eligible id
-GraphQL does not return is `unknown`. Neither is ever queued, and any GraphQL
+GraphQL does not return, or returns without a block height (still pending), is
+`unknown`. Neither is ever queued, and any GraphQL
 error stops the run before it queues anything. The run then walks the heights of the listed
 bundles, with the same pacing and guards. Nested bundles skipped by the
 filter can be listed from `bundles.db`: rows with `last_skipped_at` set,
@@ -1876,8 +1877,8 @@ is there to check, before a real run, that no bundle the filter should
 exclude was selected. A halted run adds `halted`, the guard and its reading.
 With `--ids-file`, the result also has `idsFile` and `listedIds` (distinct ids
 in the file), `heightRange` spans the listed bundles' heights, and `unknown`
-counts eligible ids the gateway's GraphQL did not return (an id with no
-`bundles` row is counted as `unrecorded` first).
+counts eligible ids the gateway's GraphQL did not return, or returned without
+a height (an id with no `bundles` row is counted as `unrecorded` first).
 
 ## For scripts and agents
 
