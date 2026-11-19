@@ -34,15 +34,21 @@ The wrapper mounts only what a command needs:
 | `index-band-*` | `INDEX_SWARM_DATA_PATH` (default `./data/indexes`) at `data/indexes`, and the gateway's Docker network (`DOCKER_NETWORK_NAME`, default `ar-io-network`), so `--gateway-url http://core:4000` reaches the gateway |
 | `index-band-export` | Also `SQLITE_DATA_PATH` (default `./data/sqlite`) read-only at `data/sqlite`; `CLICKHOUSE_URL`, `CLICKHOUSE_USER` and `CLICKHOUSE_PASSWORD`, passed by name, so not on the command line (`docker inspect` of the running container shows them); and `INDEX_EXPORT_SECRETS_DIR`, if set, read-only at `/run/secrets/index-export` for peers' password files |
 | `index-l1-*` | `INDEX_SWARM_DATA_PATH` read-only at `data/indexes`; `SQLITE_DATA_PATH` at `data/sqlite`, read-write for `index-l1-import` and read-only for `index-l1-verify` and `index-l1-audit`; for `index-l1-verify --bands-dir`, a spill folder (below); and the gateway's Docker network, so `--data-from`, `--anchor-from` or `--registry-url` can name `http://core:4000`. A `--publication` file is mapped like the other paths |
-| `index-census` | `SQLITE_DATA_PATH` read-only at `data/sqlite`; `CLICKHOUSE_URL`, `CLICKHOUSE_USER` and `CLICKHOUSE_PASSWORD`, passed by name; `INDEX_SWARM_DATA_PATH` at `data/indexes`, the only place `--output` may go; and the gateway's Docker network, where `CLICKHOUSE_URL` points |
+| `index-census` | `SQLITE_DATA_PATH` at `data/sqlite`, read-write and as `bundles.db`'s owner (see below), though the command opens it read-only; `CLICKHOUSE_URL`, `CLICKHOUSE_USER` and `CLICKHOUSE_PASSWORD`, passed by name; `INDEX_SWARM_DATA_PATH` at `data/indexes`, the only place `--output` may go; and the gateway's Docker network, where `CLICKHOUSE_URL` points |
 | `index-l2-*` | `INDEX_SWARM_DATA_PATH` read-only at `data/indexes`, and the gateway's Docker network, so `--gateway-url` can name `http://core:4000` |
-| `backfill-bundles` | `SQLITE_DATA_PATH` read-only at `data/sqlite`; `ADMIN_API_KEY`, passed by name, or the file `ADMIN_API_KEY_FILE` names, read-only; and the gateway's Docker network, so `--gateway-url http://core:4000` works |
+| `backfill-bundles` | `SQLITE_DATA_PATH` at `data/sqlite`, read-write and as `core.db`'s owner (see below), though the command opens it read-only; `ADMIN_API_KEY`, passed by name, or the file `ADMIN_API_KEY_FILE` names, read-only; and the gateway's Docker network, so `--gateway-url http://core:4000` works |
 | any `ar.io` command | Nothing, except the file a `--wallet-file` (`-w`) names, read-only. A relative path is taken from where you ran the wrapper |
 
 It runs as your user, so what it writes is yours, and
 `data/indexes/published/<index>` must be writable by you. `index-l1-import`
 is the exception: it runs as the owner of the `core.db` it writes (root, on
 a Docker install), so the files it adds beside the database match it.
+`index-census` and `backfill-bundles` run as that owner too, with the SQLite
+directory mounted read-write, although they open the databases read-only. The
+gateway keeps them in WAL mode, and even a read-only connection writes the
+`-shm` lock file. On a read-only mount, or as a user who cannot write `-shm`,
+SQLite falls back to a mode that fails with `attempt to write a readonly
+database` when the gateway resets its WAL during a long read.
 Ctrl-C stops a
 command; a build interrupted that way leaves its scratch copy in
 `data/indexes/export/.band-build-*`, which the next build removes once nothing
@@ -1751,7 +1757,9 @@ and target from `core.db`. A filter on `owner` (the public key), including a
 address. It leaves out bundles that have
 failed `--max-retries` times, and bundles queued again within
 `--cooldown-hours` (still in flight, or with the repair worker). Both
-databases are opened read-only.
+databases are opened read-only. If you run it with `docker run` instead of the
+wrapper, mount the SQLite directory read-write, as the database owner, not
+`:ro` (see above).
 
 **Owners.** `--owners <address,...>` restricts the selection to bundles posted by
 those owner addresses (base64url), on top of the gateway's filter. It can only

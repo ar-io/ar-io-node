@@ -65,6 +65,76 @@ describe('indexCensusCLICommand', () => {
     assert.match(fs.readFileSync(output, 'utf8'), /^root\theight\t/);
   });
 
+  it('refuses an output that a symlink leads out of the data root', async () => {
+    const dataRoot = path.join(dir, 'indexes');
+    const elsewhere = path.join(dir, 'sqlite');
+    fs.mkdirSync(dataRoot);
+    fs.mkdirSync(elsewhere);
+    fs.writeFileSync(path.join(elsewhere, 'bundles.db'), 'sentinel');
+    fs.symlinkSync(elsewhere, path.join(dataRoot, 'live'));
+    const saved = process.env.AR_IO_NODE_CLI_DATA_DIR;
+    process.env.AR_IO_NODE_CLI_DATA_DIR = dataRoot;
+    try {
+      for (const output of [
+        path.join(dataRoot, 'live', 'bundles.db'),
+        path.join(dataRoot, 'live', 'new', 'short-roots.tsv'),
+        path.join(dir, 'short-roots.tsv'),
+      ]) {
+        await assert.rejects(
+          indexCensusCLICommand(
+            { bundlesDb, output },
+            { log, clickhouse: emptyClickHouse() },
+          ),
+          /outside data\/indexes/,
+        );
+      }
+      // Normalizes to data/indexes/sqlite/bundles.db; the filesystem would
+      // follow live -> sqlite before the '..'. Written where it normalizes,
+      // never over the sibling's bundles.db.
+      const dotted = `${dataRoot}/live/../sqlite/bundles.db`;
+      const result = (await indexCensusCLICommand(
+        { bundlesDb, output: dotted, force: true },
+        { log, clickhouse: emptyClickHouse() },
+      )) as { output: string };
+      assert.equal(result.output, path.join(dataRoot, 'sqlite', 'bundles.db'));
+      assert.ok(fs.existsSync(result.output));
+      assert.deepEqual(fs.readdirSync(elsewhere), ['bundles.db']);
+      assert.equal(
+        fs.readFileSync(path.join(elsewhere, 'bundles.db'), 'utf8'),
+        'sentinel',
+      );
+      const inside = path.join(dataRoot, 'census', 'short-roots.tsv');
+      await indexCensusCLICommand(
+        { bundlesDb, output: inside },
+        { log, clickhouse: emptyClickHouse() },
+      );
+      assert.ok(fs.existsSync(inside));
+    } finally {
+      if (saved === undefined) delete process.env.AR_IO_NODE_CLI_DATA_DIR;
+      else process.env.AR_IO_NODE_CLI_DATA_DIR = saved;
+    }
+  });
+
+  it('refuses a pre-existing partial path instead of following it', async () => {
+    const target = path.join(dir, 'precious.db');
+    fs.writeFileSync(target, 'sentinel');
+    const output = path.join(dir, 'planted', 'short-roots.tsv');
+    fs.mkdirSync(path.dirname(output));
+    const planted = `${output}.${process.pid}.partial`;
+    fs.symlinkSync(target, planted);
+    await assert.rejects(
+      indexCensusCLICommand(
+        { bundlesDb, output },
+        { log, clickhouse: emptyClickHouse() },
+      ),
+      /EEXIST/,
+    );
+    assert.equal(fs.readFileSync(target, 'utf8'), 'sentinel');
+    // Not created by this run, so not removed by its cleanup either.
+    assert.ok(fs.lstatSync(planted).isSymbolicLink());
+    assert.equal(fs.existsSync(output), false);
+  });
+
   it('fails cleanly, leaving no partial file, when the output cannot be written', async () => {
     const blocker = path.join(dir, 'not-a-directory');
     fs.writeFileSync(blocker, '');
