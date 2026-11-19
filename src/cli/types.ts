@@ -213,4 +213,5 @@ export interface BackfillBundlesCLIOptions extends GlobalCLIOptions {
   cooldownHours?: string;
   owners?: string;
   limit?: string;
+  idsFile?: string;
 }

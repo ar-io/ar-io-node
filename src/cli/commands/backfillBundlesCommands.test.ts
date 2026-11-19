@@ -17,9 +17,13 @@ import {
   createFixture,
   D1_FILTER,
   FIXTURE_NOW,
+  FIXTURE_OWNER,
   fixtureId,
 } from '../../../test/backfill-bundles-fixture.js';
-import { backfillBundlesCLICommand } from './backfillBundlesCommands.js';
+import {
+  backfillBundlesCLICommand,
+  parseIdsFile,
+} from './backfillBundlesCommands.js';
 
 const log = createTestLogger({ suite: 'backfill-bundles' });
 
@@ -28,10 +32,33 @@ function fakeGateway({
   filter = D1_FILTER as unknown,
   queueAnswers = [] as number[],
   lagSeconds = 0.01 as number | (() => number),
+  // GraphQL nodes by id, for --ids-file; a string answers with that error.
+  graphql = {} as Record<string, unknown> | string,
 } = {}) {
   const queued: { id: string; body: any; auth: string | null }[] = [];
+  const graphqlRequests: string[][] = [];
   const answers = [...queueAnswers];
   const fetchImpl = (async (url: string, init?: RequestInit) => {
+    if (url.endsWith('/graphql')) {
+      const { ids } = JSON.parse(String(init?.body)).variables;
+      graphqlRequests.push(ids);
+      if (typeof graphql === 'string') {
+        return Response.json({ errors: [{ message: graphql }] });
+      }
+      // A node per id, or several (an id in several bundles). Like the
+      // gateway, an ids query returns its first 100 rows and ignores `after`.
+      const all = (ids as string[]).flatMap((id) =>
+        graphql[id] === undefined ? [] : [graphql[id]].flat(),
+      );
+      return Response.json({
+        data: {
+          transactions: {
+            pageInfo: { hasNextPage: all.length > 100 },
+            edges: all.slice(0, 100).map((node) => ({ node })),
+          },
+        },
+      });
+    }
     if (url.endsWith('/ar-io/info')) {
       return Response.json({ ans104UnbundleFilter: filter });
     }
@@ -60,7 +87,7 @@ function fakeGateway({
     }
     return new Response('not found', { status: 404 });
   }) as typeof fetch;
-  return { fetchImpl, queued };
+  return { fetchImpl, queued, graphqlRequests };
 }
 
 describe('backfill-bundles CLI', () => {
@@ -490,5 +517,191 @@ describe('backfill-bundles CLI', () => {
       ),
       /node-metrics-url/,
     );
+  });
+
+  describe('--ids-file', () => {
+    const AO_SIGNER = Buffer.alloc(32, 7).toString('base64url');
+    const node = (label: string, height: number, owner = FIXTURE_OWNER) => ({
+      id: fixtureId(label),
+      recipient: '',
+      owner: { address: owner },
+      data: { size: '100' },
+      block: { height },
+      tags: [{ name: 'Bundle-Format', value: 'binary' }],
+    });
+    const aoExcluded = {
+      not: {
+        or: [...D1_FILTER.not.or, { attributes: { owner_address: AO_SIGNER } }],
+      },
+    };
+    const graphql = {
+      [fixtureId('untagged-a')]: node('untagged-a', 1_300_001),
+      [fixtureId('untagged-b')]: node('untagged-b', 1_310_000),
+      [fixtureId('ardrive')]: node('ardrive', 1_300_002, AO_SIGNER),
+      [fixtureId('indexed')]: node('indexed', 1_300_004),
+    };
+    const listFile = (lines: string[]) => {
+      const file = path.join(dir, `ids-${lines.length}-${Math.random()}.txt`);
+      fs.writeFileSync(file, lines.join('\n'));
+      return file;
+    };
+    const listed = () =>
+      listFile([
+        '# nested bundles to re-queue',
+        `${fixtureId('untagged-b')}\tsome note`,
+        fixtureId('untagged-a'),
+        fixtureId('ardrive'),
+        fixtureId('indexed'),
+        fixtureId('unrecorded'),
+        fixtureId('untagged-a'),
+        '',
+      ]);
+    const ids = (file: string) => ({
+      idsFile: file,
+      bundlesDb,
+      gatewayUrl: 'http://gw:4000',
+    });
+
+    it('judges the listed bundles from GraphQL and queues the selected ones, in height order', async () => {
+      const gw = fakeGateway({ filter: aoExcluded, graphql });
+      const t = clock();
+      const result: any = await backfillBundlesCLICommand(ids(listed()), {
+        log,
+        env: { ADMIN_API_KEY: 'k' },
+        fetch: gw.fetchImpl,
+        ...t,
+      });
+      assert.deepEqual(
+        gw.queued.map((q) => q.id),
+        [fixtureId('untagged-a'), fixtureId('untagged-b')],
+      );
+      for (const q of gw.queued) {
+        assert.deepEqual(q.body, {
+          id: q.id,
+          bypassFilter: true,
+          prioritized: false,
+        });
+      }
+      assert.equal(result.listedIds, 5);
+      assert.deepEqual(result.heightRange, [1_300_001, 1_310_000]);
+      assert.deepEqual(
+        { ...result.totals.verdicts },
+        { selected: 2, 'filtered-out': 1, indexed: 1, unrecorded: 1 },
+      );
+    });
+
+    it('dry run queues nothing and needs no admin key', async () => {
+      const gw = fakeGateway({ filter: aoExcluded, graphql });
+      const result: any = await backfillBundlesCLICommand(
+        { ...ids(listed()), dryRun: true },
+        { log, env: {}, fetch: gw.fetchImpl, ...clock() },
+      );
+      assert.equal(gw.queued.length, 0);
+      assert.equal(result.totals.selected, 2);
+    });
+
+    it('counts an id GraphQL does not return as unknown and never queues it', async () => {
+      const gw = fakeGateway({
+        graphql: {
+          [fixtureId('untagged-b')]: graphql[fixtureId('untagged-b')],
+        },
+      });
+      const result: any = await backfillBundlesCLICommand(
+        ids(listFile([fixtureId('untagged-a'), fixtureId('untagged-b')])),
+        { log, env: { ADMIN_API_KEY: 'k' }, fetch: gw.fetchImpl, ...clock() },
+      );
+      assert.deepEqual(
+        gw.queued.map((q) => q.id),
+        [fixtureId('untagged-b')],
+      );
+      assert.equal(result.totals.verdicts.unknown, 1);
+    });
+
+    it('fails, queueing nothing, when GraphQL answers with an error', async () => {
+      const gw = fakeGateway({
+        graphql: 'Limit for rows or bytes to read exceeded',
+      });
+      await assert.rejects(
+        backfillBundlesCLICommand(ids(listed()), {
+          log,
+          env: { ADMIN_API_KEY: 'k' },
+          fetch: gw.fetchImpl,
+          ...clock(),
+        }),
+        /graphql failed: Limit for rows/,
+      );
+      assert.equal(gw.queued.length, 0);
+    });
+
+    it('asks GraphQL for at most 100 ids at a time', async () => {
+      const many = Array.from({ length: 150 }, (_, i) => fixtureId(`n${i}`));
+      const gw = fakeGateway({ graphql: {} });
+      const result: any = await backfillBundlesCLICommand(
+        { ...ids(listFile(many)), dryRun: true },
+        { log, env: {}, fetch: gw.fetchImpl, ...clock() },
+      );
+      assert.deepEqual(
+        gw.graphqlRequests.map((r) => r.length),
+        [100, 50],
+      );
+      assert.equal(result.totals.verdicts.unrecorded, 150);
+    });
+
+    it('splits a batch whose ids come back once per bundle holding them, keeping the first copy', async () => {
+      const many = Array.from({ length: 60 }, (_, i) => fixtureId(`dup${i}`));
+      const twice: Record<string, unknown> = {};
+      for (const id of many) {
+        twice[id] = [
+          { ...node('untagged-a', 1_300_009), id },
+          { ...node('untagged-a', 1_300_001), id },
+        ];
+      }
+      const gw = fakeGateway({ graphql: twice });
+      const result: any = await backfillBundlesCLICommand(
+        { ...ids(listFile(many)), dryRun: true },
+        { log, env: {}, fetch: gw.fetchImpl, ...clock() },
+      );
+      // 120 rows for 60 ids overflow the page: split into 30 + 30.
+      assert.deepEqual(
+        gw.graphqlRequests.map((r) => r.length),
+        [60, 30, 30],
+      );
+      assert.deepEqual(result.heightRange, [1_300_009, 1_300_009]);
+      assert.equal(result.totals.verdicts.unrecorded, 60);
+    });
+
+    it('refuses --ids-file together with --from or --to', async () => {
+      await assert.rejects(
+        backfillBundlesCLICommand(
+          { ...ids(listed()), from: '1300000' },
+          { log, env: {}, fetch: fakeGateway().fetchImpl, ...clock() },
+        ),
+        /--ids-file replaces --from and --to/,
+      );
+    });
+
+    it('parses ids: comments, a TSV first column, duplicates; refuses a bad id', () => {
+      assert.deepEqual(
+        parseIdsFile(
+          [
+            '# header',
+            `${fixtureId('a')}  # trailing`,
+            `${fixtureId('b')}\tmore\tcolumns`,
+            fixtureId('a'),
+            '',
+          ].join('\n'),
+          'list.txt',
+        ),
+        [fixtureId('a'), fixtureId('b')],
+      );
+      assert.throws(
+        () => parseIdsFile('not-an-id\n', 'list.txt'),
+        /list.txt:1: 'not-an-id' is not a base64url id/,
+      );
+      assert.throws(
+        () => parseIdsFile('# nothing\n', 'list.txt'),
+        /lists no id/,
+      );
+    });
   });
 });
