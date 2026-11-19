@@ -21,8 +21,10 @@ import {
   BUNDLE_FORMAT_BINARY_HASH,
   BUNDLE_FORMAT_NAME_HASH,
   buckets,
+  GatewayItem,
   judgeBundleState,
   selectBucket,
+  selectIds,
 } from './select.js';
 
 const log = createTestLogger({ suite: 'backfill-bundles select' });
@@ -320,5 +322,179 @@ describe('backfill-bundles selection, --owners', () => {
       [fixtureId('theirs')]: 'selected',
       [fixtureId('mine-dedicated')]: 'filtered-out',
     });
+  });
+});
+
+describe('selectIds (--ids-file)', () => {
+  let core: Database;
+  let bundles: Database;
+  before(() => ({ core, bundles } = createFixture()));
+  after(() => {
+    core.close();
+    bundles.close();
+  });
+
+  const AO_SIGNER = Buffer.alloc(32, 7).toString('base64url');
+  // The gateway's GraphQL view of a listed bundle (UTF-8 tags).
+  const item = (
+    label: string,
+    tags: [string, string][] = [['Bundle-Format', 'binary']],
+    overrides: Partial<GatewayItem> = {},
+  ): GatewayItem => ({
+    id: fixtureId(label),
+    height: 1_300_001,
+    dataSize: 100,
+    ownerAddress: FIXTURE_OWNER,
+    target: '',
+    quantity: '0',
+    parentId: undefined,
+    tags: tags.map(([name, value]) => ({ name, value })),
+    ...overrides,
+  });
+  const run = (
+    listed: string[],
+    items: GatewayItem[],
+    filter: unknown = D1_FILTER,
+    owners?: ReadonlySet<string>,
+  ) =>
+    Object.fromEntries(
+      selectIds({
+        bundles,
+        filter: createFilter(filter, log),
+        owners,
+        ids: listed.map(fixtureId),
+        items: new Map(items.map((i) => [i.id, i])),
+        maxRetries: 2,
+        cooldownSeconds: 6 * 3600,
+        nowSeconds: FIXTURE_NOW,
+      }).map((c) => [c.id, c.verdict]),
+    );
+
+  it('judges listed bundles by their bundles row, then the filter on the GraphQL item', () => {
+    assert.deepEqual(
+      run(
+        ['untagged-a', 'redstone', 'indexed', 'failed-twice', 'in-flight'],
+        [
+          item('untagged-a'),
+          item('redstone', [['Bundler-App-Name', 'Redstone']]),
+          item('indexed'),
+          item('failed-twice'),
+          item('in-flight'),
+        ],
+      ),
+      {
+        [fixtureId('untagged-a')]: 'selected',
+        [fixtureId('redstone')]: 'filtered-out',
+        [fixtureId('indexed')]: 'indexed',
+        [fixtureId('failed-twice')]: 'retries-exhausted',
+        [fixtureId('in-flight')]: 'recently-queued',
+      },
+    );
+  });
+
+  it('never selects an id the gateway did not return, or one without a height', () => {
+    assert.deepEqual(
+      run(
+        ['untagged-a', 'untagged-b'],
+        [item('untagged-b', undefined, { height: undefined })],
+      ),
+      {
+        [fixtureId('untagged-a')]: 'unknown',
+        [fixtureId('untagged-b')]: 'unknown',
+      },
+    );
+  });
+
+  it('applies owner_address exclusions and --owners to the listed item', () => {
+    const filter = {
+      not: {
+        or: [...D1_FILTER.not.or, { attributes: { owner_address: AO_SIGNER } }],
+      },
+    };
+    assert.deepEqual(
+      run(
+        ['untagged-a', 'untagged-b'],
+        [
+          item('untagged-a', undefined, { ownerAddress: AO_SIGNER }),
+          item('untagged-b'),
+        ],
+        filter,
+      ),
+      {
+        [fixtureId('untagged-a')]: 'filtered-out',
+        [fixtureId('untagged-b')]: 'selected',
+      },
+    );
+    assert.deepEqual(
+      run(
+        ['untagged-a'],
+        [item('untagged-a')],
+        D1_FILTER,
+        new Set([AO_SIGNER]),
+      ),
+      { [fixtureId('untagged-a')]: 'other-owner' },
+    );
+  });
+
+  it('gives the filter the parent id, so isNestedBundle sees a nested bundle', () => {
+    const notNested = { not: { isNestedBundle: true } };
+    assert.deepEqual(
+      run(
+        ['untagged-a', 'untagged-b'],
+        [
+          item('untagged-a', undefined, { parentId: fixtureId('outer') }),
+          item('untagged-b'),
+        ],
+        notNested,
+      ),
+      {
+        [fixtureId('untagged-a')]: 'filtered-out',
+        [fixtureId('untagged-b')]: 'selected',
+      },
+    );
+  });
+
+  it('judges a nested bundle without the height and quantity live indexing does not give it', () => {
+    const quantityZero = { attributes: { quantity: '0' } };
+    assert.deepEqual(
+      run(
+        ['untagged-a', 'untagged-b'],
+        [
+          item('untagged-a', undefined, { parentId: fixtureId('outer') }),
+          item('untagged-b'),
+        ],
+        quantityZero,
+      ),
+      {
+        // Live, a NormalizedBundleDataItem has no quantity: no match.
+        [fixtureId('untagged-a')]: 'filtered-out',
+        // An L1 bundle carries its quantity, as selectBucket gives it.
+        [fixtureId('untagged-b')]: 'selected',
+      },
+    );
+  });
+
+  it('orders by height, unknown heights first, then list order', () => {
+    const order = selectIds({
+      bundles,
+      filter: createFilter(D1_FILTER, log),
+      ids: ['untagged-b', 'ardrive', 'unrecorded', 'untagged-a'].map(fixtureId),
+      items: new Map(
+        [
+          item('untagged-b', undefined, { height: 1_310_000 }),
+          item('ardrive', undefined, { height: 1_300_002 }),
+          item('untagged-a', undefined, { height: 1_300_002 }),
+        ].map((i) => [i.id, i]),
+      ),
+      maxRetries: 2,
+      cooldownSeconds: 6 * 3600,
+      nowSeconds: FIXTURE_NOW,
+    }).map((c) => [c.id, c.height]);
+    assert.deepEqual(order, [
+      [fixtureId('unrecorded'), 0],
+      [fixtureId('ardrive'), 1_300_002],
+      [fixtureId('untagged-a'), 1_300_002],
+      [fixtureId('untagged-b'), 1_310_000],
+    ]);
   });
 });

@@ -45,7 +45,12 @@ export type BackfillVerdict =
   /** Failed `maxRetries` times; not queued again. */
   | 'retries-exhausted'
   /** Queued again since it was skipped, within the cooldown. */
-  | 'recently-queued';
+  | 'recently-queued'
+  /**
+   * `--ids-file` only: the gateway's GraphQL does not return it (or its
+   * height), so its owner and tags are unread and the filter cannot judge it.
+   */
+  | 'unknown';
 
 export interface BackfillCandidate {
   id: string;
@@ -214,6 +219,120 @@ export function selectBucket(options: SelectOptions): BackfillCandidate[] {
     });
   }
   return out;
+}
+
+/**
+ * A listed bundle as the gateway's GraphQL reports it (`--ids-file`): a
+ * nested bundle is a data item, whose tags core.db does not hold. Tag names
+ * and values are UTF-8, as GraphQL returns them.
+ */
+export interface GatewayItem {
+  id: string;
+  /** Its root transaction's height; undefined while pending. */
+  height: number | undefined;
+  dataSize: number;
+  ownerAddress: string;
+  target: string;
+  /** Winston; '0' for a data item. */
+  quantity: string;
+  /** The enclosing bundle, for a nested bundle; undefined for an L1 bundle. */
+  parentId: string | undefined;
+  tags: { name: string; value: string }[];
+}
+
+export interface SelectIdsOptions {
+  bundles: Database;
+  filter: ItemFilter;
+  owners?: ReadonlySet<string>;
+  /** The listed ids, in list order. */
+  ids: readonly string[];
+  /** What the gateway's GraphQL returned, by id. */
+  items: ReadonlyMap<string, GatewayItem>;
+  maxRetries: number;
+  cooldownSeconds: number;
+  nowSeconds: number;
+}
+
+/**
+ * The listed bundles, each with its verdict, by the same rules as
+ * {@link selectBucket}: the `bundles` row first, then the unbundle filter on
+ * the item, with the fields the gateway's filter sees (an L1 bundle with its
+ * height and quantity; a nested bundle with its parent id, which
+ * `isNestedBundle` reads, and without height or quantity), then `--owners`. The
+ * `bundles` row decides first, so an id with no row is `unrecorded` whether
+ * or not the gateway returned it; an eligible id the gateway did not return
+ * is `unknown`. Neither is ever `selected`. Sorted by height (missing heights
+ * first, as 0), then list order.
+ */
+export function selectIds(options: SelectIdsOptions): BackfillCandidate[] {
+  const { bundles, filter, items } = options;
+  const stateOf = bundles.prepare(
+    `SELECT last_queued_at, last_skipped_at, last_fully_indexed_at,
+            retry_attempt_count
+     FROM bundles WHERE id = ?`,
+  );
+  const out = options.ids.map((id, index) => {
+    const item = items.get(id);
+    let verdict = judgeBundleState(
+      stateOf.get(Buffer.from(id, 'base64url')) as BundleState | undefined,
+      options,
+    );
+    if (verdict === undefined) {
+      if (item === undefined || item.height === undefined) {
+        verdict = 'unknown';
+      } else {
+        const tags = item.tags.map((t) => ({
+          name: Buffer.from(t.name).toString('base64url'),
+          value: Buffer.from(t.value).toString('base64url'),
+        }));
+        // The fields the gateway's own filter sees: an L1 bundle as
+        // selectBucket builds it (with height and quantity), a nested bundle
+        // as a NormalizedBundleDataItem (with parent_id, and no height or
+        // quantity), so a filter on those fields judges it as live
+        // indexing would.
+        const matchable: MatchableTxLike =
+          item.parentId === undefined
+            ? {
+                id,
+                height: item.height,
+                owner_address: item.ownerAddress,
+                target: item.target,
+                quantity: item.quantity,
+                tags,
+              }
+            : {
+                id,
+                owner_address: item.ownerAddress,
+                target: item.target,
+                parent_id: item.parentId,
+                tags,
+              };
+        verdict = filter.match(matchable) ? 'selected' : 'filtered-out';
+        if (
+          verdict === 'selected' &&
+          options.owners !== undefined &&
+          !options.owners.has(item.ownerAddress)
+        ) {
+          verdict = 'other-owner';
+        }
+      }
+    }
+    return {
+      index,
+      candidate: {
+        id,
+        height: item?.height ?? 0,
+        dataSize: item?.dataSize ?? 0,
+        bundlerAppName: item?.tags.find((t) => t.name === 'Bundler-App-Name')
+          ?.value,
+        verdict,
+      } satisfies BackfillCandidate,
+    };
+  });
+  out.sort(
+    (a, b) => a.candidate.height - b.candidate.height || a.index - b.index,
+  );
+  return out.map((o) => o.candidate);
 }
 
 /** The buckets covering `from`..`to`, aligned to {@link BUCKET_BLOCKS}. */

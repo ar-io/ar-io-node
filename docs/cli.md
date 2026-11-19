@@ -36,7 +36,7 @@ The wrapper mounts only what a command needs:
 | `index-l1-*` | `INDEX_SWARM_DATA_PATH` read-only at `data/indexes`; `SQLITE_DATA_PATH` at `data/sqlite`, read-write for `index-l1-import` and read-only for `index-l1-verify` and `index-l1-audit`; for `index-l1-verify --bands-dir`, a spill folder (below); and the gateway's Docker network, so `--data-from`, `--anchor-from` or `--registry-url` can name `http://core:4000`. A `--publication` file is mapped like the other paths |
 | `index-census` | `SQLITE_DATA_PATH` at `data/sqlite`, read-write and as `bundles.db`'s owner (see below), though the command opens it read-only; `CLICKHOUSE_URL`, `CLICKHOUSE_USER` and `CLICKHOUSE_PASSWORD`, passed by name; `INDEX_SWARM_DATA_PATH` at `data/indexes`, the only place `--output` may go; and the gateway's Docker network, where `CLICKHOUSE_URL` points |
 | `index-l2-*` | `INDEX_SWARM_DATA_PATH` read-only at `data/indexes`, and the gateway's Docker network, so `--gateway-url` can name `http://core:4000` |
-| `backfill-bundles` | `SQLITE_DATA_PATH` at `data/sqlite`, read-write and as `core.db`'s owner (see below), though the command opens it read-only; `ADMIN_API_KEY`, passed by name, or the file `ADMIN_API_KEY_FILE` names, read-only; and the gateway's Docker network, so `--gateway-url http://core:4000` works |
+| `backfill-bundles` | `SQLITE_DATA_PATH` at `data/sqlite`, read-write and as `core.db`'s owner (see below), though the command opens it read-only; the `--ids-file`, read-only; `ADMIN_API_KEY`, passed by name, or the file `ADMIN_API_KEY_FILE` names, read-only; and the gateway's Docker network, so `--gateway-url http://core:4000` works |
 | any `ar.io` command | Nothing, except the file a `--wallet-file` (`-w`) names, read-only. A relative path is taken from where you ran the wrapper |
 
 It runs as your user, so what it writes is yours, and
@@ -1768,6 +1768,32 @@ e.g. to backfill one bundling service's bundles first. Bundles that are
 otherwise eligible (skipped, never fully indexed, matched by the filter) but
 whose owner is not listed are counted as `other-owner`.
 
+**Lists (`--ids-file`).** Instead of `--from`/`--to`, `--ids-file <path>`
+takes the bundles to queue from a file: one id per line, or a TSV's first
+column, with `#` starting a comment. It is for bundles a height range cannot
+reach. A nested bundle (a bundle inside a bundle's data item) is a data item,
+so `core.db` does not hold it, and the gateway applies its unbundle filter to
+it on its own, by its own owner and tags, not its parent's. One the filter
+once skipped stays skipped after the filter is widened. Each listed bundle is
+judged by the same rules: its `bundles` row first, then the gateway's filter
+and `--owners`, on the owner address, target, tags and height the gateway's
+GraphQL returns for it, 100 ids per request, including its parent for
+`isNestedBundle`. The `bundles` row decides first, so an id with no row is
+`unrecorded` whether or not GraphQL returned it. An otherwise eligible id
+GraphQL does not return, or returns without a block height (still pending), is
+`unknown`. Neither is ever queued, and any GraphQL
+error stops the run before it queues anything. The run then walks the heights of the listed
+bundles, with the same pacing and guards. Nested bundles skipped by the
+filter can be listed from `bundles.db`: rows with `last_skipped_at` set,
+`last_unbundled_at` null and `root_transaction_id` not equal to `id`. Look at
+what they hold before queueing them; for example, a nested bundle from an AO
+unit carries no `Bundler-App-Name` tag, so a filter that excludes AO by that
+tag alone does not exclude it. Exclude those by `owner_address`.
+
+```bash
+./tools/ar-io-node backfill-bundles --ids-file nested-to-requeue.txt --dry-run
+```
+
 **Recheck.** Just before queueing a bundle it reads the bundle's state again:
 a bundle that another run or the repair worker queued during a wait is left
 alone.
@@ -1807,7 +1833,8 @@ many bundles, for a pilot. After a range, check it with `index-census
 
 | Option | Meaning |
 | --- | --- |
-| `--from`, `--to` | The root transaction heights. Required |
+| `--from`, `--to` | The root transaction heights. Required, unless `--ids-file` is given |
+| `--ids-file <path>` | Queue the bundles listed in this file instead of a height range (see Lists) |
 | `--bundles-db`, `--core-db` | The gateway's databases, read-only (defaults `data/sqlite/bundles.db`, `data/sqlite/core.db`) |
 | `--gateway-url` | The gateway to read the filter and metrics from and queue on (default `http://core:4000`); its admin key comes from `ADMIN_API_KEY` or `ADMIN_API_KEY_FILE` |
 | `--dry-run` | Select and count, queue nothing |
@@ -1848,6 +1875,10 @@ through its bundle pipeline (for example, transactions loaded by
 were queued live and belong to the repair worker. `selectedByBundlerAppName`
 is there to check, before a real run, that no bundle the filter should
 exclude was selected. A halted run adds `halted`, the guard and its reading.
+With `--ids-file`, the result also has `idsFile` and `listedIds` (distinct ids
+in the file), `heightRange` spans the listed bundles' heights, and `unknown`
+counts eligible ids the gateway's GraphQL did not return, or returned without
+a height (an id with no `bundles` row is counted as `unrecorded` first).
 
 ## For scripts and agents
 

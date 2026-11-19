@@ -8,6 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- `ar-io-node backfill-bundles --ids-file <path>` queues a listed set of
+  bundles instead of a height range, nested bundles included. A nested
+  bundle the unbundle filter once skipped is not reached by `--from`/`--to`
+  (which reads L1 bundles from `core.db`); with a list, each is judged by
+  the same rules, with its owner and tags read from the gateway's GraphQL,
+  and an id GraphQL does not return is never queued.
+
 - `ar-io-node backfill-bundles --owners <address,...>` restricts a backfill
   to bundles posted by the listed owner addresses, on top of the gateway's
   unbundle filter. It only narrows the selection, so a real run may use it;

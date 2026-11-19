@@ -309,6 +309,24 @@ case "${COMMAND}" in
       fi
     fi
     rewrite_paths --bundles-db --core-db
+    # --ids-file: mount just that file, read-only, as for --wallet-file.
+    for i in "${!ARGS[@]}"; do
+      case "${ARGS[$i]}" in
+        --ids-file)
+          next=$((i + 1))
+          if [[ -n "${ARGS[$next]:-}" ]]; then
+            file="$(cd "${CALLER_DIR}" && realpath -e -- "${ARGS[$next]}")"
+            DOCKER_ARGS+=(-v "${file}:/run/backfill/$(basename "${file}"):ro")
+            ARGS[$next]="/run/backfill/$(basename "${file}")"
+          fi
+          ;;
+        --ids-file=*)
+          file="$(cd "${CALLER_DIR}" && realpath -e -- "${ARGS[$i]#--ids-file=}")"
+          DOCKER_ARGS+=(-v "${file}:/run/backfill/$(basename "${file}"):ro")
+          ARGS[$i]="--ids-file=/run/backfill/$(basename "${file}")"
+          ;;
+      esac
+    done
     join_gateway_network
     ;;
   index-l2-import)

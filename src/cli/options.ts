@@ -420,11 +420,13 @@ export const optionMap = {
   },
   backfillFrom: {
     alias: '--from <height>',
-    description: 'Lowest root transaction height to backfill. Required',
+    description:
+      'Lowest root transaction height to backfill. Required, unless --ids-file is given',
   },
   backfillTo: {
     alias: '--to <height>',
-    description: 'Highest root transaction height to backfill. Required',
+    description:
+      'Highest root transaction height to backfill. Required, unless --ids-file is given',
   },
   backfillCoreDb: {
     alias: '--core-db <path>',
@@ -515,6 +517,11 @@ export const optionMap = {
   backfillLimit: {
     alias: '--limit <n>',
     description: 'Stop after queueing this many bundles, e.g. for a pilot',
+  },
+  backfillIdsFile: {
+    alias: '--ids-file <path>',
+    description:
+      "Instead of --from/--to: the bundles listed in this file (one id per line, or a TSV's first column; '#' starts a comment), nested bundles included. Their owner and tags come from the gateway's GraphQL; an id it does not return is counted as unknown and not queued",
   },
 } satisfies Record<string, CommanderOption>;
 
@@ -707,4 +714,5 @@ export const backfillBundlesOptions: CommanderOption[] = [
   optionMap.backfillCooldown,
   optionMap.backfillOwners,
   optionMap.backfillLimit,
+  optionMap.backfillIdsFile,
 ];
