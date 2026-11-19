@@ -1777,9 +1777,11 @@ it on its own, by its own owner and tags, not its parent's. One the filter
 once skipped stays skipped after the filter is widened. Each listed bundle is
 judged by the same rules: its `bundles` row first, then the gateway's filter
 and `--owners`, on the owner address, target, tags and height the gateway's
-GraphQL returns for it, 100 ids per request. An id GraphQL does not return is
-counted as `unknown` and never queued, and any GraphQL error stops the run
-before it queues anything. The run then walks the heights of the listed
+GraphQL returns for it, 100 ids per request, including its parent for
+`isNestedBundle`. The `bundles` row decides first, so an id with no row is
+`unrecorded` whether or not GraphQL returned it. An otherwise eligible id
+GraphQL does not return is `unknown`. Neither is ever queued, and any GraphQL
+error stops the run before it queues anything. The run then walks the heights of the listed
 bundles, with the same pacing and guards. Nested bundles skipped by the
 filter can be listed from `bundles.db`: rows with `last_skipped_at` set,
 `last_unbundled_at` null and `root_transaction_id` not equal to `id`. Look at
@@ -1874,7 +1876,8 @@ is there to check, before a real run, that no bundle the filter should
 exclude was selected. A halted run adds `halted`, the guard and its reading.
 With `--ids-file`, the result also has `idsFile` and `listedIds` (distinct ids
 in the file), `heightRange` spans the listed bundles' heights, and `unknown`
-counts ids the gateway's GraphQL did not return.
+counts eligible ids the gateway's GraphQL did not return (an id with no
+`bundles` row is counted as `unrecorded` first).
 
 ## For scripts and agents
 

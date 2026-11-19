@@ -346,6 +346,8 @@ describe('selectIds (--ids-file)', () => {
     dataSize: 100,
     ownerAddress: FIXTURE_OWNER,
     target: '',
+    quantity: '0',
+    parentId: undefined,
     tags: tags.map(([name, value]) => ({ name, value })),
     ...overrides,
   });
@@ -431,6 +433,24 @@ describe('selectIds (--ids-file)', () => {
         new Set([AO_SIGNER]),
       ),
       { [fixtureId('untagged-a')]: 'other-owner' },
+    );
+  });
+
+  it('gives the filter the parent id, so isNestedBundle sees a nested bundle', () => {
+    const notNested = { not: { isNestedBundle: true } };
+    assert.deepEqual(
+      run(
+        ['untagged-a', 'untagged-b'],
+        [
+          item('untagged-a', undefined, { parentId: fixtureId('outer') }),
+          item('untagged-b'),
+        ],
+        notNested,
+      ),
+      {
+        [fixtureId('untagged-a')]: 'filtered-out',
+        [fixtureId('untagged-b')]: 'selected',
+      },
     );
   });
 

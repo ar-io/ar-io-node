@@ -670,6 +670,27 @@ describe('backfill-bundles CLI', () => {
       assert.equal(result.totals.verdicts.unrecorded, 60);
     });
 
+    it('takes a list longer than the argument limit of Math.min', async () => {
+      const many = Array.from({ length: 130_000 }, (_, i) =>
+        fixtureId(`m${i}`),
+      );
+      const graphqlMany: Record<string, unknown> = {};
+      many.forEach((id, i) => {
+        graphqlMany[id] = { ...node('untagged-a', 1_300_000 + (i % 7)), id };
+      });
+      const result: any = await backfillBundlesCLICommand(
+        { ...ids(listFile(many)), dryRun: true },
+        {
+          log,
+          env: {},
+          fetch: fakeGateway({ graphql: graphqlMany }).fetchImpl,
+          ...clock(),
+        },
+      );
+      assert.deepEqual(result.heightRange, [1_300_000, 1_300_006]);
+      assert.equal(result.listedIds, 130_000);
+    });
+
     it('refuses --ids-file together with --from or --to', async () => {
       await assert.rejects(
         backfillBundlesCLICommand(
@@ -701,6 +722,15 @@ describe('backfill-bundles CLI', () => {
       assert.throws(
         () => parseIdsFile('# nothing\n', 'list.txt'),
         /lists no id/,
+      );
+      // A leading tab is an empty first column, never the second column.
+      assert.throws(
+        () => parseIdsFile(`\t${fixtureId('a')}\n`, 'list.txt'),
+        /list.txt:1: the first column is empty/,
+      );
+      assert.deepEqual(
+        parseIdsFile(`${fixtureId('a')}\r\n${fixtureId('b')}\r\n`, 'list.txt'),
+        [fixtureId('a'), fixtureId('b')],
       );
     });
   });

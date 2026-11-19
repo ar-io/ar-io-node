@@ -206,8 +206,14 @@ export function parseIdsFile(text: string, path: string): string[] {
   const ids: string[] = [];
   const seen = new Set<string>();
   text.split('\n').forEach((line, index) => {
-    const id = line.replace(/#.*$/, '').trim().split(/\s+/)[0];
-    if (id === undefined || id === '') return;
+    const content = line.replace(/#.*$/, '').replace(/\r$/, '');
+    if (content.trim() === '') return;
+    // The first column is what starts the line: split before trimming, so a
+    // leading tab or space is an empty first column, not the second one.
+    const id = content.split(/[\t ]/)[0];
+    if (id === '') {
+      throw new Error(`${path}:${index + 1}: the first column is empty`);
+    }
     if (!isCanonical32(id)) {
       throw new Error(`${path}:${index + 1}: '${id}' is not a base64url id`);
     }
@@ -226,7 +232,8 @@ const ITEMS_QUERY = `query BackfillItems($ids: [ID!]) {
   transactions(ids: $ids, first: ${GQL_IDS_PER_REQUEST}) {
     pageInfo { hasNextPage }
     edges { node {
-      id recipient owner { address } data { size } block { height }
+      id recipient owner { address } quantity { winston }
+      data { size } block { height } bundledIn { id }
       tags { name value }
     } }
   }
@@ -282,6 +289,8 @@ async function fetchGatewayItems(
         dataSize: Number(node.data?.size ?? 0),
         ownerAddress: node.owner?.address ?? '',
         target: node.recipient ?? '',
+        quantity: node.quantity?.winston ?? '0',
+        parentId: node.bundledIn?.id || undefined,
         tags: node.tags ?? [],
       });
     }
@@ -408,11 +417,18 @@ export async function backfillBundlesCLICommand(
     });
     // The range spans the heights GraphQL returned. Ids without one sort
     // first as 0 and are counted in the first bucket.
-    const heights = ids
-      .map((id) => items.get(id)?.height)
-      .filter((h): h is number => h !== undefined);
-    from = heights.length > 0 ? Math.min(...heights) : 0;
-    to = heights.length > 0 ? Math.max(...heights) : 0;
+    // A loop, not Math.min(...heights): a long list would overflow the
+    // argument limit.
+    let lowest: number | undefined;
+    let highest: number | undefined;
+    for (const id of ids) {
+      const h = items.get(id)?.height;
+      if (h === undefined) continue;
+      if (lowest === undefined || h < lowest) lowest = h;
+      if (highest === undefined || h > highest) highest = h;
+    }
+    from = lowest ?? 0;
+    to = highest ?? 0;
   }
   const firstBucketFrom = from;
   const metrics = async (url: string) => {

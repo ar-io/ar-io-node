@@ -233,6 +233,10 @@ export interface GatewayItem {
   dataSize: number;
   ownerAddress: string;
   target: string;
+  /** Winston; '0' for a data item. */
+  quantity: string;
+  /** The enclosing bundle, for a nested bundle; undefined for an L1 bundle. */
+  parentId: string | undefined;
   tags: { name: string; value: string }[];
 }
 
@@ -252,9 +256,12 @@ export interface SelectIdsOptions {
 /**
  * The listed bundles, each with its verdict, by the same rules as
  * {@link selectBucket}: the `bundles` row first, then the unbundle filter on
- * the item (owner address, target, tags, height), then `--owners`. An id the
- * gateway did not return is `unknown`, never `selected`. Sorted by height
- * (unknown heights first, as 0), then list order.
+ * the item (owner address, target, quantity, tags, height and, for a nested
+ * bundle, its parent id, which `isNestedBundle` reads), then `--owners`. The
+ * `bundles` row decides first, so an id with no row is `unrecorded` whether
+ * or not the gateway returned it; an eligible id the gateway did not return
+ * is `unknown`. Neither is ever `selected`. Sorted by height (missing heights
+ * first, as 0), then list order.
  */
 export function selectIds(options: SelectIdsOptions): BackfillCandidate[] {
   const { bundles, filter, items } = options;
@@ -278,6 +285,8 @@ export function selectIds(options: SelectIdsOptions): BackfillCandidate[] {
           height: item.height,
           owner_address: item.ownerAddress,
           target: item.target,
+          quantity: item.quantity,
+          parent_id: item.parentId ?? null,
           tags: item.tags.map((t) => ({
             name: Buffer.from(t.name).toString('base64url'),
             value: Buffer.from(t.value).toString('base64url'),
