@@ -21,6 +21,17 @@ INSERT INTO bundles (
   CASE WHEN (@queued_at IS NOT NULL OR @skipped_at IS NOT NULL) THEN 1 ELSE 0 END,
   @duplicated_data_item_count
 ) ON CONFLICT DO UPDATE SET
+  -- A row saved with the bundle as its own root (queue-bundle treats an id
+  -- whose root it cannot resolve as L1) is corrected when the bundle is saved
+  -- again with its real root, e.g. by unbundling its parent. A known root is
+  -- never replaced, and never by the id itself.
+  root_transaction_id = CASE
+    WHEN bundles.root_transaction_id = bundles.id
+      AND @root_transaction_id IS NOT NULL
+      AND @root_transaction_id != bundles.id
+    THEN @root_transaction_id
+    ELSE bundles.root_transaction_id
+  END,
   data_item_count = IFNULL(@data_item_count, data_item_count),
   matched_data_item_count = IFNULL(@matched_data_item_count, matched_data_item_count),
   duplicated_data_item_count = IFNULL(@duplicated_data_item_count, duplicated_data_item_count),
